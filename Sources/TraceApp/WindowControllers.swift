@@ -11,7 +11,7 @@ final class StatusItemController: NSObject {
         self.model = model
         super.init()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 390, height: 520)
+        popover.contentSize = NSSize(width: 480, height: 600)
         popover.contentViewController = NSHostingController(rootView: RecentPopoverView(model: model))
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "text.magnifyingglass", accessibilityDescription: "Trace")
@@ -32,9 +32,18 @@ final class StatusItemController: NSObject {
         } else if popover.isShown {
             popover.performClose(nil)
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            showPopover()
         }
+    }
+
+    func showPopover() {
+        guard let button = statusItem.button else { return }
+        let screen = button.window?.screen ?? NSScreen.main
+        let available = screen?.visibleFrame.size ?? NSSize(width: 480, height: 640)
+        popover.contentSize = NSSize(width: min(480, available.width - 24), height: min(600, available.height - 40))
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        NotificationCenter.default.post(name: .traceFocusPopover, object: nil)
     }
 
     private func contextMenu() -> NSMenu {
@@ -150,7 +159,8 @@ final class PreferencesWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "Trace Preferences"
+        window.title = "Trace Settings"
+        window.minSize = NSSize(width: 640, height: 600)
         window.center()
         window.contentView = NSHostingView(rootView: PreferencesView(model: model))
         super.init(window: window)

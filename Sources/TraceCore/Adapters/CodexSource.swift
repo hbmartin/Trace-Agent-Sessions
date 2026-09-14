@@ -15,41 +15,24 @@ public struct CodexSource: SessionSource {
     }
 
     public func records(
-        in file: DiscoveredSourceFile,
-        from offset: Int64
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        AsyncThrowingStream { continuation in
-            Task.detached {
-                do {
-                    var context = CodexContext(
-                        sessionID: file.url.deletingPathExtension().lastPathComponent,
-                        cwd: "Unknown",
-                        model: "unknown",
-                        timestamp: Int64(Date().timeIntervalSince1970 * 1_000)
-                    )
-                    if offset > 0 {
-                        try loadCodexHeader(file.url, into: &context)
-                    }
-                    let checkpoint = try JSONLineReader.forEachCompleteLine(at: file.url, from: offset) { line in
-                        do {
-                            let object = try JSONHelpers.object(from: line.data)
-                            let parsed = parseCodexRecord(
-                                object,
-                                context: &context,
-                                locator: .byteRange(offset: line.offset, length: Int64(line.data.count)),
-                                sourceKey: "\(line.offset)"
-                            )
-                            parsed.forEach { continuation.yield($0) }
-                        } catch {
-                            // Continue through isolated malformed or future records.
-                        }
-                    }
-                    continuation.yield(.checkpoint(checkpoint))
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
+        var context = CodexContext(
+            sessionID: file.url.deletingPathExtension().lastPathComponent,
+            cwd: "Unknown", model: "unknown", timestamp: 0
+        )
+        var loadedHeader = offset == 0
+        return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
+            if !loadedHeader {
+                try loadCodexHeader(file.url, into: &context)
+                loadedHeader = true
             }
+            guard let object = try? JSONHelpers.object(from: line.data) else { return [] }
+            return parseCodexRecord(
+                object, context: &context,
+                locator: .byteRange(offset: line.offset, length: Int64(line.data.count)),
+                sourceKey: "\(line.offset)"
+            )
         }
     }
 
@@ -80,15 +63,17 @@ private struct CodexContext {
 }
 
 private func loadCodexHeader(_ url: URL, into context: inout CodexContext) throws {
-    _ = try JSONLineReader.forEachCompleteLine(at: url, from: 0) { line in
+    let cursor = try JSONLineCursor(url: url, from: 0)
+    while let line = try cursor.next() {
         guard let object = try? JSONHelpers.object(from: line.data),
               object["type"] as? String == "session_meta",
               let payload = object["payload"] as? [String: Any]
-        else { return }
+        else { continue }
         context.sessionID = payload["session_id"] as? String ?? payload["id"] as? String ?? context.sessionID
         context.cwd = payload["cwd"] as? String ?? context.cwd
         context.model = payload["model"] as? String ?? context.model
         context.timestamp = JSONHelpers.timestampMilliseconds(payload["timestamp"], fallback: context.timestamp)
+        return
     }
 }
 
@@ -139,7 +124,9 @@ private func parseCodexRecord(
                 sessionExternalID: context.sessionID,
                 cwd: context.cwd,
                 timestampMilliseconds: timestamp,
-                kind: eventType == "turn_aborted" ? .aborted : .failed
+                kind: eventType == "turn_aborted" ? .aborted : .failed,
+                detail: JSONHelpers.errorDescription(payload),
+                locator: locator
             ))]
         }
         return []

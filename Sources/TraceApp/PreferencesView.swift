@@ -4,7 +4,13 @@ import TraceCore
 
 struct PreferencesView: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject var settings: AppSettings
     @State private var launchAtLogin = false
+
+    init(model: TraceModel) {
+        self.model = model
+        self.settings = model.settings
+    }
 
     var body: some View {
         TabView {
@@ -79,6 +85,9 @@ private struct SourcesPreferences: View {
         VStack(alignment: .leading, spacing: 16) {
             GroupBox("Source health") {
                 VStack(spacing: 0) {
+                    if model.sourceHealth.isEmpty {
+                        Text("Source details appear after the first indexing pass.").foregroundStyle(.secondary).padding()
+                    }
                     ForEach(model.sourceHealth) { health in
                         HStack(alignment: .top) {
                             AgentBadge(agent: health.agent)

@@ -4,8 +4,15 @@ import TraceCore
 
 struct OnboardingView: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject var settings: AppSettings
     let completion: @MainActor () -> Void
     @State private var enableLoginItem = true
+
+    init(model: TraceModel, completion: @escaping @MainActor () -> Void) {
+        self.model = model
+        self.settings = model.settings
+        self.completion = completion
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -42,7 +49,7 @@ struct OnboardingView: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 Text("What should be searchable?").font(.headline)
-                Picker("Index scope", selection: $model.settings.indexScope) {
+                Picker("Index scope", selection: $settings.indexScope) {
                     ForEach(IndexScope.allCases) { scope in Text(scope.title).tag(scope) }
                 }
                 .pickerStyle(.radioGroup)
@@ -73,6 +80,12 @@ struct OnboardingView: View {
     }
 
     private var detectedSources: [(agent: AgentKind, path: String, detected: Bool)] {
+        if let directory = TraceRuntime.testDirectory {
+            return [(AgentKind.claudeCode, "Claude"), (.codex, "Codex"), (.gemini, "Gemini")].map { agent, name in
+                let path = directory.appendingPathComponent("Sources/" + name).path
+                return (agent, path, FileManager.default.fileExists(atPath: path))
+            }
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser
         let entries: [(AgentKind, URL)] = [
             (.claudeCode, home.appendingPathComponent(".claude/projects")),

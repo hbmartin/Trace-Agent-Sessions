@@ -32,26 +32,60 @@ struct AgentBadge: View {
 
 struct IndexProgressLabel: View {
     let progress: IndexProgress
+    @State private var showingDetails = false
+    private var busy: Bool { ![.waiting, .complete, .cancelled, .failed].contains(progress.phase) }
 
     var body: some View {
-        HStack(spacing: 8) {
-            if progress.phase != .complete && progress.phase != .failed {
-                ProgressView().controlSize(.small)
+        Button { showingDetails.toggle() } label: {
+            HStack(spacing: 8) {
+                if busy { ProgressView().controlSize(.small) }
+                Text(label).font(.caption)
+                    .foregroundStyle(progress.phase == .failed ? .red : .secondary)
+                    .lineLimit(1).truncationMode(.middle)
             }
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(progress.phase == .failed ? .red : .secondary)
-                .lineLimit(1)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("indexProgress")
+        .help(details)
+        .popover(isPresented: $showingDetails) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(label).font(.headline)
+                if progress.totalFiles > 0 {
+                    ProgressView(value: Double(progress.completedFiles), total: Double(progress.totalFiles))
+                }
+                Text(details).font(.callout).textSelection(.enabled)
+                if progress.currentFileTotalBytes > 0 && busy {
+                    ProgressView(value: Double(min(progress.currentFileBytes, progress.currentFileTotalBytes)), total: Double(progress.currentFileTotalBytes))
+                }
+            }.padding(18).frame(width: 380)
+        }
+    }
+
+    private var details: String {
+        var lines = ["\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
+            "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
+        if let agent = progress.agent { lines.append("Provider: \(agent.displayName)") }
+        if let project = progress.projectName { lines.append("Project: \(project)") }
+        if let path = progress.currentPath {
+            lines.append(path)
+            lines.append("\(ByteCountFormatter.string(fromByteCount: progress.currentFileBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: progress.currentFileTotalBytes, countStyle: .file)) processed")
+        }
+        if let error = progress.error { lines.append(error) }
+        return lines.joined(separator: "\n")
     }
 
     private var label: String {
         switch progress.phase {
+        case .waiting: "Ready to build index"
         case .discovering: "Finding sessions…"
-        case .indexing: "Indexing \(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files"
-        case .reconciling: "Reconciling deleted and moved files…"
+        case .indexing:
+            "\(progress.incremental ? "Updating" : "Indexing") \(progress.agent?.displayName ?? "sessions") · \(progress.completedFiles.formatted())/\(progress.totalFiles.formatted()) files"
+        case .reconciling: "Checking moved and deleted sessions…"
         case .aggregating: "Updating token totals…"
-        case .complete: "Index is current"
+        case .complete:
+            progress.failedFiles > 0 ? "Index updated · \(progress.failedFiles) failed files" : "Index current · Watching for changes"
+        case .cancelled: "Indexing stopped · Progress saved"
         case .failed: progress.error ?? "Indexing failed"
         }
     }

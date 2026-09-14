@@ -5,7 +5,7 @@ public protocol SessionSource: Sendable {
     var roots: [SourceRoot] { get }
 
     func discover() throws -> [DiscoveredSourceFile]
-    func records(in file: DiscoveredSourceFile, from offset: Int64) -> AsyncThrowingStream<ParsedRecord, Error>
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error>
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage
 }
 
@@ -26,6 +26,10 @@ public enum SessionSourceError: LocalizedError, Sendable {
 }
 
 public extension SessionSource {
+    func records(in file: DiscoveredSourceFile, from offset: Int64) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: nil)
+    }
+
     func discoverFiles(
         extensions allowedExtensions: Set<String>,
         classify: (URL) -> SourceFormat?
@@ -41,6 +45,7 @@ public extension SessionSource {
             ) else { continue }
 
             for case let url as URL in enumerator {
+                try Task.checkCancellation()
                 guard allowedExtensions.contains(url.pathExtension.lowercased()),
                       let format = classify(url)
                 else { continue }

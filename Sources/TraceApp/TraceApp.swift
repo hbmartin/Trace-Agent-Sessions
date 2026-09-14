@@ -6,7 +6,14 @@ struct TraceApplication: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Settings { EmptyView() }
+        Settings { PreferencesView(model: TraceEnvironment.shared.model) }
+            .commands {
+                CommandGroup(replacing: .appSettings) {
+                    Button("Settings…") {
+                        NotificationCenter.default.post(name: .traceShowPreferences, object: nil)
+                    }.keyboardShortcut(",", modifiers: .command)
+                }
+            }
     }
 }
 
@@ -45,10 +52,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let onboarding = OnboardingWindowController(model: environment.model) { [weak self] in
                 self?.onboardingController?.close()
                 self?.onboardingController = nil
+                if ProcessInfo.processInfo.arguments.contains("--ui-show-main") { self?.mainWindowController?.show() }
+                if ProcessInfo.processInfo.arguments.contains("--ui-show-popover") { self?.statusController?.showPopover() }
             }
             onboardingController = onboarding
             onboarding.showWindow(nil)
             NSApp.activate(ignoringOtherApps: true)
+        }
+
+        if TraceRuntime.testDirectory != nil, environment.settings.onboardingComplete {
+            if ProcessInfo.processInfo.arguments.contains("--ui-show-main") { main.show() }
+            if ProcessInfo.processInfo.arguments.contains("--ui-show-settings") { preferences.show() }
+            if ProcessInfo.processInfo.arguments.contains("--ui-show-popover") { statusController?.showPopover() }
         }
 
         if ProcessInfo.processInfo.arguments.contains("--network-smoke") {

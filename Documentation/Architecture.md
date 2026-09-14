@@ -32,3 +32,11 @@ Every dollar value is labeled **estimated equivalent API spend**. A known zero-b
 ## Renderer boundary
 
 The transcript starts with SwiftUI `ScrollView` plus `LazyVStack`. `TranscriptRenderer` is deliberately isolated from selection and hydration state. The 4,000-message ProMotion release benchmark decides whether it remains or is replaced by an `NSTableView` implementation.
+
+### Serialized indexing and additive details migration
+
+`IndexScheduler` coalesces app requests into one active operation plus pending paths/full-reconciliation intent. Explicit rebuilds cancel and await the current operation. `IndexCoordinator` also owns a pass-level permit because actor isolation alone does not prevent reentrant indexing during database awaits. Progress callbacks are awaited in run order and carry a run ID.
+
+JSONL adapters use pull-driven finite readers; no detached producer can queue the rest of a large file. A checkpoint follows each complete source record, and a transactional batch never ends in the middle of that record’s derived messages. Cancellation leaves committed batches readable and resumable. Snapshot replacement remains atomic. FSEvents retains recovery/directory flags so ordinary file modifications stay incremental.
+
+The `trace-v2-details` migration adds section-presence metadata and session failure details/locators without changing `index_format_version`. Existing rows remain searchable. Legacy failure details hydrate from source records on demand. UI cache revisions include the persisted source modification timestamp and checkpoint so rewrites and partial commits invalidate stale details.

@@ -17,37 +17,19 @@ public struct ClaudeCodeSource: SessionSource {
     }
 
     public func records(
-        in file: DiscoveredSourceFile,
-        from offset: Int64
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        AsyncThrowingStream { continuation in
-            Task.detached {
-                do {
-                    let fallback = (try? TraceFileIO.fingerprint(url: file.url).modificationNanoseconds / 1_000_000)
-                        ?? Int64(Date().timeIntervalSince1970 * 1_000)
-                    let checkpoint = try JSONLineReader.forEachCompleteLine(at: file.url, from: offset) { line in
-                        do {
-                            let object = try JSONHelpers.object(from: line.data)
-                            if let message = parseClaudeMessage(
-                                object,
-                                fallbackSessionID: file.url.deletingPathExtension().lastPathComponent,
-                                fallbackTimestamp: fallback + line.offset,
-                                locator: .byteRange(offset: line.offset, length: Int64(line.data.count)),
-                                sourceKey: "\(line.offset)"
-                            ) {
-                                continuation.yield(.message(message))
-                            }
-                        } catch {
-                            // Format drift is recorded by the index coordinator without
-                            // aborting the rest of an append-only file.
-                        }
-                    }
-                    continuation.yield(.checkpoint(checkpoint))
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
+        let fallback = (try? TraceFileIO.fingerprint(url: file.url).modificationNanoseconds / 1_000_000) ?? 0
+        return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
+            guard let object = try? JSONHelpers.object(from: line.data),
+                  let message = parseClaudeMessage(
+                    object,
+                    fallbackSessionID: file.url.deletingPathExtension().lastPathComponent,
+                    fallbackTimestamp: fallback + line.offset,
+                    locator: .byteRange(offset: line.offset, length: Int64(line.data.count)),
+                    sourceKey: "\(line.offset)"
+                  ) else { return [] }
+            return [.message(message)]
         }
     }
 

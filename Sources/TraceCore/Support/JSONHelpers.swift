@@ -78,3 +78,15 @@ private extension ISO8601DateFormatter {
         return formatter
     }()
 }
+
+extension JSONHelpers {
+    static func errorDescription(_ object: [String: Any]) -> String? {
+        for key in ["error", "message", "reason", "detail"] {
+            if let text = object[key] as? String, !text.isEmpty { return text }
+            if let nested = object[key] as? [String: Any] {
+                if let text = errorDescription(nested) { return text }
+            }
+        }
+        return nil
+    }
+}
