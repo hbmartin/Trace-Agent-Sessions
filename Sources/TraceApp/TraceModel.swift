@@ -6,16 +6,23 @@ import TraceCore
 @MainActor
 final class TraceModel: ObservableObject {
     var settings: AppSettings
-    let diagnostics = DiagnosticsStore()
+    let globalSearch = SessionSearchModel()
+    var mainSearch = SessionSearchModel()
+    private var observations: Set<AnyCancellable> = []
+    let diagnostics: DiagnosticsStore
 
-    @Published private(set) var progress = IndexProgress(phase: .discovering)
+    @Published private(set) var progress = IndexProgress(phase: .waiting)
     @Published private(set) var projects: [ProjectSummary] = []
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var recentSessions: [SessionSummary] = []
     @Published private(set) var messages: [MessageSummary] = []
     @Published private(set) var hydratedMessages: [Int64: HydratedMessage] = [:]
-    @Published private(set) var searchResults: [SearchResult] = []
-    @Published private(set) var searchSnippets: [Int64: String] = [:]
+    var searchResults: [SearchResult] { globalSearch.results }
+    var searchSnippets: [Int64: String] { globalSearch.snippets }
+    @Published private(set) var sessionErrors: [Int64: String] = [:]
+    @Published var projectFilter = ""
+    @Published private(set) var selectedSession: SessionSummary?
+    private var errorTasks: [Int64: Task<Void, Never>] = [:]
     @Published private(set) var sourceHealth: [SourceHealth] = []
     @Published private(set) var usage: [UsageRollup] = []
     @Published private(set) var statistics: IndexStatistics?
@@ -24,8 +31,14 @@ final class TraceModel: ObservableObject {
     @Published private(set) var pricingError: String?
     @Published var selectedProjectID: Int64?
     @Published var selectedSessionID: Int64?
-    @Published var searchQuery = ""
-    @Published var searchFilters = SearchFilters()
+    var searchQuery: String {
+        get { globalSearch.query }
+        set { globalSearch.query = newValue }
+    }
+    var searchFilters: SearchFilters {
+        get { globalSearch.filters }
+        set { globalSearch.filters = newValue }
+    }
     @Published var customCostStart = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @Published var customCostEnd = Date()
     @Published var expandedReasoningIDs: Set<Int64> = []
@@ -34,14 +47,20 @@ final class TraceModel: ObservableObject {
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
     private var watcher: FSEventsWatcher?
-    private var searchTask: Task<Void, Never>?
-    private var searchRequestID = UUID()
-    private var nextSearchCursor: SearchCursor?
-    private var indexTask: Task<Void, Never>?
+    private var scheduler: IndexScheduler?
+    private var sourceChangeTask: Task<Void, Never>?
+    private var lastSummaryRefresh = ContinuousClock.now
+    private var sessionRequestID = UUID()
+    private var projectRequestID = UUID()
     private var started = false
+    private var initialIndexRequested = false
 
     init(settings: AppSettings = AppSettings()) {
         self.settings = settings
+        diagnostics = DiagnosticsStore(url: TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
+        settings.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
+        globalSearch.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
+        mainSearch.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
     }
 
     func start() {
@@ -50,16 +69,30 @@ final class TraceModel: ObservableObject {
         Task {
             do {
                 try await diagnostics.markLaunchStarted()
-                let database = try IndexDatabase(url: IndexDatabase.defaultURL())
+                let database = try IndexDatabase(url: TraceRuntime.testDirectory?.appendingPathComponent("index.sqlite") ?? IndexDatabase.defaultURL())
                 self.database = database
                 let sources = makeSources()
                 let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
+                globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+                mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+                scheduler = makeScheduler(coordinator)
                 loadPricing()
                 await reloadSummaries()
-                startWatching(sources.flatMap(\.roots).map(\.url))
                 if settings.onboardingComplete {
-                    startIndexing()
+                    startWatching(sources.flatMap(\.roots).map(\.url))
+                    if ProcessInfo.processInfo.arguments.contains("--index-smoke"), TraceRuntime.testDirectory != nil {
+                        await scheduler?.request(reconcile: true, scope: settings.indexScope)
+                        await scheduler?.waitUntilIdle()
+                        let snapshot = try await database.statistics()
+                        let report: [String: Any] = ["messages": snapshot.messageCount, "sessions": snapshot.sessionCount,
+                            "indexedFiles": progress.indexedFiles, "unchangedFiles": progress.unchangedFiles,
+                            "failedFiles": progress.failedFiles, "phase": progress.phase.rawValue]
+                        let data = try JSONSerialization.data(withJSONObject: report, options: .sortedKeys)
+                        FileHandle.standardOutput.write(data + Data("\n".utf8))
+                        await prepareToTerminate()
+                        exit(progress.phase == .complete && progress.failedFiles == 0 ? 0 : 1)
+                    } else { startIndexing() }
                 }
             } catch {
                 startupError = error.localizedDescription
@@ -70,136 +103,122 @@ final class TraceModel: ObservableObject {
 
     func completeOnboarding(enableLoginItem: Bool) {
         do {
-            try settings.setLaunchAtLogin(enableLoginItem)
+            if TraceRuntime.testDirectory == nil { try settings.setLaunchAtLogin(enableLoginItem) }
         } catch {
             startupError = "Could not update the login item: \(error.localizedDescription)"
         }
         settings.onboardingComplete = true
-        startIndexing()
+        if coordinator != nil {
+            startWatching(makeSources().flatMap(\.roots).map(\.url))
+            startIndexing()
+        }
+    }
+
+    private func makeScheduler(_ coordinator: IndexCoordinator) -> IndexScheduler {
+        IndexScheduler(coordinator: coordinator, scope: settings.indexScope) { [weak self] update in
+            await self?.receiveProgress(update)
+        }
+    }
+
+    private func receiveProgress(_ update: IndexProgress) async {
+        progress = update
+        let terminal = [.complete, .failed, .cancelled].contains(update.phase)
+        if terminal || lastSummaryRefresh.duration(to: .now) >= .milliseconds(250) {
+            lastSummaryRefresh = .now
+            await reloadSummaries(lightweight: !terminal)
+            if !searchQuery.isEmpty { search() }
+            if !mainSearch.query.isEmpty { searchMain() }
+        }
     }
 
     func startIndexing() {
-        guard let coordinator, indexTask == nil else { return }
-        let scope = settings.indexScope
-        let model = self
-        indexTask = Task {
-            await coordinator.indexAll(scope: scope) { update in
-                Task { @MainActor in model.progress = update }
-            }
-            model.indexTask = nil
-            await model.reloadSummaries()
-        }
+        guard settings.onboardingComplete, !initialIndexRequested, let scheduler else { return }
+        initialIndexRequested = true
+        Task { await scheduler.request(reconcile: true, scope: settings.indexScope) }
     }
 
     func rebuildIndex() {
-        guard let database else { return }
-        indexTask?.cancel()
-        indexTask = nil
-        Task {
-            do {
-                try await database.clearIndex()
-                hydratedMessages.removeAll()
-                messages.removeAll()
-                searchResults.removeAll()
-                startIndexing()
-            } catch {
-                startupError = "Rebuild failed: \(error.localizedDescription)"
-            }
-        }
+        guard settings.onboardingComplete, let scheduler else { return }
+        Task { await scheduler.request(rebuild: true, scope: settings.indexScope) }
     }
 
     func reloadSourcesAndRebuild() {
+        sourceChangeTask?.cancel()
         watcher?.stop()
         watcher = nil
-        guard let database else { return }
-        let sources = makeSources()
-        coordinator = IndexCoordinator(database: database, sources: sources)
-        startWatching(sources.flatMap(\.roots).map(\.url))
-        rebuildIndex()
+        sourceChangeTask = Task {
+            await scheduler?.stop()
+            guard !Task.isCancelled, let database else { return }
+            let sources = makeSources()
+            let coordinator = IndexCoordinator(database: database, sources: sources)
+            self.coordinator = coordinator
+            globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+            mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+            scheduler = makeScheduler(coordinator)
+            initialIndexRequested = false
+            startWatching(sources.flatMap(\.roots).map(\.url))
+            // Root changes reconcile existing files; unchanged sources retain their index.
+            startIndexing()
+        }
     }
 
-    func search(reset: Bool = true) {
-        if reset {
-            searchTask?.cancel()
-            searchSnippets.removeAll(keepingCapacity: true)
-            nextSearchCursor = nil
-        } else {
-            guard searchTask == nil, nextSearchCursor != nil else { return }
-        }
-        guard let database, !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            searchResults = []
-            nextSearchCursor = nil
-            return
-        }
-        let query = searchQuery
-        let filters = searchFilters
-        let sort = settings.searchSort
-        let cursor = reset ? nil : nextSearchCursor
-        let requestID = UUID()
-        searchRequestID = requestID
-        searchTask = Task { [weak self] in
-            let start = ContinuousClock.now
+    func search(reset: Bool = true) { globalSearch.search(sort: settings.searchSort, reset: reset) }
+    func searchMain() {
+        mainSearch.filters.projectID = selectedProjectID
+        mainSearch.search(sort: settings.searchSort)
+    }
+    func hydrateSearchResult(_ result: SearchResult) async { await globalSearch.hydrate(result) }
+
+    var filteredProjects: [ProjectSummary] {
+        let query = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty ? projects : projects.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
+    }
+
+    func loadSessionError(_ session: SessionSummary) {
+        guard sessionErrors[session.id] == nil, errorTasks[session.id] == nil, let coordinator else { return }
+        errorTasks[session.id] = Task {
+            defer { errorTasks[session.id] = nil }
             do {
-                let page = try await database.search(query: query, filters: filters, sort: sort, cursor: cursor)
+                let failures = try await coordinator.failures(for: session)
                 try Task.checkCancellation()
-                guard let self, self.searchRequestID == requestID else { return }
-                if reset {
-                    self.searchResults = page.results
-                } else {
-                    self.searchResults.append(contentsOf: page.results)
-                }
-                self.nextSearchCursor = page.nextCursor
-                self.searchTask = nil
-                let elapsed = start.duration(to: .now)
-                let milliseconds = Double(elapsed.components.seconds) * 1_000
-                    + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
-                try? await self.diagnostics.recordSearch(milliseconds: milliseconds)
-            } catch is CancellationError {
-                return
-            } catch {
-                guard let self, self.searchRequestID == requestID else { return }
-                self.searchTask = nil
-                self.startupError = "Search failed: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    func hydrateSearchResult(_ result: SearchResult) async {
-        guard searchSnippets[result.id] == nil, let coordinator else { return }
-        do {
-            let hydrated = try await coordinator.hydrate(messageID: result.id)
-            try Task.checkCancellation()
-            guard searchResults.contains(where: { $0.id == result.id }) else { return }
-            let sections = [
-                hydrated.sections.prose,
-                hydrated.sections.toolInvocation,
-                hydrated.sections.toolOutput,
-            ].filter { !$0.isEmpty }
-            if let snippet = sections.first {
-                searchSnippets[result.id] = snippet
-            }
-        } catch is CancellationError {
-            return
-        } catch {
-            // The zero-I/O prefix remains usable if the source changed before hydration.
+                sessionErrors[session.id] = failures.isEmpty
+                    ? "\(session.agent.displayName) recorded an error without a detailed explanation."
+                    : failures.map { failure in
+                        let header = [session.agent.displayName, failure.kind.capitalized,
+                            failure.timestampMilliseconds.traceDate, failure.toolName].compactMap { $0 }.joined(separator: " · ")
+                        return header + "\n" + (failure.detail.isEmpty ? "The source did not provide an error message." : String(failure.detail.prefix(4_000)))
+                    }.joined(separator: "\n\n")
+            } catch is CancellationError { }
+            catch { sessionErrors[session.id] = "Could not read error details from \(session.sourcePath): \(error.localizedDescription)" }
         }
     }
 
     func selectProject(_ projectID: Int64?) {
         selectedProjectID = projectID
         guard let database else { return }
+        let request = UUID()
+        projectRequestID = request
+        searchMain()
         Task {
-            sessions = (try? await database.sessions(projectID: projectID)) ?? []
+            let rows = (try? await database.sessions(projectID: projectID)) ?? []
+            guard projectRequestID == request else { return }
+            sessions = rows
         }
     }
 
     func selectSession(_ sessionID: Int64, showWindow: Bool = false) {
         selectedSessionID = sessionID
         settings.lastSessionID = sessionID
+        selectedSession = (sessions + recentSessions).first { $0.id == sessionID } ?? selectedSession
+        let request = UUID()
+        sessionRequestID = request
         hydratedMessages.removeAll(keepingCapacity: true)
         guard let database else { return }
         Task {
-            messages = (try? await database.messages(sessionID: sessionID)) ?? []
+            let rows = (try? await database.messages(sessionID: sessionID)) ?? []
+            guard sessionRequestID == request else { return }
+            messages = rows
+            if selectedSession?.id != sessionID { selectedSession = try? await database.session(id: sessionID) }
             try? await diagnostics.recordOpen()
             if showWindow {
                 NotificationCenter.default.post(name: .traceShowMainWindow, object: nil)
@@ -215,10 +234,13 @@ final class TraceModel: ObservableObject {
 
     func hydrate(_ message: MessageSummary) {
         guard hydratedMessages[message.id] == nil, let coordinator else { return }
+        let request = sessionRequestID
+        let revision = selectedSession?.sourceRevision
         Task {
             let start = ContinuousClock.now
             do {
                 let hydrated = try await coordinator.hydrate(message)
+                guard sessionRequestID == request, selectedSession?.sourceRevision == revision else { return }
                 hydratedMessages[message.id] = hydrated
                 let elapsed = start.duration(to: .now)
                 let milliseconds = Double(elapsed.components.seconds) * 1_000
@@ -239,13 +261,12 @@ final class TraceModel: ObservableObject {
         guard let coordinator else { return }
         let summaries = messages
         let expanded = expandedReasoningIDs
+        let visibility = settings.transcriptVisibility
         Task {
             var blocks: [String] = []
-            for summary in summaries {
+            for summary in summaries where visibility.includes(summary) {
                 guard let hydrated = try? await coordinator.hydrate(summary) else { continue }
-                var sections = [hydrated.sections.prose, hydrated.sections.toolInvocation, hydrated.sections.toolOutput]
-                if expanded.contains(summary.id) { sections.append(hydrated.sections.reasoning) }
-                let body = sections.filter { !$0.isEmpty }.joined(separator: "\n\n")
+                let body = visibility.text(hydrated, expandedReasoning: expanded.contains(summary.id))
                 if !body.isEmpty { blocks.append("## \(hydrated.role.rawValue)\n\n\(body)") }
             }
             NSPasteboard.general.clearContents()
@@ -281,37 +302,66 @@ final class TraceModel: ObservableObject {
     }
 
     func prepareToTerminate() async {
+        watcher?.stop()
+        sourceChangeTask?.cancel()
+        await scheduler?.stop()
         try? await diagnostics.markCleanShutdown()
     }
 
     private func makeSources() -> [any SessionSource] {
+        if let directory = TraceRuntime.testDirectory {
+            let roots = directory.appendingPathComponent("Sources")
+            return [ClaudeCodeSource(roots: [roots.appendingPathComponent("Claude")]),
+                    CodexSource(root: roots.appendingPathComponent("Codex")),
+                    GeminiSource(root: roots.appendingPathComponent("Gemini"))]
+        }
         let defaultClaude = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
         let custom = settings.additionalClaudeRoots.map { URL(fileURLWithPath: $0) }
         return [ClaudeCodeSource(roots: [defaultClaude] + custom), CodexSource(), GeminiSource()]
     }
 
     private func startWatching(_ roots: [URL]) {
-        let watcher = FSEventsWatcher(roots: roots) { [weak self] paths in
-            Task { @MainActor [weak self] in await self?.refresh(paths: paths) }
-        }
+        guard watcher == nil, settings.onboardingComplete else { return }
+        let watcher = FSEventsWatcher(roots: roots, onChange: { [weak self] changes in
+            Task { @MainActor [weak self] in
+                guard let self, self.settings.onboardingComplete else { return }
+                await self.scheduler?.request(paths: changes.paths, reconcile: changes.requiresReconciliation,
+                                              scope: self.settings.indexScope)
+            }
+        })
         watcher.start()
         self.watcher = watcher
     }
 
-    private func refresh(paths: Set<String>) async {
-        guard let coordinator else { return }
-        await coordinator.refresh(paths: paths, scope: settings.indexScope) { update in
-            Task { @MainActor [weak self] in self?.progress = update }
-        }
-        await reloadSummaries()
-        if !searchQuery.isEmpty { search() }
-    }
-
-    private func reloadSummaries() async {
+    private func reloadSummaries(lightweight: Bool = false) async {
         guard let database else { return }
+        let previousSessions = Dictionary((sessions + recentSessions).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         projects = (try? await database.projects()) ?? []
         recentSessions = (try? await database.sessions(limit: 10)) ?? []
-        sessions = (try? await database.sessions(projectID: selectedProjectID)) ?? []
+        let project = selectedProjectID
+        let loadedSessions = (try? await database.sessions(projectID: project)) ?? []
+        if selectedProjectID == project { sessions = loadedSessions }
+        for session in sessions + recentSessions {
+            if let old = previousSessions[session.id], old.messageCount != session.messageCount || old.lastActivityMilliseconds != session.lastActivityMilliseconds || old.sourceRevision != session.sourceRevision || old.hadError != session.hadError {
+                sessionErrors[session.id] = nil
+                errorTasks[session.id]?.cancel()
+            }
+        }
+        if let sessionID = selectedSessionID {
+            let loadedSession = try? await database.session(id: sessionID)
+            if selectedSessionID == sessionID {
+                let changed = selectedSession?.sourceRevision != loadedSession?.sourceRevision
+                selectedSession = loadedSession
+                if let loadedSession, changed || loadedSession.messageCount != messages.count {
+                    let rows = (try? await database.messages(sessionID: sessionID)) ?? []
+                    if selectedSessionID == sessionID {
+                        if changed { hydratedMessages.removeAll(keepingCapacity: true) }
+                        messages = rows
+                    }
+                }
+            }
+        }
+        if lightweight { return }
         sourceHealth = (try? await database.sourceHealth()) ?? []
         statistics = try? await database.statistics()
         if let bytes = statistics?.databaseBytes { try? await diagnostics.recordIndexSize(bytes: bytes) }

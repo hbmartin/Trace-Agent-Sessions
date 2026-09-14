@@ -15,7 +15,7 @@ struct TraceBench {
             switch command {
             case "index":
                 if options.has("--cold") { try removeDatabase(at: databaseURL) }
-                try await runIndex(databaseURL: databaseURL, scope: options.scope)
+                try await runIndex(databaseURL: databaseURL, scope: options.scope, sourceDirectory: options.url("--sources-directory"))
             case "search":
                 let query = options.value("--query") ?? "the"
                 let iterations = max(1, Int(options.value("--iterations") ?? "50") ?? 50)
@@ -31,16 +31,19 @@ struct TraceBench {
         }
     }
 
-    private static func runIndex(databaseURL: URL, scope: IndexScope) async throws {
+    private static func runIndex(databaseURL: URL, scope: IndexScope, sourceDirectory: URL?) async throws {
         let database = try IndexDatabase(url: databaseURL)
-        let coordinator = IndexCoordinator(
-            database: database,
-            sources: [ClaudeCodeSource(), CodexSource(), GeminiSource()]
-        )
+        let sources: [any SessionSource]
+        if let sourceDirectory {
+            sources = [ClaudeCodeSource(roots: [sourceDirectory.appendingPathComponent("Claude")]),
+                       CodexSource(root: sourceDirectory.appendingPathComponent("Codex")),
+                       GeminiSource(root: sourceDirectory.appendingPathComponent("Gemini"))]
+        } else { sources = [ClaudeCodeSource(), CodexSource(), GeminiSource()] }
+        let coordinator = IndexCoordinator(database: database, sources: sources)
         let clock = ContinuousClock()
         let start = clock.now
         await coordinator.indexAll(scope: scope) { progress in
-            if progress.phase == .indexing, progress.completedFiles.isMultiple(of: 100) {
+            if progress.phase == .indexing, progress.currentFileBytes == 0, progress.completedFiles.isMultiple(of: 100) {
                 FileHandle.standardError.write(Data("Indexed \(progress.completedFiles)/\(progress.totalFiles)\n".utf8))
             }
         }
@@ -137,7 +140,7 @@ private struct Options {
 private enum BenchError: LocalizedError {
     case usage
     var errorDescription: String? {
-        "usage: tracebench index [--cold] [--scope prose|tools|everything] [--database PATH] | search [--query TEXT] [--iterations N] [--database PATH] | corpus [--database PATH]"
+        "usage: tracebench index [--cold] [--scope prose|tools|everything] [--sources-directory PATH] [--database PATH] | search [--query TEXT] [--iterations N] [--database PATH] | corpus [--database PATH]"
     }
 }
 

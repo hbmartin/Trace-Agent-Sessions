@@ -41,6 +41,51 @@ public enum TraceFileIO {
 public struct JSONLineRecord: Sendable {
     public let offset: Int64
     public let data: Data
+    public let endOffset: Int64
+}
+
+/// A finite, pull-driven reader. Appends beyond the captured boundary belong to the next pass.
+final class JSONLineCursor {
+    private let handle: FileHandle
+    private let endOffset: Int64
+    private var readOffset: Int64
+    private var bufferOffset: Int64
+    private var buffer = Data()
+    private(set) var checkpoint: Int64
+
+    init(url: URL, from offset: Int64, through boundary: Int64? = nil) throws {
+        handle = try FileHandle(forReadingFrom: url)
+        let size = Int64(try handle.seekToEnd())
+        endOffset = min(size, boundary ?? size)
+        readOffset = max(0, offset)
+        bufferOffset = readOffset
+        checkpoint = readOffset
+        try handle.seek(toOffset: UInt64(readOffset))
+    }
+
+    deinit { try? handle.close() }
+
+    func next() throws -> JSONLineRecord? {
+        while true {
+            try Task.checkCancellation()
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                let count = buffer.distance(from: buffer.startIndex, to: newline)
+                var line = Data(buffer.prefix(count))
+                if line.last == 0x0D { line.removeLast() }
+                let start = bufferOffset
+                let consumed = count + 1
+                buffer.removeFirst(consumed)
+                bufferOffset += Int64(consumed)
+                checkpoint = bufferOffset
+                return .init(offset: start, data: line, endOffset: checkpoint)
+            }
+            guard readOffset < endOffset,
+                  let chunk = try handle.read(upToCount: Int(min(256 * 1_024, endOffset - readOffset))),
+                  !chunk.isEmpty else { return nil }
+            buffer.append(chunk)
+            readOffset += Int64(chunk.count)
+        }
+    }
 }
 
 public enum JSONLineReader {
@@ -49,31 +94,48 @@ public enum JSONLineReader {
         from startOffset: Int64,
         body: (JSONLineRecord) throws -> Void
     ) throws -> Int64 {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        try handle.seek(toOffset: UInt64(max(0, startOffset)))
-
-        var buffer = Data()
-        var bufferOffset = max(0, startOffset)
-        var committedOffset = bufferOffset
-
-        while let chunk = try handle.read(upToCount: 256 * 1_024), !chunk.isEmpty {
-            buffer.append(chunk)
-            while let newline = buffer.firstIndex(of: 0x0A) {
-                let count = buffer.distance(from: buffer.startIndex, to: newline)
-                var line = Data(buffer.prefix(count))
-                if line.last == 0x0D { line.removeLast() }
-                if !line.isEmpty {
-                    try body(.init(offset: bufferOffset, data: line))
-                }
-                let consumed = count + 1
-                buffer.removeFirst(consumed)
-                bufferOffset += Int64(consumed)
-                committedOffset = bufferOffset
-            }
+        let cursor = try JSONLineCursor(url: url, from: startOffset)
+        while let line = try cursor.next() {
+            if !line.data.isEmpty { try body(line) }
         }
+        return cursor.checkpoint
+    }
+}
 
-        return committedOffset
+/// Each iterator is consumed serially. The parser and cursor are owned exclusively by that iterator.
+private final class RecordStreamState: @unchecked Sendable {
+    let url: URL
+    let offset: Int64
+    let boundary: Int64?
+    let parse: (JSONLineRecord) throws -> [ParsedRecord]
+    var cursor: JSONLineCursor?
+    var pending: ArraySlice<ParsedRecord> = []
+
+    init(url: URL, offset: Int64, boundary: Int64?, parse: @escaping (JSONLineRecord) throws -> [ParsedRecord]) {
+        self.url = url
+        self.offset = offset
+        self.boundary = boundary
+        self.parse = parse
+    }
+
+    func next() throws -> ParsedRecord? {
+        try Task.checkCancellation()
+        if let record = pending.popFirst() { return record }
+        if cursor == nil { cursor = try JSONLineCursor(url: url, from: offset, through: boundary) }
+        guard let line = try cursor?.next() else { return nil }
+        let records = line.data.isEmpty ? [] : try parse(line)
+        pending = ArraySlice(records + [.checkpoint(line.endOffset)])
+        return pending.popFirst()
+    }
+}
+
+enum ParsedRecordStream {
+    static func jsonLines(
+        url: URL, from offset: Int64, through boundary: Int64?,
+        parse: @escaping (JSONLineRecord) throws -> [ParsedRecord]
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        let state = RecordStreamState(url: url, offset: offset, boundary: boundary, parse: parse)
+        return AsyncThrowingStream(unfolding: { try state.next() })
     }
 }
 

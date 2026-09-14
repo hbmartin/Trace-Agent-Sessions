@@ -18,70 +18,25 @@ public struct GeminiSource: SessionSource {
     }
 
     public func records(
-        in file: DiscoveredSourceFile,
-        from offset: Int64
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        AsyncThrowingStream { continuation in
-            Task.detached {
-                do {
-                    let metadata = geminiMetadata(for: file.url)
-                    if file.format == .geminiJSON {
-                        let data = try Data(contentsOf: file.url, options: [.mappedIfSafe])
-                        let root = try JSONHelpers.object(from: data)
-                        let sessionID = root["sessionId"] as? String ?? metadata.sessionID
-                        let ranges = JSONDocumentScanner.objectRanges(in: data, arrayKey: "messages")
-                        for (index, range) in ranges.enumerated() {
-                            let objectData = data.subdata(in: range)
-                            guard let messageObject = try? JSONHelpers.object(from: objectData) else { continue }
-                            let locator = RecordLocator.byteRange(
-                                offset: Int64(range.lowerBound),
-                                length: Int64(range.count),
-                                key: messageObject["id"] as? String
-                            )
-                            if let message = parseGeminiMessage(
-                                messageObject,
-                                sessionID: sessionID,
-                                cwd: metadata.cwd,
-                                fallbackTimestamp: metadata.timestamp + Int64(index),
-                                locator: locator,
-                                sourceKey: messageObject["id"] as? String ?? "\(range.lowerBound)"
-                            ) {
-                                continuation.yield(.message(message))
-                            }
-                        }
-                        continuation.yield(.checkpoint(Int64(data.count)))
-                    } else {
-                        let checkpoint = try JSONLineReader.forEachCompleteLine(at: file.url, from: offset) { line in
-                            guard let root = try? JSONHelpers.object(from: line.data) else { return }
-                            let sessionID = root["sessionId"] as? String ?? metadata.sessionID
-                            let ranges = JSONDocumentScanner.objectRanges(in: line.data, arrayKey: "messages")
-                            for (index, range) in ranges.enumerated() {
-                                let objectData = line.data.subdata(in: range)
-                                guard let messageObject = try? JSONHelpers.object(from: objectData) else { continue }
-                                let absoluteOffset = line.offset + Int64(range.lowerBound)
-                                let locator = RecordLocator.byteRange(
-                                    offset: absoluteOffset,
-                                    length: Int64(range.count),
-                                    key: messageObject["id"] as? String
-                                )
-                                if let message = parseGeminiMessage(
-                                    messageObject,
-                                    sessionID: sessionID,
-                                    cwd: metadata.cwd,
-                                    fallbackTimestamp: metadata.timestamp + absoluteOffset + Int64(index),
-                                    locator: locator,
-                                    sourceKey: messageObject["id"] as? String ?? "\(absoluteOffset)"
-                                ) {
-                                    continuation.yield(.message(message))
-                                }
-                            }
-                        }
-                        continuation.yield(.checkpoint(checkpoint))
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
+        if file.format == .geminiJSON {
+            let state = GeminiSnapshotStream(file: file)
+            return AsyncThrowingStream(unfolding: { try state.next() })
+        }
+        let metadata = geminiMetadata(for: file.url)
+        return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
+            guard let root = try? JSONHelpers.object(from: line.data) else { return [] }
+            let sessionID = root["sessionId"] as? String ?? metadata.sessionID
+            return JSONDocumentScanner.objectRanges(in: line.data, arrayKey: "messages").compactMap { range in
+                guard let object = try? JSONHelpers.object(from: line.data.subdata(in: range)) else { return nil }
+                let absoluteOffset = line.offset + Int64(range.lowerBound)
+                return parseGeminiMessage(
+                    object, sessionID: sessionID, cwd: metadata.cwd,
+                    fallbackTimestamp: metadata.timestamp + absoluteOffset,
+                    locator: .byteRange(offset: absoluteOffset, length: Int64(range.count), key: object["id"] as? String),
+                    sourceKey: object["id"] as? String ?? "\(absoluteOffset)"
+                ).map { .message($0) }
             }
         }
     }
@@ -188,4 +143,46 @@ private func parseGeminiMessage(
         toolName: toolName,
         usage: usage
     )
+}
+
+private final class GeminiSnapshotStream: @unchecked Sendable {
+    let file: DiscoveredSourceFile
+    var data: Data?
+    var ranges: ArraySlice<Range<Int>> = []
+    var sessionID = ""
+    var cwd = ""
+    var timestamp: Int64 = 0
+    var ordinal: Int64 = 0
+    var finished = false
+
+    init(file: DiscoveredSourceFile) { self.file = file }
+
+    func next() throws -> ParsedRecord? {
+        try Task.checkCancellation()
+        guard !finished else { return nil }
+        if data == nil {
+            let loaded = try Data(contentsOf: file.url)
+            let root = try JSONHelpers.object(from: loaded)
+            let metadata = geminiMetadata(for: file.url)
+            sessionID = root["sessionId"] as? String ?? metadata.sessionID
+            cwd = metadata.cwd
+            timestamp = metadata.timestamp
+            ranges = ArraySlice(JSONDocumentScanner.objectRanges(in: loaded, arrayKey: "messages"))
+            data = loaded
+        }
+        guard let data else { return nil }
+        while let range = ranges.popFirst() {
+            try Task.checkCancellation()
+            ordinal += 1
+            guard let object = try? JSONHelpers.object(from: data.subdata(in: range)) else { continue }
+            if let message = parseGeminiMessage(
+                object, sessionID: sessionID, cwd: cwd, fallbackTimestamp: timestamp + ordinal - 1,
+                locator: .byteRange(offset: Int64(range.lowerBound), length: Int64(range.count), key: object["id"] as? String),
+                sourceKey: object["id"] as? String ?? "\(range.lowerBound)"
+            ) { return .message(message) }
+        }
+        finished = true
+        self.data = nil
+        return .checkpoint(Int64(data.count))
+    }
 }

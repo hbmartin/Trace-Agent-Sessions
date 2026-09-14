@@ -149,6 +149,10 @@ public struct MessageSections: Codable, Equatable, Sendable {
         }
     }
 
+    public var flags: Int {
+        (prose.isEmpty ? 0 : 1) | (toolInvocation.isEmpty && toolOutput.isEmpty ? 0 : 2) | (reasoning.isEmpty ? 0 : 4)
+    }
+
     public var preferredPreview: String {
         if !prose.isEmpty { return prose }
         if !toolInvocation.isEmpty { return toolInvocation }
@@ -242,6 +246,8 @@ public struct ParsedSessionEvent: Sendable {
     public let cwd: String
     public let timestampMilliseconds: Int64
     public let kind: SessionEventKind
+    public var detail: String? = nil
+    public var locator: RecordLocator? = nil
 }
 
 public struct ParsedUsageRecord: Sendable {
@@ -290,7 +296,7 @@ public enum SearchSort: String, Codable, CaseIterable, Sendable {
     case relevance
 }
 
-public struct SearchFilters: Sendable {
+public struct SearchFilters: Equatable, Sendable {
     public var agents: Set<AgentKind>
     public var projectID: Int64?
     public var fromMilliseconds: Int64?
@@ -354,6 +360,7 @@ public struct SessionSummary: Identifiable, Sendable {
     public let messageCount: Int
     public let hadError: Bool
     public let sourcePath: String
+    public var sourceRevision: String = ""
 }
 
 public struct MessageSummary: Identifiable, Sendable {
@@ -367,6 +374,7 @@ public struct MessageSummary: Identifiable, Sendable {
     public let sourcePath: String
     public let sourceFormat: SourceFormat
     public let locator: RecordLocator
+    public var sectionFlags: Int? = nil
 }
 
 public struct SourceHealth: Identifiable, Sendable {
@@ -433,4 +441,51 @@ public enum CostRange: String, CaseIterable, Sendable, Identifiable {
     case custom
 
     public var id: String { rawValue }
+}
+
+public struct SessionFailure: Sendable, Identifiable {
+    public var id: String { "\(timestampMilliseconds):\(kind):\(detail)" }
+    public let timestampMilliseconds: Int64
+    public let kind: String
+    public let toolName: String?
+    public let detail: String
+    public let locator: RecordLocator?
+}
+
+public struct TranscriptVisibility: Hashable, Sendable {
+    public var tools: Bool
+    public var system: Bool
+    public var reasoning: Bool
+
+    public init(tools: Bool = true, system: Bool = true, reasoning: Bool = true) {
+        self.tools = tools
+        self.system = system
+        self.reasoning = reasoning
+    }
+
+    public func includes(role: MessageRole) -> Bool {
+        switch role {
+        case .system: system
+        case .reasoning: reasoning
+        case .toolUse, .toolResult: tools
+        default: true
+        }
+    }
+
+    public func includes(_ message: MessageSummary) -> Bool {
+        // System is a record category; section switches also apply inside it.
+        if message.role == .system && !system { return false }
+        if let flags = message.sectionFlags {
+            return flags & 1 != 0 || (tools && flags & 2 != 0) || (reasoning && flags & 4 != 0)
+        }
+        return includes(role: message.role)
+    }
+
+    public func text(_ message: HydratedMessage, expandedReasoning: Bool) -> String {
+        guard message.role != .system || system else { return "" }
+        var sections = [message.sections.prose]
+        if tools { sections += [message.sections.toolInvocation, message.sections.toolOutput] }
+        if reasoning && expandedReasoning { sections.append(message.sections.reasoning) }
+        return sections.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
 }

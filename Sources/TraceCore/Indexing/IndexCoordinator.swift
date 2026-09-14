@@ -3,41 +3,56 @@ import os
 
 public struct IndexProgress: Sendable {
     public enum Phase: String, Sendable {
-        case discovering
-        case indexing
-        case reconciling
-        case aggregating
-        case complete
-        case failed
+        case waiting, discovering, indexing, reconciling, aggregating, complete, cancelled, failed
     }
+    public var phase: Phase
+    public var runID: UUID
+    public var sequence: Int = 0
+    public var incremental: Bool = false
+    public var agent: AgentKind?
+    public var completedFiles: Int
+    public var totalFiles: Int
+    public var indexedFiles: Int = 0
+    public var unchangedFiles: Int = 0
+    public var failedFiles: Int = 0
+    public var committedBytes: Int64 = 0
+    public var currentFileBytes: Int64 = 0
+    public var currentFileTotalBytes: Int64 = 0
+    public var projectName: String?
+    public var currentPath: String?
+    public var error: String?
 
-    public let phase: Phase
-    public let agent: AgentKind?
-    public let completedFiles: Int
-    public let totalFiles: Int
-    public let currentPath: String?
-    public let error: String?
-
-    public init(
-        phase: Phase,
-        agent: AgentKind? = nil,
-        completedFiles: Int = 0,
-        totalFiles: Int = 0,
-        currentPath: String? = nil,
-        error: String? = nil
-    ) {
+    public init(phase: Phase, agent: AgentKind? = nil, completedFiles: Int = 0,
+                totalFiles: Int = 0, currentPath: String? = nil, error: String? = nil,
+                runID: UUID = UUID()) {
         self.phase = phase
         self.agent = agent
         self.completedFiles = completedFiles
         self.totalFiles = totalFiles
         self.currentPath = currentPath
         self.error = error
+        self.runID = runID
+    }
+}
+
+/// Actors are reentrant at database awaits: an explicit permit protects an entire pass.
+private actor IndexRunGate {
+    private var held = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func acquire() async {
+        if !held { held = true; return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+    func release() {
+        if waiting.isEmpty { held = false }
+        else { waiting.removeFirst().resume() }
     }
 }
 
 public actor IndexCoordinator {
     private let database: IndexDatabase
     private let sources: [any SessionSource]
+    private let gate = IndexRunGate()
     private let logger = Logger(subsystem: "me.haroldmartin.Trace", category: "index")
 
     public init(database: IndexDatabase, sources: [any SessionSource]) {
@@ -45,100 +60,122 @@ public actor IndexCoordinator {
         self.sources = sources
     }
 
-    public func indexAll(
-        scope: IndexScope,
-        progress: @escaping @Sendable (IndexProgress) -> Void = { _ in }
-    ) async {
+    public func indexAll(scope: IndexScope, rebuild: Bool = false,
+                         progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async {
+        await gate.acquire()
+        await run(scope: scope, paths: nil, rebuild: rebuild, progress: progress)
+        await gate.release()
+    }
+
+    public func refresh(paths: Set<String>, scope: IndexScope,
+                        progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async {
+        await gate.acquire()
+        await run(scope: scope, paths: paths, rebuild: false, progress: progress)
+        await gate.release()
+    }
+
+    private func run(scope: IndexScope, paths: Set<String>?, rebuild: Bool,
+                     progress: @escaping @Sendable (IndexProgress) async -> Void) async {
+        var status = IndexProgress(phase: .discovering)
+        status.incremental = paths != nil
         do {
+            try Task.checkCancellation()
+            let oldScope = try await database.storedIndexScope()
+            if rebuild || oldScope != scope { try await database.clearIndex() }
             try await database.setIndexScope(scope)
-            progress(.init(phase: .discovering))
-            var discoveredByAgent: [AgentKind: [DiscoveredSourceFile]] = [:]
+            await progress(status)
             var rootIDs: [String: Int64] = [:]
-            var rootErrors: [String: String] = [:]
-
             for source in sources {
-                for root in source.roots {
-                    rootIDs[root.id] = try await database.register(root: root)
-                }
-                let files = try source.discover()
-                discoveredByAgent[source.agent] = files
+                for root in source.roots { rootIDs[root.id] = try await database.register(root: root) }
             }
-
-            let allFiles = AgentKind.allCases.flatMap { discoveredByAgent[$0] ?? [] }
-            for (index, file) in allFiles.enumerated() {
-                progress(.init(
-                    phase: .indexing,
-                    agent: file.agent,
-                    completedFiles: index,
-                    totalFiles: allFiles.count,
-                    currentPath: file.url.path
-                ))
+            var allFiles: [DiscoveredSourceFile] = []
+            let fullScan = paths == nil || oldScope != scope || rebuild
+            if fullScan {
+                for source in sources {
+                    try Task.checkCancellation()
+                    allFiles += try source.discover()
+                }
+            } else {
+                for path in (paths ?? []).sorted() {
+                    try Task.checkCancellation()
+                    let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+                    if !FileManager.default.fileExists(atPath: url.path) {
+                        try await database.deleteSource(path: url.path)
+                    } else if let (_, file, _) = classify(url: url) { allFiles.append(file) }
+                }
+            }
+            // A stable order and finite discovered set make progress comparable within a run.
+            allFiles.sort { ($0.agent.rawValue, $0.url.path) < ($1.agent.rawValue, $1.url.path) }
+            var seen: Set<String> = []
+            allFiles = allFiles.filter { seen.insert($0.url.standardizedFileURL.resolvingSymlinksInPath().path).inserted }
+            status.totalFiles = allFiles.count
+            var rootErrors: [String: String] = [:]
+            for file in allFiles {
+                try Task.checkCancellation()
                 guard let source = source(for: file.agent),
-                      let rootID = rootIDs["\(file.agent.rawValue):\(file.root.standardizedFileURL.path)"]
-                else { continue }
+                      let rootID = rootIDs["\(file.agent.rawValue):\(file.root.standardizedFileURL.path)"] else { continue }
+                status.phase = .indexing
+                status.agent = file.agent
+                status.currentPath = file.url.path
+                status.currentFileBytes = 0
+                status.currentFileTotalBytes = (try? TraceFileIO.fingerprint(url: file.url).size) ?? 0
+                status.sequence += 1
+                await progress(status)
                 do {
-                    try await process(file: file, using: source, rootID: rootID, scope: scope)
-                } catch {
-                    logger.error("Index failed for \(file.url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                    // The callback runs serially after committed batches, and never mutates the database.
+                    let baseStatus = status
+                    let outcome = try await process(file: file, using: source, rootID: rootID, scope: scope) { bytes, newlyCommitted, project in
+                        var update = baseStatus
+                        update.currentFileBytes = bytes
+                        update.projectName = project
+                        update.committedBytes += newlyCommitted
+                        await progress(update)
+                    }
+                    if outcome.changed { status.indexedFiles += 1 } else { status.unchangedFiles += 1 }
+                    status.committedBytes += outcome.committedBytes
+                } catch is CancellationError { throw CancellationError() }
+                catch {
+                    status.failedFiles += 1
+                    status.error = error.localizedDescription
                     try? await database.recordSourceError(path: file.url.path, error: error.localizedDescription)
                     rootErrors["\(file.agent.rawValue):\(file.root.standardizedFileURL.path)"] = error.localizedDescription
                 }
+                status.completedFiles += 1
             }
-
-            progress(.init(phase: .reconciling, completedFiles: allFiles.count, totalFiles: allFiles.count))
-            for agent in AgentKind.allCases {
-                let livePaths = Set((discoveredByAgent[agent] ?? []).map { $0.url.standardizedFileURL.resolvingSymlinksInPath().path })
-                for stored in try await database.paths(agent: agent) where !livePaths.contains(stored.path) {
-                    try await database.deleteSource(id: stored.id)
-                }
-            }
-
-            for source in sources {
-                for root in source.roots {
-                    if let rootID = rootIDs[root.id] {
-                        try await database.recordRootScan(rootID: rootID, error: rootErrors[root.id])
+            try Task.checkCancellation()
+            if fullScan {
+                status.phase = .reconciling
+                status.sequence += 1
+                await progress(status)
+                for source in sources {
+                    let live = Set(allFiles.filter { $0.agent == source.agent }.map { $0.url.standardizedFileURL.resolvingSymlinksInPath().path })
+                    for stored in try await database.paths(agent: source.agent) where !live.contains(stored.path) {
+                        try Task.checkCancellation()
+                        try await database.deleteSource(id: stored.id)
+                    }
+                    for root in source.roots {
+                        if let rootID = rootIDs[root.id] { try await database.recordRootScan(rootID: rootID, error: rootErrors[root.id]) }
                     }
                 }
             }
-
-            progress(.init(phase: .aggregating, completedFiles: allFiles.count, totalFiles: allFiles.count))
-            try await database.rebuildUsageRollups()
-            progress(.init(phase: .complete, completedFiles: allFiles.count, totalFiles: allFiles.count))
+            status.phase = .aggregating
+            status.sequence += 1
+            await progress(status)
+            if status.indexedFiles > 0 || fullScan || !(paths ?? []).isEmpty {
+                try await database.rebuildUsageRollups()
+            }
+            try Task.checkCancellation()
+            status.phase = .complete
+            status.currentPath = nil
+            status.agent = nil
+        } catch is CancellationError {
+            status.phase = .cancelled
         } catch {
-            logger.error("Index run failed: \(error.localizedDescription, privacy: .public)")
-            progress(.init(phase: .failed, error: error.localizedDescription))
+            status.phase = .failed
+            status.error = error.localizedDescription
         }
-    }
-
-    public func refresh(
-        paths: Set<String>,
-        scope: IndexScope,
-        progress: @escaping @Sendable (IndexProgress) -> Void = { _ in }
-    ) async {
-        var needsFullReconcile = false
-        for path in paths {
-            let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                try? await database.deleteSource(path: url.path)
-                continue
-            }
-            guard let (source, file, root) = classify(url: url) else {
-                if url.hasDirectoryPath { needsFullReconcile = true }
-                continue
-            }
-            do {
-                let rootID = try await database.register(root: root)
-                try await process(file: file, using: source, rootID: rootID, scope: scope)
-            } catch {
-                logger.error("Refresh failed for \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
-                try? await database.recordSourceError(path: url.path, error: error.localizedDescription)
-            }
-        }
-        if needsFullReconcile {
-            await indexAll(scope: scope, progress: progress)
-        } else {
-            try? await database.rebuildUsageRollups()
-        }
+        status.sequence += 1
+        await progress(status)
     }
 
     public func hydrate(_ summary: MessageSummary) async throws -> HydratedMessage {
@@ -159,13 +196,43 @@ public actor IndexCoordinator {
         return try await hydrate(summary)
     }
 
+    public func failures(for session: SessionSummary) async throws -> [SessionFailure] {
+        var failures = try await database.failures(sessionID: session.id)
+        let summaries = try await database.messages(sessionID: session.id)
+        for summary in summaries where summary.hasError {
+            try Task.checkCancellation()
+            guard !failures.contains(where: { $0.locator == summary.locator }) else { continue }
+            let message = try await hydrate(summary)
+            failures.append(.init(timestampMilliseconds: summary.timestampMilliseconds,
+                kind: message.toolName == nil && message.sections.toolOutput.isEmpty ? "failed message" : "failed tool",
+                toolName: message.toolName,
+                detail: message.sections.toolOutput.isEmpty ? message.sections.prose : message.sections.toolOutput,
+                locator: summary.locator))
+        }
+        // Old event-only sessions stored just a boolean. Resolve them read-only, without reindexing.
+        if failures.isEmpty, session.hadError,
+           let (source, file, _) = classify(url: URL(fileURLWithPath: session.sourcePath)) {
+            for try await record in source.records(in: file, from: 0) {
+                try Task.checkCancellation()
+                if case .event(let event) = record {
+                    failures.append(.init(timestampMilliseconds: event.timestampMilliseconds,
+                        kind: event.kind.rawValue, toolName: nil,
+                        detail: event.detail ?? "The source recorded an error without an explanation.", locator: event.locator))
+                }
+            }
+        }
+        return failures.sorted { $0.timestampMilliseconds > $1.timestampMilliseconds }
+    }
+
     private func process(
         file: DiscoveredSourceFile,
         using source: any SessionSource,
         rootID: Int64,
         scope: IndexScope,
-        attempt: Int = 0
-    ) async throws {
+        attempt: Int = 0,
+        committed: @escaping @Sendable (Int64, Int64, String?) async -> Void = { _, _, _ in }
+    ) async throws -> (changed: Bool, committedBytes: Int64) {
+        try Task.checkCancellation()
         let initialFingerprint = try TraceFileIO.fingerprint(url: file.url)
         var state = try await database.sourceState(path: file.url.path)
 
@@ -176,12 +243,14 @@ public actor IndexCoordinator {
         }
 
         if let state,
+           state.device == initialFingerprint.device,
+           state.inode == initialFingerprint.inode,
            state.size == initialFingerprint.size,
            state.modificationNanoseconds == initialFingerprint.modificationNanoseconds,
            state.scannedBytes == state.size,
            state.headLength == initialFingerprint.headLength,
            state.headHash == initialFingerprint.headHash {
-            return
+            return (false, 0)
         }
 
         if file.format == .geminiJSON {
@@ -199,7 +268,8 @@ public actor IndexCoordinator {
                 scope: scope,
                 attempt: attempt
             )
-            return
+            await committed(initialFingerprint.size, initialFingerprint.size, nil)
+            return (true, initialFingerprint.size)
         }
 
         let sourceID: Int64
@@ -224,17 +294,25 @@ public actor IndexCoordinator {
 
         var batch: [ParsedRecord] = []
         var checkpoint = startOffset
-        for try await record in source.records(in: file, from: startOffset) {
+        var projectName: String?
+        for try await record in source.records(in: file, from: startOffset, through: initialFingerprint.size) {
+            try Task.checkCancellation()
+            if case .message(let message) = record, projectName == nil {
+                projectName = ProjectCanonicalizer.canonicalProject(for: message.cwd).name
+            }
             if case .checkpoint(let offset) = record { checkpoint = offset }
             batch.append(record)
-            if batch.count >= 250 {
+            if batch.count >= 250, case .checkpoint = record {
                 try await database.insert(records: batch, sourceFileID: sourceID, scope: scope)
                 batch.removeAll(keepingCapacity: true)
+                await committed(checkpoint, max(0, checkpoint - startOffset), projectName)
             }
         }
         if !batch.isEmpty {
             try await database.insert(records: batch, sourceFileID: sourceID, scope: scope)
+            await committed(checkpoint, max(0, checkpoint - startOffset), projectName)
         }
+        try Task.checkCancellation()
 
         let finalFingerprint = try TraceFileIO.fingerprint(
             url: file.url,
@@ -250,15 +328,11 @@ public actor IndexCoordinator {
             guard attempt < 2 else {
                 throw SessionSourceError.unreadableFile("\(file.url.path) changed repeatedly while indexing")
             }
-            try await process(file: file, using: source, rootID: rootID, scope: scope, attempt: attempt + 1)
-            return
+            return try await process(file: file, using: source, rootID: rootID, scope: scope, attempt: attempt + 1, committed: committed)
         }
-        try await database.finishSource(id: sourceID, fingerprint: finalFingerprint, scannedBytes: checkpoint)
-        if finalFingerprint != initialFingerprint,
-           finalFingerprint.size > checkpoint,
-           attempt < 2 {
-            try await process(file: file, using: source, rootID: rootID, scope: scope, attempt: attempt + 1)
-        }
+        // Persist the fingerprint of the boundary actually consumed. Later appends remain detectable.
+        try await database.finishSource(id: sourceID, fingerprint: initialFingerprint, scannedBytes: checkpoint)
+        return (checkpoint > startOffset, max(0, checkpoint - startOffset))
     }
 
     private func processSnapshot(
@@ -273,6 +347,7 @@ public actor IndexCoordinator {
         var records: [ParsedRecord] = []
         var checkpoint: Int64 = 0
         for try await record in source.records(in: file, from: 0) {
+            try Task.checkCancellation()
             if case .checkpoint(let offset) = record { checkpoint = offset }
             records.append(record)
         }
@@ -285,7 +360,7 @@ public actor IndexCoordinator {
             guard attempt < 2 else {
                 throw SessionSourceError.unreadableFile("\(file.url.path) changed repeatedly while indexing")
             }
-            try await process(file: file, using: source, rootID: rootID, scope: scope, attempt: attempt + 1)
+            _ = try await process(file: file, using: source, rootID: rootID, scope: scope, attempt: attempt + 1)
             return
         }
 

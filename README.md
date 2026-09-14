@@ -42,3 +42,15 @@ deletions are mirrored and no transcript archive is retained.
 `Scripts/release.sh` builds an Apple-silicon archive, signs it with Developer
 ID, creates a DMG, notarizes, staples, and verifies it. Configure a signing team
 in `Config/Signing.xcconfig` and a `notarytool` keychain profile first.
+
+## Search, transcript display, and development builds
+
+The menu popover keeps search and index status visible while its session list scrolls. The main window searches the selected project (or all sessions under All Projects); the Projects filter matches project names only.
+
+Transcript controls independently show or hide tools, system records, and reasoning. Comfortable is the default spacing; Compact reduces card padding and gaps. Copy Transcript omits hidden sections and includes reasoning only when its disclosure is expanded. Hover over a session’s error icon for the provider, time, failure kind, and available source explanation.
+
+Indexing runs through a single scheduler. Watcher events coalesce behind the active pass, complete JSONL records commit with their checkpoints, and each pass reads only its captured input boundary. Project/session summaries update during indexing. Click the status indicator for provider, project/file, byte progress, and indexed/unchanged/failed counts.
+
+Debug and Release builds share the stable bundle identifier and `~/Library/Caches/me.haroldmartin.Trace/index.sqlite`, independent of DerivedData or the app’s location. The details migration preserves existing message IDs, FTS postings, and checkpoints. Ordinary launches reconcile changed files; only an explicit rebuild, scope change, or incompatible index format resets content. Quit the older build before launching another build against the same index.
+
+UI tests automatically isolate their database, sources, preferences, and diagnostics. A fixed test directory can be supplied with `TRACE_TEST_DIRECTORY`; its `Sources` directory contains `Claude`, `Codex`, and `Gemini` roots. The test-only `--index-smoke` launch argument indexes that directory, prints a JSON summary, and exits. It requires an isolated test directory and does not operate on the production cache.

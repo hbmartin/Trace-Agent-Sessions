@@ -19,6 +19,15 @@ final class AppSettings: ObservableObject {
         static let costRange = "costRange"
     }
 
+    @Published var showTools: Bool { didSet { defaults.set(showTools, forKey: "showTools") } }
+    @Published var showSystem: Bool { didSet { defaults.set(showSystem, forKey: "showSystem") } }
+    @Published var showReasoning: Bool { didSet { defaults.set(showReasoning, forKey: "showReasoning") } }
+    @Published var transcriptDensity: TranscriptDensity { didSet { defaults.set(transcriptDensity.rawValue, forKey: "transcriptDensity") } }
+
+    var transcriptVisibility: TranscriptVisibility {
+        .init(tools: showTools, system: showSystem, reasoning: showReasoning)
+    }
+
     private let defaults: UserDefaults
 
     @Published var onboardingComplete: Bool { didSet { defaults.set(onboardingComplete, forKey: Key.onboardingComplete) } }
@@ -42,12 +51,17 @@ final class AppSettings: ObservableObject {
     @Published var includeSidechains: Bool { didSet { defaults.set(includeSidechains, forKey: Key.includeSidechains) } }
     @Published var costRange: CostRange { didSet { defaults.set(costRange.rawValue, forKey: Key.costRange) } }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = TraceRuntime.defaults) {
         self.defaults = defaults
+        showTools = defaults.object(forKey: "showTools") as? Bool ?? true
+        showSystem = defaults.object(forKey: "showSystem") as? Bool ?? true
+        showReasoning = defaults.object(forKey: "showReasoning") as? Bool ?? true
+        transcriptDensity = TranscriptDensity(rawValue: defaults.string(forKey: "transcriptDensity") ?? "") ?? .comfortable
         let arguments = ProcessInfo.processInfo.arguments
-        onboardingComplete = arguments.contains("--ui-testing") || arguments.contains("--network-smoke")
+        onboardingComplete = arguments.contains("--ui-onboarding") || arguments.contains("--network-smoke")
             ? false
             : defaults.bool(forKey: Key.onboardingComplete)
+        if TraceRuntime.testDirectory != nil && arguments.contains("--index-smoke") { onboardingComplete = true }
         indexScope = IndexScope(rawValue: defaults.object(forKey: Key.indexScope) as? Int ?? 0) ?? .proseOnly
         searchSort = SearchSort(rawValue: defaults.string(forKey: Key.searchSort) ?? "") ?? .recency
         additionalClaudeRoots = defaults.stringArray(forKey: Key.additionalClaudeRoots) ?? []
@@ -76,6 +90,7 @@ final class AppSettings: ObservableObject {
     }
 
     func setLaunchAtLogin(_ enabled: Bool) throws {
+        guard TraceRuntime.testDirectory == nil else { return }
         if enabled {
             try SMAppService.mainApp.register()
         } else {
@@ -83,7 +98,7 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    var launchAtLoginEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    var launchAtLoginEnabled: Bool { TraceRuntime.testDirectory == nil && SMAppService.mainApp.status == .enabled }
 }
 
 enum KeyCodeNames {
@@ -116,4 +131,28 @@ extension Notification.Name {
     static let traceShowLauncher = Notification.Name("TraceShowLauncher")
     static let traceHotkeyChanged = Notification.Name("TraceHotkeyChanged")
     static let traceShowPreferences = Notification.Name("TraceShowPreferences")
+}
+
+enum TranscriptDensity: String, CaseIterable, Identifiable {
+    case comfortable, compact
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
+/// UI tests use a separate database, source roots, preferences, and diagnostics directory.
+enum TraceRuntime {
+    static let testDirectory: URL? = {
+        if let path = ProcessInfo.processInfo.environment["TRACE_TEST_DIRECTORY"] {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("--ui-testing") || args.contains("--network-smoke") {
+            return FileManager.default.temporaryDirectory.appendingPathComponent("TraceIsolated-\(UUID())", isDirectory: true)
+        }
+        return nil
+    }()
+    static var defaults: UserDefaults {
+        if let directory = testDirectory { return UserDefaults(suiteName: "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)")! }
+        return .standard
+    }
 }

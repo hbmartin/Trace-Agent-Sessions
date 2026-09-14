@@ -27,7 +27,7 @@ struct IndexedSourceState: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
     public static let indexFormatVersion = 1
     private let pool: DatabasePool
     private let url: URL
@@ -195,6 +195,22 @@ public actor IndexDatabase {
                 arguments: [String(schemaVersion), String(indexFormatVersion), String(IndexScope.proseOnly.rawValue)]
             )
         }
+        migrator.registerMigration("trace-v2-details") { db in
+            try db.execute(sql: "ALTER TABLE message ADD COLUMN section_flags INTEGER")
+            try db.execute(sql: "UPDATE trace_meta SET value='2' WHERE key='schema_version'")
+            try db.execute(sql: """
+                CREATE TABLE session_failure (
+                    session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+                    source_key TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    tool_name TEXT,
+                    detail TEXT NOT NULL,
+                    locator BLOB,
+                    PRIMARY KEY(session_id, source_key)
+                );
+                """)
+        }
         try migrator.migrate(pool)
     }
 
@@ -216,6 +232,13 @@ public actor IndexDatabase {
                 )
                 return .commit
             }
+        }
+    }
+
+    public func storedIndexScope() throws -> IndexScope {
+        try pool.read { db in
+            let raw = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='index_scope'")
+            return IndexScope(rawValue: Int(raw ?? "0") ?? 0) ?? .proseOnly
         }
     }
 
@@ -437,6 +460,7 @@ public actor IndexDatabase {
     ) throws {
         let agent = sourceAgent(sourceFileID, db: db)
         for record in records {
+            try Task.checkCancellation()
             switch record {
             case .message(let message):
                 try insert(message: message, sourceFileID: sourceFileID, scope: scope, db: db)
@@ -469,6 +493,12 @@ public actor IndexDatabase {
                     db: db
                 )
                 try db.execute(sql: "UPDATE session SET had_error=1 WHERE id=?", arguments: [sessionID])
+                try storeFailure(
+                    sessionID: sessionID, sourceKey: event.sourceKey, timestamp: event.timestampMilliseconds,
+                    kind: event.kind.rawValue, toolName: nil,
+                    detail: event.detail ?? "The source recorded a \(event.kind.rawValue) turn without an explanation.",
+                    locator: event.locator, db: db
+                )
             case .checkpoint(let offset):
                 try db.execute(sql: "UPDATE source_file SET scanned_bytes=? WHERE id=?", arguments: [offset, sourceFileID])
             }
@@ -517,15 +547,15 @@ public actor IndexDatabase {
                 INSERT INTO message(
                     id, source_file_id, session_id, source_key, seq, external_uuid, role, ts,
                     loc_kind, loc_offset, loc_length, loc_key, char_count, prefix, tool_summary,
-                    tool_name, is_sidechain, has_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tool_name, is_sidechain, has_error, section_flags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             arguments: [
                 messageID, sourceFileID, sessionID, message.sourceKey, nextSequence,
                 message.externalID, message.role.rawValue, message.timestampMilliseconds,
                 message.locator.kind.rawValue, message.locator.offset, message.locator.length,
                 message.locator.key, message.sections.preferredPreview.count, preview, toolSummary,
-                message.toolName, message.isSidechain, message.hasError,
+                message.toolName, message.isSidechain, message.hasError, message.sections.flags,
             ]
         )
 
@@ -553,6 +583,15 @@ public actor IndexDatabase {
             ]
         )
 
+        if message.hasError {
+            try storeFailure(
+                sessionID: sessionID, sourceKey: message.sourceKey, timestamp: message.timestampMilliseconds,
+                kind: message.toolName == nil && message.sections.toolOutput.isEmpty ? "failed message" : "failed tool",
+                toolName: message.toolName,
+                detail: message.sections.toolOutput.isEmpty ? message.sections.prose : message.sections.toolOutput,
+                locator: message.locator, db: db
+            )
+        }
         if let usage = message.usage {
             try insertUsage(
                 usage,
@@ -564,6 +603,28 @@ public actor IndexDatabase {
                 agent: agent,
                 db: db
             )
+        }
+    }
+
+    private func storeFailure(
+        sessionID: Int64, sourceKey: String, timestamp: Int64, kind: String,
+        toolName: String?, detail: String, locator: RecordLocator?, db: Database
+    ) throws {
+        try db.execute(sql: """
+            INSERT OR REPLACE INTO session_failure(session_id, source_key, ts, kind, tool_name, detail, locator)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [sessionID, sourceKey, timestamp, kind, toolName,
+                String(detail.prefix(4_000)), try locator.map { try JSONEncoder().encode($0) }])
+    }
+
+    public func failures(sessionID: Int64) throws -> [SessionFailure] {
+        try pool.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM session_failure WHERE session_id=? ORDER BY ts DESC", arguments: [sessionID]).map { row in
+                let data: Data? = row["locator"]
+                return SessionFailure(timestampMilliseconds: row["ts"], kind: row["kind"],
+                    toolName: row["tool_name"], detail: row["detail"],
+                    locator: data.flatMap { try? JSONDecoder().decode(RecordLocator.self, from: $0) })
+            }
         }
     }
 
@@ -866,10 +927,21 @@ public actor IndexDatabase {
             if let projectID { arguments += [projectID] }
             arguments += [limit]
             return try Row.fetchAll(db, sql: """
-                SELECT s.*, coalesce(s.title, 'Untitled session') AS resolved_title, sf.path AS source_path
+                SELECT s.*, coalesce(s.title, 'Untitled session') AS resolved_title, sf.path AS source_path,
+                       sf.mtime_ns AS source_mtime, sf.scanned_bytes AS source_checkpoint
                 FROM session s JOIN source_file sf ON sf.id=s.source_file_id
                 \(predicate) ORDER BY s.last_activity_at DESC LIMIT ?
                 """, arguments: arguments).compactMap(sessionSummary(from:))
+        }
+    }
+
+    public func session(id: Int64) throws -> SessionSummary? {
+        try pool.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT s.*, coalesce(s.title, 'Untitled session') AS resolved_title, sf.path AS source_path,
+                       sf.mtime_ns AS source_mtime, sf.scanned_bytes AS source_checkpoint
+                FROM session s JOIN source_file sf ON sf.id=s.source_file_id WHERE s.id=?
+                """, arguments: [id]).flatMap(sessionSummary(from:))
         }
     }
 
@@ -975,7 +1047,8 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
         id: id, projectID: projectID, agent: agent,
         title: title, startedAtMilliseconds: startedAt,
         lastActivityMilliseconds: lastActivity, messageCount: messageCount,
-        hadError: hadError, sourcePath: sourcePath
+        hadError: hadError, sourcePath: sourcePath,
+        sourceRevision: "\(row["source_mtime"] as Int64):\(row["source_checkpoint"] as Int64)"
     )
 }
 
@@ -1003,7 +1076,7 @@ private func messageSummary(from row: Row) -> MessageSummary? {
         id: id, role: role, timestampMilliseconds: timestamp,
         prefix: prefix, toolSummary: toolSummary,
         characterCount: characterCount, hasError: hasError,
-        sourcePath: sourcePath, sourceFormat: format, locator: locator
+        sourcePath: sourcePath, sourceFormat: format, locator: locator, sectionFlags: row["section_flags"]
     )
 }
 

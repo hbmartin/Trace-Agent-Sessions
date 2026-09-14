@@ -19,30 +19,33 @@ struct RecentPopoverView: View {
             .padding(12)
             .background(.quaternary.opacity(0.45))
 
-            if !model.searchQuery.isEmpty {
-                SearchResultList(model: model, maximum: 10, selectedResultID: .constant(nil))
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("RECENT SESSIONS")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 12)
-                    if model.recentSessions.isEmpty {
-                        ContentUnavailableView("No sessions indexed", systemImage: "clock.arrow.circlepath")
-                    } else {
-                        ForEach(model.recentSessions.prefix(10)) { session in
-                            Button {
-                                model.selectSession(session.id, showWindow: true)
-                            } label: {
-                                SessionRow(session: session)
+            Group {
+                if !model.searchQuery.isEmpty {
+                    SearchResultList(model: model, search: model.globalSearch, maximum: 10, selectedResultID: .constant(nil))
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            Text("RECENT SESSIONS")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 12)
+                            if model.recentSessions.isEmpty {
+                                ContentUnavailableView("No sessions indexed", systemImage: "clock.arrow.circlepath")
+                            } else {
+                                ForEach(model.recentSessions.prefix(10)) { session in
+                                    Button { model.selectSession(session.id, showWindow: true) } label: {
+                                        SessionRow(session: session, model: model)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(-1)
 
             Divider()
             HStack {
@@ -55,8 +58,9 @@ struct RecentPopoverView: View {
             }
             .padding(10)
         }
-        .frame(width: 390, height: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { searchFocused = true }
+        .onReceive(NotificationCenter.default.publisher(for: .traceFocusPopover)) { _ in searchFocused = true }
     }
 }
 
@@ -152,7 +156,7 @@ struct LauncherView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                SearchResultList(model: model, maximum: .max, selectedResultID: $selectedResultID)
+                SearchResultList(model: model, search: model.globalSearch, maximum: .max, selectedResultID: $selectedResultID)
             }
             Divider()
             HStack {
@@ -264,76 +268,89 @@ private struct FilterChip: View {
     }
 }
 
-private struct SearchResultList: View {
+struct SearchResultList: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject var search: SessionSearchModel
     let maximum: Int
+    var isMainSearch = false
     @Binding var selectedResultID: Int64?
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 5) {
-                    ForEach(groups) { project in
-                        Text(project.name.uppercased())
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.top, 8)
-                        ForEach(project.sessions) { session in
-                            HStack(spacing: 7) {
-                                AgentBadge(agent: session.agent)
-                                Text(session.title)
-                                    .font(.caption.weight(.medium))
-                                    .lineLimit(1)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.top, 3)
-                            ForEach(session.results) { result in
-                                Button { model.openSearchResult(result) } label: {
-                                    HStack(alignment: .top, spacing: 10) {
-                                        Text(result.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
-                                            .font(.caption2.weight(.medium))
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 62, alignment: .leading)
-                                        Text(model.searchSnippets[result.id] ?? result.prefix)
-                                            .lineLimit(2)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        Text(result.timestampMilliseconds.traceDate)
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .contentShape(Rectangle())
+        if search.isSearching && search.results.isEmpty {
+            ProgressView("Searching…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = search.error {
+            ContentUnavailableView("Search failed", systemImage: "exclamationmark.triangle", description: Text(error))
+        } else if search.results.isEmpty {
+            ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try another word or project."))
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 5) {
+                        ForEach(groups) { project in
+                            Text(project.name.uppercased())
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 8)
+                            ForEach(project.sessions) { session in
+                                HStack(spacing: 7) {
+                                    AgentBadge(agent: session.agent)
+                                    Text(session.title)
+                                        .font(.caption.weight(.medium))
+                                        .lineLimit(1)
+                                    Spacer()
                                 }
-                                .buttonStyle(.plain)
-                                .background(
-                                    selectedResultID == result.id ? TraceTheme.accent.opacity(0.12) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 7)
-                                )
-                                .id(result.id)
-                                .task(id: result.id) { await model.hydrateSearchResult(result) }
-                                .onAppear {
-                                    if result.id == model.searchResults.last?.id {
-                                        model.search(reset: false)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 3)
+                                ForEach(session.results) { result in
+                                    Button {
+                                        if isMainSearch { search.query = ""; search.search() }
+                                        model.openSearchResult(result)
+                                    } label: {
+                                        HStack(alignment: .top, spacing: 10) {
+                                            Text(result.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                                                .font(.caption2.weight(.medium))
+                                                .foregroundStyle(.secondary)
+                                                .frame(width: 62, alignment: .leading)
+                                            Text(search.snippets[result.id] ?? result.prefix)
+                                                .lineLimit(2)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                            Text(result.timestampMilliseconds.traceDate)
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 7)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .background(
+                                        selectedResultID == result.id ? TraceTheme.accent.opacity(0.12) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 7)
+                                    )
+                                    .id(result.id)
+                                    .task(id: result.id) { await search.hydrate(result) }
+                                    .onAppear {
+                                        if result.id == search.results.last?.id {
+                                            search.search(reset: false)
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    .padding(.vertical, 5)
                 }
-                .padding(.vertical, 5)
-            }
-            .onChange(of: selectedResultID) { _, id in
-                if let id { proxy.scrollTo(id, anchor: .center) }
+                .onChange(of: selectedResultID) { _, id in
+                    if let id { proxy.scrollTo(id, anchor: .center) }
+                }
             }
         }
     }
 
     private var groups: [SearchProjectGroup] {
         var projects: [SearchProjectGroup] = []
-        for result in model.searchResults.prefix(maximum) {
+        for result in search.results.prefix(maximum) {
             if let projectIndex = projects.firstIndex(where: { $0.id == result.projectID }) {
                 projects[projectIndex].append(result)
             } else {
@@ -380,13 +397,14 @@ private struct SearchSessionGroup: Identifiable {
 
 struct SessionRow: View {
     let session: SessionSummary
+    @ObservedObject var model: TraceModel
 
     var body: some View {
         HStack(spacing: 9) {
-            Image(systemName: session.hadError ? "exclamationmark.circle.fill" : "bubble.left.and.text.bubble.right")
-                .foregroundStyle(session.hadError ? .red : .secondary)
+            if session.hadError { SessionErrorIcon(session: session, model: model) }
+            else { Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary) }
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.title).lineLimit(1)
+                Text(session.title).lineLimit(1).truncationMode(.tail)
                 HStack(spacing: 6) {
                     Text(session.agent.displayName)
                     Text("·")
@@ -396,11 +414,47 @@ struct SessionRow: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .contentShape(Rectangle())
     }
+}
+
+private struct SessionErrorIcon: View {
+    let session: SessionSummary
+    @ObservedObject var model: TraceModel
+    @State private var showing = false
+
+    var body: some View {
+        Image(systemName: "exclamationmark.circle.fill")
+            .foregroundStyle(.red)
+            .accessibilityLabel("Session error")
+            .accessibilityValue(model.sessionErrors[session.id] ?? "Hover for error details")
+            .onHover { hovering in
+                showing = hovering
+                if hovering { model.loadSessionError(session) }
+            }
+            .onTapGesture { showing.toggle(); model.loadSessionError(session) }
+            .popover(isPresented: $showing, arrowEdge: .trailing) {
+                ScrollView {
+                    Text(model.sessionErrors[session.id] ?? "Loading error details…")
+                        .font(.callout)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                }
+                .frame(width: 420, height: 220)
+            }
+    }
+}
+
+extension Notification.Name {
+    static let traceFocusPopover = Notification.Name("traceFocusPopover")
 }
