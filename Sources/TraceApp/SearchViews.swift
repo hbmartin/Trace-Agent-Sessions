@@ -1,0 +1,406 @@
+import SwiftUI
+import TraceCore
+
+struct RecentPopoverView: View {
+    @ObservedObject var model: TraceModel
+    @FocusState private var searchFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search all sessions", text: $model.searchQuery)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onSubmit { NotificationCenter.default.post(name: .traceShowLauncher, object: nil) }
+                    .onChange(of: model.searchQuery) { _, _ in model.search() }
+            }
+            .padding(12)
+            .background(.quaternary.opacity(0.45))
+
+            if !model.searchQuery.isEmpty {
+                SearchResultList(model: model, maximum: 10, selectedResultID: .constant(nil))
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("RECENT SESSIONS")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
+                    if model.recentSessions.isEmpty {
+                        ContentUnavailableView("No sessions indexed", systemImage: "clock.arrow.circlepath")
+                    } else {
+                        ForEach(model.recentSessions.prefix(10)) { session in
+                            Button {
+                                model.selectSession(session.id, showWindow: true)
+                            } label: {
+                                SessionRow(session: session)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+
+            Divider()
+            HStack {
+                IndexProgressLabel(progress: model.progress)
+                Spacer()
+                Button("Open Trace") {
+                    NotificationCenter.default.post(name: .traceShowMainWindow, object: nil)
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding(10)
+        }
+        .frame(width: 390, height: 520)
+        .onAppear { searchFocused = true }
+    }
+}
+
+struct LauncherView: View {
+    @ObservedObject var model: TraceModel
+    @FocusState private var searchFocused: Bool
+    @State private var datePreset = SearchDatePreset.anyTime
+    @State private var selectedResultID: Int64?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Image(systemName: "magnifyingglass")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                TextField("Search Claude Code, Codex, and Gemini", text: $model.searchQuery)
+                    .textFieldStyle(.plain)
+                    .font(.title3)
+                    .focused($searchFocused)
+                    .onChange(of: model.searchQuery) { _, _ in model.search() }
+                    .onSubmit { openSelectedResult() }
+                    .onKeyPress(.downArrow) {
+                        moveSelection(by: 1)
+                        return .handled
+                    }
+                    .onKeyPress(.upArrow) {
+                        moveSelection(by: -1)
+                        return .handled
+                    }
+            }
+            .padding(18)
+
+            Divider()
+
+            HStack(spacing: 8) {
+                ForEach(AgentKind.allCases) { agent in
+                    FilterChip(
+                        title: agent.displayName,
+                        selected: model.searchFilters.agents.contains(agent)
+                    ) {
+                        if model.searchFilters.agents.contains(agent) {
+                            model.searchFilters.agents.remove(agent)
+                        } else {
+                            model.searchFilters.agents.insert(agent)
+                        }
+                        model.search()
+                    }
+                }
+                FilterChip(title: "Errors", selected: model.searchFilters.errorsOnly) {
+                    model.searchFilters.errorsOnly.toggle()
+                    model.search()
+                }
+                Menu {
+                    Button("All projects") { selectProject(nil) }
+                    Divider()
+                    ForEach(model.projects) { project in
+                        Button(project.displayName) { selectProject(project.id) }
+                    }
+                } label: {
+                    Label(selectedProjectName, systemImage: "folder")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Menu {
+                    ForEach(SearchDatePreset.allCases) { preset in
+                        Button(preset.title) { selectDate(preset) }
+                    }
+                } label: {
+                    Label(datePreset.title, systemImage: "calendar")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                Spacer()
+                Picker("Sort", selection: $model.settings.searchSort) {
+                    Text("Recent").tag(SearchSort.recency)
+                    Text("Relevant").tag(SearchSort.relevance)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 170)
+                .onChange(of: model.settings.searchSort) { _, _ in model.search() }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider()
+            if model.searchQuery.isEmpty {
+                ContentUnavailableView(
+                    "Search your agent history",
+                    systemImage: "text.magnifyingglass",
+                    description: Text("Words are prefix-matched together. Put phrases in quotes.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                SearchResultList(model: model, maximum: .max, selectedResultID: $selectedResultID)
+            }
+            Divider()
+            HStack {
+                IndexProgressLabel(progress: model.progress)
+                Spacer()
+                Text("↩ Open  ·  esc Close")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(10)
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.separator.opacity(0.6)))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(radius: 30, y: 12)
+        .onAppear { searchFocused = true }
+        .onChange(of: model.searchResults.map(\.id)) { _, ids in
+            if let selectedResultID, ids.contains(selectedResultID) { return }
+            selectedResultID = ids.first
+        }
+        .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
+    }
+
+    private var selectedProjectName: String {
+        guard let id = model.searchFilters.projectID else { return "All projects" }
+        return model.projects.first(where: { $0.id == id })?.displayName ?? "All projects"
+    }
+
+    private func selectProject(_ id: Int64?) {
+        model.searchFilters.projectID = id
+        model.search()
+    }
+
+    private func selectDate(_ preset: SearchDatePreset) {
+        datePreset = preset
+        let bounds = preset.bounds(now: Date())
+        model.searchFilters.fromMilliseconds = bounds.from
+        model.searchFilters.toMilliseconds = bounds.to
+        model.search()
+    }
+
+    private func moveSelection(by delta: Int) {
+        let results = model.searchResults
+        guard !results.isEmpty else { return }
+        let current = selectedResultID.flatMap { selected in results.firstIndex(where: { $0.id == selected }) } ?? -1
+        let next = min(results.count - 1, max(0, current + delta))
+        selectedResultID = results[next].id
+    }
+
+    private func openSelectedResult() {
+        guard let selectedResultID,
+              let result = model.searchResults.first(where: { $0.id == selectedResultID }) else { return }
+        model.openSearchResult(result)
+    }
+}
+
+private enum SearchDatePreset: String, CaseIterable, Identifiable {
+    case anyTime
+    case sevenDays
+    case thirtyDays
+    case yearToDate
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .anyTime: "Any time"
+        case .sevenDays: "7 days"
+        case .thirtyDays: "30 days"
+        case .yearToDate: "Year to date"
+        }
+    }
+
+    func bounds(now: Date) -> (from: Int64?, to: Int64?) {
+        let calendar = Calendar.current
+        let start: Date?
+        switch self {
+        case .anyTime:
+            start = nil
+        case .sevenDays:
+            start = calendar.date(byAdding: .day, value: -7, to: now)
+        case .thirtyDays:
+            start = calendar.date(byAdding: .day, value: -30, to: now)
+        case .yearToDate:
+            start = calendar.date(from: calendar.dateComponents([.year], from: now))
+        }
+        return (
+            start.map { Int64($0.timeIntervalSince1970 * 1_000) },
+            Int64(now.timeIntervalSince1970 * 1_000)
+        )
+    }
+}
+
+private struct FilterChip: View {
+    let title: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(selected ? TraceTheme.accent.opacity(0.2) : .clear, in: Capsule())
+                .overlay(Capsule().stroke(selected ? TraceTheme.accent : .secondary.opacity(0.25)))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SearchResultList: View {
+    @ObservedObject var model: TraceModel
+    let maximum: Int
+    @Binding var selectedResultID: Int64?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 5) {
+                    ForEach(groups) { project in
+                        Text(project.name.uppercased())
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 8)
+                        ForEach(project.sessions) { session in
+                            HStack(spacing: 7) {
+                                AgentBadge(agent: session.agent)
+                                Text(session.title)
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.top, 3)
+                            ForEach(session.results) { result in
+                                Button { model.openSearchResult(result) } label: {
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Text(result.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                                            .font(.caption2.weight(.medium))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 62, alignment: .leading)
+                                        Text(model.searchSnippets[result.id] ?? result.prefix)
+                                            .lineLimit(2)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        Text(result.timestampMilliseconds.traceDate)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .background(
+                                    selectedResultID == result.id ? TraceTheme.accent.opacity(0.12) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 7)
+                                )
+                                .id(result.id)
+                                .task(id: result.id) { await model.hydrateSearchResult(result) }
+                                .onAppear {
+                                    if result.id == model.searchResults.last?.id {
+                                        model.search(reset: false)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 5)
+            }
+            .onChange(of: selectedResultID) { _, id in
+                if let id { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+
+    private var groups: [SearchProjectGroup] {
+        var projects: [SearchProjectGroup] = []
+        for result in model.searchResults.prefix(maximum) {
+            if let projectIndex = projects.firstIndex(where: { $0.id == result.projectID }) {
+                projects[projectIndex].append(result)
+            } else {
+                projects.append(.init(result: result))
+            }
+        }
+        return projects
+    }
+}
+
+private struct SearchProjectGroup: Identifiable {
+    let id: Int64
+    let name: String
+    var sessions: [SearchSessionGroup]
+
+    init(result: SearchResult) {
+        id = result.projectID
+        name = result.projectName
+        sessions = [.init(result: result)]
+    }
+
+    mutating func append(_ result: SearchResult) {
+        if let sessionIndex = sessions.firstIndex(where: { $0.id == result.sessionID }) {
+            sessions[sessionIndex].results.append(result)
+        } else {
+            sessions.append(.init(result: result))
+        }
+    }
+}
+
+private struct SearchSessionGroup: Identifiable {
+    let id: Int64
+    let title: String
+    let agent: AgentKind
+    var results: [SearchResult]
+
+    init(result: SearchResult) {
+        id = result.sessionID
+        title = result.sessionTitle
+        agent = result.agent
+        results = [result]
+    }
+}
+
+struct SessionRow: View {
+    let session: SessionSummary
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: session.hadError ? "exclamationmark.circle.fill" : "bubble.left.and.text.bubble.right")
+                .foregroundStyle(session.hadError ? .red : .secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.title).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(session.agent.displayName)
+                    Text("·")
+                    Text("\(session.messageCount.formatted()) messages")
+                    Text("·")
+                    Text(session.lastActivityMilliseconds.traceDate)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+}

@@ -1,0 +1,2 @@
+{"$set":{"messages":[{"id":"gemini-current-user","type":"user","timestamp":"2026-04-05T06:07:08Z","content":"Search current snapshots"}]},"sessionId":"gemini-current-session"}
+{"$set":{"messages":[{"id":"gemini-current-assistant","type":"gemini","timestamp":"2026-04-05T06:07:09Z","model":"gemini-2.5-flash","content":"Snapshot located","tokens":{"input":50,"output":10}}]},"sessionId":"gemini-current-session"}

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+      - uses: jdx/mise-action@v2
+      - name: Configure custom SQLite
+        run: Scripts/configure-grdb.sh
+      - name: Verify generated project
+        run: Scripts/check-project-drift.sh
+      - name: Audit first-party network surface
+        run: Scripts/check-network-surface.sh
+      - name: Build and run core tests
+        run: >-
+          xcodebuild test
+          -project Trace.xcodeproj
+          -scheme Trace
+          -configuration Debug
+          -destination 'platform=macOS,arch=arm64'
+          -only-testing:TraceCoreTests
+          CODE_SIGNING_ALLOWED=NO
+      - name: Run UI tests
+        run: >-
+          xcodebuild test
+          -project Trace.xcodeproj
+          -scheme Trace
+          -configuration Debug
+          -destination 'platform=macOS,arch=arm64'
+          -only-testing:TraceUITests
+      - name: Build benchmark CLI
+        run: >-
+          xcodebuild build
+          -project Trace.xcodeproj
+          -scheme TraceBench
+          -configuration Release
+          -destination 'platform=macOS,arch=arm64'
+          CODE_SIGNING_ALLOWED=NO

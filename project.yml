@@ -1,0 +1,158 @@
+name: Trace
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    macOS: "15.0"
+  xcodeVersion: "26.3"
+  createIntermediateGroups: true
+  groupSortPosition: top
+configs:
+  Debug: debug
+  Release: release
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+projectReferences:
+  GRDBCustom:
+    path: Vendor/GRDB.swift/GRDBCustom.xcodeproj
+settings:
+  base:
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: false
+    SWIFT_VERSION: 6.0
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_HARDENED_RUNTIME: true
+    DEAD_CODE_STRIPPING: true
+    CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: true
+targets:
+  TraceCore:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/TraceCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.Core
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
+    dependencies:
+      - target: GRDBCustom/GRDBCustom
+
+  Trace:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/TraceApp
+      - path: Resources
+        buildPhase: resources
+    info:
+      path: Config/Trace-Info.plist
+      properties:
+        CFBundleDisplayName: Trace
+        CFBundleName: Trace
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.developer-tools
+        LSMinimumSystemVersion: "15.0"
+        LSUIElement: true
+        NSHighResolutionCapable: true
+        NSSupportsAutomaticGraphicsSwitching: true
+    entitlements:
+      path: Config/Trace.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace
+        PRODUCT_NAME: Trace
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: false
+    dependencies:
+      - target: TraceCore
+        embed: true
+      - target: GRDBCustom/GRDBCustom
+        embed: true
+
+  TraceBench:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/TraceBench
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.Bench
+        GENERATE_INFOPLIST_FILE: true
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path"
+    dependencies:
+      - target: TraceCore
+      - target: GRDBCustom/GRDBCustom
+
+  TraceCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/TraceCoreTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.CoreTests
+        GENERATE_INFOPLIST_FILE: true
+        ENABLE_HARDENED_RUNTIME: false
+    dependencies:
+      - target: TraceCore
+      - target: GRDBCustom/GRDBCustom
+
+  TraceUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/TraceUITests
+    entitlements:
+      path: Config/TraceUITests.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.UITests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Trace
+        ENABLE_HARDENED_RUNTIME: false
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: true
+    dependencies:
+      - target: Trace
+
+schemes:
+  Trace:
+    build:
+      targets:
+        Trace: all
+        TraceCoreTests: [test]
+        TraceUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - name: TraceCoreTests
+          parallelizable: true
+          randomExecutionOrder: true
+        - name: TraceUITests
+          parallelizable: false
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    preActions:
+      - name: Configure GRDB custom SQLite
+        script: Scripts/configure-grdb.sh
+        settingsTarget: Trace
+
+  TraceBench:
+    build:
+      targets:
+        TraceBench: all
+    run:
+      config: Release
+    preActions:
+      - name: Configure GRDB custom SQLite
+        script: Scripts/configure-grdb.sh
+        settingsTarget: TraceBench

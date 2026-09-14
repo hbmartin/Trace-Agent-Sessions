@@ -1,0 +1,9 @@
+{"type":"session_meta","timestamp":"2026-02-03T04:05:06Z","payload":{"id":"codex-session","cwd":"/tmp/trace-fixture/repo","model":"gpt-5.6-terra"}}
+{"type":"response_item","timestamp":"2026-02-03T04:05:07Z","payload":{"type":"message","id":"codex-user-1","role":"user","content":[{"type":"input_text","text":"Fix the launch race"}]}}
+{"type":"response_item","timestamp":"2026-02-03T04:05:08Z","payload":{"type":"reasoning","id":"codex-reasoning-1","summary":[{"type":"summary_text","text":"Inspect lifecycle ordering"}]}}
+{"type":"response_item","timestamp":"2026-02-03T04:05:09Z","payload":{"type":"function_call","call_id":"codex-call-1","name":"exec_command","arguments":"{\"cmd\":\"swift test\"}"}}
+{"type":"response_item","timestamp":"2026-02-03T04:05:10Z","payload":{"type":"function_call_output","call_id":"codex-output-1","status":"failed","output":"test failed"}}
+{"type":"token_usage_record","timestamp":"2026-02-03T04:05:11Z","payload":{"response_id":"response-dedupe-1","model":"gpt-5.6-terra","usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":200,"reasoning_output_tokens":50}}}
+{"type":"token_usage_record","timestamp":"2026-02-03T04:05:12Z","payload":{"response_id":"response-dedupe-1","model":"gpt-5.6-terra","usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":200,"reasoning_output_tokens":50}}}
+{"type":"event_msg","timestamp":"2026-02-03T04:05:13Z","payload":{"type":"turn_aborted"}}
+{"type":"future_record","payload":{"unknown":true}}

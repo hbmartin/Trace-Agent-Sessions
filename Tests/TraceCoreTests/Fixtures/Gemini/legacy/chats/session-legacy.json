@@ -1,0 +1,29 @@
+{
+  "sessionId": "gemini-legacy-session",
+  "messages": [
+    {
+      "id": "gemini-user-1",
+      "type": "user",
+      "timestamp": "2026-03-04T05:06:07Z",
+      "content": "Explain the cache policy"
+    },
+    {
+      "id": "gemini-assistant-1",
+      "type": "gemini",
+      "timestamp": "2026-03-04T05:06:08Z",
+      "model": "gemini-2.5-pro",
+      "content": "The cache is disposable.",
+      "thoughts": [{"subject": "Reasoning summary"}],
+      "tokens": {"input": 700, "output": 90, "cached": 200, "thoughts": 20},
+      "toolCalls": [
+        {
+          "name": "read_file",
+          "args": {"path": "README.md"},
+          "status": "failed",
+          "result": [{"functionResponse": {"response": {"error": "not found"}}}]
+        }
+      ]
+    }
+  ],
+  "unknownFutureField": [1, 2, 3]
+}

@@ -1,0 +1,4 @@
+// DO NOT INCLUDE THIS FILE DIRECTLY.
+// Include GRDBCustomSQLite.h instead.
+#define SQLITE_ENABLE_SNAPSHOT
+#define SQLITE_ENABLE_FTS5
