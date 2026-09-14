@@ -27,7 +27,7 @@ struct IndexedSourceState: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
     public static let indexFormatVersion = 1
     private let pool: DatabasePool
     private let url: URL
@@ -210,6 +210,14 @@ public actor IndexDatabase {
                     PRIMARY KEY(session_id, source_key)
                 );
                 """)
+        }
+        migrator.registerMigration("trace-v3-session-metadata") { db in
+            try db.execute(sql: "ALTER TABLE session ADD COLUMN first_user_message TEXT")
+            try db.execute(sql: "ALTER TABLE session ADD COLUMN generated_title TEXT")
+            try db.execute(sql: "ALTER TABLE session ADD COLUMN has_plan INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: "ALTER TABLE source_file ADD COLUMN metadata_revision TEXT")
+            try db.execute(sql: "UPDATE session SET first_user_message=title")
+            try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
         }
         try migrator.migrate(pool)
     }
@@ -856,7 +864,7 @@ public actor IndexDatabase {
                 arguments += [limit + 1]
                 sql = """
                     SELECT m.id, m.session_id, s.project_id, p.display_name AS project_name,
-                           coalesce(s.title, 'Untitled session') AS session_title, s.agent,
+                           coalesce(s.title, 'Untitled session') AS session_title, s.agent, s.has_plan,
                            m.role, m.ts, m.prefix, sf.path AS source_path, NULL AS score
                     FROM message_fts
                     JOIN message m ON m.id = message_fts.rowid
@@ -882,7 +890,7 @@ public actor IndexDatabase {
                         WHERE message_fts MATCH ?
                     )
                     SELECT m.id, m.session_id, s.project_id, p.display_name AS project_name,
-                           coalesce(s.title, 'Untitled session') AS session_title, s.agent,
+                           coalesce(s.title, 'Untitled session') AS session_title, s.agent, s.has_plan,
                            m.role, m.ts, m.prefix, sf.path AS source_path, r.score
                     FROM ranked r
                     JOIN message m ON m.id = r.rowid
@@ -901,6 +909,39 @@ public actor IndexDatabase {
             let results = rows.compactMap(searchResult(from:))
             let next = hasMore ? results.last.map { SearchCursor(rowID: $0.id, rank: $0.rank) } : nil
             return SearchPage(results: results, nextCursor: next)
+        }
+    }
+
+    func metadataNeedsRefresh(sourceID: Int64, revision: String) throws -> Bool {
+        try pool.read { db in
+            let stored = try String.fetchOne(db, sql: "SELECT metadata_revision FROM source_file WHERE id=?", arguments: [sourceID])
+            return stored != revision
+        }
+    }
+
+    func updateMetadata(sourceID: Int64, revision: String, metadata: SessionMetadata) throws {
+        try pool.write { db in
+            try db.execute(sql: """
+                UPDATE session SET first_user_message=?, generated_title=?, title=coalesce(?, ?), has_plan=?
+                WHERE source_file_id=?
+                """, arguments: [metadata.firstUserMessage, metadata.title, metadata.title,
+                                  metadata.firstUserMessage, metadata.hasPlan, sourceID])
+            try db.execute(sql: "UPDATE source_file SET metadata_revision=? WHERE id=?", arguments: [revision, sourceID])
+        }
+    }
+
+    func updateCodexNames(_ names: [String: String], root: URL) throws {
+        try pool.write { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT s.id, s.external_id FROM session s JOIN source_file sf ON sf.id=s.source_file_id
+                JOIN source_root sr ON sr.id=sf.root_id WHERE s.agent=? AND sr.path=?
+                """, arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path])
+            for row in rows {
+                let externalID: String = row["external_id"]
+                let id: Int64 = row["id"]
+                try db.execute(sql: "UPDATE session SET generated_title=?, title=coalesce(?, first_user_message) WHERE id=?",
+                               arguments: [names[externalID], names[externalID], id])
+            }
         }
     }
 
@@ -1026,7 +1067,7 @@ private func searchResult(from row: Row) -> SearchResult? {
     let rank: Double? = row["score"]
     return SearchResult(
         id: id, sessionID: sessionID, projectID: projectID,
-        projectName: projectName, sessionTitle: sessionTitle, agent: agent,
+        projectName: projectName, sessionTitle: sessionTitle, sessionHasPlan: row["has_plan"], agent: agent,
         role: role, timestampMilliseconds: timestamp, prefix: prefix,
         sourcePath: sourcePath, rank: rank
     )
@@ -1045,7 +1086,7 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
     let sourcePath: String = row["source_path"]
     return SessionSummary(
         id: id, projectID: projectID, agent: agent,
-        title: title, startedAtMilliseconds: startedAt,
+        title: title, hasPlan: row["has_plan"], startedAtMilliseconds: startedAt,
         lastActivityMilliseconds: lastActivity, messageCount: messageCount,
         hadError: hadError, sourcePath: sourcePath,
         sourceRevision: "\(row["source_mtime"] as Int64):\(row["source_checkpoint"] as Int64)"

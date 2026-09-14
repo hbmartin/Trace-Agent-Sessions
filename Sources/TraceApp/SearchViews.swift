@@ -21,10 +21,10 @@ struct RecentPopoverView: View {
 
             Group {
                 if !model.searchQuery.isEmpty {
-                    SearchResultList(model: model, search: model.globalSearch, maximum: 10, selectedResultID: .constant(nil))
+                    SearchResultList(model: model, search: model.globalSearch, maximum: 10, usesNativeScrolling: true, selectedResultID: .constant(nil))
                 } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
+                    NativeScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text("RECENT SESSIONS")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.tertiary)
@@ -273,6 +273,7 @@ struct SearchResultList: View {
     @ObservedObject var search: SessionSearchModel
     let maximum: Int
     var isMainSearch = false
+    var usesNativeScrolling = false
     @Binding var selectedResultID: Int64?
 
     var body: some View {
@@ -284,65 +285,75 @@ struct SearchResultList: View {
             ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try another word or project."))
         } else {
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 5) {
-                        ForEach(groups) { project in
-                            Text(project.name.uppercased())
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 12)
-                                .padding(.top, 8)
-                            ForEach(project.sessions) { session in
-                                HStack(spacing: 7) {
-                                    AgentBadge(agent: session.agent)
-                                    Text(session.title)
-                                        .font(.caption.weight(.medium))
-                                        .lineLimit(1)
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.top, 3)
-                                ForEach(session.results) { result in
-                                    Button {
-                                        if isMainSearch { search.query = ""; search.search() }
-                                        model.openSearchResult(result)
-                                    } label: {
-                                        HStack(alignment: .top, spacing: 10) {
-                                            Text(result.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
-                                                .font(.caption2.weight(.medium))
-                                                .foregroundStyle(.secondary)
-                                                .frame(width: 62, alignment: .leading)
-                                            Text(search.snippets[result.id] ?? result.prefix)
-                                                .lineLimit(2)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                            Text(result.timestampMilliseconds.traceDate)
-                                                .font(.caption2)
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 7)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .background(
-                                        selectedResultID == result.id ? TraceTheme.accent.opacity(0.12) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 7)
-                                    )
-                                    .id(result.id)
-                                    .task(id: result.id) { await search.hydrate(result) }
-                                    .onAppear {
-                                        if result.id == search.results.last?.id {
-                                            search.search(reset: false)
-                                        }
-                                    }
-                                }
-                            }
+                SearchScrollSurface(native: usesNativeScrolling) {
+                    Group {
+                        if usesNativeScrolling {
+                            VStack(alignment: .leading, spacing: 5) { resultRows }
+                        } else {
+                            LazyVStack(alignment: .leading, spacing: 5) { resultRows }
                         }
                     }
                     .padding(.vertical, 5)
                 }
                 .onChange(of: selectedResultID) { _, id in
                     if let id { proxy.scrollTo(id, anchor: .center) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var resultRows: some View {
+        ForEach(groups) { project in
+            Text(project.name.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            ForEach(project.sessions) { session in
+                HStack(spacing: 7) {
+                    AgentBadge(agent: session.agent)
+                    if session.hasPlan { PlanBadge() }
+                    Text(session.title)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 3)
+                ForEach(session.results) { result in
+                    Button {
+                        if isMainSearch { search.query = ""; search.search() }
+                        model.openSearchResult(result)
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(result.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 62, alignment: .leading)
+                            Text(search.snippets[result.id] ?? result.prefix)
+                                .lineLimit(2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(result.timestampMilliseconds.traceDate)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        selectedResultID == result.id ? TraceTheme.accent.opacity(0.12) : .clear,
+                        in: RoundedRectangle(cornerRadius: 7)
+                    )
+                    .contextMenu { Button("Copy Message") { model.copyMessage(id: result.id) } }
+                    .id(result.id)
+                    .task(id: result.id) { await search.hydrate(result) }
+                    .onAppear {
+                        if result.id == search.results.last?.id {
+                            search.search(reset: false)
+                        }
+                    }
                 }
             }
         }
@@ -384,12 +395,14 @@ private struct SearchProjectGroup: Identifiable {
 private struct SearchSessionGroup: Identifiable {
     let id: Int64
     let title: String
+    let hasPlan: Bool
     let agent: AgentKind
     var results: [SearchResult]
 
     init(result: SearchResult) {
         id = result.sessionID
         title = result.sessionTitle
+        hasPlan = result.sessionHasPlan
         agent = result.agent
         results = [result]
     }
@@ -404,7 +417,10 @@ struct SessionRow: View {
             if session.hadError { SessionErrorIcon(session: session, model: model) }
             else { Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary) }
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.title).lineLimit(1).truncationMode(.tail)
+                HStack {
+                    Text(session.title).lineLimit(1).truncationMode(.tail)
+                    if session.hasPlan { PlanBadge() }
+                }
                 HStack(spacing: 6) {
                     Text(session.agent.displayName)
                     Text("·")
@@ -457,4 +473,13 @@ private struct SessionErrorIcon: View {
 
 extension Notification.Name {
     static let traceFocusPopover = Notification.Name("traceFocusPopover")
+}
+
+private struct SearchScrollSurface<Content: View>: View {
+    let native: Bool
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        if native { NativeScrollView(content: content) }
+        else { ScrollView(content: content) }
+    }
 }

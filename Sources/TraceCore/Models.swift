@@ -329,6 +329,7 @@ public struct SearchResult: Identifiable, Sendable {
     public let projectID: Int64
     public let projectName: String
     public let sessionTitle: String
+    public var sessionHasPlan: Bool = false
     public let agent: AgentKind
     public let role: MessageRole
     public let timestampMilliseconds: Int64
@@ -355,6 +356,7 @@ public struct SessionSummary: Identifiable, Sendable {
     public let projectID: Int64
     public let agent: AgentKind
     public let title: String
+    public var hasPlan: Bool = false
     public let startedAtMilliseconds: Int64
     public let lastActivityMilliseconds: Int64
     public let messageCount: Int

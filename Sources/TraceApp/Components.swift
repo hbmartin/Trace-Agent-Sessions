@@ -93,17 +93,17 @@ struct IndexProgressLabel: View {
 
 struct MarkdownText: View {
     let source: String
+    var copyMessage: (() -> Void)? = nil
     @State private var rendered = AttributedString()
 
     var body: some View {
-        Text(rendered)
-            .textSelection(.enabled)
+        SelectableMessageText(text: rendered, copyMessage: copyMessage)
             .task(id: source) {
                 rendered = await Task.detached(priority: .userInitiated) {
-                    (try? AttributedString(
-                        markdown: source,
-                        options: .init(interpretedSyntax: .full)
-                    )) ?? AttributedString(source)
+                    let prose = source.replacingOccurrences(of: "<proposed_plan>", with: "")
+                        .replacingOccurrences(of: "</proposed_plan>", with: "")
+                    let parsed = try? AttributedString(markdown: prose, options: .init(interpretedSyntax: .full))
+                    return parsed?.characters.isEmpty == false ? parsed! : AttributedString(prose)
                 }.value
             }
     }
@@ -192,5 +192,15 @@ final class ShortcutRecorderView: NSView {
 extension Int64 {
     var traceDate: String {
         Date(timeIntervalSince1970: Double(self) / 1_000).formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+struct PlanBadge: View {
+    var body: some View {
+        Label("Plan", systemImage: "list.bullet.rectangle")
+            .font(.caption2)
+            .foregroundStyle(.purple)
+            .accessibilityLabel("Generated plan")
+            .help("This session contains an explicit generated plan.")
     }
 }

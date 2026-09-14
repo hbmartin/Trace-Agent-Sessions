@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 @MainActor
 final class StatusItemController: NSObject {
@@ -73,6 +74,7 @@ final class StatusItemController: NSObject {
 
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
+    private var titleObservation: AnyCancellable?
     init(model: TraceModel) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
@@ -87,6 +89,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: MainView(model: model))
         super.init(window: window)
         window.delegate = self
+        titleObservation = model.objectWillChange.sink { [weak self, weak model] in
+            Task { @MainActor in
+                guard let model else { return }
+                self?.window?.title = model.detailTitle
+            }
+        }
     }
 
     required init?(coder: NSCoder) { nil }

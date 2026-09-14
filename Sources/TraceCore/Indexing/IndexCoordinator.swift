@@ -131,6 +131,7 @@ public actor IndexCoordinator {
                         update.committedBytes += newlyCommitted
                         await progress(update)
                     }
+                    try await refreshMetadata(file: file)
                     if outcome.changed { status.indexedFiles += 1 } else { status.unchangedFiles += 1 }
                     status.committedBytes += outcome.committedBytes
                 } catch is CancellationError { throw CancellationError() }
@@ -156,6 +157,12 @@ public actor IndexCoordinator {
                     for root in source.roots {
                         if let rootID = rootIDs[root.id] { try await database.recordRootScan(rootID: rootID, error: rootErrors[root.id]) }
                     }
+                }
+            }
+            for source in sources where source.agent == .codex {
+                for root in source.roots {
+                    let names = CodexSessionNames.load(directory: root.url.deletingLastPathComponent())
+                    try await database.updateCodexNames(names, root: root.url)
                 }
             }
             status.phase = .aggregating
@@ -222,6 +229,17 @@ public actor IndexCoordinator {
             }
         }
         return failures.sorted { $0.timestampMilliseconds > $1.timestampMilliseconds }
+    }
+
+    private func refreshMetadata(file: DiscoveredSourceFile) async throws {
+        guard let state = try await database.sourceState(path: file.url.path) else { return }
+        let revision = "1:\(state.modificationNanoseconds):\(state.scannedBytes)"
+        guard try await database.metadataNeedsRefresh(sourceID: state.id, revision: revision) else { return }
+        let before = try TraceFileIO.fingerprint(url: file.url)
+        guard before.size == state.size, before.modificationNanoseconds == state.modificationNanoseconds else { return }
+        let metadata = try SessionMetadataReader.scan(file: file, boundary: state.scannedBytes)
+        guard before == (try TraceFileIO.fingerprint(url: file.url)) else { return }
+        try await database.updateMetadata(sourceID: state.id, revision: revision, metadata: metadata)
     }
 
     private func process(

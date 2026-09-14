@@ -42,11 +42,8 @@ final class AppSettings: ObservableObject {
             else { defaults.removeObject(forKey: Key.lastSessionID) }
         }
     }
-    @Published var lastScrollMessageID: Int64? {
-        didSet {
-            if let lastScrollMessageID { defaults.set(lastScrollMessageID, forKey: Key.lastScrollMessageID) }
-            else { defaults.removeObject(forKey: Key.lastScrollMessageID) }
-        }
+    @Published var projectPaneFraction: Double {
+        didSet { defaults.set(projectPaneFraction, forKey: "projectPaneFraction") }
     }
     @Published var includeSidechains: Bool { didSet { defaults.set(includeSidechains, forKey: Key.includeSidechains) } }
     @Published var costRange: CostRange { didSet { defaults.set(costRange.rawValue, forKey: Key.costRange) } }
@@ -68,7 +65,8 @@ final class AppSettings: ObservableObject {
         hotkeyKeyCode = UInt32(defaults.object(forKey: Key.hotkeyKeyCode) as? Int ?? kVK_Space)
         hotkeyModifiers = UInt32(defaults.object(forKey: Key.hotkeyModifiers) as? Int ?? (cmdKey | shiftKey))
         lastSessionID = defaults.object(forKey: Key.lastSessionID) as? Int64
-        lastScrollMessageID = defaults.object(forKey: Key.lastScrollMessageID) as? Int64
+        projectPaneFraction = defaults.object(forKey: "projectPaneFraction") as? Double ?? 0.4
+        defaults.removeObject(forKey: Key.lastScrollMessageID)
         includeSidechains = defaults.bool(forKey: Key.includeSidechains)
         costRange = CostRange(rawValue: defaults.string(forKey: Key.costRange) ?? "") ?? .thirtyDays
     }

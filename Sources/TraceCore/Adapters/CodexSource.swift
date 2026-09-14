@@ -145,7 +145,7 @@ private func parseCodexRecord(
         let rawRole = payload["role"] as? String ?? "system"
         role = rawRole == "assistant" ? .assistant : (rawRole == "user" ? .user : .system)
         sections.prose = JSONHelpers.text(from: payload["content"])
-    case "agent_message":
+    case "agent_message", "plan":
         role = .assistant
         sections.prose = payload["text"] as? String
             ?? payload["message"] as? String
