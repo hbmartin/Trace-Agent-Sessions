@@ -45,9 +45,13 @@ in `Config/Signing.xcconfig` and a `notarytool` keychain profile first.
 
 ## Search, transcript display, and development builds
 
-The menu popover keeps search and index status visible while its session list scrolls. The main window searches the selected project (or all sessions under All Projects); the Projects filter matches project names only.
+The menu popover keeps search and index status visible while its session list scrolls. The main window searches the selected project; the Projects filter matches project names only. Drag the horizontal divider to resize the Projects and Sessions panes. Global search remains available in the popover and launcher.
 
-Transcript controls independently show or hide tools, system records, and reasoning. Comfortable is the default spacing; Compact reduces card padding and gaps. Copy Transcript omits hidden sections and includes reasoning only when its disclosure is expanded. Hover over a session’s error icon for the provider, time, failure kind, and available source explanation.
+Selecting a project clears the open transcript. Session views hide project search and the Transcript/Costs toggle; Back to project restores browsing. Sessions open at the top on their first visit, remember their viewport until Trace quits, and search results jump directly to the matching message.
+
+Session names use available local Codex, Claude, and Gemini title metadata, falling back to the first actual user message. A Plan badge marks explicit generated plans, not task checklists or planning mode. Metadata backfills preserve existing message IDs and search checkpoints. Codex title sidecars are read only.
+
+Transcript controls independently show or hide tools, system records, and reasoning. Comfortable is the default spacing; Compact reduces card padding and gaps. Copy Transcript omits hidden sections and includes reasoning only when its disclosure is expanded. Right-click a message or search result and choose Copy Message to copy its complete text, including collapsed tool and reasoning content. Hover over a session’s error icon for the provider, time, failure kind, and available source explanation.
 
 Indexing runs through a single scheduler. Watcher events coalesce behind the active pass, complete JSONL records commit with their checkpoints, and each pass reads only its captured input boundary. Project/session summaries update during indexing. Click the status indicator for provider, project/file, byte progress, and indexed/unchanged/failed counts.
 

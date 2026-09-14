@@ -52,6 +52,11 @@ final class TraceModel: ObservableObject {
     private var lastSummaryRefresh = ContinuousClock.now
     private var sessionRequestID = UUID()
     private var projectRequestID = UUID()
+    private var summaryRequestID = UUID()
+    var scrollPositions: [Int64: TranscriptBookmark] = [:]
+    @Published private(set) var scrollRequest = UUID()
+    private(set) var requestedMessageID: Int64?
+    private var mayRestoreSession = true
     private var started = false
     private var initialIndexRequested = false
 
@@ -87,7 +92,7 @@ final class TraceModel: ObservableObject {
                         let snapshot = try await database.statistics()
                         let report: [String: Any] = ["messages": snapshot.messageCount, "sessions": snapshot.sessionCount,
                             "indexedFiles": progress.indexedFiles, "unchangedFiles": progress.unchangedFiles,
-                            "failedFiles": progress.failedFiles, "phase": progress.phase.rawValue]
+                            "failedFiles": progress.failedFiles, "phase": progress.phase.rawValue, "pricingLoaded": pricing != nil]
                         let data = try JSONSerialization.data(withJSONObject: report, options: .sortedKeys)
                         FileHandle.standardOutput.write(data + Data("\n".utf8))
                         await prepareToTerminate()
@@ -193,43 +198,98 @@ final class TraceModel: ObservableObject {
         }
     }
 
+    var detailTitle: String {
+        if let selectedSession, selectedSession.id == selectedSessionID { return selectedSession.title }
+        return projects.first { $0.id == selectedProjectID }?.displayName ?? "Trace"
+    }
+
+    func clearSession() {
+        mayRestoreSession = false
+        sessionRequestID = UUID()
+        selectedSessionID = nil
+        selectedSession = nil
+        settings.lastSessionID = nil
+        messages = []
+        hydratedMessages.removeAll()
+        expandedReasoningIDs.removeAll()
+        requestedMessageID = nil
+    }
+
     func selectProject(_ projectID: Int64?) {
+        guard selectedProjectID != projectID else { return }
+        clearSession()
         selectedProjectID = projectID
-        guard let database else { return }
+        loadProjectSessions()
+    }
+
+    private func loadProjectSessions() {
         let request = UUID()
         projectRequestID = request
+        let project = selectedProjectID
+        sessions = []
         searchMain()
+        guard let database else { return }
         Task {
-            let rows = (try? await database.sessions(projectID: projectID)) ?? []
-            guard projectRequestID == request else { return }
+            let rows = (try? await database.sessions(projectID: project)) ?? []
+            guard projectRequestID == request, selectedProjectID == project else { return }
             sessions = rows
         }
     }
 
-    func selectSession(_ sessionID: Int64, showWindow: Bool = false) {
+    func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil) {
+        mayRestoreSession = false
+        if selectedSessionID == sessionID, selectedSession != nil, messageID == nil {
+            if showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
+            return
+        }
         selectedSessionID = sessionID
         settings.lastSessionID = sessionID
-        selectedSession = (sessions + recentSessions).first { $0.id == sessionID } ?? selectedSession
+        selectedSession = (sessions + recentSessions).first { $0.id == sessionID }
         let request = UUID()
         sessionRequestID = request
+        requestedMessageID = messageID
+        messages = []
         hydratedMessages.removeAll(keepingCapacity: true)
+        expandedReasoningIDs.removeAll()
+        mainSearch.query = ""
+        mainSearch.search()
         guard let database else { return }
         Task {
+            let session = try? await database.session(id: sessionID)
             let rows = (try? await database.messages(sessionID: sessionID)) ?? []
-            guard sessionRequestID == request else { return }
+            guard sessionRequestID == request, selectedSessionID == sessionID else { return }
+            selectedSession = session
+            if let session, selectedProjectID != session.projectID {
+                selectedProjectID = session.projectID
+                loadProjectSessions()
+            }
             messages = rows
-            if selectedSession?.id != sessionID { selectedSession = try? await database.session(id: sessionID) }
+            scrollRequest = UUID()
             try? await diagnostics.recordOpen()
-            if showWindow {
+            if showWindow, sessionRequestID == request {
                 NotificationCenter.default.post(name: .traceShowMainWindow, object: nil)
             }
         }
     }
 
     func openSearchResult(_ result: SearchResult) {
-        selectedProjectID = result.projectID
-        settings.lastScrollMessageID = result.id
-        selectSession(result.sessionID, showWindow: true)
+        selectSession(result.sessionID, showWindow: true, messageID: result.id)
+    }
+
+    func copyMessage(id: Int64) {
+        guard let coordinator else { return }
+        Task {
+            do {
+                let message = try await coordinator.hydrate(messageID: id)
+                let sections = message.sections
+                let text = [sections.prose, sections.toolInvocation, sections.toolOutput, sections.reasoning]
+                    .filter { !$0.isEmpty }.joined(separator: "\n\n")
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            } catch {
+                startupError = "Could not copy message: \(error.localizedDescription)"
+            }
+        }
     }
 
     func hydrate(_ message: MessageSummary) {
@@ -247,6 +307,7 @@ final class TraceModel: ObservableObject {
                     + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
                 try? await diagnostics.recordOpen(hydrationMilliseconds: milliseconds)
             } catch {
+                guard sessionRequestID == request else { return }
                 startupError = "Could not read source message: \(error.localizedDescription)"
             }
         }
@@ -322,10 +383,20 @@ final class TraceModel: ObservableObject {
 
     private func startWatching(_ roots: [URL]) {
         guard watcher == nil, settings.onboardingComplete else { return }
-        let watcher = FSEventsWatcher(roots: roots, onChange: { [weak self] changes in
+        let metadataRoots = makeSources().filter { $0.agent == .codex }.flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
+        let watcher = FSEventsWatcher(roots: roots + metadataRoots, onChange: { [weak self] changes in
             Task { @MainActor [weak self] in
                 guard let self, self.settings.onboardingComplete else { return }
-                await self.scheduler?.request(paths: changes.paths, reconcile: changes.requiresReconciliation,
+                let paths = changes.paths.filter { path in
+                    roots.contains { path == $0.path || path.hasPrefix($0.path + "/") }
+                    || metadataRoots.contains { root in
+                        let url = URL(fileURLWithPath: path)
+                        return url.deletingLastPathComponent() == root
+                            && (url.lastPathComponent == "session_index.jsonl" || url.lastPathComponent.hasPrefix("state_"))
+                    }
+                }
+                guard !paths.isEmpty || changes.requiresReconciliation else { return }
+                await self.scheduler?.request(paths: Set(paths), reconcile: changes.requiresReconciliation,
                                               scope: self.settings.indexScope)
             }
         })
@@ -335,12 +406,18 @@ final class TraceModel: ObservableObject {
 
     private func reloadSummaries(lightweight: Bool = false) async {
         guard let database else { return }
+        let refresh = UUID()
+        summaryRequestID = refresh
         let previousSessions = Dictionary((sessions + recentSessions).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        projects = (try? await database.projects()) ?? []
-        recentSessions = (try? await database.sessions(limit: 10)) ?? []
+        let loadedProjects = (try? await database.projects()) ?? []
+        let loadedRecent = (try? await database.sessions(limit: 10)) ?? []
         let project = selectedProjectID
+        let projectRequest = projectRequestID
         let loadedSessions = (try? await database.sessions(projectID: project)) ?? []
-        if selectedProjectID == project { sessions = loadedSessions }
+        guard summaryRequestID == refresh else { return }
+        projects = loadedProjects
+        recentSessions = loadedRecent
+        if selectedProjectID == project, projectRequestID == projectRequest { sessions = loadedSessions }
         for session in sessions + recentSessions {
             if let old = previousSessions[session.id], old.messageCount != session.messageCount || old.lastActivityMilliseconds != session.lastActivityMilliseconds || old.sourceRevision != session.sourceRevision || old.hadError != session.hadError {
                 sessionErrors[session.id] = nil
@@ -348,26 +425,31 @@ final class TraceModel: ObservableObject {
             }
         }
         if let sessionID = selectedSessionID {
+            let request = sessionRequestID
             let loadedSession = try? await database.session(id: sessionID)
-            if selectedSessionID == sessionID {
+            if selectedSessionID == sessionID, sessionRequestID == request {
                 let changed = selectedSession?.sourceRevision != loadedSession?.sourceRevision
                 selectedSession = loadedSession
                 if let loadedSession, changed || loadedSession.messageCount != messages.count {
                     let rows = (try? await database.messages(sessionID: sessionID)) ?? []
-                    if selectedSessionID == sessionID {
+                    if selectedSessionID == sessionID, sessionRequestID == request {
                         if changed { hydratedMessages.removeAll(keepingCapacity: true) }
                         messages = rows
                     }
                 }
             }
         }
-        if lightweight { return }
+        if lightweight || summaryRequestID != refresh { return }
         sourceHealth = (try? await database.sourceHealth()) ?? []
         statistics = try? await database.statistics()
         if let bytes = statistics?.databaseBytes { try? await diagnostics.recordIndexSize(bytes: bytes) }
-        if selectedSessionID == nil, let stored = settings.lastSessionID,
-           sessions.contains(where: { $0.id == stored }) {
-            selectSession(stored)
+        guard summaryRequestID == refresh else { return }
+        if mayRestoreSession {
+            if let stored = settings.lastSessionID, (try? await database.session(id: stored)) != nil {
+                selectSession(stored)
+            } else if [.complete, .failed].contains(progress.phase) {
+                mayRestoreSession = false
+            }
         }
         reloadCosts()
         refreshDiagnostics()
@@ -383,7 +465,7 @@ final class TraceModel: ObservableObject {
             return
         }
         do {
-            let loaded = try PricingCatalog.load(bundledURL: url)
+            let loaded = try PricingCatalog.load(bundledURL: url, overrideURL: TraceRuntime.testDirectory?.appendingPathComponent("pricing.json") ?? PricingCatalog.defaultOverrideURL())
             pricing = loaded.catalog
             pricingError = loaded.overrideError
         } catch {
