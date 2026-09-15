@@ -82,9 +82,17 @@ public struct GeminiSource: SessionSource {
 enum GeminiJSONLSessionIdentity {
     #if DEBUG
     private nonisolated(unsafe) static var prefixScans = 0
+    private nonisolated(unsafe) static var delayedPrefixPath: String?
+    private nonisolated(unsafe) static var prefixLineDelay: TimeInterval = 0
     private static let prefixScanLock = NSLock()
     static func resetPrefixScanCount() { prefixScanLock.withLock { prefixScans = 0 } }
     static var prefixScanCount: Int { prefixScanLock.withLock { prefixScans } }
+    static func delayPrefixScan(path: String?, secondsPerLine: TimeInterval = 0) {
+        prefixScanLock.withLock {
+            delayedPrefixPath = path
+            prefixLineDelay = secondsPerLine
+        }
+    }
     #endif
 
     static func explicitID(in root: [String: Any]) -> String? {
@@ -108,9 +116,17 @@ enum GeminiJSONLSessionIdentity {
         let cursor = try JSONLineCursor(url: url, from: 0, through: offset)
         var inherited: String?
         while let line = try cursor.next() {
+            try Task.checkCancellation()
+            #if DEBUG
+            let delay = prefixScanLock.withLock {
+                delayedPrefixPath == url.path ? prefixLineDelay : 0
+            }
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            #endif
             guard let root = try? JSONHelpers.object(from: line.data) else { continue }
             inherited = explicitID(in: root) ?? inherited
         }
+        try Task.checkCancellation()
         return inherited
     }
 }

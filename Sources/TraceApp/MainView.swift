@@ -42,7 +42,12 @@ struct MainView: View {
         }
         .onChange(of: model.selectedSessionID) { _, id in
             if id != nil { section = .transcript }
+            model.setMainSearchPanelVisible(section == .transcript)
         }
+        .onChange(of: section) { _, newSection in
+            model.setMainSearchPanelVisible(newSection == .transcript)
+        }
+        .onAppear { model.setMainSearchPanelVisible(section == .transcript) }
         .alert("Trace", isPresented: Binding(
             get: { model.startupError != nil },
             set: { if !$0 { model.startupError = nil } }
@@ -177,6 +182,7 @@ struct TranscriptView: View {
             }
             if model.selectedSessionID == nil && !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 SearchResultList(model: model, search: model.mainSearch, maximum: .max, isMainSearch: true, selectedResultID: .constant(nil))
+                    .id(search.resultSetID)
             } else if let session = model.selectedSession, session.id == model.selectedSessionID {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -231,13 +237,6 @@ struct TranscriptBookmark {
     let index: Int
 }
 
-private struct MessageFrames: PreferenceKey {
-    static let defaultValue: [Int64: CGRect] = [:]
-    static func reduce(value: inout [Int64: CGRect], nextValue: () -> [Int64: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-}
-
 private struct TranscriptScrollGeometry: Equatable {
     let offset: CGFloat
     let height: CGFloat
@@ -254,6 +253,7 @@ private struct TranscriptRenderer: View {
     @State private var frames: [Int64: CGRect] = [:]
     @State private var pending: TranscriptBookmark?
     @State private var restorationToken = UUID()
+    @State private var restorationDelayPending = false
     @State private var restoring = true
     @State private var userScrolling = false
     @State private var lastRequest: UUID?
@@ -286,7 +286,7 @@ private struct TranscriptRenderer: View {
                         .contextMenu { Button("Copy Message") { model.copyMessage(id: message.id) } }
                         .id(message.id)
                         .background(GeometryReader { geometry in
-                            Color.clear.preference(key: MessageFrames.self, value: [message.id: geometry.frame(in: .named("transcriptContent"))])
+                            Color.clear.preference(key: RowFramesPreference.self, value: [message.id: geometry.frame(in: .named("transcriptContent"))])
                         })
                     }
                 }
@@ -303,21 +303,32 @@ private struct TranscriptRenderer: View {
             } action: { _, geometry in
                 contentOffset = geometry.offset
                 viewportHeight = geometry.height
+                if restoring && position.isPositionedByUser { cancelRestorationForUser() }
+                if !restorationDelayPending, let pending, let frame = frames[pending.messageID],
+                   abs(contentOffset - max(0, frame.minY - pending.offset)) <= 2 {
+                    finishRestoration()
+                }
                 if userScrolling { savePosition() }
             }
             .onScrollPhaseChange { oldPhase, phase in
-                userScrolling = phase != .idle && !(restoring && phase == .animating)
-                if userScrolling {
-                    restoring = false
-                    pending = nil
-                }
+                userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+                    || (phase == .animating && position.isPositionedByUser)
+                if userScrolling { cancelRestorationForUser() }
                 if phase == .idle && oldPhase != .idle { savePosition() }
             }
-            .onPreferenceChange(MessageFrames.self) { newFrames in
+            .onChange(of: position.isPositionedByUser) { _, positionedByUser in
+                if positionedByUser && restoring {
+                    userScrolling = true
+                    cancelRestorationForUser()
+                }
+            }
+            .onPreferenceChange(RowFramesPreference.self) { newFrames in
                 let previousFrames = frames
                 frames = newFrames
-                if let pending, let frame = frames[pending.messageID] {
-                    position.scrollTo(y: max(0, frame.minY - pending.offset))
+                if !restorationDelayPending, let pending, let frame = frames[pending.messageID] {
+                    let target = max(0, frame.minY - pending.offset)
+                    if abs(target - contentOffset) <= 2 { finishRestoration() }
+                    else { position.scrollTo(y: target) }
                 } else if !userScrolling, !restoring,
                           let bookmark = model.scrollPositions[sessionID],
                           let previousFrame = previousFrames[bookmark.messageID],
@@ -337,22 +348,26 @@ private struct TranscriptRenderer: View {
             .task(id: restorationToken) {
                 guard let pending else { return }
                 let token = restorationToken
-                // Hydration can expand nearby lazy rows in several waves. Keep retrying
-                // this explicit restoration from view-local state while layout settles.
-                var settledLayouts = 0
-                for _ in 0..<50 {
+                if let delay = testRestorationDelay {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    guard restorationToken == token, self.pending != nil, !userScrolling else { return }
+                    restorationDelayPending = false
+                }
+                for _ in 0..<20 {
                     guard self.pending?.messageID == pending.messageID,
                           restorationToken == token, !userScrolling else { return }
                     if let frame = frames[pending.messageID] {
-                        let targetIsVisible = viewportHeight > 0
-                            && frame.maxY > contentOffset
-                            && frame.minY < contentOffset + viewportHeight
+                        let targetIsVisible = RowFrameGeometry.intersectsViewport(
+                            frame, offset: contentOffset, height: viewportHeight
+                        )
                         if !targetIsVisible { proxy.scrollTo(pending.messageID, anchor: .top) }
-                        position.scrollTo(y: max(0, frame.minY - pending.offset))
-                        settledLayouts = targetIsVisible ? settledLayouts + 1 : 0
-                        if settledLayouts >= 10 { break }
+                        let target = max(0, frame.minY - pending.offset)
+                        if abs(target - contentOffset) <= 2 {
+                            finishRestoration()
+                            return
+                        }
+                        position.scrollTo(y: target)
                     } else {
-                        settledLayouts = 0
                         proxy.scrollTo(pending.messageID, anchor: .top)
                     }
                     try? await Task.sleep(for: .milliseconds(100))
@@ -362,8 +377,7 @@ private struct TranscriptRenderer: View {
                 if let frame = frames[pending.messageID] {
                     position.scrollTo(y: max(0, frame.minY - pending.offset))
                 }
-                self.pending = nil
-                restoring = false
+                finishRestoration()
             }
         }
     }
@@ -391,22 +405,56 @@ private struct TranscriptRenderer: View {
         restorationToken = UUID()
         model.scrollPositions[sessionID] = pending
         restoring = true
+        if testRestorationDelay != nil {
+            restorationDelayPending = true
+            if let path = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] {
+                try? Data().write(to: URL(fileURLWithPath: path))
+            }
+            return
+        }
         proxy.scrollTo(target, anchor: .top)
         if let frame = frames[target] {
-            position.scrollTo(y: max(0, frame.minY - saved.offset))
-            if viewportHeight > 0, frame.maxY > contentOffset,
-               frame.minY < contentOffset + viewportHeight {
-                pending = nil
-                restoring = false
-            }
+            let y = max(0, frame.minY - saved.offset)
+            position.scrollTo(y: y)
+            if abs(y - contentOffset) <= 2 { finishRestoration() }
         }
+    }
+
+    private func finishRestoration() {
+        pending = nil
+        restoring = false
+        restorationDelayPending = false
+    }
+
+    private var testRestorationDelay: Int? {
+        guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+              let delay = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"].flatMap(Int.init),
+              delay > 0 else { return nil }
+        return delay
+    }
+
+    private func cancelRestorationForUser() {
+        guard restoring || pending != nil else { return }
+        if let path = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"],
+           ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+            try? Data().write(to: URL(fileURLWithPath: path))
+        }
+        pending = nil
+        restoring = false
+        restorationDelayPending = false
+        restorationToken = UUID()
+        position.isPositionedByUser = true
     }
 
     private func savePosition() {
         guard !restoring, pending == nil,
-              let first = frames.filter({ $0.value.maxY > contentOffset + 1 }).min(by: { $0.value.minY < $1.value.minY }),
-              let index = model.messages.firstIndex(where: { $0.id == first.key }) else { return }
-        model.scrollPositions[sessionID] = .init(messageID: first.key, offset: first.value.minY - contentOffset, index: index)
+              let first = RowFrameGeometry.firstVisible(in: frames, offset: contentOffset),
+              let index = model.messages.firstIndex(where: { $0.id == first.id }) else { return }
+        model.scrollPositions[sessionID] = .init(messageID: first.id, offset: first.frame.minY - contentOffset, index: index)
+        if let path = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"],
+           ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+            try? Data("\(index)".utf8).write(to: URL(fileURLWithPath: path))
+        }
     }
 }
 

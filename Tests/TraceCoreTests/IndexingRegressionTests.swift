@@ -231,6 +231,100 @@ final class IndexingRegressionTests: XCTestCase {
         }
     }
 
+    func testPlaceholderRecoveryMovesSameFormatInodeWithoutLosingIDs() async throws {
+        let root = try directory()
+        let original = root.appendingPathComponent("original.jsonl")
+        let renamed = root.appendingPathComponent("renamed.jsonl")
+        let usage = #"{"type":"assistant","uuid":"usage","sessionId":"session","cwd":"/tmp/TraceExample","timestamp":1700000000000,"message":{"id":"response","model":"claude-sonnet-5","content":"cost record","usage":{"input_tokens":10,"output_tokens":2}}}"# + "\n"
+        try Data((line(1) + usage).utf8).write(to: original)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [root])
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let indexedState = try await database.sourceState(path: original.path)
+        let sourceID = try XCTUnwrap(indexedState?.id)
+        let initialSearch = try await database.search(query: "searchable")
+        let messageID = try XCTUnwrap(initialSearch.results.first?.id)
+        let originalUsage = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertEqual(originalUsage.first?.inputTokens, 10)
+
+        try FileManager.default.moveItem(at: original, to: renamed)
+        let rootID = try await database.register(root: source.roots[0])
+        try await database.recordSourceError(
+            file: .init(agent: .claudeCode, root: root, url: renamed, format: .claudeJSONL),
+            rootID: rootID, error: "synthetic error before recovery"
+        )
+        let placeholder = try await database.sourceState(path: renamed.path)
+        XCTAssertTrue(try XCTUnwrap(placeholder).isPlaceholder)
+        await coordinator.refresh(paths: [original.path, renamed.path], scope: .proseOnly)
+        let recoveredState = try await database.sourceState(path: renamed.path)
+        let recovered = try XCTUnwrap(recoveredState)
+        XCTAssertEqual(recovered.id, sourceID)
+        XCTAssertFalse(recovered.isPlaceholder)
+        XCTAssertNil(recovered.lastError)
+        let missing = try await database.sourceState(path: original.path)
+        let recoveredSearch = try await database.search(query: "searchable")
+        let failureCount = try await database.unresolvedSourceFailureCount()
+        XCTAssertNil(missing)
+        XCTAssertEqual(recoveredSearch.results.first?.id, messageID)
+        XCTAssertEqual(failureCount, 0)
+        let recoveredUsage = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertEqual(recoveredUsage.first?.inputTokens, 10)
+    }
+
+    func testPlaceholderPromotionIndexesNewFileWithoutContentReplacement() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("new.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [root])
+        let rootID = try await database.register(root: source.roots[0])
+        try await database.recordSourceError(
+            file: .init(agent: .claudeCode, root: root, url: file, format: .claudeJSONL),
+            rootID: rootID, error: "synthetic transient error"
+        )
+        let placeholder = try await database.sourceState(path: file.path)
+        let placeholderID = try XCTUnwrap(placeholder?.id)
+        await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .proseOnly)
+        let indexedState = try await database.sourceState(path: file.path)
+        let state = try XCTUnwrap(indexedState)
+        XCTAssertEqual(state.id, placeholderID)
+        XCTAssertFalse(state.isPlaceholder)
+        XCTAssertEqual(state.contentGeneration, 0)
+        XCTAssertNil(state.lastError)
+        let search = try await database.search(query: "searchable")
+        XCTAssertEqual(search.results.count, 1)
+    }
+
+    func testInodeRenameAcrossGeminiFormatsReindexesNewSource() async throws {
+        let root = try directory()
+        let chats = root.appendingPathComponent("project/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let original = chats.appendingPathComponent("session-switch.json")
+        let renamed = chats.appendingPathComponent("session-switch.jsonl")
+        let object: [String: Any] = ["sessionId": "switch", "messages": [[
+            "id": "one", "type": "user", "timestamp": "2026-03-04T05:06:07Z", "content": "searchable switch"
+        ]]]
+        var data = try JSONSerialization.data(withJSONObject: object)
+        data.append(0x0A)
+        try data.write(to: original)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [GeminiSource(root: root)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let originalState = try await database.sourceState(path: original.path)
+        let oldID = try XCTUnwrap(originalState?.id)
+        try FileManager.default.moveItem(at: original, to: renamed)
+        await coordinator.refresh(paths: [original.path, renamed.path], scope: .proseOnly)
+        let reindexedState = try await database.sourceState(path: renamed.path)
+        let state = try XCTUnwrap(reindexedState)
+        XCTAssertNotEqual(state.id, oldID)
+        XCTAssertEqual(state.format, .geminiJSONL)
+        let missing = try await database.sourceState(path: original.path)
+        let search = try await database.search(query: "searchable")
+        XCTAssertNil(missing)
+        XCTAssertEqual(search.results.count, 1)
+    }
+
     func testUnresolvedSourceErrorSurvivesQuietAndCancelledPasses() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")
@@ -383,6 +477,7 @@ final class IndexingRegressionTests: XCTestCase {
         try await raw.write { db in
             try db.execute(sql: "DROP INDEX idx_usage_project")
             try db.execute(sql: "DROP INDEX idx_source_error")
+            try db.execute(sql: "ALTER TABLE source_file DROP COLUMN is_placeholder")
             try db.execute(sql: "ALTER TABLE source_file DROP COLUMN content_session_id")
             try db.execute(sql: "ALTER TABLE source_file DROP COLUMN metadata_session_id")
             try db.execute(sql: "ALTER TABLE session DROP COLUMN error_revision")
@@ -391,6 +486,7 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v4-source-generation'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v5-usage-project'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v6-checkpoint-context'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v7-source-placeholders'")
             try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
         }
 
@@ -403,7 +499,41 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "6")
+        XCTAssertEqual(schema, "7")
+    }
+
+    func testV7MigrationBackfillsPlaceholdersWithoutChangingIndexedIDs() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let failed = root.appendingPathComponent("failed.jsonl")
+        let url = root.appendingPathComponent("index.sqlite")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: url)
+        let source = ClaudeCodeSource(roots: [root])
+        await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .proseOnly)
+        let sourceID = try await database.sourceState(path: file.path)?.id
+        let page = try await database.search(query: "searchable")
+        let messageID = page.results.first?.id
+        let rootID = try await database.register(root: source.roots[0])
+        try await database.recordSourceError(
+            file: .init(agent: .claudeCode, root: root, url: failed, format: .claudeJSONL),
+            rootID: rootID, error: "synthetic legacy placeholder"
+        )
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "ALTER TABLE source_file DROP COLUMN is_placeholder")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v7-source-placeholders'")
+            try db.execute(sql: "UPDATE trace_meta SET value='6' WHERE key='schema_version'")
+        }
+        let migrated = try IndexDatabase(url: url)
+        XCTAssertFalse(migrated.contentWasResetOnOpen)
+        let indexed = try await migrated.sourceState(path: file.path)
+        let placeholder = try await migrated.sourceState(path: failed.path)
+        let reopenedPage = try await migrated.search(query: "searchable")
+        XCTAssertEqual(indexed?.id, sourceID)
+        XCTAssertFalse(try XCTUnwrap(indexed).isPlaceholder)
+        XCTAssertTrue(try XCTUnwrap(placeholder).isPlaceholder)
+        XCTAssertEqual(reopenedPage.results.first?.id, messageID)
     }
 
     func testIncrementalRollupsSkipUnchangedPassAndRunAfterChangedInput() async throws {
@@ -691,6 +821,10 @@ private struct CountingSource: SessionSource {
         counter.increment()
         return base.records(in: file, from: offset, through: boundary)
     }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        counter.increment()
+        return base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
+    }
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
         try base.hydrate(fileURL: fileURL, format: format, locator: locator)
     }
@@ -707,7 +841,14 @@ private struct ThrowAfterIncrementalEOFSource: SessionSource {
     func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        let source = base.records(in: file, from: offset, through: boundary)
+        records(in: file, from: offset, through: boundary, initialSessionID: nil)
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        let source = base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
         guard invocation.nextInvocation() > 1 else { return source }
         let state: SyntheticIncrementalFailureState
         do {
@@ -772,8 +913,17 @@ private struct MutatingSnapshotSource: SessionSource {
     func records(
         in discovered: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: discovered, from: offset, through: boundary, initialSessionID: nil)
+    }
+
+    func records(
+        in discovered: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
         let number = invocation.nextInvocation()
-        guard number == 2 else { return base.records(in: discovered, from: offset, through: boundary) }
+        guard number == 2 else {
+            return base.records(in: discovered, from: offset, through: boundary, initialSessionID: initialSessionID)
+        }
         let state = MutateThenFailState(file: file, replacement: replacement)
         return AsyncThrowingStream(unfolding: { try state.next() })
     }
@@ -822,6 +972,13 @@ private struct QuietSnapshotSource: SessionSource {
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
         let state = QuietSnapshotState(gate: gate)
         return AsyncThrowingStream(unfolding: { await state.next() })
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
     }
 
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {

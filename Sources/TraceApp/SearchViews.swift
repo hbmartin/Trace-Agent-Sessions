@@ -28,6 +28,7 @@ struct RecentPopoverView: View {
             Group {
                 if !search.query.isEmpty {
                     SearchResultList(model: model, search: model.globalSearch, maximum: 10, usesNativeScrolling: true, selectedResultID: .constant(nil))
+                        .id(search.resultSetID)
                 } else {
                     NativeScrollView {
                         VStack(alignment: .leading, spacing: 4) {
@@ -171,6 +172,7 @@ struct LauncherView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 SearchResultList(model: model, search: model.globalSearch, maximum: .max, selectedResultID: $selectedResultID)
+                    .id(search.resultSetID)
             }
             Divider()
             HStack {
@@ -191,7 +193,7 @@ struct LauncherView: View {
             if let selectedResultID, ids.contains(selectedResultID) { return }
             selectedResultID = ids.first
         }
-        .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
+        .onExitCommand { NotificationCenter.default.post(name: .traceHideLauncher, object: nil) }
     }
 
     private var selectedProjectName: String {
@@ -294,6 +296,7 @@ struct SearchResultList: View {
     @State private var resultFrames: [Int64: CGRect] = [:]
     @State private var savedAnchor: SearchResultAnchor?
     @State private var pendingAnchor: SearchResultAnchor?
+    @State private var pendingAnchorToken = UUID()
     @State private var nativeScrollCommand: NativeScrollCommand?
 
     var body: some View {
@@ -325,9 +328,11 @@ struct SearchResultList: View {
                         if usesNativeScrolling {
                             NativeScrollView(
                                 onScroll: { contentOffset = $0 },
-                                scrollCommand: nativeScrollCommand
+                                onUserScroll: { cancelPendingAnchor() },
+                                scrollCommand: nativeScrollCommand,
+                                resultSetID: search.resultSetID
                             ) {
-                                rowsContent.onPreferenceChange(SearchResultFrames.self) {
+                                rowsContent.onPreferenceChange(RowFramesPreference.self) {
                                     receiveFrames($0)
                                 }
                             }
@@ -335,15 +340,30 @@ struct SearchResultList: View {
                             ScrollView { rowsContent }
                                 .scrollPosition($searchPosition)
                                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y }
-                                    action: { _, offset in contentOffset = offset }
-                                .onPreferenceChange(SearchResultFrames.self) { receiveFrames($0) }
+                                    action: { _, offset in
+                                        contentOffset = offset
+                                        if pendingAnchor != nil && searchPosition.isPositionedByUser {
+                                            cancelPendingAnchor()
+                                        }
+                                    }
+                                .onPreferenceChange(RowFramesPreference.self) { receiveFrames($0) }
                         }
                     }
                     .accessibilityIdentifier("searchResultsScroll")
-                    .id(search.resultSetID)
                     .onChange(of: search.automaticRefreshToken) { _, _ in captureAnchor() }
                     .onChange(of: search.automaticResultRevision) { _, _ in
                         restoreAnchor(using: proxy)
+                    }
+                    .task(id: pendingAnchorToken) {
+                        guard pendingAnchor != nil else { return }
+                        let token = pendingAnchorToken
+                        try? await Task.sleep(for: .milliseconds(50))
+                        guard !Task.isCancelled, pendingAnchorToken == token else { return }
+                        applyPendingAnchor(clear: false)
+                        try? await Task.sleep(for: .milliseconds(250))
+                        guard !Task.isCancelled, pendingAnchorToken == token else { return }
+                        applyPendingAnchor(clear: true)
+                        cancelPendingAnchor()
                     }
                     .onChange(of: selectedResultID) { _, id in
                         if let id { proxy.scrollTo(id, anchor: .center) }
@@ -366,11 +386,10 @@ struct SearchResultList: View {
     }
 
     private func captureAnchor() {
-        let first = resultFrames.filter { $0.value.maxY > contentOffset + 1 }
-            .min { $0.value.minY < $1.value.minY }
+        let first = RowFrameGeometry.firstVisible(in: resultFrames, offset: contentOffset)
         savedAnchor = .init(
-            id: first?.key,
-            offset: first.map { $0.value.minY - contentOffset } ?? 0,
+            id: first?.id,
+            offset: first.map { $0.frame.minY - contentOffset } ?? 0,
             oldOrder: search.results.map(\.id)
         )
     }
@@ -388,23 +407,38 @@ struct SearchResultList: View {
                 ?? savedAnchor.oldOrder.prefix(oldIndex).reversed().first(where: surviving.contains)
         } else { target = nil }
         guard let target else {
+            cancelPendingAnchor()
             if usesNativeScrolling {
-                nativeScrollCommand = .init(id: UUID(), y: 0)
+                nativeScrollCommand = .init(id: UUID(), resultSetID: search.resultSetID, y: 0)
             } else { searchPosition.scrollTo(edge: .top) }
             return
         }
         pendingAnchor = .init(id: target, offset: savedAnchor.offset, oldOrder: [])
-        if !usesNativeScrolling { proxy.scrollTo(target, anchor: .top) }
+        pendingAnchorToken = UUID()
+        if resultFrames[target] != nil { applyPendingAnchor(clear: false) }
+        else if !usesNativeScrolling { proxy.scrollTo(target, anchor: .top) }
     }
 
     private func receiveFrames(_ frames: [Int64: CGRect]) {
         resultFrames = frames
+        applyPendingAnchor(clear: true)
+    }
+
+    private func applyPendingAnchor(clear: Bool) {
         guard let pendingAnchor, let id = pendingAnchor.id,
-              let frame = frames[id] else { return }
+              let frame = resultFrames[id] else { return }
         let y = max(0, frame.minY - pendingAnchor.offset)
-        if usesNativeScrolling { nativeScrollCommand = .init(id: UUID(), y: y) }
+        if usesNativeScrolling {
+            nativeScrollCommand = .init(id: UUID(), resultSetID: search.resultSetID, y: y)
+        }
         else { searchPosition.scrollTo(y: y) }
-        self.pendingAnchor = nil
+        if clear { cancelPendingAnchor() }
+    }
+
+    private func cancelPendingAnchor() {
+        guard pendingAnchor != nil else { return }
+        pendingAnchor = nil
+        pendingAnchorToken = UUID()
     }
 
     @ViewBuilder private var resultRows: some View {
@@ -455,7 +489,7 @@ struct SearchResultList: View {
                     .id(result.id)
                     .background(GeometryReader { geometry in
                         Color.clear.preference(
-                            key: SearchResultFrames.self,
+                            key: RowFramesPreference.self,
                             value: [result.id: geometry.frame(in: .named("searchResultContent"))]
                         )
                     })
@@ -629,11 +663,4 @@ private struct SearchResultAnchor {
     let id: Int64?
     let offset: CGFloat
     let oldOrder: [Int64]
-}
-
-private struct SearchResultFrames: PreferenceKey {
-    static let defaultValue: [Int64: CGRect] = [:]
-    static func reduce(value: inout [Int64: CGRect], nextValue: () -> [Int64: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
-    }
 }

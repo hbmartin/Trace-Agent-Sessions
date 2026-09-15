@@ -62,6 +62,13 @@ struct CostsView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 12)
             }
+            if model.costsTotalsUpdating {
+                Text("Totals update when indexing finishes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+            }
 
             Divider()
             Table(model.usage) {

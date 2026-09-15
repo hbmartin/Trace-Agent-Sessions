@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NotificationCenter.default.addObserver(self, selector: #selector(showMain), name: .traceShowMainWindow, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(showLauncher), name: .traceShowLauncher, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(hideLauncher), name: .traceHideLauncher, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(showPreferences), name: .traceShowPreferences, object: nil)
 
         if !environment.settings.onboardingComplete {
@@ -89,5 +90,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showMain() { mainWindowController?.show() }
     @objc private func showLauncher() { launcherController?.show() }
+    @objc private func hideLauncher() { launcherController?.hide() }
     @objc private func showPreferences() { preferencesController?.show() }
 }

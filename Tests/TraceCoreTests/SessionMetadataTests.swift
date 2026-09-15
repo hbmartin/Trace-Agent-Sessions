@@ -355,6 +355,61 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(session.title, "initial request")
     }
 
+    func testLegacyGeminiPrefixScanLeavesCoordinatorAvailableForHydration() async throws {
+        let root = try directory()
+        let chats = root.appendingPathComponent("project/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let file = chats.appendingPathComponent("session-legacy-prefix.jsonl")
+        let first: [String: Any] = ["sessionId": "legacy-id", "$set": ["messages": [
+            ["id": "initial", "type": "user", "content": "initial request"]]]]
+        var objects = [first]
+        for index in 0..<100 {
+            objects.append(["$set": ["messages": [
+                ["id": "filler-\(index)", "type": "gemini", "content": "filler answer"]]]])
+        }
+        try write(objects, to: file)
+        let databaseURL = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: databaseURL)
+        let coordinator = IndexCoordinator(database: database, sources: [GeminiSource(root: root)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let initialPage = try await database.search(query: "initial")
+        let messageID = try XCTUnwrap(initialPage.results.first?.id)
+        let raw = try DatabaseQueue(path: databaseURL.path)
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE source_file SET content_session_id=NULL, metadata_session_id=NULL WHERE path=?",
+                           arguments: [file.path])
+        }
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: try JSONSerialization.data(withJSONObject: ["$set": ["messages": [
+            ["id": "tail", "type": "gemini", "content": "tail answer"]]]]) + Data([10]))
+        try handle.close()
+        #if DEBUG
+        GeminiJSONLSessionIdentity.resetPrefixScanCount()
+        GeminiJSONLSessionIdentity.delayPrefixScan(path: file.path, secondsPerLine: 0.01)
+        defer { GeminiJSONLSessionIdentity.delayPrefixScan(path: nil) }
+        #endif
+        let finished = TestCompletionFlag()
+        let run = Task {
+            await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+            finished.mark()
+        }
+        #if DEBUG
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline && GeminiJSONLSessionIdentity.prefixScanCount == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertGreaterThan(GeminiJSONLSessionIdentity.prefixScanCount, 0)
+        #endif
+        let hydrated = try await coordinator.hydrate(messageID: messageID)
+        XCTAssertTrue(hydrated.sections.prose.contains("initial request"))
+        XCTAssertFalse(finished.value,
+                       "hydration should finish while the detached legacy scan is still running")
+        await run.value
+        let state = try await database.sourceState(path: file.path)
+        XCTAssertEqual(state?.contentSessionID, "legacy-id")
+    }
+
     func testMetadataIsScopedToExternalSessionIDAndCodexPlanShapes() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("mixed.jsonl")
@@ -473,4 +528,11 @@ private final class MetadataWarningRecorder: @unchecked Sendable {
         lock.withLock { lastTerminal = update }
     }
     var terminal: IndexProgress? { lock.withLock { lastTerminal } }
+}
+
+private final class TestCompletionFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var complete = false
+    func mark() { lock.withLock { complete = true } }
+    var value: Bool { lock.withLock { complete } }
 }

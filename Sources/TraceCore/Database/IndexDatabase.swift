@@ -27,10 +27,12 @@ struct IndexedSourceState: Sendable {
     let contentGeneration: Int64
     let contentSessionID: String?
     let metadataSessionID: String?
+    let isPlaceholder: Bool
+    let lastError: String?
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 6
+    public static let schemaVersion = 7
     public static let indexFormatVersion = 3
     public nonisolated let contentWasResetOnOpen: Bool
     private let pool: DatabasePool
@@ -248,6 +250,15 @@ public actor IndexDatabase {
             try db.execute(sql: "CREATE INDEX idx_source_error ON source_file(id) WHERE last_error IS NOT NULL")
             try db.execute(sql: "UPDATE trace_meta SET value='6' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v7-source-placeholders") { db in
+            try db.execute(sql: "ALTER TABLE source_file ADD COLUMN is_placeholder INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: """
+                UPDATE source_file SET is_placeholder=1
+                WHERE dev=0 AND inode=0 AND size=0 AND mtime_ns=0
+                    AND scanned_bytes=0 AND head_length=0 AND length(head_hash)=0
+                """)
+            try db.execute(sql: "UPDATE trace_meta SET value='7' WHERE key='schema_version'")
+        }
         try migrator.migrate(pool)
     }
 
@@ -350,14 +361,18 @@ public actor IndexDatabase {
         }
     }
 
-    func sourceState(device: UInt64, inode: UInt64) throws -> IndexedSourceState? {
+    func movableSourceState(device: UInt64, inode: UInt64, agent: AgentKind,
+                            format: SourceFormat) throws -> IndexedSourceState? {
         try pool.read { db in
-            guard let row = try Row.fetchOne(
+            let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT * FROM source_file WHERE dev=? AND inode=? LIMIT 1",
-                arguments: [Int64(bitPattern: device), Int64(bitPattern: inode)]
-            ) else { return nil }
-            return sourceState(from: row)
+                sql: "SELECT * FROM source_file WHERE dev=? AND inode=? AND agent=? AND format=? AND is_placeholder=0",
+                arguments: [Int64(bitPattern: device), Int64(bitPattern: inode),
+                            agent.rawValue, format.rawValue]
+            )
+            return rows.map(sourceState(from:)).first {
+                !FileManager.default.fileExists(atPath: $0.path)
+            }
         }
     }
 
@@ -376,7 +391,9 @@ public actor IndexDatabase {
             headLength: row["head_length"],
             contentGeneration: row["content_generation"],
             contentSessionID: row["content_session_id"],
-            metadataSessionID: row["metadata_session_id"]
+            metadataSessionID: row["metadata_session_id"],
+            isPlaceholder: row["is_placeholder"],
+            lastError: row["last_error"]
         )
     }
 
@@ -408,6 +425,37 @@ public actor IndexDatabase {
                 sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
                 arguments: [rootID, path, id]
             )
+        }
+    }
+
+    func replacePlaceholderWithMovedSource(placeholderID: Int64, movedID: Int64,
+                                           rootID: Int64, path: String) throws {
+        try pool.writeWithoutTransaction { db in
+            try db.inTransaction {
+                try db.execute(sql: "DELETE FROM source_file WHERE id=? AND is_placeholder=1",
+                               arguments: [placeholderID])
+                guard db.changesCount == 1 else { throw SessionSourceError.malformedRecord("source placeholder changed") }
+                try db.execute(sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
+                               arguments: [rootID, path, movedID])
+                return .commit
+            }
+        }
+    }
+
+    func promotePlaceholder(id: Int64, rootID: Int64, file: DiscoveredSourceFile,
+                            fingerprint: SourceFingerprint) throws {
+        try pool.write { db in
+            try db.execute(sql: """
+                UPDATE source_file SET root_id=?, agent=?, format=?, is_placeholder=0,
+                    dev=?, inode=?, size=?, mtime_ns=?, scanned_bytes=0, head_hash=?, head_length=?
+                WHERE id=? AND is_placeholder=1
+                """, arguments: [
+                    rootID, file.agent.rawValue, file.format.rawValue,
+                    Int64(bitPattern: fingerprint.device), Int64(bitPattern: fingerprint.inode),
+                    fingerprint.size, fingerprint.modificationNanoseconds,
+                    fingerprint.headHash, fingerprint.headLength, id,
+                ])
+            guard db.changesCount == 1 else { throw SessionSourceError.malformedRecord("source placeholder changed") }
         }
     }
 
@@ -837,8 +885,8 @@ public actor IndexDatabase {
             try db.execute(sql: """
                 INSERT OR IGNORE INTO source_file(
                     root_id, agent, format, path, dev, inode, size, mtime_ns,
-                    scanned_bytes, head_hash, head_length
-                ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?, 0)
+                    scanned_bytes, head_hash, head_length, is_placeholder
+                ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?, 0, 1)
                 """, arguments: [rootID, file.agent.rawValue, file.format.rawValue,
                                  file.url.path, Data()])
             let id = try Int64.fetchOne(db, sql: "SELECT id FROM source_file WHERE path=?",
@@ -927,6 +975,17 @@ public actor IndexDatabase {
                 try db.execute(sql: "UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty'")
                 try db.execute(sql: "INSERT INTO trace_meta(key, value) VALUES ('usage_rollups_timezone', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", arguments: [timeZoneID])
                 return .commit
+            }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+           let path = ProcessInfo.processInfo.environment["TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH"] {
+            if !FileManager.default.fileExists(atPath: path) {
+                _ = FileManager.default.createFile(atPath: path, contents: nil)
+            }
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data("rebuilt\n".utf8))
+                try? handle.close()
             }
         }
     }
