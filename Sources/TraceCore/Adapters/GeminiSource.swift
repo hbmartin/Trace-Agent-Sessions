@@ -20,13 +20,20 @@ public struct GeminiSource: SessionSource {
     public func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialSessionID: nil)
+    }
+
+    public func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
         if file.format == .geminiJSON {
             let state = GeminiSnapshotStream(file: file)
             return AsyncThrowingStream(unfolding: { try state.next() })
         }
         let metadata = geminiMetadata(for: file.url)
-        var currentSessionID = metadata.sessionID
-        var loadedContext = offset == 0
+        var currentSessionID = initialSessionID ?? metadata.sessionID
+        var loadedContext = offset == 0 || initialSessionID != nil
         return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
             if !loadedContext {
                 currentSessionID = try GeminiJSONLSessionIdentity.id(before: offset, in: file.url)
@@ -34,8 +41,12 @@ public struct GeminiSource: SessionSource {
                 loadedContext = true
             }
             guard let root = try? JSONHelpers.object(from: line.data) else { return [] }
-            currentSessionID = GeminiJSONLSessionIdentity.explicitID(in: root) ?? currentSessionID
-            return JSONDocumentScanner.objectRanges(in: line.data, arrayKey: "messages").compactMap { range in
+            var records: [ParsedRecord] = []
+            if let explicitID = GeminiJSONLSessionIdentity.explicitID(in: root) {
+                currentSessionID = explicitID
+                records.append(.sessionContext(explicitID))
+            }
+            records += JSONDocumentScanner.objectRanges(in: line.data, arrayKey: "messages").compactMap { range in
                 guard let object = try? JSONHelpers.object(from: line.data.subdata(in: range)) else { return nil }
                 let absoluteOffset = line.offset + Int64(range.lowerBound)
                 return parseGeminiMessage(
@@ -45,6 +56,7 @@ public struct GeminiSource: SessionSource {
                     sourceKey: object["id"] as? String ?? "\(absoluteOffset)"
                 ).map { .message($0) }
             }
+            return records
         }
     }
 
@@ -68,6 +80,13 @@ public struct GeminiSource: SessionSource {
 }
 
 enum GeminiJSONLSessionIdentity {
+    #if DEBUG
+    private nonisolated(unsafe) static var prefixScans = 0
+    private static let prefixScanLock = NSLock()
+    static func resetPrefixScanCount() { prefixScanLock.withLock { prefixScans = 0 } }
+    static var prefixScanCount: Int { prefixScanLock.withLock { prefixScans } }
+    #endif
+
     static func explicitID(in root: [String: Any]) -> String? {
         func nonempty(_ value: Any?) -> String? {
             guard let value = value as? String else { return nil }
@@ -83,6 +102,9 @@ enum GeminiJSONLSessionIdentity {
     }
 
     static func id(before offset: Int64, in url: URL) throws -> String? {
+        #if DEBUG
+        prefixScanLock.withLock { prefixScans += 1 }
+        #endif
         let cursor = try JSONLineCursor(url: url, from: 0, through: offset)
         var inherited: String?
         while let line = try cursor.next() {

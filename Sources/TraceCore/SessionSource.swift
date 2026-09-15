@@ -6,6 +6,7 @@ public protocol SessionSource: Sendable {
 
     func discover() throws -> [DiscoveredSourceFile]
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error>
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error>
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage
 }
 
@@ -26,6 +27,9 @@ public enum SessionSourceError: LocalizedError, Sendable {
 }
 
 public extension SessionSource {
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
+    }
     func records(in file: DiscoveredSourceFile, from offset: Int64) -> AsyncThrowingStream<ParsedRecord, Error> {
         records(in: file, from: offset, through: nil)
     }

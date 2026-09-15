@@ -146,12 +146,24 @@ final class TraceUITests: XCTestCase {
         let icon = app.images["Session error"].firstMatch
         XCTAssertTrue(icon.waitForExistence(timeout: 15))
         icon.hover()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+        let originalDetail = app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "UniqueOutput: file missing"
-        )).firstMatch.waitForExistence(timeout: 5))
-        app.typeKey(.escape, modifierFlags: [])
+        )).firstMatch
+        XCTAssertTrue(originalDetail.waitForExistence(timeout: 5))
 
         let file = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        let ordinary: [String: Any] = [
+            "type": "assistant", "uuid": "ordinary-append", "sessionId": "test-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:09Z",
+            "message": ["content": "Ordinary append while reading errors"],
+        ]
+        let ordinaryHandle = try FileHandle(forWritingTo: file)
+        try ordinaryHandle.seekToEnd()
+        try ordinaryHandle.write(contentsOf: JSONSerialization.data(withJSONObject: ordinary) + Data([10]))
+        try ordinaryHandle.close()
+        XCTAssertTrue(app.staticTexts["7 messages"].waitForExistence(timeout: 15))
+        XCTAssertTrue(originalDetail.exists, "an ordinary append must keep the error popover open")
+
         let appended: [String: Any] = [
             "type": "user", "uuid": "later-failure", "sessionId": "test-session",
             "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:10Z",
@@ -162,10 +174,9 @@ final class TraceUITests: XCTestCase {
         try handle.seekToEnd()
         try handle.write(contentsOf: JSONSerialization.data(withJSONObject: appended) + Data([10]))
         try handle.close()
-        icon.hover()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "Later failure detail"
-        )).firstMatch.waitForExistence(timeout: 15))
+        )).firstMatch.waitForExistence(timeout: 15), "the open popover must reload on a new failure")
     }
 
     func testCancelledErrorPopoverLoadRetriesWhenRowReturns() throws {
@@ -250,6 +261,98 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testSearchUpdatesDuringControlledLongIndexPass() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/live-rebuild.jsonl")
+        var data = Data()
+        for index in 0..<750 {
+            let row: [String: Any] = [
+                "type": "assistant", "uuid": "stream-\(index)", "sessionId": "stream-session",
+                "cwd": "/tmp/TraceUIExample", "timestamp": 1_700_000_000_000 + index * 1_000,
+                "message": ["content": "StreamingNeedle row \(index)"],
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: row))
+            data.append(10)
+        }
+        try data.write(to: file)
+        app.launchEnvironment["TRACE_TEST_INDEX_BATCH_DELAY_MS"] = "5000"
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10))
+        query.click()
+        query.typeText("StreamingNeedle")
+        let early = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "StreamingNeedle row"
+        )).firstMatch
+        XCTAssertTrue(early.waitForExistence(timeout: 8),
+                      "a committed batch must refresh active search before the pass finishes")
+        let progress = app.descendants(matching: .any).matching(identifier: "indexProgress").firstMatch
+        XCTAssertTrue(progress.exists)
+        XCTAssertTrue(progress.label.contains("Indexing"),
+                      "the first result must arrive while indexing is still running")
+        let newest = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "StreamingNeedle row 749"
+        )).firstMatch
+        XCTAssertTrue(newest.waitForExistence(timeout: 30))
+    }
+
+    func testAutomaticSearchRefreshKeepsVisibleResultAnchor() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/anchor.jsonl")
+        var data = Data()
+        for index in 0..<90 {
+            let row: [String: Any] = [
+                "type": "assistant", "uuid": "anchor-\(index)", "sessionId": "anchor-session",
+                "cwd": "/tmp/TraceUIExample", "timestamp": 1_700_000_000_000 + index * 1_000,
+                "message": ["content": "AnchorNeedle row \(index)"],
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: row))
+            data.append(10)
+        }
+        try data.write(to: file)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 15))
+        query.click()
+        query.typeText("AnchorNeedle")
+        let scroll = app.scrollViews["searchResultsScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "AnchorNeedle row 89"
+        )).firstMatch.waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -850)
+        let visible = app.buttons.allElementsBoundByIndex.first {
+            $0.isHittable && $0.label.contains("AnchorNeedle row")
+        }
+        let anchor = try XCTUnwrap(visible)
+        let anchorY = anchor.frame.minY
+
+        let appended: [String: Any] = [
+            "type": "assistant", "uuid": "anchor-new", "sessionId": "anchor-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": 1_700_000_200_000,
+            "message": ["content": "AnchorNeedle newest row"],
+        ]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: appended) + Data([10]))
+        try handle.close()
+        XCTAssertTrue(app.staticTexts["91 messages"].waitForExistence(timeout: 15))
+        Thread.sleep(forTimeInterval: 1)
+        let retained = NSPredicate { _, _ in
+            anchor.isHittable && abs(anchor.frame.minY - anchorY) <= 35
+        }
+        expectation(for: retained, evaluatedWith: nil)
+        waitForExpectations(timeout: 10)
+        scroll.scroll(byDeltaX: 0, deltaY: 20_000)
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "AnchorNeedle newest row"
+        )).firstMatch.waitForExistence(timeout: 15))
+    }
+
     func testVersionOneIndexUpgradeKeepsMainWindowResponsive() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         app.launch()
@@ -280,6 +383,49 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(current.waitForExistence(timeout: 20))
     }
 
+    func testStartupRollupRepairFailureKeepsSearchAvailable() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        let usage: [String: Any] = [
+            "type": "assistant", "uuid": "cost-record", "sessionId": "test-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": 1_700_000_000_000,
+            "message": ["id": "cost-response", "model": "claude-sonnet-5",
+                        "content": "Searchable usage record",
+                        "usage": ["input_tokens": 10, "output_tokens": 2]],
+        ]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: usage) + Data([10]))
+        try handle.close()
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let current = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Index current")).firstMatch
+        XCTAssertTrue(current.waitForExistence(timeout: 15))
+        app.terminate()
+
+        let sqlite = Process()
+        sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        sqlite.arguments = [directory.appendingPathComponent("index.sqlite").path,
+            "CREATE TRIGGER fail_startup_rollup BEFORE DELETE ON usage_daily BEGIN SELECT RAISE(ABORT, 'rollup unavailable'); END; UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty';"]
+        try sqlite.run()
+        sqlite.waitUntilExit()
+        XCTAssertEqual(sqlite.terminationStatus, 0)
+
+        app.launch()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 15), "rollup repair must not abort startup")
+        query.click()
+        query.typeText("Searchable")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Searchable usage record"
+        )).firstMatch.waitForExistence(timeout: 15), "indexed search must remain usable")
+        app.radioButtons["Costs"].click()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "rollup unavailable"
+        )).firstMatch.waitForExistence(timeout: 10))
+    }
+
     func testSuccessfulIncrementalPassClearsEarlierFileFailure() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         app.launch()
@@ -301,7 +447,7 @@ final class TraceUITests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
 
         let failed = app.buttons.containing(NSPredicate(
-            format: "label CONTAINS %@", "failed files"
+            format: "label CONTAINS %@", "files still failing"
         )).firstMatch
         XCTAssertTrue(failed.waitForExistence(timeout: 15))
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
@@ -478,7 +624,7 @@ final class TraceUITests: XCTestCase {
 
     func testSearchJumpsToMatchAndPlanBadge() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        try addLongSession("Search session", project: "SearchProject", directory: directory)
+        try addLongSession("Search session", project: "SearchProject", directory: directory, count: 300)
         let file = directory.appendingPathComponent("Sources/Claude/Search session.jsonl")
         let handle = try FileHandle(forWritingTo: file)
         try handle.seekToEnd()
@@ -511,7 +657,7 @@ final class TraceUITests: XCTestCase {
         let match = scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniqueSearchNeedle")).firstMatch
         XCTAssertTrue(match.waitForExistence(timeout: 10))
         XCTAssertTrue(match.isHittable)
-        scroll.scroll(byDeltaX: 0, deltaY: 20_000)
+        scroll.scroll(byDeltaX: 0, deltaY: 100_000)
         let first = scroll.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Search session message 0")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         XCTAssertTrue(first.isHittable)

@@ -40,7 +40,7 @@ struct IndexProgressLabel: View {
             HStack(spacing: 8) {
                 if busy { ProgressView().controlSize(.small) }
                 Text(label).font(.caption)
-                    .foregroundStyle(progress.phase == .failed ? .red : .secondary)
+                    .foregroundStyle(progress.phase == .failed || progress.unresolvedFailedFiles > 0 ? .red : .secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             .contentShape(Rectangle())
@@ -65,6 +65,9 @@ struct IndexProgressLabel: View {
     private var details: String {
         var lines = ["\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
+        if progress.unresolvedFailedFiles > 0 {
+            lines.append("\(progress.unresolvedFailedFiles) files still failing")
+        }
         if let agent = progress.agent { lines.append("Provider: \(agent.displayName)") }
         if let project = progress.projectName { lines.append("Project: \(project)") }
         if let path = progress.currentPath {
@@ -72,6 +75,8 @@ struct IndexProgressLabel: View {
             lines.append("\(ByteCountFormatter.string(fromByteCount: progress.currentFileBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: progress.currentFileTotalBytes, countStyle: .file)) processed")
         }
         if let error = progress.error { lines.append(error) }
+        if let warning = progress.metadataWarning { lines.append(warning) }
+        if let rollupError = progress.rollupError { lines.append("Token totals: \(rollupError)") }
         return lines.joined(separator: "\n")
     }
 
@@ -84,8 +89,17 @@ struct IndexProgressLabel: View {
         case .reconciling: "Checking moved and deleted sessions…"
         case .aggregating: "Updating token totals…"
         case .complete:
-            progress.failedFiles > 0 ? "Index updated · \(progress.failedFiles) failed files" : "Index current · Watching for changes"
-        case .cancelled: "Indexing stopped · Progress saved"
+            if progress.unresolvedFailedFiles > 0 {
+                "Index updated · \(progress.unresolvedFailedFiles) files still failing"
+            } else if progress.failedFiles > 0 {
+                "Index updated · \(progress.failedFiles) failed files"
+            } else if progress.rollupError != nil {
+                "Index current · Token totals need retry"
+            } else { "Index current · Watching for changes" }
+        case .cancelled:
+            progress.unresolvedFailedFiles > 0
+                ? "Indexing stopped · \(progress.unresolvedFailedFiles) files still failing"
+                : "Indexing stopped · Progress saved"
         case .failed: progress.error ?? "Indexing failed"
         }
     }

@@ -4,6 +4,10 @@ import TraceCore
 
 @MainActor
 final class SessionSearchModel: ObservableObject {
+    enum SearchTrigger {
+        case user
+        case automatic
+    }
     @Published var query = ""
     @Published var filters = SearchFilters()
     @Published private(set) var results: [SearchResult] = []
@@ -13,6 +17,8 @@ final class SessionSearchModel: ObservableObject {
     @Published private(set) var hasLoadedAdditionalPages = false
     @Published private(set) var resultsMayBeStale = false
     @Published private(set) var resultSetID = UUID()
+    @Published private(set) var automaticRefreshToken: UUID?
+    @Published private(set) var automaticResultRevision = 0
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
     private var task: Task<Void, Never>?
@@ -37,15 +43,18 @@ final class SessionSearchModel: ObservableObject {
         self.diagnostics = diagnostics
     }
 
-    func search(sort: SearchSort? = nil, reset: Bool = true) {
+    func search(sort: SearchSort? = nil, reset: Bool = true,
+                trigger: SearchTrigger = .user) {
         if let sort { self.sort = sort }
         if reset {
+            if trigger == .automatic { automaticRefreshToken = UUID() }
             resultsMayBeStale = false
-            resultSetID = UUID()
+            let criteriaChanged = query != lastQuery || filters != lastFilters || self.sort != lastSort
+            if trigger == .user || criteriaChanged { resultSetID = UUID() }
             task?.cancel()
             task = nil
             requestID = UUID()
-            if query != lastQuery || filters != lastFilters || self.sort != lastSort {
+            if criteriaChanged {
                 results = []
                 snippets.removeAll()
             }
@@ -78,7 +87,12 @@ final class SessionSearchModel: ObservableObject {
                 let page = try await database.search(query: query, filters: filters, sort: sort, cursor: cursor)
                 try Task.checkCancellation()
                 guard let self, self.requestID == id else { return }
-                if reset { self.results = page.results } else { self.results += page.results }
+                if reset {
+                    self.results = page.results
+                    let surviving = Set(page.results.map(\.id))
+                    self.snippets = self.snippets.filter { surviving.contains($0.key) }
+                    if trigger == .automatic { self.automaticResultRevision += 1 }
+                } else { self.results += page.results }
                 if !reset { self.hasLoadedAdditionalPages = true }
                 self.nextCursor = page.nextCursor
                 self.task = nil
@@ -115,6 +129,7 @@ final class SessionSearchModel: ObservableObject {
         loadingAdditionalPage = false
         hasLoadedAdditionalPages = false
         resultsMayBeStale = false
+        automaticRefreshToken = nil
     }
 
     func hydrate(_ result: SearchResult) async {

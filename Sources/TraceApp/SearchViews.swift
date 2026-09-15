@@ -289,6 +289,12 @@ struct SearchResultList: View {
     var isMainSearch = false
     var usesNativeScrolling = false
     @Binding var selectedResultID: Int64?
+    @State private var searchPosition = ScrollPosition(edge: .top)
+    @State private var contentOffset: CGFloat = 0
+    @State private var resultFrames: [Int64: CGRect] = [:]
+    @State private var savedAnchor: SearchResultAnchor?
+    @State private var pendingAnchor: SearchResultAnchor?
+    @State private var nativeScrollCommand: NativeScrollCommand?
 
     var body: some View {
         if search.isSearching && search.results.isEmpty {
@@ -315,24 +321,90 @@ struct SearchResultList: View {
                     .padding(.vertical, 8)
                 }
                 ScrollViewReader { proxy in
-                    SearchScrollSurface(native: usesNativeScrolling) {
-                        Group {
-                            if usesNativeScrolling {
-                                VStack(alignment: .leading, spacing: 5) { resultRows }
-                            } else {
-                                LazyVStack(alignment: .leading, spacing: 5) { resultRows }
+                    Group {
+                        if usesNativeScrolling {
+                            NativeScrollView(
+                                onScroll: { contentOffset = $0 },
+                                scrollCommand: nativeScrollCommand
+                            ) {
+                                rowsContent.onPreferenceChange(SearchResultFrames.self) {
+                                    receiveFrames($0)
+                                }
                             }
+                        } else {
+                            ScrollView { rowsContent }
+                                .scrollPosition($searchPosition)
+                                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y }
+                                    action: { _, offset in contentOffset = offset }
+                                .onPreferenceChange(SearchResultFrames.self) { receiveFrames($0) }
                         }
-                        .padding(.vertical, 5)
                     }
                     .accessibilityIdentifier("searchResultsScroll")
                     .id(search.resultSetID)
+                    .onChange(of: search.automaticRefreshToken) { _, _ in captureAnchor() }
+                    .onChange(of: search.automaticResultRevision) { _, _ in
+                        restoreAnchor(using: proxy)
+                    }
                     .onChange(of: selectedResultID) { _, id in
                         if let id { proxy.scrollTo(id, anchor: .center) }
                     }
                 }
             }
         }
+    }
+
+    private var rowsContent: some View {
+        Group {
+            if usesNativeScrolling {
+                VStack(alignment: .leading, spacing: 5) { resultRows }
+            } else {
+                LazyVStack(alignment: .leading, spacing: 5) { resultRows }
+            }
+        }
+        .padding(.vertical, 5)
+        .coordinateSpace(name: "searchResultContent")
+    }
+
+    private func captureAnchor() {
+        let first = resultFrames.filter { $0.value.maxY > contentOffset + 1 }
+            .min { $0.value.minY < $1.value.minY }
+        savedAnchor = .init(
+            id: first?.key,
+            offset: first.map { $0.value.minY - contentOffset } ?? 0,
+            oldOrder: search.results.map(\.id)
+        )
+    }
+
+    private func restoreAnchor(using proxy: ScrollViewProxy) {
+        guard let savedAnchor else { return }
+        self.savedAnchor = nil
+        let surviving = Set(search.results.map(\.id))
+        let target: Int64?
+        if let id = savedAnchor.id, surviving.contains(id) {
+            target = id
+        } else if let id = savedAnchor.id,
+                  let oldIndex = savedAnchor.oldOrder.firstIndex(of: id) {
+            target = savedAnchor.oldOrder.dropFirst(oldIndex + 1).first(where: surviving.contains)
+                ?? savedAnchor.oldOrder.prefix(oldIndex).reversed().first(where: surviving.contains)
+        } else { target = nil }
+        guard let target else {
+            if usesNativeScrolling {
+                nativeScrollCommand = .init(id: UUID(), y: 0)
+            } else { searchPosition.scrollTo(edge: .top) }
+            return
+        }
+        pendingAnchor = .init(id: target, offset: savedAnchor.offset, oldOrder: [])
+        if !usesNativeScrolling { proxy.scrollTo(target, anchor: .top) }
+    }
+
+    private func receiveFrames(_ frames: [Int64: CGRect]) {
+        resultFrames = frames
+        guard let pendingAnchor, let id = pendingAnchor.id,
+              let frame = frames[id] else { return }
+        let y = max(0, frame.minY - pendingAnchor.offset)
+        if usesNativeScrolling { nativeScrollCommand = .init(id: UUID(), y: y) }
+        else { searchPosition.scrollTo(y: y) }
+        self.pendingAnchor = nil
     }
 
     @ViewBuilder private var resultRows: some View {
@@ -381,6 +453,12 @@ struct SearchResultList: View {
                     )
                     .contextMenu { Button("Copy Message") { model.copyMessage(id: result.id) } }
                     .id(result.id)
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: SearchResultFrames.self,
+                            value: [result.id: geometry.frame(in: .named("searchResultContent"))]
+                        )
+                    })
                     .task(id: result.id) { await search.hydrate(result) }
                     .onAppear {
                         if result.id == search.results.last?.id {
@@ -448,8 +526,11 @@ struct SessionRow: View {
     var body: some View {
         HStack(spacing: 9) {
             if session.hadError {
-                SessionErrorIcon(loadError: loadError)
-                    .id("\(session.id):\(session.messageCount):\(session.lastActivityMilliseconds):\(session.sourceGeneration):\(session.hadError)")
+                SessionErrorIcon(
+                    errorRevision: session.errorRevision,
+                    sourceGeneration: session.sourceGeneration,
+                    loadError: loadError
+                )
             }
             else { Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary) }
             VStack(alignment: .leading, spacing: 3) {
@@ -478,6 +559,8 @@ struct SessionRow: View {
 }
 
 private struct SessionErrorIcon: View {
+    let errorRevision: Int64
+    let sourceGeneration: Int64
     let loadError: @MainActor () async -> String
     @State private var showing = false
     @State private var detail: String?
@@ -506,6 +589,11 @@ private struct SessionErrorIcon: View {
                 .frame(width: 420, height: 220)
             }
             .onDisappear { cancelLoading() }
+            .onChange(of: "\(sourceGeneration):\(errorRevision)") { _, _ in
+                cancelLoading()
+                detail = nil
+                if showing { beginLoading() }
+            }
     }
 
     private func cancelLoading() {
@@ -537,11 +625,15 @@ extension Notification.Name {
     static let traceFocusPopover = Notification.Name("traceFocusPopover")
 }
 
-private struct SearchScrollSurface<Content: View>: View {
-    let native: Bool
-    @ViewBuilder var content: () -> Content
-    var body: some View {
-        if native { NativeScrollView(content: content) }
-        else { ScrollView(content: content) }
+private struct SearchResultAnchor {
+    let id: Int64?
+    let offset: CGFloat
+    let oldOrder: [Int64]
+}
+
+private struct SearchResultFrames: PreferenceKey {
+    static let defaultValue: [Int64: CGRect] = [:]
+    static func reduce(value: inout [Int64: CGRect], nextValue: () -> [Int64: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
     }
 }

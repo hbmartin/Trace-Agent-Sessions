@@ -11,14 +11,19 @@ public struct IndexProgress: Sendable {
     public var totalFiles: Int
     public var indexedFiles: Int = 0
     public var indexChanged: Bool = false
+    public var passID = UUID()
+    public var mutationRevision: Int = 0
     public var unchangedFiles: Int = 0
     public var failedFiles: Int = 0
+    public var unresolvedFailedFiles: Int = 0
     public var committedBytes: Int64 = 0
     public var currentFileBytes: Int64 = 0
     public var currentFileTotalBytes: Int64 = 0
     public var projectName: String?
     public var currentPath: String?
     public var error: String?
+    public var metadataWarning: String?
+    public var rollupError: String?
 
     public init(phase: Phase, agent: AgentKind? = nil, completedFiles: Int = 0,
                 totalFiles: Int = 0, currentPath: String? = nil, error: String? = nil) {
@@ -32,9 +37,10 @@ public struct IndexProgress: Sendable {
 }
 
 private actor PassMutationTracker {
-    private var changed = false
-    func markChanged() { changed = true }
-    func hasChanges() -> Bool { changed }
+    private var revision = 0
+    func markChanged() { revision += 1 }
+    func version() -> Int { revision }
+    func hasChanges() -> Bool { revision > 0 }
 }
 
 /// Actors are reentrant at database awaits: an explicit permit protects an entire pass.
@@ -55,10 +61,26 @@ public actor IndexCoordinator {
     private let database: IndexDatabase
     private let sources: [any SessionSource]
     private let gate = IndexRunGate()
+    private struct CodexNameCacheEntry {
+        let names: [String: String]
+        let loadedAt: ContinuousClock.Instant
+    }
+    private var codexNameCache: [String: CodexNameCacheEntry] = [:]
 
     public init(database: IndexDatabase, sources: [any SessionSource]) {
         self.database = database
         self.sources = sources
+    }
+
+    private func codexNames(directory: URL, force: Bool = false) async -> [String: String] {
+        let key = directory.standardizedFileURL.path
+        if !force, let cached = codexNameCache[key],
+           cached.loadedAt.duration(to: .now) < .seconds(30) {
+            return cached.names
+        }
+        let names = await Self.loadCodexNames(directory: directory)
+        codexNameCache[key] = .init(names: names, loadedAt: .now)
+        return names
     }
 
     public func indexAll(scope: IndexScope, rebuild: Bool = false,
@@ -80,6 +102,7 @@ public actor IndexCoordinator {
         var status = IndexProgress(phase: .discovering)
         status.incremental = paths != nil
         let mutations = PassMutationTracker()
+        status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount()) ?? 0
         do {
             try Task.checkCancellation()
             let oldScope = try await database.storedIndexScope()
@@ -88,6 +111,7 @@ public actor IndexCoordinator {
                 await mutations.markChanged()
             }
             try await database.setIndexScope(scope)
+            status.mutationRevision = await mutations.version()
             await progress(status)
             var rootIDs: [String: Int64] = [:]
             for source in sources {
@@ -98,6 +122,8 @@ public actor IndexCoordinator {
             let refreshCodexNames = fullScan || (paths ?? []).contains {
                 TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: $0))
             }
+            if refreshCodexNames { codexNameCache.removeAll() }
+            var missingPaths: [String] = []
             if fullScan {
                 for source in sources {
                     try Task.checkCancellation()
@@ -108,8 +134,7 @@ public actor IndexCoordinator {
                     try Task.checkCancellation()
                     let url = URL(fileURLWithPath: TraceFileIO.canonicalPath(path).path)
                     if !FileManager.default.fileExists(atPath: url.path) {
-                        if try await database.sourceState(path: url.path) != nil { await mutations.markChanged() }
-                        try await database.deleteSource(path: url.path)
+                        missingPaths.append(url.path)
                     } else if let (_, file, _) = classify(url: url) { allFiles.append(file) }
                 }
             }
@@ -128,7 +153,9 @@ public actor IndexCoordinator {
                 status.currentPath = file.url.path
                 status.currentFileBytes = 0
                 status.currentFileTotalBytes = (try? TraceFileIO.fingerprint(url: file.url).size) ?? 0
+                status.mutationRevision = await mutations.version()
                 await progress(status)
+                var shouldRefreshMissingCodexTitle = false
                 do {
                     // The callback runs serially after committed batches, and never mutates the database.
                     let baseStatus = status
@@ -140,30 +167,59 @@ public actor IndexCoordinator {
                         update.currentFileBytes = bytes
                         update.projectName = project
                         update.committedBytes += newlyCommitted
+                        update.mutationRevision = await mutations.version()
                         await progress(update)
                     }
                     let metadataChanged = try await refreshMetadata(file: file)
                     if metadataChanged { await mutations.markChanged() }
-                    if !fullScan, file.agent == .codex, (outcome.changed || metadataChanged),
-                       let state = try await database.sourceState(path: file.url.path),
-                       try await database.hasUntitledCodexSessions(sourceID: state.id) {
-                        let names = await Self.loadCodexNames(directory: file.root.deletingLastPathComponent())
-                        if try await database.updateCodexNames(
-                            names, root: file.root, sourceID: state.id, onlyMissing: true
-                        ) { await mutations.markChanged() }
-                    }
+                    try await database.clearSourceError(path: file.url.path)
+                    shouldRefreshMissingCodexTitle = !fullScan && file.agent == .codex
+                        && (outcome.changed || metadataChanged)
                     if outcome.changed { status.indexedFiles += 1 } else { status.unchangedFiles += 1 }
                     status.committedBytes += outcome.committedBytes
                 } catch is CancellationError { throw CancellationError() }
                 catch {
                     status.failedFiles += 1
                     status.error = error.localizedDescription
-                    try? await database.recordSourceError(path: file.url.path, error: error.localizedDescription)
+                    try? await database.recordSourceError(
+                        file: file, rootID: rootID, error: error.localizedDescription
+                    )
                     rootErrors["\(file.agent.rawValue):\(file.root.standardizedFileURL.path)"] = error.localizedDescription
                 }
+                if shouldRefreshMissingCodexTitle {
+                    do {
+                        if let state = try await database.sourceState(path: file.url.path),
+                           try await database.hasUntitledCodexSessions(sourceID: state.id) {
+                            let names = await codexNames(directory: file.root.deletingLastPathComponent())
+                            if try await database.updateCodexNames(
+                                names, root: file.root, sourceID: state.id, onlyMissing: true
+                            ) { await mutations.markChanged() }
+                        }
+                    } catch is CancellationError { throw CancellationError() }
+                    catch { status.metadataWarning = "Codex title lookup: \(error.localizedDescription)" }
+                }
                 status.completedFiles += 1
+                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
+                    ?? status.unresolvedFailedFiles
+                status.mutationRevision = await mutations.version()
+                await progress(status)
             }
             try Task.checkCancellation()
+            if !missingPaths.isEmpty {
+                status.phase = .reconciling
+                await progress(status)
+                for path in missingPaths {
+                    try Task.checkCancellation()
+                    if try await database.sourceState(path: path) != nil {
+                        try await database.deleteSource(path: path)
+                        await mutations.markChanged()
+                    }
+                }
+                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
+                    ?? status.unresolvedFailedFiles
+                status.mutationRevision = await mutations.version()
+                await progress(status)
+            }
             if fullScan {
                 status.phase = .reconciling
                 await progress(status)
@@ -173,25 +229,33 @@ public actor IndexCoordinator {
                     for stored in try await database.paths(agent: source.agent)
                     where !live.contains(TraceFileIO.canonicalPath(stored.path).comparisonKey) {
                         try Task.checkCancellation()
-                        await mutations.markChanged()
                         try await database.deleteSource(id: stored.id)
+                        await mutations.markChanged()
                     }
                     for root in source.roots {
                         if let rootID = rootIDs[root.id] { try await database.recordRootScan(rootID: rootID, error: rootErrors[root.id]) }
                     }
                 }
+                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
+                    ?? status.unresolvedFailedFiles
             }
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots {
-                    let names = await Self.loadCodexNames(directory: root.url.deletingLastPathComponent())
-                    if try await database.updateCodexNames(names, root: root.url) {
-                        await mutations.markChanged()
-                    }
+                    do {
+                        let names = await codexNames(directory: root.url.deletingLastPathComponent(), force: fullScan)
+                        if try await database.updateCodexNames(names, root: root.url) {
+                            await mutations.markChanged()
+                        }
+                    } catch is CancellationError { throw CancellationError() }
+                    catch { status.metadataWarning = "Codex title lookup: \(error.localizedDescription)" }
                 }
             }
             status.phase = .aggregating
+            status.mutationRevision = await mutations.version()
             await progress(status)
-            try await database.rebuildUsageRollupsIfDirty()
+            do { try await database.rebuildUsageRollupsIfDirty() }
+            catch is CancellationError { throw CancellationError() }
+            catch { status.rollupError = error.localizedDescription }
             try Task.checkCancellation()
             status.phase = .complete
             status.currentPath = nil
@@ -203,6 +267,9 @@ public actor IndexCoordinator {
             status.error = error.localizedDescription
         }
         status.indexChanged = await mutations.hasChanges()
+        status.mutationRevision = await mutations.version()
+        status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
+            ?? status.unresolvedFailedFiles
         await progress(status)
     }
 
@@ -274,9 +341,13 @@ public actor IndexCoordinator {
             && (stored?.checkpoint ?? .max) <= state.scannedBytes
         let startOffset = canMerge ? stored?.checkpoint ?? 0 : 0
         let mode: MetadataUpdateMode = canMerge ? .merge : .replace
-        let initialSessionID = canMerge
-            ? try await database.metadataSessionContext(sourceID: state.id, before: startOffset)
-            : nil
+        let initialSessionID: String?
+        if !canMerge { initialSessionID = nil }
+        else if file.format == .geminiJSONL {
+            initialSessionID = state.metadataSessionID
+        } else {
+            initialSessionID = try await database.metadataSessionContext(sourceID: state.id, before: startOffset)
+        }
         let before = try TraceFileIO.fingerprint(url: file.url)
         guard before.size == state.size, before.modificationNanoseconds == state.modificationNanoseconds else { return false }
         let scan = try await Self.scanMetadata(
@@ -287,8 +358,7 @@ public actor IndexCoordinator {
         )
         guard before == (try TraceFileIO.fingerprint(url: file.url)) else { return false }
         let revision = "2:\(state.contentGeneration):\(scan.checkpoint)"
-        try await database.updateMetadata(sourceID: state.id, revision: revision, scan: scan, mode: mode)
-        return !scan.sessions.isEmpty
+        return try await database.updateMetadata(sourceID: state.id, revision: revision, scan: scan, mode: mode)
     }
 
     private nonisolated static func scanMetadata(
@@ -335,6 +405,7 @@ public actor IndexCoordinator {
         if state == nil,
            let moved = try await database.sourceState(device: initialFingerprint.device, inode: initialFingerprint.inode) {
             try await database.moveSource(id: moved.id, rootID: rootID, path: file.url.path)
+            await mutation()
             state = try await database.sourceState(path: file.url.path)
         }
 
@@ -383,8 +454,8 @@ public actor IndexCoordinator {
             if appendable {
                 startOffset = state.scannedBytes
             } else {
-                await mutation()
                 try await database.replaceSourceContents(id: state.id)
+                await mutation()
                 startOffset = 0
             }
         } else {
@@ -392,27 +463,50 @@ public actor IndexCoordinator {
             startOffset = 0
         }
 
+        var contentSessionID: String?
+        if file.format == .geminiJSONL {
+            let fallback = file.url.deletingPathExtension().lastPathComponent
+            if startOffset == 0 { contentSessionID = fallback }
+            else if let inherited = state?.contentSessionID { contentSessionID = inherited }
+            else {
+                contentSessionID = try GeminiJSONLSessionIdentity.id(before: startOffset, in: file.url)
+                    ?? fallback
+            }
+        }
         var batch: [ParsedRecord] = []
         var checkpoint = startOffset
         var persistedCheckpoint = startOffset
         var completedLines = 0
         var lastProgress: ContinuousClock.Instant?
         var projectName: String?
-        for try await record in source.records(in: file, from: startOffset, through: initialFingerprint.size) {
+        let testBatchDelay = ProcessInfo.processInfo.arguments.contains("--ui-testing")
+            ? ProcessInfo.processInfo.environment["TRACE_TEST_INDEX_BATCH_DELAY_MS"].flatMap(Int.init)
+            : nil
+        for try await record in source.records(
+            in: file, from: startOffset, through: initialFingerprint.size,
+            initialSessionID: contentSessionID
+        ) {
             try Task.checkCancellation()
+            if case .sessionContext(let id) = record { contentSessionID = id }
             if case .message(let message) = record, projectName == nil {
                 projectName = ProjectCanonicalizer.canonicalProject(for: message.cwd).name
             }
             if case .checkpoint(let offset) = record {
                 checkpoint = offset
                 completedLines += 1
+            } else if case .sessionContext = record {
+                // The inherited identity is committed with the next checkpoint.
             } else {
                 batch.append(record)
             }
             if case .checkpoint = record, batch.count >= 250 || completedLines >= 250 {
+                if persistedCheckpoint == startOffset, let testBatchDelay, testBatchDelay > 0 {
+                    try await Task.sleep(for: .milliseconds(min(testBatchDelay, 5_000)))
+                }
                 let batchChanged = !batch.isEmpty
                 try await database.insert(
-                    records: batch, sourceFileID: sourceID, scope: scope, checkpoint: checkpoint
+                    records: batch, sourceFileID: sourceID, scope: scope,
+                    checkpoint: checkpoint, contentSessionID: contentSessionID
                 )
                 batch.removeAll(keepingCapacity: true)
                 completedLines = 0
@@ -422,12 +516,16 @@ public actor IndexCoordinator {
                     lastProgress = .now
                     await committed(checkpoint, max(0, checkpoint - startOffset), projectName)
                 }
+                if let testBatchDelay, testBatchDelay > 0 {
+                    try await Task.sleep(for: .milliseconds(min(testBatchDelay, 5_000)))
+                }
             }
         }
         if !batch.isEmpty || checkpoint > persistedCheckpoint {
             let batchChanged = !batch.isEmpty
             try await database.insert(
-                records: batch, sourceFileID: sourceID, scope: scope, checkpoint: checkpoint
+                records: batch, sourceFileID: sourceID, scope: scope,
+                checkpoint: checkpoint, contentSessionID: contentSessionID
             )
             if batchChanged { await mutation() }
         }
@@ -444,8 +542,8 @@ public actor IndexCoordinator {
             || (finalFingerprint.size == initialFingerprint.size
                 && finalFingerprint.modificationNanoseconds != initialFingerprint.modificationNanoseconds)
         if finalFingerprint.size < checkpoint || wasReplaced {
-            await mutation()
             try await database.replaceSourceContents(id: sourceID)
+            await mutation()
             guard attempt < 2 else {
                 throw SessionSourceError.unreadableFile("\(file.url.path) changed repeatedly while indexing")
             }
@@ -529,7 +627,6 @@ public actor IndexCoordinator {
         }
 
         try Task.checkCancellation()
-        await mutation()
         try await database.replaceSnapshotContents(
             id: sourceID,
             records: records,
@@ -537,6 +634,7 @@ public actor IndexCoordinator {
             fingerprint: finalFingerprint,
             scannedBytes: checkpoint
         )
+        await mutation()
     }
 
     private func source(for agent: AgentKind) -> (any SessionSource)? {
