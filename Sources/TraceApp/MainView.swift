@@ -238,6 +238,11 @@ private struct MessageFrames: PreferenceKey {
     }
 }
 
+private struct TranscriptScrollGeometry: Equatable {
+    let offset: CGFloat
+    let height: CGFloat
+}
+
 private struct TranscriptRenderer: View {
     @ObservedObject var model: TraceModel
     let sessionID: Int64
@@ -245,8 +250,10 @@ private struct TranscriptRenderer: View {
     let density: TranscriptDensity
     @State private var position = ScrollPosition(edge: .top)
     @State private var contentOffset: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
     @State private var frames: [Int64: CGRect] = [:]
     @State private var pending: TranscriptBookmark?
+    @State private var restorationToken = UUID()
     @State private var restoring = true
     @State private var userScrolling = false
     @State private var lastRequest: UUID?
@@ -291,13 +298,16 @@ private struct TranscriptRenderer: View {
             }
             .accessibilityIdentifier("transcriptScroll")
             .scrollPosition($position)
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
-                contentOffset = offset
+            .onScrollGeometryChange(for: TranscriptScrollGeometry.self) {
+                .init(offset: $0.contentOffset.y, height: $0.containerSize.height)
+            } action: { _, geometry in
+                contentOffset = geometry.offset
+                viewportHeight = geometry.height
                 if userScrolling { savePosition() }
             }
             .onScrollPhaseChange { oldPhase, phase in
-                userScrolling = phase != .idle
-                if userScrolling, !(restoring && phase == .animating) {
+                userScrolling = phase != .idle && !(restoring && phase == .animating)
+                if userScrolling {
                     restoring = false
                     pending = nil
                 }
@@ -324,18 +334,31 @@ private struct TranscriptRenderer: View {
                     restore(force: true, using: proxy)
                 }
             }
-            .task(id: pending?.messageID) {
+            .task(id: restorationToken) {
                 guard let pending else { return }
+                let token = restorationToken
                 // Hydration can expand nearby lazy rows in several waves. Keep retrying
                 // this explicit restoration from view-local state while layout settles.
-                for _ in 0..<10 {
-                    guard self.pending?.messageID == pending.messageID, !userScrolling else { return }
+                var settledLayouts = 0
+                for _ in 0..<50 {
+                    guard self.pending?.messageID == pending.messageID,
+                          restorationToken == token, !userScrolling else { return }
                     if let frame = frames[pending.messageID] {
+                        let targetIsVisible = viewportHeight > 0
+                            && frame.maxY > contentOffset
+                            && frame.minY < contentOffset + viewportHeight
+                        if !targetIsVisible { proxy.scrollTo(pending.messageID, anchor: .top) }
                         position.scrollTo(y: max(0, frame.minY - pending.offset))
+                        settledLayouts = targetIsVisible ? settledLayouts + 1 : 0
+                        if settledLayouts >= 10 { break }
+                    } else {
+                        settledLayouts = 0
+                        proxy.scrollTo(pending.messageID, anchor: .top)
                     }
-                    try? await Task.sleep(for: .milliseconds(50))
+                    try? await Task.sleep(for: .milliseconds(100))
                 }
-                guard self.pending?.messageID == pending.messageID, !userScrolling else { return }
+                guard self.pending?.messageID == pending.messageID,
+                      restorationToken == token, !userScrolling else { return }
                 if let frame = frames[pending.messageID] {
                     position.scrollTo(y: max(0, frame.minY - pending.offset))
                 }
@@ -365,13 +388,17 @@ private struct TranscriptRenderer: View {
             .min { abs($0.offset - saved.index) < abs($1.offset - saved.index) }?.element.id
         let target = ids.contains(saved.messageID) ? saved.messageID : (nearest ?? ids[0])
         pending = .init(messageID: target, offset: saved.offset, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)
+        restorationToken = UUID()
         model.scrollPositions[sessionID] = pending
         restoring = true
         proxy.scrollTo(target, anchor: .top)
         if let frame = frames[target] {
             position.scrollTo(y: max(0, frame.minY - saved.offset))
-            pending = nil
-            restoring = false
+            if viewportHeight > 0, frame.maxY > contentOffset,
+               frame.minY < contentOffset + viewportHeight {
+                pending = nil
+                restoring = false
+            }
         }
     }
 

@@ -68,7 +68,9 @@ enum JSONHelpers {
             }
             if let array = value as? [Any] { return array.contains(where: meaningful) }
             if let object = value as? [String: Any] {
-                return object.contains { key, nested in key != "type" && meaningful(nested) }
+                return object.contains { key, nested in
+                    !["type", "media_type", "mime_type", "format"].contains(key) && meaningful(nested)
+                }
             }
             return true
         }
@@ -86,7 +88,8 @@ enum JSONHelpers {
                 return false
             }
             return object.contains { key, value in
-                !["input", "args", "arguments"].contains(key) && hasNonTextContent(value)
+                !["input", "args", "arguments", "media_type", "mime_type", "format"].contains(key)
+                    && hasNonTextContent(value)
             }
         }
         if let array = content as? [Any] {

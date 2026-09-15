@@ -282,6 +282,7 @@ public enum ParsedRecord: Sendable {
     case message(ParsedMessage)
     case usage(ParsedUsageRecord)
     case event(ParsedSessionEvent)
+    case sessionContext(String)
     case checkpoint(Int64)
 }
 
@@ -382,6 +383,7 @@ public struct SessionSummary: Identifiable, Sendable {
     public let hadError: Bool
     public let sourcePath: String
     public var sourceGeneration: Int64 = 0
+    public var errorRevision: Int64 = 0
 }
 
 public struct MessageSummary: Identifiable, Sendable {

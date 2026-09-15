@@ -12,6 +12,7 @@ struct SessionMetadata: Sendable {
 struct SessionMetadataScan: Sendable {
     var sessions: [String: SessionMetadata]
     var checkpoint: Int64
+    var finalSessionID: String? = nil
 }
 
 enum MetadataUpdateMode: Sendable {
@@ -44,7 +45,7 @@ enum SessionMetadataReader {
     ) throws -> SessionMetadataScan {
         let fallbackSessionID = file.url.deletingPathExtension().lastPathComponent
         var currentSessionID = initialSessionID ?? fallbackSessionID
-        if file.format == .geminiJSONL, offset > 0 {
+        if file.format == .geminiJSONL, offset > 0, initialSessionID == nil {
             currentSessionID = try GeminiJSONLSessionIdentity.id(before: offset, in: file.url)
                 ?? currentSessionID
         }
@@ -173,7 +174,8 @@ enum SessionMetadataReader {
 
         return .init(
             sessions: accumulators.mapValues(\.metadata),
-            checkpoint: checkpoint
+            checkpoint: checkpoint,
+            finalSessionID: file.format == .geminiJSONL ? currentSessionID : nil
         )
     }
 

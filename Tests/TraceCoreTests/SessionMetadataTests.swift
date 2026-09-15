@@ -127,6 +127,46 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(newestUnreadable?.title, "Fallback request")
     }
 
+    func testOptionalCodexTitleDatabaseFailureIsMetadataWarning() async throws {
+        let root = try directory()
+        let rollouts = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: rollouts, withIntermediateDirectories: true)
+        let file = rollouts.appendingPathComponent("rollout-title-warning.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "codex-warning", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Indexed request"]]]],
+        ], to: file)
+        let url = root.appendingPathComponent("trace.sqlite")
+        let database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: rollouts)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try write([["id": "codex-warning", "thread_name": "Sidecar title"]], to: sidecar)
+        await coordinator.refresh(paths: [sidecar.path], scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE session SET generated_title=NULL")
+            try db.execute(sql: "CREATE TRIGGER reject_optional_title BEFORE UPDATE OF generated_title ON session WHEN NEW.generated_title='Sidecar title' BEGIN SELECT RAISE(ABORT, 'optional title unavailable'); END")
+        }
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(#"{"type":"response_item","payload":{"type":"plan","text":"A structured plan"}}"#.utf8) + Data([10]))
+        try handle.close()
+        let recorder = MetadataWarningRecorder()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly) { recorder.receive($0) }
+        let terminal = try XCTUnwrap(recorder.terminal)
+        XCTAssertEqual(terminal.phase, .complete)
+        XCTAssertEqual(terminal.failedFiles, 0)
+        XCTAssertEqual(terminal.unresolvedFailedFiles, 0)
+        XCTAssertTrue(terminal.metadataWarning?.contains("optional title unavailable") == true)
+        let indexed = try await database.search(query: "Indexed")
+        XCTAssertEqual(indexed.results.count, 1)
+        let sessions = try await database.sessions()
+        let session = try XCTUnwrap(sessions.first)
+        XCTAssertTrue(session.hasPlan)
+    }
+
     func testNewAndReplacedCodexRolloutsFillSidecarNames() async throws {
         let root = try directory()
         let rollouts = root.appendingPathComponent("sessions")
@@ -276,6 +316,45 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(afterAppend.first(where: { $0.title == "Inherited title" })?.messageCount, 3)
     }
 
+    func testGeminiOneLineAppendsReuseBothSavedSessionIdentities() async throws {
+        let root = try directory()
+        let chats = root.appendingPathComponent("project/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let file = chats.appendingPathComponent("session-live.jsonl")
+        try write([["sessionId": "real-session-id", "$set": ["messages": [
+            ["id": "initial", "type": "user", "content": "initial request"]]]]], to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [GeminiSource(root: root)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let initialState = try await database.sourceState(path: file.path)
+        XCTAssertEqual(initialState?.contentSessionID, "real-session-id")
+        XCTAssertEqual(initialState?.metadataSessionID, "real-session-id")
+
+        #if DEBUG
+        GeminiJSONLSessionIdentity.resetPrefixScanCount()
+        #endif
+        for index in 0..<12 {
+            let next: [String: Any] = ["$set": ["messages": [
+                ["id": "append-\(index)", "type": "gemini", "content": "live answer \(index)"]]]]
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: JSONSerialization.data(withJSONObject: next) + Data([10]))
+            try handle.close()
+            await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+            let state = try await database.sourceState(path: file.path)
+            XCTAssertEqual(state?.contentSessionID, "real-session-id")
+            XCTAssertEqual(state?.metadataSessionID, "real-session-id")
+        }
+        #if DEBUG
+        XCTAssertEqual(GeminiJSONLSessionIdentity.prefixScanCount, 0,
+                       "routine appends must never reopen the JSONL prefix")
+        #endif
+        let sessions = try await database.sessions()
+        let session = try XCTUnwrap(sessions.first)
+        XCTAssertEqual(session.messageCount, 13)
+        XCTAssertEqual(session.title, "initial request")
+    }
+
     func testMetadataIsScopedToExternalSessionIDAndCodexPlanShapes() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("mixed.jsonl")
@@ -384,4 +463,14 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(fallback.catalog.rates, normal.catalog.rates)
         XCTAssertNotNil(fallback.overrideError)
     }
+}
+
+private final class MetadataWarningRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastTerminal: IndexProgress?
+    func receive(_ update: IndexProgress) {
+        guard [.complete, .failed, .cancelled].contains(update.phase) else { return }
+        lock.withLock { lastTerminal = update }
+    }
+    var terminal: IndexProgress? { lock.withLock { lastTerminal } }
 }

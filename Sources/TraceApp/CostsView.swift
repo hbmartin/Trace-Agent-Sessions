@@ -55,6 +55,13 @@ struct CostsView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 12)
             }
+            if let costsError = model.costsError {
+                Label(costsError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+            }
 
             Divider()
             Table(model.usage) {

@@ -194,6 +194,145 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertGreaterThan(replaced.sourceGeneration, appended.sourceGeneration)
     }
 
+    func testInodeRenameKeepsSourceAndMessageIDsForBothPathOrders() async throws {
+        for (originalName, renamedName) in [("a-session.jsonl", "z-session.jsonl"),
+                                            ("z-session.jsonl", "a-session.jsonl")] {
+            let root = try directory()
+            let original = root.appendingPathComponent(originalName)
+            let renamed = root.appendingPathComponent(renamedName)
+            try Data(line(1).utf8).write(to: original)
+            let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+            await coordinator.indexAll(scope: .proseOnly)
+            let initialState = try await database.sourceState(path: original.path)
+            let sourceID = try XCTUnwrap(initialState?.id)
+            let initialSearch = try await database.search(query: "searchable")
+            let originalResult = try XCTUnwrap(initialSearch.results.first)
+
+            try FileManager.default.moveItem(at: original, to: renamed)
+            let recorder = ProgressRecorder()
+            await coordinator.refresh(paths: [original.path, renamed.path], scope: .proseOnly) {
+                recorder.receive($0)
+            }
+            let terminal = try XCTUnwrap(recorder.terminal)
+            XCTAssertEqual(terminal.phase, .complete)
+            XCTAssertTrue(terminal.indexChanged)
+            XCTAssertGreaterThan(terminal.mutationRevision, 0)
+            let oldState = try await database.sourceState(path: original.path)
+            let newState = try await database.sourceState(path: renamed.path)
+            XCTAssertNil(oldState)
+            XCTAssertEqual(newState?.id, sourceID)
+            let movedSearch = try await database.search(query: "searchable")
+            let movedResult = try XCTUnwrap(movedSearch.results.first)
+            XCTAssertEqual(movedResult.id, originalResult.id)
+            XCTAssertEqual(movedResult.sourcePath, renamed.path)
+            let hydrated = try await coordinator.hydrate(messageID: movedResult.id)
+            XCTAssertTrue(hydrated.sections.prose.contains("searchable message 1"))
+        }
+    }
+
+    func testUnresolvedSourceErrorSurvivesQuietAndCancelledPasses() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data(line(0).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [root])
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let rootID = try await database.register(root: source.roots[0])
+        let failedFile = root.appendingPathComponent("failed.jsonl")
+        try await database.recordSourceError(
+            file: .init(agent: .claudeCode, root: root, url: failedFile, format: .claudeJSONL),
+            rootID: rootID, error: "synthetic unreadable file"
+        )
+        let quiet = ProgressRecorder()
+        await coordinator.refresh(paths: [], scope: .proseOnly) { quiet.receive($0) }
+        XCTAssertEqual(quiet.terminal?.phase, .complete)
+        XCTAssertEqual(quiet.terminal?.unresolvedFailedFiles, 1)
+
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((1..<601).map { line($0) }.joined().utf8))
+        try handle.close()
+
+        let latch = BatchLatch()
+        let cancelled = ProgressRecorder()
+        let run = Task {
+            await coordinator.indexAll(scope: .proseOnly) { update in
+                cancelled.receive(update)
+                if update.phase == .indexing && update.currentFileBytes > 0 { await latch.pauseOnce() }
+            }
+        }
+        try await latch.waitForPause()
+        run.cancel()
+        await latch.release()
+        await run.value
+        XCTAssertEqual(cancelled.terminal?.phase, .cancelled)
+        XCTAssertEqual(cancelled.terminal?.unresolvedFailedFiles, 1)
+        let unresolved = try await database.unresolvedSourceFailureCount()
+        XCTAssertEqual(unresolved, 1)
+    }
+
+    func testRollupFailureLeavesSearchAvailableAndDirtyForRetry() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let usage = #"{"type":"assistant","uuid":"one","sessionId":"session","cwd":"/tmp/project","timestamp":1700000000000,"message":{"id":"response","model":"claude-sonnet-5","content":"searchable cost","usage":{"input_tokens":10,"output_tokens":2}}}"# + "\n"
+        try Data(usage.utf8).write(to: file)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "CREATE TRIGGER fail_rollup BEFORE DELETE ON usage_daily BEGIN SELECT RAISE(ABORT, 'rollup unavailable'); END")
+        }
+        let appended = #"{"type":"assistant","uuid":"two","sessionId":"session","cwd":"/tmp/project","timestamp":1700000001000,"message":{"id":"response-two","model":"claude-sonnet-5","content":"more searchable cost","usage":{"input_tokens":4,"output_tokens":1}}}"# + "\n"
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(appended.utf8))
+        try handle.close()
+        let recorder = ProgressRecorder()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly) { recorder.receive($0) }
+        XCTAssertEqual(recorder.terminal?.phase, .complete)
+        XCTAssertNotNil(recorder.terminal?.rollupError)
+        let search = try await database.search(query: "searchable")
+        XCTAssertEqual(search.results.count, 2)
+        let dirty = try await raw.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'")
+        }
+        XCTAssertEqual(dirty, "1")
+        try await raw.write { try $0.execute(sql: "DROP TRIGGER fail_rollup") }
+        try await database.rebuildUsageRollupsIfDirty()
+        let repaired = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertEqual(repaired.first?.inputTokens, 14)
+    }
+
+    func testTimezoneMarkerForcesRollupRebuildWithoutDirtyFlag() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let usage = #"{"type":"assistant","uuid":"one","sessionId":"session","cwd":"/tmp/project","timestamp":1700000000000,"message":{"id":"response","model":"claude-sonnet-5","content":"answer","usage":{"input_tokens":10,"output_tokens":2}}}"# + "\n"
+        try Data(usage.utf8).write(to: file)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        await IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]).indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "CREATE TABLE timezone_rollup_audit(value INTEGER)")
+            try db.execute(sql: "CREATE TRIGGER timezone_rollup AFTER DELETE ON usage_daily BEGIN INSERT INTO timezone_rollup_audit VALUES (1); END")
+        }
+        try await database.rebuildUsageRollupsIfDirty(timeZoneID: "Test/ZoneA")
+        try await database.rebuildUsageRollupsIfDirty(timeZoneID: "Test/ZoneA")
+        try await database.rebuildUsageRollupsIfDirty(timeZoneID: "Test/ZoneB")
+        let (deletes, zone, dirty) = try await raw.read { db in
+            (try Int.fetchOne(db, sql: "SELECT count(*) FROM timezone_rollup_audit"),
+             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_timezone'"),
+             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'"))
+        }
+        XCTAssertEqual(deletes, 2)
+        XCTAssertEqual(zone, "Test/ZoneB")
+        XCTAssertEqual(dirty, "0")
+    }
+
     func testIndexFormatResetIsReportedAndBatchCheckpointsAreBounded() async throws {
         let root = try directory()
         let databaseURL = root.appendingPathComponent("index.sqlite")
@@ -242,10 +381,16 @@ final class IndexingRegressionTests: XCTestCase {
         let originalID = try XCTUnwrap(indexedSessions.first?.id)
         let raw = try DatabaseQueue(path: databaseURL.path)
         try await raw.write { db in
+            try db.execute(sql: "DROP INDEX idx_usage_project")
+            try db.execute(sql: "DROP INDEX idx_source_error")
+            try db.execute(sql: "ALTER TABLE source_file DROP COLUMN content_session_id")
+            try db.execute(sql: "ALTER TABLE source_file DROP COLUMN metadata_session_id")
+            try db.execute(sql: "ALTER TABLE session DROP COLUMN error_revision")
             try db.execute(sql: "ALTER TABLE source_file DROP COLUMN content_generation")
             try db.execute(sql: "ALTER TABLE usage_observation DROP COLUMN project_id")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v4-source-generation'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v5-usage-project'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v6-checkpoint-context'")
             try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
         }
 
@@ -258,7 +403,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "5")
+        XCTAssertEqual(schema, "6")
     }
 
     func testIncrementalRollupsSkipUnchangedPassAndRunAfterChangedInput() async throws {
@@ -293,7 +438,8 @@ final class IndexingRegressionTests: XCTestCase {
 
         let handle = try FileHandle(forWritingTo: file)
         try handle.seekToEnd()
-        try handle.write(contentsOf: Data(line(2).utf8))
+        let additionalUsage = #"{"type":"assistant","uuid":"two","sessionId":"session","cwd":"/tmp/project","timestamp":1700000001000,"message":{"id":"response-two","model":"claude-sonnet-5","content":"another answer","usage":{"input_tokens":4,"output_tokens":1}}}"# + "\n"
+        try handle.write(contentsOf: Data(additionalUsage.utf8))
         try handle.close()
         await coordinator.refresh(paths: [file.path], scope: .proseOnly)
         let changedDeletes = try await raw.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM rollup_audit") }
@@ -788,6 +934,16 @@ private final class IndexErrorRecorder: @unchecked Sendable {
     }
 
     var error: String? { lock.withLock { stored } }
+}
+
+private final class ProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastTerminal: IndexProgress?
+    func receive(_ update: IndexProgress) {
+        guard [.complete, .cancelled, .failed].contains(update.phase) else { return }
+        lock.withLock { lastTerminal = update }
+    }
+    var terminal: IndexProgress? { lock.withLock { lastTerminal } }
 }
 
 private actor RunRecorder {

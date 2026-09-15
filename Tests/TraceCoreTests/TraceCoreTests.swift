@@ -295,6 +295,7 @@ final class TraceCoreTests: XCTestCase {
         XCTAssertFalse(JSONHelpers.hasNonTextContent([ordinaryTool]))
         XCTAssertFalse(JSONHelpers.hasNonTextContent([["attachments": [Any]()]]))
         XCTAssertFalse(JSONHelpers.hasNonTextContent([["type": "image", "source": ["type": "base64", "data": ""]]]))
+        XCTAssertFalse(JSONHelpers.hasNonTextContent([["type": "image", "source": ["type": "base64", "media_type": "image/png", "mime_type": "image/png", "data": ""]]]))
         XCTAssertFalse(JSONHelpers.hasNonTextContent([["type": "file", "file": ""]]))
         XCTAssertTrue(JSONHelpers.hasNonTextContent([["type": "image", "source": ["data": "encoded"]]]))
     }

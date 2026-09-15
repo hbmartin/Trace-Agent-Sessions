@@ -25,10 +25,12 @@ struct IndexedSourceState: Sendable {
     let headHash: Data
     let headLength: Int
     let contentGeneration: Int64
+    let contentSessionID: String?
+    let metadataSessionID: String?
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 5
+    public static let schemaVersion = 6
     public static let indexFormatVersion = 3
     public nonisolated let contentWasResetOnOpen: Bool
     private let pool: DatabasePool
@@ -237,6 +239,15 @@ public actor IndexDatabase {
             try db.execute(sql: "UPDATE usage_observation SET project_id=(SELECT project_id FROM session WHERE session.id=usage_observation.session_id)")
             try db.execute(sql: "UPDATE trace_meta SET value='5' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v6-checkpoint-context") { db in
+            try db.execute(sql: "ALTER TABLE source_file ADD COLUMN content_session_id TEXT")
+            try db.execute(sql: "ALTER TABLE source_file ADD COLUMN metadata_session_id TEXT")
+            try db.execute(sql: "ALTER TABLE session ADD COLUMN error_revision INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: "UPDATE session SET error_revision=(SELECT count(*) FROM session_failure WHERE session_id=session.id)")
+            try db.execute(sql: "CREATE INDEX idx_usage_project ON usage_observation(project_id)")
+            try db.execute(sql: "CREATE INDEX idx_source_error ON source_file(id) WHERE last_error IS NOT NULL")
+            try db.execute(sql: "UPDATE trace_meta SET value='6' WHERE key='schema_version'")
+        }
         try migrator.migrate(pool)
     }
 
@@ -363,7 +374,9 @@ public actor IndexDatabase {
             scannedBytes: row["scanned_bytes"],
             headHash: row["head_hash"],
             headLength: row["head_length"],
-            contentGeneration: row["content_generation"]
+            contentGeneration: row["content_generation"],
+            contentSessionID: row["content_session_id"],
+            metadataSessionID: row["metadata_session_id"]
         )
     }
 
@@ -430,7 +443,7 @@ public actor IndexDatabase {
                 try Self.markRollupsDirty(db)
                 try deleteOrphanedProjects(db: db)
                 try db.execute(
-                    sql: "UPDATE source_file SET scanned_bytes=0, last_error=NULL, metadata_revision=NULL, content_generation=content_generation+1 WHERE id=?",
+                    sql: "UPDATE source_file SET scanned_bytes=0, metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, content_generation=content_generation+1 WHERE id=?",
                     arguments: [id]
                 )
                 return .commit
@@ -443,15 +456,16 @@ public actor IndexDatabase {
     }
 
     func insert(
-        records: [ParsedRecord], sourceFileID: Int64, scope: IndexScope, checkpoint: Int64? = nil
+        records: [ParsedRecord], sourceFileID: Int64, scope: IndexScope,
+        checkpoint: Int64? = nil, contentSessionID: String? = nil
     ) throws {
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try insert(records: records, sourceFileID: sourceFileID, scope: scope, db: db)
                 if let checkpoint {
                     try db.execute(
-                        sql: "UPDATE source_file SET scanned_bytes=? WHERE id=?",
-                        arguments: [checkpoint, sourceFileID]
+                        sql: "UPDATE source_file SET scanned_bytes=?, content_session_id=? WHERE id=?",
+                        arguments: [checkpoint, contentSessionID, sourceFileID]
                     )
                 }
                 return .commit
@@ -478,7 +492,7 @@ public actor IndexDatabase {
                 try deleteOrphanedProjects(db: db)
                 try insert(records: records, sourceFileID: id, scope: scope, db: db)
                 try db.execute(
-                    sql: "UPDATE source_file SET metadata_revision=NULL, content_generation=content_generation+1 WHERE id=?",
+                    sql: "UPDATE source_file SET metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, content_generation=content_generation+1 WHERE id=?",
                     arguments: [id]
                 )
                 try updateSource(
@@ -506,7 +520,7 @@ public actor IndexDatabase {
             case .message(let message):
                 try insert(message: message, sourceFileID: sourceFileID, scope: scope, db: db)
             case .usage(let parsed):
-                let sessionID = try upsertSession(
+                let session = try upsertSession(
                     externalID: parsed.sessionExternalID,
                     cwd: parsed.cwd,
                     timestamp: parsed.timestampMilliseconds,
@@ -519,13 +533,14 @@ public actor IndexDatabase {
                     sourceKey: parsed.sourceKey,
                     timestamp: parsed.timestampMilliseconds,
                     sidechain: parsed.isSidechain,
-                    sessionID: sessionID,
+                    sessionID: session.id,
+                    projectID: session.projectID,
                     sourceFileID: sourceFileID,
                     agent: agent,
                     db: db
                 )
             case .event(let event):
-                let sessionID = try upsertSession(
+                let session = try upsertSession(
                     externalID: event.sessionExternalID,
                     cwd: event.cwd,
                     timestamp: event.timestampMilliseconds,
@@ -533,13 +548,15 @@ public actor IndexDatabase {
                     sourceFileID: sourceFileID,
                     db: db
                 )
-                try db.execute(sql: "UPDATE session SET had_error=1 WHERE id=?", arguments: [sessionID])
+                try db.execute(sql: "UPDATE session SET had_error=1 WHERE id=?", arguments: [session.id])
                 try storeFailure(
-                    sessionID: sessionID, sourceKey: event.sourceKey, timestamp: event.timestampMilliseconds,
+                    sessionID: session.id, sourceKey: event.sourceKey, timestamp: event.timestampMilliseconds,
                     kind: event.kind.rawValue, toolName: nil,
                     detail: event.detail ?? "The source recorded a \(event.kind.rawValue) turn without an explanation.",
                     locator: event.locator, db: db
                 )
+            case .sessionContext:
+                break
             case .checkpoint(let offset):
                 try db.execute(sql: "UPDATE source_file SET scanned_bytes=? WHERE id=?", arguments: [offset, sourceFileID])
             }
@@ -564,7 +581,7 @@ public actor IndexDatabase {
         ) != nil { return }
 
         let agent = sourceAgent(sourceFileID, db: db)
-        let sessionID = try upsertSession(
+        let session = try upsertSession(
             externalID: message.sessionExternalID,
             cwd: message.cwd,
             timestamp: message.timestampMilliseconds,
@@ -575,7 +592,7 @@ public actor IndexDatabase {
         let nextSequence = (try Int.fetchOne(
             db,
             sql: "SELECT max(seq) + 1 FROM message WHERE session_id=?",
-            arguments: [sessionID]
+            arguments: [session.id]
         )) ?? 0
         let messageID = try nextMessageID(timestamp: message.timestampMilliseconds, db: db)
         let preview = JSONHelpers.normalizedPreview(message.sections.preferredPreview)
@@ -592,7 +609,7 @@ public actor IndexDatabase {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             arguments: [
-                messageID, sourceFileID, sessionID, message.sourceKey, nextSequence,
+                messageID, sourceFileID, session.id, message.sourceKey, nextSequence,
                 message.externalID, message.role.rawValue, message.timestampMilliseconds,
                 message.locator.kind.rawValue, message.locator.offset, message.locator.length,
                 message.locator.key, message.sections.preferredPreview.count, preview, toolSummary,
@@ -620,13 +637,13 @@ public actor IndexDatabase {
                 """,
             arguments: [
                 message.timestampMilliseconds, message.timestampMilliseconds,
-                message.role.rawValue, preview, preview, message.hasError, sessionID,
+                message.role.rawValue, preview, preview, message.hasError, session.id,
             ]
         )
 
         if message.hasError {
             try storeFailure(
-                sessionID: sessionID, sourceKey: message.sourceKey, timestamp: message.timestampMilliseconds,
+                sessionID: session.id, sourceKey: message.sourceKey, timestamp: message.timestampMilliseconds,
                 kind: message.toolName == nil && message.sections.toolOutput.isEmpty ? "failed message" : "failed tool",
                 toolName: message.toolName,
                 detail: message.sections.toolOutput.isEmpty ? message.sections.prose : message.sections.toolOutput,
@@ -639,7 +656,8 @@ public actor IndexDatabase {
                 sourceKey: "message:\(message.sourceKey)",
                 timestamp: message.timestampMilliseconds,
                 sidechain: message.isSidechain,
-                sessionID: sessionID,
+                sessionID: session.id,
+                projectID: session.projectID,
                 sourceFileID: sourceFileID,
                 agent: agent,
                 db: db
@@ -656,6 +674,7 @@ public actor IndexDatabase {
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """, arguments: [sessionID, sourceKey, timestamp, kind, toolName,
                 String(detail.prefix(4_000)), try locator.map { try JSONEncoder().encode($0) }])
+        try db.execute(sql: "UPDATE session SET error_revision=error_revision+1 WHERE id=?", arguments: [sessionID])
     }
 
     public func failures(sessionID: Int64) throws -> [SessionFailure] {
@@ -695,7 +714,7 @@ public actor IndexDatabase {
         agent: AgentKind,
         sourceFileID: Int64,
         db: Database
-    ) throws -> Int64 {
+    ) throws -> (id: Int64, projectID: Int64) {
         let project = ProjectCanonicalizer.canonicalProject(for: cwd)
         try db.execute(
             sql: """
@@ -706,10 +725,6 @@ public actor IndexDatabase {
             arguments: [project.key, project.path, project.name]
         )
         let projectID = try Int64.fetchOne(db, sql: "SELECT id FROM project WHERE canonical_key=?", arguments: [project.key])!
-        let previousProjectID = try Int64.fetchOne(
-            db, sql: "SELECT project_id FROM session WHERE source_file_id=? AND external_id=?",
-            arguments: [sourceFileID, externalID]
-        )
         try db.execute(
             sql: """
                 INSERT INTO session(project_id, source_file_id, agent, external_id, started_at, last_activity_at, message_count)
@@ -721,14 +736,12 @@ public actor IndexDatabase {
                 """,
             arguments: [projectID, sourceFileID, agent.rawValue, externalID, timestamp, timestamp]
         )
-        if let previousProjectID, previousProjectID != projectID {
-            try Self.markRollupsDirty(db)
-        }
-        return try Int64.fetchOne(
+        let sessionID = try Int64.fetchOne(
             db,
             sql: "SELECT id FROM session WHERE source_file_id=? AND external_id=?",
             arguments: [sourceFileID, externalID]
         )!
+        return (sessionID, projectID)
     }
 
     private func insertUsage(
@@ -737,11 +750,11 @@ public actor IndexDatabase {
         timestamp: Int64,
         sidechain: Bool,
         sessionID: Int64,
+        projectID: Int64,
         sourceFileID: Int64,
         agent: AgentKind,
         db: Database
     ) throws {
-        let projectID = try Int64.fetchOne(db, sql: "SELECT project_id FROM session WHERE id=?", arguments: [sessionID])!
         try db.execute(
             sql: """
                 INSERT OR IGNORE INTO usage_observation(
@@ -793,7 +806,7 @@ public actor IndexDatabase {
         try db.execute(
             sql: """
                 UPDATE source_file
-                SET dev=?, inode=?, size=?, mtime_ns=?, scanned_bytes=?, head_hash=?, head_length=?, last_error=?
+                SET dev=?, inode=?, size=?, mtime_ns=?, scanned_bytes=?, head_hash=?, head_length=?, last_error=coalesce(?, last_error)
                 WHERE id=?
                 """,
             arguments: [
@@ -808,7 +821,7 @@ public actor IndexDatabase {
                 VALUES (?, ?, ?, CASE WHEN ? IS NULL THEN 0 ELSE 1 END)
                 ON CONFLICT(source_file_id) DO UPDATE SET
                     last_success_ms=excluded.last_success_ms,
-                    last_error=excluded.last_error,
+                    last_error=coalesce(excluded.last_error, adapter_health.last_error),
                     error_count=CASE WHEN excluded.last_error IS NULL THEN adapter_health.error_count ELSE adapter_health.error_count + 1 END
                 """,
             arguments: [id, Int64(Date().timeIntervalSince1970 * 1_000), error, error]
@@ -819,9 +832,17 @@ public actor IndexDatabase {
         try db.execute(sql: "DELETE FROM project WHERE NOT EXISTS (SELECT 1 FROM session WHERE session.project_id=project.id) AND NOT EXISTS (SELECT 1 FROM usage_observation WHERE usage_observation.project_id=project.id)")
     }
 
-    func recordSourceError(path: String, error: String) throws {
+    func recordSourceError(file: DiscoveredSourceFile, rootID: Int64, error: String) throws {
         try pool.write { db in
-            guard let id = try Int64.fetchOne(db, sql: "SELECT id FROM source_file WHERE path=?", arguments: [path]) else { return }
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO source_file(
+                    root_id, agent, format, path, dev, inode, size, mtime_ns,
+                    scanned_bytes, head_hash, head_length
+                ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?, 0)
+                """, arguments: [rootID, file.agent.rawValue, file.format.rawValue,
+                                 file.url.path, Data()])
+            let id = try Int64.fetchOne(db, sql: "SELECT id FROM source_file WHERE path=?",
+                                        arguments: [file.url.path])!
             try db.execute(sql: "UPDATE source_file SET last_error=? WHERE id=?", arguments: [error, id])
             try db.execute(
                 sql: """
@@ -831,6 +852,24 @@ public actor IndexDatabase {
                     """,
                 arguments: [id, error]
             )
+        }
+    }
+
+    func clearSourceError(path: String) throws {
+        try pool.write { db in
+            guard let id = try Int64.fetchOne(db, sql: """
+                SELECT sf.id FROM source_file sf
+                LEFT JOIN adapter_health ah ON ah.source_file_id=sf.id
+                WHERE sf.path=? AND (sf.last_error IS NOT NULL OR ah.last_error IS NOT NULL)
+                """, arguments: [path]) else { return }
+            try db.execute(sql: "UPDATE source_file SET last_error=NULL WHERE id=?", arguments: [id])
+            try db.execute(sql: "UPDATE adapter_health SET last_error=NULL WHERE source_file_id=?", arguments: [id])
+        }
+    }
+
+    public func unresolvedSourceFailureCount() throws -> Int {
+        try pool.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM source_file WHERE last_error IS NOT NULL") ?? 0
         }
     }
 
@@ -850,7 +889,7 @@ public actor IndexDatabase {
         }
     }
 
-    public func rebuildUsageRollups() throws {
+    public func rebuildUsageRollups(timeZoneID: String = TimeZone.autoupdatingCurrent.identifier) throws {
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM usage_daily")
@@ -886,16 +925,19 @@ public actor IndexDatabase {
                     GROUP BY 1, 2, 3, 4
                     """)
                 try db.execute(sql: "UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty'")
+                try db.execute(sql: "INSERT INTO trace_meta(key, value) VALUES ('usage_rollups_timezone', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", arguments: [timeZoneID])
                 return .commit
             }
         }
     }
 
-    public func rebuildUsageRollupsIfDirty() throws {
+    public func rebuildUsageRollupsIfDirty(timeZoneID: String = TimeZone.autoupdatingCurrent.identifier) throws {
         let dirty = try pool.read { db in
-            try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'") != "0"
+            let flag = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'")
+            let storedZone = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_timezone'")
+            return flag != "0" || storedZone != timeZoneID
         }
-        if dirty { try rebuildUsageRollups() }
+        if dirty { try rebuildUsageRollups(timeZoneID: timeZoneID) }
     }
 
     public func search(
@@ -1032,9 +1074,12 @@ public actor IndexDatabase {
         revision: String,
         scan: SessionMetadataScan,
         mode: MetadataUpdateMode
-    ) throws {
+    ) throws -> Bool {
         try pool.write { db in
+            var changed = false
             for (externalID, metadata) in scan.sessions {
+                let before = try Row.fetchOne(db, sql: "SELECT first_user_message, generated_title, has_plan FROM session WHERE source_file_id=? AND external_id=?",
+                                              arguments: [sourceID, externalID])
                 switch mode {
                 case .replace:
                     try db.execute(sql: """
@@ -1068,8 +1113,21 @@ public actor IndexDatabase {
                             externalID,
                         ])
                 }
+                let after = try Row.fetchOne(db, sql: "SELECT first_user_message, generated_title, has_plan FROM session WHERE source_file_id=? AND external_id=?",
+                                             arguments: [sourceID, externalID])
+                let oldFirst: String? = before?["first_user_message"]
+                let newFirst: String? = after?["first_user_message"]
+                let oldTitle: String? = before?["generated_title"]
+                let newTitle: String? = after?["generated_title"]
+                let oldPlan: Bool? = before?["has_plan"]
+                let newPlan: Bool? = after?["has_plan"]
+                if oldFirst != newFirst || oldTitle != newTitle || oldPlan != newPlan {
+                    changed = true
+                }
             }
-            try db.execute(sql: "UPDATE source_file SET metadata_revision=? WHERE id=?", arguments: [revision, sourceID])
+            try db.execute(sql: "UPDATE source_file SET metadata_revision=?, metadata_session_id=? WHERE id=?",
+                           arguments: [revision, scan.finalSessionID, sourceID])
+            return changed
         }
     }
 
@@ -1256,7 +1314,7 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
         title: title, hasPlan: row["has_plan"], startedAtMilliseconds: startedAt,
         lastActivityMilliseconds: lastActivity, messageCount: messageCount,
         hadError: hadError, sourcePath: sourcePath,
-        sourceGeneration: row["source_generation"]
+        sourceGeneration: row["source_generation"], errorRevision: row["error_revision"]
     )
 }
 
