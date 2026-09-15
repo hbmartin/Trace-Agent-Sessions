@@ -1,14 +1,12 @@
 import AppKit
-import Combine
 import Foundation
 import TraceCore
 
 @MainActor
 final class TraceModel: ObservableObject {
-    var settings: AppSettings
+    let settings: AppSettings
     let globalSearch = SessionSearchModel()
     var mainSearch = SessionSearchModel()
-    private var observations: Set<AnyCancellable> = []
     let diagnostics: DiagnosticsStore
 
     @Published private(set) var progress = IndexProgress(phase: .waiting)
@@ -17,12 +15,9 @@ final class TraceModel: ObservableObject {
     @Published private(set) var recentSessions: [SessionSummary] = []
     @Published private(set) var messages: [MessageSummary] = []
     @Published private(set) var hydratedMessages: [Int64: HydratedMessage] = [:]
-    var searchResults: [SearchResult] { globalSearch.results }
-    var searchSnippets: [Int64: String] { globalSearch.snippets }
-    @Published private(set) var sessionErrors: [Int64: String] = [:]
+    @Published private(set) var hydrationFailures: Set<Int64> = []
     @Published var projectFilter = ""
     @Published private(set) var selectedSession: SessionSummary?
-    private var errorTasks: [Int64: Task<Void, Never>] = [:]
     @Published private(set) var sourceHealth: [SourceHealth] = []
     @Published private(set) var usage: [UsageRollup] = []
     @Published private(set) var statistics: IndexStatistics?
@@ -31,14 +26,6 @@ final class TraceModel: ObservableObject {
     @Published private(set) var pricingError: String?
     @Published var selectedProjectID: Int64?
     @Published var selectedSessionID: Int64?
-    var searchQuery: String {
-        get { globalSearch.query }
-        set { globalSearch.query = newValue }
-    }
-    var searchFilters: SearchFilters {
-        get { globalSearch.filters }
-        set { globalSearch.filters = newValue }
-    }
     @Published var customCostStart = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @Published var customCostEnd = Date()
     @Published var expandedReasoningIDs: Set<Int64> = []
@@ -50,6 +37,9 @@ final class TraceModel: ObservableObject {
     private var scheduler: IndexScheduler?
     private var sourceChangeTask: Task<Void, Never>?
     private var lastSummaryRefresh = ContinuousClock.now
+    private var incrementalProgressTask: Task<Void, Never>?
+    private var pendingIncrementalProgress: IndexProgress?
+    private var incrementalProgressVisible = false
     private var sessionRequestID = UUID()
     private var projectRequestID = UUID()
     private var summaryRequestID = UUID()
@@ -63,9 +53,6 @@ final class TraceModel: ObservableObject {
     init(settings: AppSettings = AppSettings()) {
         self.settings = settings
         diagnostics = DiagnosticsStore(url: TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
-        settings.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
-        globalSearch.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
-        mainSearch.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
     }
 
     func start() {
@@ -76,6 +63,7 @@ final class TraceModel: ObservableObject {
                 try await diagnostics.markLaunchStarted()
                 let database = try IndexDatabase(url: TraceRuntime.testDirectory?.appendingPathComponent("index.sqlite") ?? IndexDatabase.defaultURL())
                 self.database = database
+                if database.contentWasResetOnOpen { prepareForIndexReset() }
                 let sources = makeSources()
                 let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
@@ -126,13 +114,41 @@ final class TraceModel: ObservableObject {
     }
 
     private func receiveProgress(_ update: IndexProgress) async {
-        progress = update
         let terminal = [.complete, .failed, .cancelled].contains(update.phase)
-        if terminal || lastSummaryRefresh.duration(to: .now) >= .milliseconds(250) {
+        if update.incremental {
+            if terminal {
+                incrementalProgressTask?.cancel()
+                incrementalProgressTask = nil
+                pendingIncrementalProgress = nil
+                if incrementalProgressVisible || update.phase == .failed || update.failedFiles > 0 {
+                    progress = update
+                }
+                incrementalProgressVisible = false
+            } else {
+                pendingIncrementalProgress = update
+                if incrementalProgressTask == nil {
+                    incrementalProgressTask = Task { [weak self] in
+                        do { try await Task.sleep(for: .milliseconds(300)) }
+                        catch { return }
+                        guard let self, let pending = self.pendingIncrementalProgress else { return }
+                        self.progress = pending
+                        self.incrementalProgressVisible = true
+                        self.incrementalProgressTask = nil
+                    }
+                }
+            }
+        } else {
+            progress = update
+        }
+
+        let shouldRefresh = terminal
+            || ((!update.incremental || incrementalProgressVisible)
+                && lastSummaryRefresh.duration(to: .now) >= .milliseconds(250))
+        if shouldRefresh {
             lastSummaryRefresh = .now
             await reloadSummaries(lightweight: !terminal)
-            if !searchQuery.isEmpty { search() }
-            if !mainSearch.query.isEmpty { searchMain() }
+            if !globalSearch.query.isEmpty, !globalSearch.protectsPagination { search() }
+            if !mainSearch.query.isEmpty, !mainSearch.protectsPagination { searchMain() }
         }
     }
 
@@ -144,6 +160,7 @@ final class TraceModel: ObservableObject {
 
     func rebuildIndex() {
         guard settings.onboardingComplete, let scheduler else { return }
+        prepareForIndexReset()
         Task { await scheduler.request(rebuild: true, scope: settings.indexScope) }
     }
 
@@ -172,29 +189,31 @@ final class TraceModel: ObservableObject {
         mainSearch.filters.projectID = selectedProjectID
         mainSearch.search(sort: settings.searchSort)
     }
-    func hydrateSearchResult(_ result: SearchResult) async { await globalSearch.hydrate(result) }
-
     var filteredProjects: [ProjectSummary] {
         let query = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty ? projects : projects.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
     }
 
-    func loadSessionError(_ session: SessionSummary) {
-        guard sessionErrors[session.id] == nil, errorTasks[session.id] == nil, let coordinator else { return }
-        errorTasks[session.id] = Task {
-            defer { errorTasks[session.id] = nil }
-            do {
-                let failures = try await coordinator.failures(for: session)
-                try Task.checkCancellation()
-                sessionErrors[session.id] = failures.isEmpty
-                    ? "\(session.agent.displayName) recorded an error without a detailed explanation."
-                    : failures.map { failure in
-                        let header = [session.agent.displayName, failure.kind.capitalized,
-                            failure.timestampMilliseconds.traceDate, failure.toolName].compactMap { $0 }.joined(separator: " · ")
-                        return header + "\n" + (failure.detail.isEmpty ? "The source did not provide an error message." : String(failure.detail.prefix(4_000)))
-                    }.joined(separator: "\n\n")
-            } catch is CancellationError { }
-            catch { sessionErrors[session.id] = "Could not read error details from \(session.sourcePath): \(error.localizedDescription)" }
+    func sessionErrorText(_ session: SessionSummary) async -> String {
+        guard let coordinator else {
+            return "Error details are unavailable while the index is starting."
+        }
+        do {
+            let failures = try await coordinator.failures(for: session)
+            try Task.checkCancellation()
+            return failures.isEmpty
+                ? "\(session.agent.displayName) recorded an error without a detailed explanation."
+                : failures.map { failure in
+                    let header = [session.agent.displayName, failure.kind.capitalized,
+                        failure.timestampMilliseconds.traceDate, failure.toolName].compactMap { $0 }.joined(separator: " · ")
+                    return header + "\n" + (failure.detail.isEmpty
+                        ? "The source did not provide an error message."
+                        : String(failure.detail.prefix(4_000)))
+                }.joined(separator: "\n\n")
+        } catch is CancellationError {
+            return "Loading error details was cancelled."
+        } catch {
+            return "Could not read error details from \(session.sourcePath): \(error.localizedDescription)"
         }
     }
 
@@ -211,8 +230,38 @@ final class TraceModel: ObservableObject {
         settings.lastSessionID = nil
         messages = []
         hydratedMessages.removeAll()
+        hydrationFailures.removeAll()
         expandedReasoningIDs.removeAll()
         requestedMessageID = nil
+    }
+
+    func consumeRequestedMessageID(_ messageID: Int64) {
+        if requestedMessageID == messageID { requestedMessageID = nil }
+    }
+
+    private func prepareForIndexReset() {
+        mayRestoreSession = false
+        sessionRequestID = UUID()
+        projectRequestID = UUID()
+        summaryRequestID = UUID()
+        selectedProjectID = nil
+        selectedSessionID = nil
+        selectedSession = nil
+        settings.lastSessionID = nil
+        projects = []
+        sessions = []
+        recentSessions = []
+        messages = []
+        hydratedMessages = [:]
+        hydrationFailures = []
+        expandedReasoningIDs = []
+        scrollPositions = [:]
+        requestedMessageID = nil
+        sourceHealth = []
+        usage = []
+        statistics = nil
+        globalSearch.resetForIndexReset()
+        mainSearch.resetForIndexReset()
     }
 
     func selectProject(_ projectID: Int64?) {
@@ -250,6 +299,7 @@ final class TraceModel: ObservableObject {
         requestedMessageID = messageID
         messages = []
         hydratedMessages.removeAll(keepingCapacity: true)
+        hydrationFailures.removeAll(keepingCapacity: true)
         expandedReasoningIDs.removeAll()
         mainSearch.query = ""
         mainSearch.search()
@@ -295,19 +345,21 @@ final class TraceModel: ObservableObject {
     func hydrate(_ message: MessageSummary) {
         guard hydratedMessages[message.id] == nil, let coordinator else { return }
         let request = sessionRequestID
-        let revision = selectedSession?.sourceRevision
+        let generation = selectedSession?.sourceGeneration
+        hydrationFailures.remove(message.id)
         Task {
             let start = ContinuousClock.now
             do {
                 let hydrated = try await coordinator.hydrate(message)
-                guard sessionRequestID == request, selectedSession?.sourceRevision == revision else { return }
+                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation else { return }
                 hydratedMessages[message.id] = hydrated
                 let elapsed = start.duration(to: .now)
                 let milliseconds = Double(elapsed.components.seconds) * 1_000
                     + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
                 try? await diagnostics.recordOpen(hydrationMilliseconds: milliseconds)
             } catch {
-                guard sessionRequestID == request else { return }
+                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation else { return }
+                hydrationFailures.insert(message.id)
                 startupError = "Could not read source message: \(error.localizedDescription)"
             }
         }
@@ -384,19 +436,28 @@ final class TraceModel: ObservableObject {
     private func startWatching(_ roots: [URL]) {
         guard watcher == nil, settings.onboardingComplete else { return }
         let metadataRoots = makeSources().filter { $0.agent == .codex }.flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
+        let canonicalRoots = roots.map { TraceFileIO.canonicalPath($0.path) }
+        let canonicalMetadataRoots = metadataRoots.map { TraceFileIO.canonicalPath($0.path) }
         let watcher = FSEventsWatcher(roots: roots + metadataRoots, onChange: { [weak self] changes in
             Task { @MainActor [weak self] in
                 guard let self, self.settings.onboardingComplete else { return }
-                let paths = changes.paths.filter { path in
-                    roots.contains { path == $0.path || path.hasPrefix($0.path + "/") }
-                    || metadataRoots.contains { root in
-                        let url = URL(fileURLWithPath: path)
-                        return url.deletingLastPathComponent() == root
-                            && (url.lastPathComponent == "session_index.jsonl" || url.lastPathComponent.hasPrefix("state_"))
+                let paths = changes.paths.compactMap { path -> String? in
+                    let canonical = TraceFileIO.canonicalPath(path)
+                    if canonicalRoots.contains(where: { $0.contains(canonical) }) { return canonical.path }
+                    let url = URL(fileURLWithPath: canonical.path)
+                    let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
+                    if canonicalMetadataRoots.contains(where: { $0.comparisonKey == parent.comparisonKey }),
+                       TraceFileIO.isCodexMetadataSidecar(url) {
+                        return canonical.path
                     }
+                    return nil
                 }
-                guard !paths.isEmpty || changes.requiresReconciliation else { return }
-                await self.scheduler?.request(paths: Set(paths), reconcile: changes.requiresReconciliation,
+                let reconcile = changes.reconciliationPaths.contains { path in
+                    let changed = TraceFileIO.canonicalPath(path)
+                    return canonicalRoots.contains { $0.intersects(changed) }
+                }
+                guard !paths.isEmpty || reconcile else { return }
+                await self.scheduler?.request(paths: Set(paths), reconcile: reconcile,
                                               scope: self.settings.indexScope)
             }
         })
@@ -408,7 +469,6 @@ final class TraceModel: ObservableObject {
         guard let database else { return }
         let refresh = UUID()
         summaryRequestID = refresh
-        let previousSessions = Dictionary((sessions + recentSessions).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let loadedProjects = (try? await database.projects()) ?? []
         let loadedRecent = (try? await database.sessions(limit: 10)) ?? []
         let project = selectedProjectID
@@ -418,24 +478,26 @@ final class TraceModel: ObservableObject {
         projects = loadedProjects
         recentSessions = loadedRecent
         if selectedProjectID == project, projectRequestID == projectRequest { sessions = loadedSessions }
-        for session in sessions + recentSessions {
-            if let old = previousSessions[session.id], old.messageCount != session.messageCount || old.lastActivityMilliseconds != session.lastActivityMilliseconds || old.sourceRevision != session.sourceRevision || old.hadError != session.hadError {
-                sessionErrors[session.id] = nil
-                errorTasks[session.id]?.cancel()
-            }
-        }
         if let sessionID = selectedSessionID {
             let request = sessionRequestID
             let loadedSession = try? await database.session(id: sessionID)
-            if selectedSessionID == sessionID, sessionRequestID == request {
-                let changed = selectedSession?.sourceRevision != loadedSession?.sourceRevision
-                selectedSession = loadedSession
-                if let loadedSession, changed || loadedSession.messageCount != messages.count {
-                    let rows = (try? await database.messages(sessionID: sessionID)) ?? []
-                    if selectedSessionID == sessionID, sessionRequestID == request {
-                        if changed { hydratedMessages.removeAll(keepingCapacity: true) }
-                        messages = rows
+            if selectedSessionID == sessionID, sessionRequestID == request, summaryRequestID == refresh {
+                if let loadedSession {
+                    let changed = selectedSession?.sourceGeneration != loadedSession.sourceGeneration
+                    selectedSession = loadedSession
+                    if changed || loadedSession.messageCount != messages.count {
+                        let rows = (try? await database.messages(sessionID: sessionID)) ?? []
+                        if selectedSessionID == sessionID, sessionRequestID == request,
+                           summaryRequestID == refresh {
+                            if changed {
+                                hydratedMessages.removeAll(keepingCapacity: true)
+                                hydrationFailures.removeAll(keepingCapacity: true)
+                            }
+                            messages = rows
+                        }
                     }
+                } else {
+                    clearSession()
                 }
             }
         }
@@ -445,8 +507,17 @@ final class TraceModel: ObservableObject {
         if let bytes = statistics?.databaseBytes { try? await diagnostics.recordIndexSize(bytes: bytes) }
         guard summaryRequestID == refresh else { return }
         if mayRestoreSession {
-            if let stored = settings.lastSessionID, (try? await database.session(id: stored)) != nil {
-                selectSession(stored)
+            if let stored = settings.lastSessionID {
+                let restored = try? await database.session(id: stored)
+                guard summaryRequestID == refresh,
+                      mayRestoreSession,
+                      settings.lastSessionID == stored,
+                      selectedSessionID == nil else { return }
+                if restored != nil {
+                    selectSession(stored)
+                } else if [.complete, .failed].contains(progress.phase) {
+                    mayRestoreSession = false
+                }
             } else if [.complete, .failed].contains(progress.phase) {
                 mayRestoreSession = false
             }

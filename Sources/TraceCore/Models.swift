@@ -125,17 +125,20 @@ public struct MessageSections: Codable, Equatable, Sendable {
     public var toolInvocation: String
     public var toolOutput: String
     public var reasoning: String
+    public var hasNonTextContent: Bool
 
     public init(
         prose: String = "",
         toolInvocation: String = "",
         toolOutput: String = "",
-        reasoning: String = ""
+        reasoning: String = "",
+        hasNonTextContent: Bool = false
     ) {
         self.prose = prose
         self.toolInvocation = toolInvocation
         self.toolOutput = toolOutput
         self.reasoning = reasoning
+        self.hasNonTextContent = hasNonTextContent
     }
 
     public func indexedText(for scope: IndexScope) -> String {
@@ -150,7 +153,10 @@ public struct MessageSections: Codable, Equatable, Sendable {
     }
 
     public var flags: Int {
-        (prose.isEmpty ? 0 : 1) | (toolInvocation.isEmpty && toolOutput.isEmpty ? 0 : 2) | (reasoning.isEmpty ? 0 : 4)
+        (prose.isEmpty ? 0 : 1)
+            | (toolInvocation.isEmpty && toolOutput.isEmpty ? 0 : 2)
+            | (reasoning.isEmpty ? 0 : 4)
+            | (hasNonTextContent ? 8 : 0)
     }
 
     public var preferredPreview: String {
@@ -158,6 +164,19 @@ public struct MessageSections: Codable, Equatable, Sendable {
         if !toolInvocation.isEmpty { return toolInvocation }
         if !toolOutput.isEmpty { return toolOutput }
         return reasoning
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case prose, toolInvocation, toolOutput, reasoning, hasNonTextContent
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        prose = try container.decodeIfPresent(String.self, forKey: .prose) ?? ""
+        toolInvocation = try container.decodeIfPresent(String.self, forKey: .toolInvocation) ?? ""
+        toolOutput = try container.decodeIfPresent(String.self, forKey: .toolOutput) ?? ""
+        reasoning = try container.decodeIfPresent(String.self, forKey: .reasoning) ?? ""
+        hasNonTextContent = try container.decodeIfPresent(Bool.self, forKey: .hasNonTextContent) ?? false
     }
 }
 
@@ -362,7 +381,7 @@ public struct SessionSummary: Identifiable, Sendable {
     public let messageCount: Int
     public let hadError: Bool
     public let sourcePath: String
-    public var sourceRevision: String = ""
+    public var sourceGeneration: Int64 = 0
 }
 
 public struct MessageSummary: Identifiable, Sendable {
@@ -475,10 +494,13 @@ public struct TranscriptVisibility: Hashable, Sendable {
     }
 
     public func includes(_ message: MessageSummary) -> Bool {
+        if message.hasError { return true }
         // System is a record category; section switches also apply inside it.
         if message.role == .system && !system { return false }
         if let flags = message.sectionFlags {
-            return flags & 1 != 0 || (tools && flags & 2 != 0) || (reasoning && flags & 4 != 0)
+            if flags == 0 { return includes(role: message.role) }
+            let includesAttachment = flags & 8 != 0 && includes(role: message.role)
+            return flags & 1 != 0 || (tools && flags & 2 != 0) || (reasoning && flags & 4 != 0) || includesAttachment
         }
         return includes(role: message.role)
     }

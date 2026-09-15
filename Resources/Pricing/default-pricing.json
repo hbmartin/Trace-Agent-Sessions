@@ -10,13 +10,23 @@
     { "modelPattern": "gpt-5.5-pro*", "inputPerMillion": 30, "outputPerMillion": 180, "inputIncludesCacheReads": true, "unmetered": false },
     { "modelPattern": "gpt-5.5*", "inputPerMillion": 5, "outputPerMillion": 30, "cacheReadPerMillion": 0.5, "inputIncludesCacheReads": true, "unmetered": false },
     { "modelPattern": "gpt-5*", "inputPerMillion": 1.25, "outputPerMillion": 10, "cacheReadPerMillion": 0.125, "inputIncludesCacheReads": true, "unmetered": false },
-    { "modelPattern": "claude-sonnet-4-5*", "inputPerMillion": 1.5, "outputPerMillion": 7.5, "cacheWritePerMillion": 1.875, "cacheReadPerMillion": 0.15, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-sonnet-5*", "inputPerMillion": 2, "outputPerMillion": 10, "cacheWritePerMillion": 2.5, "cacheReadPerMillion": 0.2, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-sonnet-4-5*", "inputPerMillion": 3, "outputPerMillion": 15, "cacheWritePerMillion": 3.75, "cacheReadPerMillion": 0.3, "inputIncludesCacheReads": false, "unmetered": false },
     { "modelPattern": "claude-sonnet-4*", "inputPerMillion": 3, "outputPerMillion": 15, "cacheWritePerMillion": 3.75, "cacheReadPerMillion": 0.3, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-opus-5*", "inputPerMillion": 5, "outputPerMillion": 25, "cacheWritePerMillion": 6.25, "cacheReadPerMillion": 0.5, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-fable-5-1*", "inputPerMillion": 10, "outputPerMillion": 50, "cacheWritePerMillion": 12.5, "cacheReadPerMillion": 0.25, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-fable-5*", "inputPerMillion": 10, "outputPerMillion": 50, "cacheWritePerMillion": 12.5, "cacheReadPerMillion": 1, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-opus-4-8*", "inputPerMillion": 5, "outputPerMillion": 25, "cacheWritePerMillion": 6.25, "cacheReadPerMillion": 0.5, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-opus-4-6*", "inputPerMillion": 5, "outputPerMillion": 25, "cacheWritePerMillion": 6.25, "cacheReadPerMillion": 0.5, "inputIncludesCacheReads": false, "unmetered": false },
+    { "modelPattern": "claude-opus-4-5*", "inputPerMillion": 5, "outputPerMillion": 25, "cacheWritePerMillion": 6.25, "cacheReadPerMillion": 0.5, "inputIncludesCacheReads": false, "unmetered": false },
     { "modelPattern": "claude-opus-4*", "inputPerMillion": 15, "outputPerMillion": 75, "cacheWritePerMillion": 18.75, "cacheReadPerMillion": 1.5, "inputIncludesCacheReads": false, "unmetered": false },
     { "modelPattern": "claude-3-5-haiku*", "inputPerMillion": 0.8, "outputPerMillion": 4, "cacheWritePerMillion": 1, "cacheReadPerMillion": 0.08, "inputIncludesCacheReads": false, "unmetered": false },
-    { "modelPattern": "gemini-3.8-flash*", "inputPerMillion": 0.75, "outputPerMillion": 3.75, "cacheReadPerMillion": 0.075, "inputIncludesCacheReads": true, "unmetered": false, "note": "Introductory pricing through 2026-12-31." },
-    { "modelPattern": "gemini-2.5-pro*", "inputPerMillion": 1.25, "outputPerMillion": 10, "cacheReadPerMillion": 0.125, "inputIncludesCacheReads": true, "unmetered": false, "note": "Uses the standard rate for prompts up to 200K tokens." },
-    { "modelPattern": "gemini-2.5-flash-lite*", "inputPerMillion": 0.1, "outputPerMillion": 0.4, "cacheReadPerMillion": 0.01, "inputIncludesCacheReads": true, "unmetered": false },
-    { "modelPattern": "gemini-2.5-flash*", "inputPerMillion": 0.3, "outputPerMillion": 2.5, "cacheReadPerMillion": 0.03, "inputIncludesCacheReads": true, "unmetered": false }
+    { "modelPattern": "gemini-3.8-flash*", "inputPerMillion": 0.75, "outputPerMillion": 3.75, "cacheReadPerMillion": 0.075, "additionalReasoningPerMillion": 3.75, "inputIncludesCacheReads": true, "unmetered": false, "note": "Introductory pricing through 2026-12-31." },
+    { "modelPattern": "gemini-3.1-pro-preview*", "inputPerMillion": 2, "outputPerMillion": 12, "cacheReadPerMillion": 0.2, "additionalReasoningPerMillion": 12, "inputIncludesCacheReads": true, "unmetered": false, "note": "Uses the standard rate for prompts up to 200K tokens." },
+    { "modelPattern": "gemini-3-pro-preview*", "inputPerMillion": 2, "outputPerMillion": 12, "cacheReadPerMillion": 0.2, "additionalReasoningPerMillion": 12, "inputIncludesCacheReads": true, "unmetered": false, "note": "Uses the standard rate for prompts up to 200K tokens." },
+    { "modelPattern": "gemini-3-flash-preview*", "inputPerMillion": 0.5, "outputPerMillion": 3, "cacheReadPerMillion": 0.05, "additionalReasoningPerMillion": 3, "inputIncludesCacheReads": true, "unmetered": false },
+    { "modelPattern": "gemini-2.5-pro*", "inputPerMillion": 1.25, "outputPerMillion": 10, "cacheReadPerMillion": 0.125, "additionalReasoningPerMillion": 10, "inputIncludesCacheReads": true, "unmetered": false, "note": "Uses the standard rate for prompts up to 200K tokens." },
+    { "modelPattern": "gemini-2.5-flash-lite*", "inputPerMillion": 0.1, "outputPerMillion": 0.4, "cacheReadPerMillion": 0.01, "additionalReasoningPerMillion": 0.4, "inputIncludesCacheReads": true, "unmetered": false },
+    { "modelPattern": "gemini-2.5-flash*", "inputPerMillion": 0.3, "outputPerMillion": 2.5, "cacheReadPerMillion": 0.03, "additionalReasoningPerMillion": 2.5, "inputIncludesCacheReads": true, "unmetered": false }
   ]
 }

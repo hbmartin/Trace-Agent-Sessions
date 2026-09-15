@@ -36,6 +36,12 @@ final class TraceCoreTests: XCTestCase {
         XCTAssertGreaterThan(final, checkpoint)
     }
 
+    func testJSONErrorDescriptionsTrimAndSkipWhitespace() {
+        XCTAssertEqual(JSONHelpers.errorDescription([
+            "error": " \n\t ", "message": "  actionable detail  ",
+        ]), "actionable detail")
+    }
+
     func testAdaptersParseObservedVariantsAndHydrateRanges() async throws {
         let claude = ClaudeCodeSource(roots: [fixtures.appendingPathComponent("Claude")])
         let codex = CodexSource(root: fixtures.appendingPathComponent("Codex"))
@@ -227,6 +233,249 @@ final class TraceCoreTests: XCTestCase {
         XCTAssertEqual(catalog.estimate(usage), .estimated(7))
         XCTAssertEqual(catalog.estimate(withModel(usage, "local-v1")), .unmetered)
         XCTAssertEqual(catalog.estimate(withModel(usage, "unknown")), .rateUnavailable)
+
+        let gemini = try PricingCatalog(file: .init(
+            formatVersion: 1,
+            effectiveDate: "2026-01-01",
+            currency: "USD",
+            rates: [.init(modelPattern: "gemini-*", inputPerMillion: 2, outputPerMillion: 10,
+                          additionalReasoningPerMillion: 10)]
+        ))
+        let thinkingUsage = UsageRollup(
+            day: "2026-01-01", projectID: 1, projectName: "Project", model: "gemini-test",
+            isSidechain: false, inputTokens: 1_000_000, outputTokens: 500_000,
+            cacheWriteTokens: 0, cacheReadTokens: 0, reasoningTokens: 250_000
+        )
+        XCTAssertEqual(gemini.estimate(thinkingUsage), .estimated(9.5))
+    }
+
+    func testClaudeUsageUsesResponseIDWithoutCollapsingContentRows() async throws {
+        let directory = try temporaryDirectory()
+        let root = directory.appendingPathComponent("claude")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("session.jsonl")
+        let rows = ["one", "two"].enumerated().map { index, text in
+            #"{"type":"assistant","uuid":"line-\#(index)","sessionId":"session","cwd":"/tmp/project","timestamp":1700000000000,"message":{"id":"response-one","model":"claude-sonnet-5","content":"\#(text)","usage":{"input_tokens":100,"output_tokens":20}}}"#
+        }.joined(separator: "\n") + "\n"
+        try Data(rows.utf8).write(to: file)
+
+        let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+            .indexAll(scope: .proseOnly)
+        let sessions = try await database.sessions()
+        let session = try XCTUnwrap(sessions.first)
+        let contentRows = try await database.messages(sessionID: session.id)
+        XCTAssertEqual(contentRows.count, 2)
+        let rollups = try await database.usage(
+            fromDay: nil, throughDay: nil, includeSidechains: true
+        )
+        let usage = try XCTUnwrap(rollups.first)
+        XCTAssertEqual(usage.inputTokens, 100)
+        XCTAssertEqual(usage.outputTokens, 20)
+    }
+
+    func testAttachmentOnlyClaudeMessageIsClassifiedWithoutStoringMedia() async throws {
+        let directory = try temporaryDirectory()
+        let root = directory.appendingPathComponent("claude")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("session.jsonl")
+        let row = #"{"type":"user","uuid":"image","sessionId":"session","cwd":"/tmp/project","message":{"content":[{"type":"image","source":{"type":"base64","data":"secret"}}]}}"# + "\n"
+        try Data(row.utf8).write(to: file)
+        let source = ClaudeCodeSource(roots: [root])
+        let discovered = try XCTUnwrap(try source.discover().first)
+        let records = try await collect(source.records(in: discovered, from: 0))
+        let message = try XCTUnwrap(messages(in: records).first)
+        XCTAssertTrue(message.sections.hasNonTextContent)
+        XCTAssertEqual(message.sections.flags, 8)
+        XCTAssertTrue(message.sections.prose.isEmpty)
+    }
+
+    func testCodexTurnContextModelsInitialAndIncrementalUsage() async throws {
+        let directory = try temporaryDirectory()
+        let root = directory.appendingPathComponent("codex")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("rollout-context.jsonl")
+        let initial = """
+        {"type":"session_meta","timestamp":1700000000000,"payload":{"id":"session","cwd":"/tmp/project"}}
+        {"type":"turn_context","timestamp":1700000000001,"payload":{"model":"gpt-5.6-sol"}}
+        {"type":"token_usage_record","timestamp":1700000000002,"payload":{"response_id":"one","usage":{"input_tokens":10,"output_tokens":2}}}
+
+        """
+        try Data(initial.utf8).write(to: file)
+        let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: root)])
+        await coordinator.indexAll(scope: .proseOnly)
+
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"token_usage_record\",\"payload\":{\"response_id\":\"two\",\"usage\":{\"input_tokens\":20,\"output_tokens\":4}}}\n".utf8))
+        try handle.close()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+
+        let rollups = try await database.usage(
+            fromDay: nil, throughDay: nil, includeSidechains: true
+        )
+        let usage = rollups.filter { $0.model == "gpt-5.6-sol" }
+        XCTAssertFalse(usage.isEmpty)
+        XCTAssertEqual(usage.reduce(0) { $0 + $1.inputTokens }, 30)
+        XCTAssertEqual(usage.reduce(0) { $0 + $1.outputTokens }, 6)
+    }
+
+    func testMissingTimestampsUseStableFileMtimeAndRecordOffset() async throws {
+        let directory = try temporaryDirectory()
+        let codexRoot = directory.appendingPathComponent("codex")
+        let claudeRoot = directory.appendingPathComponent("claude")
+        try FileManager.default.createDirectory(at: codexRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: claudeRoot, withIntermediateDirectories: true)
+        let codexFile = codexRoot.appendingPathComponent("rollout-missing-time.jsonl")
+        let claudeFile = claudeRoot.appendingPathComponent("missing-time.jsonl")
+        try Data("""
+        {"type":"session_meta","payload":{"id":"session","cwd":"/tmp/project"}}
+        {"type":"response_item","payload":{"type":"message","role":"user","content":"codex text"}}
+
+        """.utf8).write(to: codexFile)
+        try Data("""
+        {"type":"user","uuid":"line","sessionId":"session","cwd":"/tmp/project","message":{"content":"claude text"}}
+
+        """.utf8).write(to: claudeFile)
+        let modified = Date(timeIntervalSince1970: 1_800_000_000)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: codexFile.path)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: claudeFile.path)
+
+        let codexSource = CodexSource(root: codexRoot)
+        let codexDiscovered = try XCTUnwrap(try codexSource.discover().first)
+        let codexMessages = messages(in: try await collect(codexSource.records(in: codexDiscovered, from: 0)))
+        let codexMessage = try XCTUnwrap(codexMessages.first)
+        XCTAssertEqual(
+            codexMessage.timestampMilliseconds,
+            TraceFileIO.modificationMilliseconds(url: codexFile) + (codexMessage.locator.offset ?? 0)
+        )
+
+        let claudeSource = ClaudeCodeSource(roots: [claudeRoot])
+        let claudeDiscovered = try XCTUnwrap(try claudeSource.discover().first)
+        let firstParse = messages(in: try await collect(claudeSource.records(in: claudeDiscovered, from: 0)))
+        let secondParse = messages(in: try await collect(claudeSource.records(in: claudeDiscovered, from: 0)))
+        XCTAssertEqual(firstParse.first?.timestampMilliseconds, secondParse.first?.timestampMilliseconds)
+        XCTAssertEqual(firstParse.first?.timestampMilliseconds, TraceFileIO.modificationMilliseconds(url: claudeFile))
+        XCTAssertGreaterThan(firstParse.first?.timestampMilliseconds ?? 0, 0)
+    }
+
+    func testBundledPricingCoversObservedModels() throws {
+        let bundled = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/Pricing/default-pricing.json")
+        let catalog = try PricingCatalog(file: try JSONDecoder().decode(
+            PricingFile.self, from: Data(contentsOf: bundled)
+        ))
+        let observed = [
+            "claude-opus-4-8", "claude-opus-5", "claude-fable-5", "claude-fable-5-1",
+            "claude-sonnet-5", "gemini-3-flash-preview", "gemini-3-pro-preview",
+            "gemini-3.1-pro-preview",
+        ]
+        for model in observed { XCTAssertNotNil(catalog.rate(for: model), model) }
+        XCTAssertEqual(catalog.rate(for: "claude-sonnet-5")?.inputPerMillion, 2)
+        XCTAssertEqual(catalog.rate(for: "claude-sonnet-4-5")?.inputPerMillion, 3)
+        XCTAssertEqual(catalog.rate(for: "claude-opus-4-8")?.outputPerMillion, 25)
+        XCTAssertEqual(catalog.rate(for: "claude-fable-5-1")?.cacheReadPerMillion, 0.25)
+        XCTAssertEqual(catalog.rate(for: "gemini-3-flash-preview")?.additionalReasoningPerMillion, 3)
+    }
+
+    func testGeminiSnapshotStreamsAcrossChunksAndRejectsIncompleteDocument() async throws {
+        let directory = try temporaryDirectory()
+        let project = directory.appendingPathComponent("project")
+        let chats = project.appendingPathComponent("chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let file = chats.appendingPathComponent("session-large.json")
+        let large = String(repeating: "escaped \" brace } ", count: 5_000)
+        let document = try JSONSerialization.data(withJSONObject: [
+            "sessionId": "streamed",
+            "messages": [
+                ["id": "one", "type": "user", "content": large],
+                ["id": "two", "type": "gemini", "content": "done"],
+            ],
+            "metadata": ["nested": [["ok": true]]],
+        ])
+        try document.write(to: file)
+        let source = GeminiSource(root: directory)
+        let discovered = try XCTUnwrap(try source.discover().first)
+        let records = try await collect(source.records(in: discovered, from: 0))
+        let parsed = messages(in: records)
+        XCTAssertEqual(parsed.map(\.externalID), ["one", "two"])
+        XCTAssertEqual(records.compactMap { if case .checkpoint(let value) = $0 { value } else { nil } }, [Int64(document.count)])
+        XCTAssertEqual(try source.hydrate(
+            fileURL: file, format: .geminiJSON, locator: try XCTUnwrap(parsed.first?.locator)
+        ).sections.prose, large)
+
+        let emptyDocument = Data(#"{"sessionId":"empty","messages":[]}"#.utf8)
+        try emptyDocument.write(to: file)
+        let empty = try XCTUnwrap(try source.discover().first)
+        let emptyRecords = try await collect(source.records(in: empty, from: 0))
+        XCTAssertTrue(messages(in: emptyRecords).isEmpty)
+        XCTAssertEqual(emptyRecords.compactMap {
+            if case .checkpoint(let value) = $0 { value } else { nil }
+        }, [Int64(emptyDocument.count)])
+
+        try Data(#"{"sessionId":"streamed","messages":[{"id":"one","type":"user","content":"truncated"}"#.utf8)
+            .write(to: file)
+        let incomplete = try XCTUnwrap(try source.discover().first)
+        do {
+            _ = try await collect(source.records(in: incomplete, from: 0))
+            XCTFail("An incomplete snapshot must not emit a terminal checkpoint")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        }
+
+        try Data(#"{"sessionId":"streamed","messages":[],"metadata":}"#.utf8).write(to: file)
+        let malformed = try XCTUnwrap(try source.discover().first)
+        do {
+            _ = try await collect(source.records(in: malformed, from: 0))
+            XCTFail("A syntactically malformed snapshot must not emit a terminal checkpoint")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        }
+    }
+
+    func testGeminiSnapshotChecksCancellationBeforeAndDuringScanning() async throws {
+        let directory = try temporaryDirectory()
+        let chats = directory.appendingPathComponent("project/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let file = chats.appendingPathComponent("session-cancellation.json")
+        let document = try JSONSerialization.data(withJSONObject: [
+            "sessionId": "cancel",
+            "messages": [
+                ["id": "first", "type": "user", "content": "ready"],
+                ["id": "large", "type": "gemini", "content": String(repeating: "scan me ", count: 4_000_000)],
+            ],
+        ])
+        try document.write(to: file)
+        let source = GeminiSource(root: directory)
+        let discovered = try XCTUnwrap(try source.discover().first)
+
+        let cancelledBeforeStart = Task { () -> [ParsedRecord] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return (try? await collect(source.records(in: discovered, from: 0))) ?? []
+        }
+        let beforeStartRecords = await cancelledBeforeStart.value
+        XCTAssertTrue(beforeStartRecords.isEmpty)
+
+        let beganLargeObject = expectation(description: "scanner emitted the first object")
+        let cancelledDuringScan = Task { () -> [ParsedRecord] in
+            var iterator = source.records(in: discovered, from: 0).makeAsyncIterator()
+            var records: [ParsedRecord] = []
+            do {
+                if let first = try await iterator.next() { records.append(first) }
+                beganLargeObject.fulfill()
+                while let record = try await iterator.next() { records.append(record) }
+            } catch {
+            }
+            return records
+        }
+        await fulfillment(of: [beganLargeObject], timeout: 2)
+        try await Task.sleep(for: .milliseconds(2))
+        cancelledDuringScan.cancel()
+        let duringScanRecords = await cancelledDuringScan.value
+        XCTAssertEqual(messages(in: duringScanRecords).map(\.externalID), ["first"])
+        XCTAssertFalse(duringScanRecords.contains { if case .checkpoint = $0 { true } else { false } })
     }
 
     private var fixtures: URL {

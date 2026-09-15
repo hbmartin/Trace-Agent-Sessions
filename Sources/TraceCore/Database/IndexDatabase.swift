@@ -24,11 +24,13 @@ struct IndexedSourceState: Sendable {
     let scannedBytes: Int64
     let headHash: Data
     let headLength: Int
+    let contentGeneration: Int64
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 3
-    public static let indexFormatVersion = 1
+    public static let schemaVersion = 4
+    public static let indexFormatVersion = 2
+    public nonisolated let contentWasResetOnOpen: Bool
     private let pool: DatabasePool
     private let url: URL
 
@@ -56,7 +58,7 @@ public actor IndexDatabase {
         }
         pool = try DatabasePool(path: url.path, configuration: configuration)
         try Self.migrate(pool)
-        try Self.rebuildContentIfNeeded(pool)
+        contentWasResetOnOpen = try Self.rebuildContentIfNeeded(pool)
     }
 
     private static func migrate(_ pool: DatabasePool) throws {
@@ -192,7 +194,7 @@ public actor IndexDatabase {
                 """)
             try db.execute(
                 sql: "INSERT INTO trace_meta(key, value) VALUES ('schema_version', ?), ('index_format_version', ?), ('index_scope', ?)",
-                arguments: [String(schemaVersion), String(indexFormatVersion), String(IndexScope.proseOnly.rawValue)]
+                arguments: ["1", String(indexFormatVersion), String(IndexScope.proseOnly.rawValue)]
             )
         }
         migrator.registerMigration("trace-v2-details") { db in
@@ -219,27 +221,32 @@ public actor IndexDatabase {
             try db.execute(sql: "UPDATE session SET first_user_message=title")
             try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v4-source-generation") { db in
+            try db.execute(sql: "ALTER TABLE source_file ADD COLUMN content_generation INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: "UPDATE trace_meta SET value='4' WHERE key='schema_version'")
+        }
         try migrator.migrate(pool)
     }
 
-    private static func rebuildContentIfNeeded(_ pool: DatabasePool) throws {
-        try pool.writeWithoutTransaction { db in
+    private static func rebuildContentIfNeeded(_ pool: DatabasePool) throws -> Bool {
+        try pool.writeWithoutTransaction { db -> Bool in
             let stored = try String.fetchOne(
                 db,
                 sql: "SELECT value FROM trace_meta WHERE key='index_format_version'"
             )
-            guard stored != String(indexFormatVersion) else { return }
+            guard stored != String(indexFormatVersion) else { return false }
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM message_fts")
+                try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM project")
-                try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(
                     sql: "INSERT INTO trace_meta(key, value) VALUES ('index_format_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     arguments: [String(indexFormatVersion)]
                 )
                 return .commit
             }
+            return true
         }
     }
 
@@ -295,13 +302,6 @@ public actor IndexDatabase {
         )
     }
 
-    public func indexScope() throws -> IndexScope {
-        try pool.read { db in
-            let raw = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='index_scope'")
-            return IndexScope(rawValue: Int(raw ?? "0") ?? 0) ?? .proseOnly
-        }
-    }
-
     func register(root: SourceRoot) throws -> Int64 {
         try pool.write { db in
             try db.execute(
@@ -348,7 +348,8 @@ public actor IndexDatabase {
             modificationNanoseconds: row["mtime_ns"],
             scannedBytes: row["scanned_bytes"],
             headHash: row["head_hash"],
-            headLength: row["head_length"]
+            headLength: row["head_length"],
+            contentGeneration: row["content_generation"]
         )
     }
 
@@ -412,7 +413,10 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM session WHERE source_file_id=?", arguments: [id])
                 try deleteOrphanedProjects(db: db)
-                try db.execute(sql: "UPDATE source_file SET scanned_bytes=0, last_error=NULL WHERE id=?", arguments: [id])
+                try db.execute(
+                    sql: "UPDATE source_file SET scanned_bytes=0, last_error=NULL, metadata_revision=NULL, content_generation=content_generation+1 WHERE id=?",
+                    arguments: [id]
+                )
                 return .commit
             }
         }
@@ -422,10 +426,18 @@ public actor IndexDatabase {
         try insert(records: [record], sourceFileID: sourceFileID, scope: scope)
     }
 
-    func insert(records: [ParsedRecord], sourceFileID: Int64, scope: IndexScope) throws {
+    func insert(
+        records: [ParsedRecord], sourceFileID: Int64, scope: IndexScope, checkpoint: Int64? = nil
+    ) throws {
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try insert(records: records, sourceFileID: sourceFileID, scope: scope, db: db)
+                if let checkpoint {
+                    try db.execute(
+                        sql: "UPDATE source_file SET scanned_bytes=? WHERE id=?",
+                        arguments: [checkpoint, sourceFileID]
+                    )
+                }
                 return .commit
             }
         }
@@ -448,6 +460,10 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM session WHERE source_file_id=?", arguments: [id])
                 try deleteOrphanedProjects(db: db)
                 try insert(records: records, sourceFileID: id, scope: scope, db: db)
+                try db.execute(
+                    sql: "UPDATE source_file SET metadata_revision=NULL, content_generation=content_generation+1 WHERE id=?",
+                    arguments: [id]
+                )
                 try updateSource(
                     id: id,
                     fingerprint: fingerprint,
@@ -633,6 +649,25 @@ public actor IndexDatabase {
                     toolName: row["tool_name"], detail: row["detail"],
                     locator: data.flatMap { try? JSONDecoder().decode(RecordLocator.self, from: $0) })
             }
+        }
+    }
+
+    public func needsLegacyFailureScan(sessionID: Int64) throws -> Bool {
+        try pool.read { db in
+            let hasLegacyMessages = try Bool.fetchOne(db, sql: """
+                SELECT EXISTS(
+                    SELECT 1 FROM message WHERE session_id=? AND section_flags IS NULL
+                )
+                """, arguments: [sessionID]) ?? false
+            if hasLegacyMessages { return true }
+            return try Bool.fetchOne(db, sql: """
+                SELECT EXISTS(
+                    SELECT 1 FROM session s
+                    WHERE s.id=? AND s.had_error=1
+                      AND NOT EXISTS(SELECT 1 FROM message WHERE session_id=s.id)
+                      AND NOT EXISTS(SELECT 1 FROM session_failure WHERE session_id=s.id)
+                )
+                """, arguments: [sessionID]) ?? false
         }
     }
 
@@ -864,7 +899,8 @@ public actor IndexDatabase {
                 arguments += [limit + 1]
                 sql = """
                     SELECT m.id, m.session_id, s.project_id, p.display_name AS project_name,
-                           coalesce(s.title, 'Untitled session') AS session_title, s.agent, s.has_plan,
+                           coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS session_title,
+                           s.agent, s.has_plan,
                            m.role, m.ts, m.prefix, sf.path AS source_path, NULL AS score
                     FROM message_fts
                     JOIN message m ON m.id = message_fts.rowid
@@ -890,7 +926,8 @@ public actor IndexDatabase {
                         WHERE message_fts MATCH ?
                     )
                     SELECT m.id, m.session_id, s.project_id, p.display_name AS project_name,
-                           coalesce(s.title, 'Untitled session') AS session_title, s.agent, s.has_plan,
+                           coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS session_title,
+                           s.agent, s.has_plan,
                            m.role, m.ts, m.prefix, sf.path AS source_path, r.score
                     FROM ranked r
                     JOIN message m ON m.id = r.rowid
@@ -912,20 +949,82 @@ public actor IndexDatabase {
         }
     }
 
-    func metadataNeedsRefresh(sourceID: Int64, revision: String) throws -> Bool {
+    func metadataRevision(sourceID: Int64) throws -> String? {
         try pool.read { db in
-            let stored = try String.fetchOne(db, sql: "SELECT metadata_revision FROM source_file WHERE id=?", arguments: [sourceID])
-            return stored != revision
+            try String.fetchOne(
+                db,
+                sql: "SELECT metadata_revision FROM source_file WHERE id=?",
+                arguments: [sourceID]
+            )
         }
     }
 
-    func updateMetadata(sourceID: Int64, revision: String, metadata: SessionMetadata) throws {
-        try pool.write { db in
-            try db.execute(sql: """
-                UPDATE session SET first_user_message=?, generated_title=?, title=coalesce(?, ?), has_plan=?
+    /// Seeds a tail-only metadata scan with the session used by the latest
+    /// display record before its checkpoint. The fallback covers sources that
+    /// have produced usage or events but no displayable message yet.
+    func metadataSessionContext(sourceID: Int64, before checkpoint: Int64) throws -> String? {
+        try pool.read { db in
+            if let externalID = try String.fetchOne(db, sql: """
+                SELECT s.external_id
+                FROM message m
+                JOIN session s ON s.id=m.session_id
+                WHERE m.source_file_id=? AND m.loc_kind=? AND m.loc_offset < ?
+                ORDER BY m.loc_offset DESC, m.id DESC
+                LIMIT 1
+                """, arguments: [sourceID, LocatorKind.byteRange.rawValue, checkpoint]) {
+                return externalID
+            }
+            return try String.fetchOne(db, sql: """
+                SELECT external_id
+                FROM session
                 WHERE source_file_id=?
-                """, arguments: [metadata.firstUserMessage, metadata.title, metadata.title,
-                                  metadata.firstUserMessage, metadata.hasPlan, sourceID])
+                ORDER BY last_activity_at DESC, id DESC
+                LIMIT 1
+                """, arguments: [sourceID])
+        }
+    }
+
+    func updateMetadata(
+        sourceID: Int64,
+        revision: String,
+        scan: SessionMetadataScan,
+        mode: MetadataUpdateMode
+    ) throws {
+        try pool.write { db in
+            for (externalID, metadata) in scan.sessions {
+                switch mode {
+                case .replace:
+                    try db.execute(sql: """
+                        UPDATE session SET
+                            first_user_message=?,
+                            generated_title=?,
+                            has_plan=?
+                        WHERE source_file_id=? AND external_id=?
+                        """, arguments: [
+                            metadata.firstUserMessage,
+                            metadata.title,
+                            metadata.hasPlan,
+                            sourceID,
+                            externalID,
+                        ])
+                case .merge:
+                    try db.execute(sql: """
+                        UPDATE session SET
+                            first_user_message=coalesce(first_user_message, ?),
+                            generated_title=CASE WHEN ? THEN ? ELSE coalesce(generated_title, ?) END,
+                            has_plan=CASE WHEN has_plan=1 OR ? THEN 1 ELSE 0 END
+                        WHERE source_file_id=? AND external_id=?
+                        """, arguments: [
+                            metadata.firstUserMessage,
+                            metadata.titleIsExplicit,
+                            metadata.title,
+                            metadata.title,
+                            metadata.hasPlan,
+                            sourceID,
+                            externalID,
+                        ])
+                }
+            }
             try db.execute(sql: "UPDATE source_file SET metadata_revision=? WHERE id=?", arguments: [revision, sourceID])
         }
     }
@@ -939,8 +1038,10 @@ public actor IndexDatabase {
             for row in rows {
                 let externalID: String = row["external_id"]
                 let id: Int64 = row["id"]
-                try db.execute(sql: "UPDATE session SET generated_title=?, title=coalesce(?, first_user_message) WHERE id=?",
-                               arguments: [names[externalID], names[externalID], id])
+                try db.execute(
+                    sql: "UPDATE session SET generated_title=? WHERE id=?",
+                    arguments: [names[externalID], id]
+                )
             }
         }
     }
@@ -968,8 +1069,9 @@ public actor IndexDatabase {
             if let projectID { arguments += [projectID] }
             arguments += [limit]
             return try Row.fetchAll(db, sql: """
-                SELECT s.*, coalesce(s.title, 'Untitled session') AS resolved_title, sf.path AS source_path,
-                       sf.mtime_ns AS source_mtime, sf.scanned_bytes AS source_checkpoint
+                SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
+                       sf.path AS source_path,
+                       sf.content_generation AS source_generation
                 FROM session s JOIN source_file sf ON sf.id=s.source_file_id
                 \(predicate) ORDER BY s.last_activity_at DESC LIMIT ?
                 """, arguments: arguments).compactMap(sessionSummary(from:))
@@ -979,8 +1081,9 @@ public actor IndexDatabase {
     public func session(id: Int64) throws -> SessionSummary? {
         try pool.read { db in
             try Row.fetchOne(db, sql: """
-                SELECT s.*, coalesce(s.title, 'Untitled session') AS resolved_title, sf.path AS source_path,
-                       sf.mtime_ns AS source_mtime, sf.scanned_bytes AS source_checkpoint
+                SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
+                       sf.path AS source_path,
+                       sf.content_generation AS source_generation
                 FROM session s JOIN source_file sf ON sf.id=s.source_file_id WHERE s.id=?
                 """, arguments: [id]).flatMap(sessionSummary(from:))
         }
@@ -1089,7 +1192,7 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
         title: title, hasPlan: row["has_plan"], startedAtMilliseconds: startedAt,
         lastActivityMilliseconds: lastActivity, messageCount: messageCount,
         hadError: hadError, sourcePath: sourcePath,
-        sourceRevision: "\(row["source_mtime"] as Int64):\(row["source_checkpoint"] as Int64)"
+        sourceGeneration: row["source_generation"]
     )
 }
 

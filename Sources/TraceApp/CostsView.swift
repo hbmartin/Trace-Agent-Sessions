@@ -3,6 +3,12 @@ import TraceCore
 
 struct CostsView: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject private var settings: AppSettings
+
+    init(model: TraceModel) {
+        self.model = model
+        settings = model.settings
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -21,18 +27,18 @@ struct CostsView: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 8) {
-                    Picker("Range", selection: $model.settings.costRange) {
+                    Picker("Range", selection: $settings.costRange) {
                         ForEach(CostRange.allCases) { range in Text(range.title).tag(range) }
                     }
                     .frame(width: 170)
-                    Toggle("Include sidechains", isOn: $model.settings.includeSidechains)
+                    Toggle("Include sidechains", isOn: $settings.includeSidechains)
                 }
             }
             .padding(20)
-            .onChange(of: model.settings.costRange) { _, _ in model.reloadCosts() }
-            .onChange(of: model.settings.includeSidechains) { _, _ in model.reloadCosts() }
+            .onChange(of: settings.costRange) { _, _ in model.reloadCosts() }
+            .onChange(of: settings.includeSidechains) { _, _ in model.reloadCosts() }
 
-            if model.settings.costRange == .custom {
+            if settings.costRange == .custom {
                 HStack {
                     DatePicker("From", selection: $model.customCostStart, displayedComponents: .date)
                     DatePicker("Through", selection: $model.customCostEnd, displayedComponents: .date)

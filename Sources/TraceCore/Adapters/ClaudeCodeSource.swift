@@ -19,7 +19,7 @@ public struct ClaudeCodeSource: SessionSource {
     public func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        let fallback = (try? TraceFileIO.fingerprint(url: file.url).modificationNanoseconds / 1_000_000) ?? 0
+        let fallback = TraceFileIO.modificationMilliseconds(url: file.url)
         return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
             guard let object = try? JSONHelpers.object(from: line.data),
                   let message = parseClaudeMessage(
@@ -65,7 +65,7 @@ private func parseClaudeMessage(
 
     let envelope = object["message"] as? [String: Any]
     let content = envelope?["content"] ?? object["content"]
-    var sections = MessageSections()
+    var sections = MessageSections(hasNonTextContent: JSONHelpers.hasNonTextContent(content))
     var toolName: String?
     var hasError = JSONHelpers.bool(object["is_error"]) || JSONHelpers.bool(object["isError"])
 
@@ -106,15 +106,17 @@ private func parseClaudeMessage(
     }
 
     let model = envelope?["model"] as? String
-    let externalID = object["uuid"] as? String ?? envelope?["id"] as? String
+    let lineID = object["uuid"] as? String
+    let responseID = envelope?["id"] as? String
+    let externalID = lineID ?? responseID
     let usage = claudeUsage(
         envelope?["usage"] as? [String: Any],
         model: model,
-        dedupeKey: externalID ?? sourceKey
+        dedupeKey: responseID ?? lineID ?? sourceKey
     )
 
     return .init(
-        sourceKey: externalID ?? sourceKey,
+        sourceKey: lineID ?? responseID ?? sourceKey,
         externalID: externalID,
         sessionExternalID: object["sessionId"] as? String ?? object["session_id"] as? String ?? fallbackSessionID,
         cwd: object["cwd"] as? String ?? "Unknown",

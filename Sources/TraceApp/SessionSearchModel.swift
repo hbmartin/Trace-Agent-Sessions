@@ -10,6 +10,7 @@ final class SessionSearchModel: ObservableObject {
     @Published private(set) var snippets: [Int64: String] = [:]
     @Published private(set) var isSearching = false
     @Published private(set) var error: String?
+    @Published private(set) var hasLoadedAdditionalPages = false
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
     private var task: Task<Void, Never>?
@@ -20,6 +21,9 @@ final class SessionSearchModel: ObservableObject {
     private var lastFilters = SearchFilters()
     private var lastSort = SearchSort.recency
     private var diagnostics: DiagnosticsStore?
+    private var loadingAdditionalPage = false
+
+    var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
 
     func attach(database: IndexDatabase, coordinator: IndexCoordinator, diagnostics: DiagnosticsStore? = nil) {
         self.database = database
@@ -41,6 +45,8 @@ final class SessionSearchModel: ObservableObject {
             lastFilters = filters
             lastSort = self.sort
             nextCursor = nil
+            loadingAdditionalPage = false
+            hasLoadedAdditionalPages = false
         } else if task != nil || nextCursor == nil { return }
         guard let database, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             results = []
@@ -54,6 +60,7 @@ final class SessionSearchModel: ObservableObject {
         let filters = filters
         let sort = self.sort
         let cursor = reset ? nil : nextCursor
+        loadingAdditionalPage = !reset
         isSearching = true
         error = nil
         task = Task { [weak self] in
@@ -64,20 +71,41 @@ final class SessionSearchModel: ObservableObject {
                 try Task.checkCancellation()
                 guard let self, self.requestID == id else { return }
                 if reset { self.results = page.results } else { self.results += page.results }
+                if !reset { self.hasLoadedAdditionalPages = true }
                 self.nextCursor = page.nextCursor
                 self.task = nil
+                self.loadingAdditionalPage = false
                 self.isSearching = false
                 let elapsed = started.duration(to: .now)
                 let milliseconds = Double(elapsed.components.seconds) * 1_000 + Double(elapsed.components.attoseconds) / 1e15
                 try? await self.diagnostics?.recordSearch(milliseconds: milliseconds)
-            } catch is CancellationError { }
+            } catch is CancellationError {
+                guard let self, self.requestID == id else { return }
+                self.task = nil
+                self.loadingAdditionalPage = false
+                self.isSearching = false
+            }
             catch {
                 guard let self, self.requestID == id else { return }
                 self.error = error.localizedDescription
                 self.task = nil
+                self.loadingAdditionalPage = false
                 self.isSearching = false
             }
         }
+    }
+
+    func resetForIndexReset() {
+        task?.cancel()
+        task = nil
+        requestID = UUID()
+        nextCursor = nil
+        results = []
+        snippets = [:]
+        isSearching = false
+        error = nil
+        loadingAdditionalPage = false
+        hasLoadedAdditionalPages = false
     }
 
     func hydrate(_ result: SearchResult) async {

@@ -14,9 +14,9 @@ struct PreferencesView: View {
 
     var body: some View {
         TabView {
-            GeneralPreferences(model: model, launchAtLogin: $launchAtLogin)
+            GeneralPreferences(model: model, settings: settings, launchAtLogin: $launchAtLogin)
                 .tabItem { Label("General", systemImage: "gear") }
-            SourcesPreferences(model: model)
+            SourcesPreferences(model: model, settings: settings)
                 .tabItem { Label("Sources", systemImage: "externaldrive") }
             DiagnosticsPreferences(model: model)
                 .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
@@ -24,7 +24,7 @@ struct PreferencesView: View {
         .padding(18)
         .frame(minWidth: 620, minHeight: 560)
         .onAppear {
-            launchAtLogin = model.settings.launchAtLoginEnabled
+            launchAtLogin = settings.launchAtLoginEnabled
             model.refreshDiagnostics()
         }
     }
@@ -32,16 +32,17 @@ struct PreferencesView: View {
 
 private struct GeneralPreferences: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject var settings: AppSettings
     @Binding var launchAtLogin: Bool
 
     var body: some View {
         Form {
             Section("Search") {
-                Picker("Index scope", selection: $model.settings.indexScope) {
+                Picker("Index scope", selection: $settings.indexScope) {
                     ForEach(IndexScope.allCases) { scope in Text(scope.title).tag(scope) }
                 }
-                .onChange(of: model.settings.indexScope) { _, _ in model.rebuildIndex() }
-                Picker("Default ordering", selection: $model.settings.searchSort) {
+                .onChange(of: settings.indexScope) { _, _ in model.rebuildIndex() }
+                Picker("Default ordering", selection: $settings.searchSort) {
                     Text("Most recent").tag(SearchSort.recency)
                     Text("BM25 relevance").tag(SearchSort.relevance)
                 }
@@ -51,7 +52,7 @@ private struct GeneralPreferences: View {
                 HStack {
                     Text("Open search")
                     Spacer()
-                    HotkeyRecorderView(settings: model.settings)
+                    HotkeyRecorderView(settings: settings)
                         .frame(width: 150, height: 30)
                 }
                 Text("Click the shortcut, then type a key with at least one modifier.")
@@ -62,7 +63,7 @@ private struct GeneralPreferences: View {
             Section("Startup") {
                 Toggle("Open Trace when I log in", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
-                        do { try model.settings.setLaunchAtLogin(enabled) }
+                        do { try settings.setLaunchAtLogin(enabled) }
                         catch { model.startupError = "Could not update the login item: \(error.localizedDescription)" }
                     }
             }
@@ -80,6 +81,7 @@ private struct GeneralPreferences: View {
 
 private struct SourcesPreferences: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject var settings: AppSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -107,15 +109,15 @@ private struct SourcesPreferences: View {
 
             GroupBox("Additional Claude Code roots") {
                 VStack(alignment: .leading, spacing: 8) {
-                    if model.settings.additionalClaudeRoots.isEmpty {
+                    if settings.additionalClaudeRoots.isEmpty {
                         Text("No additional roots").foregroundStyle(.secondary)
                     }
-                    ForEach(model.settings.additionalClaudeRoots, id: \.self) { path in
+                    ForEach(settings.additionalClaudeRoots, id: \.self) { path in
                         HStack {
                             Text(path).font(.caption.monospaced()).lineLimit(1)
                             Spacer()
                             Button("Remove", systemImage: "minus.circle") {
-                                model.settings.additionalClaudeRoots.removeAll { $0 == path }
+                                settings.additionalClaudeRoots.removeAll { $0 == path }
                                 model.reloadSourcesAndRebuild()
                             }
                             .labelStyle(.iconOnly)
@@ -147,8 +149,8 @@ private struct SourcesPreferences: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Add Root"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        if !model.settings.additionalClaudeRoots.contains(url.path) {
-            model.settings.additionalClaudeRoots.append(url.path)
+        if !settings.additionalClaudeRoots.contains(url.path) {
+            settings.additionalClaudeRoots.append(url.path)
             model.reloadSourcesAndRebuild()
         }
     }

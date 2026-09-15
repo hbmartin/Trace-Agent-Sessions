@@ -8,6 +8,24 @@ struct SelectableMessageText: NSViewRepresentable {
     var secondary = false
     var copyMessage: (() -> Void)?
 
+    final class Coordinator {
+        let measurementStorage = NSTextStorage()
+        let measurementLayout = NSLayoutManager()
+        let measurementContainer = NSTextContainer()
+        var lastText: AttributedString?
+        var lastMonospaced = false
+        var lastSecondary = false
+
+        init() {
+            measurementContainer.lineFragmentPadding = 0
+            measurementContainer.widthTracksTextView = false
+            measurementLayout.addTextContainer(measurementContainer)
+            measurementStorage.addLayoutManager(measurementLayout)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> MessageTextView {
         let view = MessageTextView()
         view.isEditable = false
@@ -25,6 +43,9 @@ struct SelectableMessageText: NSViewRepresentable {
 
     func updateNSView(_ view: MessageTextView, context: Context) {
         view.copyMessage = copyMessage
+        guard context.coordinator.lastText != text
+                || context.coordinator.lastMonospaced != monospaced
+                || context.coordinator.lastSecondary != secondary else { return }
         let styled = NSMutableAttributedString(attributedString: NSAttributedString(text))
         let range = NSRange(location: 0, length: styled.length)
         styled.addAttributes([
@@ -42,15 +63,21 @@ struct SelectableMessageText: NSViewRepresentable {
             }
             offset += length
         }
-        if view.textStorage?.isEqual(to: styled) != true {
-            view.textStorage?.setAttributedString(styled)
-            view.invalidateIntrinsicContentSize()
-        }
+        view.textStorage?.setAttributedString(styled)
+        context.coordinator.measurementStorage.setAttributedString(styled)
+        context.coordinator.lastText = text
+        context.coordinator.lastMonospaced = monospaced
+        context.coordinator.lastSecondary = secondary
+        view.invalidateIntrinsicContentSize()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MessageTextView, context: Context) -> CGSize? {
-        let width = max(1, proposal.width ?? 600)
-        guard let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
+        let fallbackWidth = nsView.bounds.width > 0 ? nsView.bounds.width : nil
+        guard let width = proposal.width ?? fallbackWidth,
+              width.isFinite,
+              width > 0 else { return nil }
+        let container = context.coordinator.measurementContainer
+        let layout = context.coordinator.measurementLayout
         container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
         return CGSize(width: width, height: max(18, ceil(layout.usedRect(for: container).height)))

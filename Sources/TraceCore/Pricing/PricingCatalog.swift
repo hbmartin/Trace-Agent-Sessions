@@ -6,6 +6,7 @@ public struct PricingRate: Codable, Equatable, Sendable {
     public let outputPerMillion: Decimal?
     public let cacheWritePerMillion: Decimal?
     public let cacheReadPerMillion: Decimal?
+    public let additionalReasoningPerMillion: Decimal?
     public let inputIncludesCacheReads: Bool
     public let unmetered: Bool
     public let note: String?
@@ -16,6 +17,7 @@ public struct PricingRate: Codable, Equatable, Sendable {
         outputPerMillion: Decimal? = nil,
         cacheWritePerMillion: Decimal? = nil,
         cacheReadPerMillion: Decimal? = nil,
+        additionalReasoningPerMillion: Decimal? = nil,
         inputIncludesCacheReads: Bool = false,
         unmetered: Bool = false,
         note: String? = nil
@@ -25,6 +27,7 @@ public struct PricingRate: Codable, Equatable, Sendable {
         self.outputPerMillion = outputPerMillion
         self.cacheWritePerMillion = cacheWritePerMillion
         self.cacheReadPerMillion = cacheReadPerMillion
+        self.additionalReasoningPerMillion = additionalReasoningPerMillion
         self.inputIncludesCacheReads = inputIncludesCacheReads
         self.unmetered = unmetered
         self.note = note
@@ -88,13 +91,15 @@ public struct PricingCatalog: Sendable {
             guard patterns.insert(rate.modelPattern).inserted else {
                 throw PricingError.invalidFormat("duplicate modelPattern \(rate.modelPattern)")
             }
-            for value in [rate.inputPerMillion, rate.outputPerMillion, rate.cacheWritePerMillion, rate.cacheReadPerMillion].compactMap({ $0 }) {
+            for value in [rate.inputPerMillion, rate.outputPerMillion, rate.cacheWritePerMillion,
+                          rate.cacheReadPerMillion, rate.additionalReasoningPerMillion].compactMap({ $0 }) {
                 guard value >= 0 else {
                     throw PricingError.invalidFormat("rates must not be negative")
                 }
             }
             if rate.unmetered,
-               [rate.inputPerMillion, rate.outputPerMillion, rate.cacheWritePerMillion, rate.cacheReadPerMillion].contains(where: { $0 != nil }) {
+               [rate.inputPerMillion, rate.outputPerMillion, rate.cacheWritePerMillion,
+                rate.cacheReadPerMillion, rate.additionalReasoningPerMillion].contains(where: { $0 != nil }) {
                 throw PricingError.invalidFormat("unmetered rates cannot include token prices")
             }
         }
@@ -143,12 +148,15 @@ public struct PricingCatalog: Sendable {
         let ordinaryInput = rate.inputIncludesCacheReads
             ? max(0, usage.inputTokens - cachedRead)
             : max(0, usage.inputTokens)
-        let components: [(Int64, Decimal?)] = [
+        var components: [(Int64, Decimal?)] = [
             (ordinaryInput, rate.inputPerMillion),
             (max(0, usage.outputTokens), rate.outputPerMillion),
             (max(0, usage.cacheWriteTokens), rate.cacheWritePerMillion),
             (cachedRead, rate.cacheReadPerMillion),
         ]
+        if let reasoningRate = rate.additionalReasoningPerMillion {
+            components.append((max(0, usage.reasoningTokens), reasoningRate))
+        }
         guard components.allSatisfy({ $0.0 == 0 || $0.1 != nil }) else {
             return .rateUnavailable
         }

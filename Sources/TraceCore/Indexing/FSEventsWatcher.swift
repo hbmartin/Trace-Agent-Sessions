@@ -3,15 +3,17 @@ import Foundation
 
 public struct SourceChanges: Sendable {
     public var paths: Set<String> = []
-    public var requiresReconciliation = false
+    public var reconciliationPaths: Set<String> = []
+    public var requiresReconciliation: Bool { !reconciliationPaths.isEmpty }
 
     public mutating func include(path: String, flags: FSEventStreamEventFlags) {
+        let canonical = TraceFileIO.canonicalPath(path).path
         let recovery = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
             | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged)
         let directory = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
         let structural = flags & UInt32(kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
-        requiresReconciliation = requiresReconciliation || flags & recovery != 0 || (directory && structural)
-        if !directory { paths.insert(path) }
+        if flags & recovery != 0 || (directory && structural) { reconciliationPaths.insert(canonical) }
+        if !directory { paths.insert(canonical) }
     }
 }
 
@@ -32,7 +34,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
 
     public init(roots: [URL], latency: CFTimeInterval = 0.02,
                 onChange: @escaping @Sendable (SourceChanges) -> Void) {
-        self.roots = roots.map(\.standardizedFileURL.path)
+        self.roots = roots.map { TraceFileIO.canonicalPath($0.path).path }
         self.latency = latency
         self.callback = onChange
     }
@@ -93,7 +95,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
     private func enqueue(_ changes: SourceChanges) {
         lock.lock()
         pending.paths.formUnion(changes.paths)
-        pending.requiresReconciliation = pending.requiresReconciliation || changes.requiresReconciliation
+        pending.reconciliationPaths.formUnion(changes.reconciliationPaths)
         guard flushWorkItem == nil else { lock.unlock(); return }
         let item = DispatchWorkItem { [weak self] in self?.flush() }
         flushWorkItem = item
