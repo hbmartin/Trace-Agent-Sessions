@@ -138,6 +138,7 @@ private struct SessionSidebar: View {
                                 .tag(Optional(session.id))
                         }
                     }
+                    .accessibilityIdentifier("sessionSidebarList")
                 }.frame(maxHeight: .infinity)
             }
         }
@@ -329,7 +330,9 @@ private struct TranscriptRenderer: View {
                 // this explicit restoration from view-local state while layout settles.
                 for _ in 0..<10 {
                     guard self.pending?.messageID == pending.messageID, !userScrolling else { return }
-                    proxy.scrollTo(pending.messageID, anchor: .top)
+                    if let frame = frames[pending.messageID] {
+                        position.scrollTo(y: max(0, frame.minY - pending.offset))
+                    }
                     try? await Task.sleep(for: .milliseconds(50))
                 }
                 guard self.pending?.messageID == pending.messageID, !userScrolling else { return }
@@ -427,11 +430,7 @@ private struct MessageRow: View {
         if summary.hasError { return true }
         guard let hydrated else { return true }
         let sections = hydrated.sections
-        return !sections.prose.isEmpty
-            || (visibility.tools && (!sections.toolInvocation.isEmpty || !sections.toolOutput.isEmpty))
-            || (visibility.reasoning && !sections.reasoning.isEmpty)
-            || sections.hasNonTextContent
-            || [.user, .assistant].contains(summary.role)
+        return hasVisibleContent(in: sections)
     }
 
     @ViewBuilder private var content: some View {
@@ -463,7 +462,7 @@ private struct MessageRow: View {
         } else if summary.sectionFlags.map({ $0 & 8 != 0 }) == true {
             Label("Image or attachment", systemImage: "paperclip").foregroundStyle(.secondary)
         } else if summary.hasError {
-            Text("Error recorded without text details.").foregroundStyle(.secondary)
+            Text("Error recorded.").foregroundStyle(.secondary)
         } else if hydrationFailed {
             Text("Unable to load visible content.").foregroundStyle(.secondary)
         } else {
@@ -475,17 +474,17 @@ private struct MessageRow: View {
         if visibility.includes(role: summary.role), !message.sections.prose.isEmpty {
             MarkdownText(source: message.sections.prose, copyMessage: copyMessage)
         }
-        if visibility.tools && !message.sections.toolInvocation.isEmpty {
+        if visibility.includes(role: summary.role), visibility.tools && !message.sections.toolInvocation.isEmpty {
             DisclosureGroup("Tool invocation") {
                 SelectableMessageText(text: AttributedString(message.sections.toolInvocation), monospaced: true, copyMessage: copyMessage)
             }
         }
-        if visibility.tools && !message.sections.toolOutput.isEmpty {
+        if visibility.includes(role: summary.role), visibility.tools && !message.sections.toolOutput.isEmpty {
             DisclosureGroup("Tool output") {
                 SelectableMessageText(text: AttributedString(message.sections.toolOutput), monospaced: true, copyMessage: copyMessage)
             }
         }
-        if visibility.reasoning && !message.sections.reasoning.isEmpty {
+        if visibility.includes(role: summary.role), visibility.reasoning && !message.sections.reasoning.isEmpty {
             DisclosureGroup(isExpanded: $reasoningExpanded) {
                 SelectableMessageText(text: AttributedString(message.sections.reasoning), secondary: true, copyMessage: copyMessage)
             } label: {
@@ -497,13 +496,10 @@ private struct MessageRow: View {
                 .foregroundStyle(.secondary)
         } else if summary.hasError
                     && !hasVisibleContent(in: message.sections) {
-            Text("Error recorded without text details.").foregroundStyle(.secondary)
-        } else if [.user, .assistant].contains(summary.role)
-                    && message.sections.prose.isEmpty
-                    && message.sections.toolInvocation.isEmpty
-                    && message.sections.toolOutput.isEmpty
-                    && message.sections.reasoning.isEmpty {
-            Text("No text content.").foregroundStyle(.secondary)
+            Text(hasAnyContent(in: message.sections)
+                 ? "Error details hidden by current toggles."
+                 : "Error recorded without text details.")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -520,7 +516,7 @@ private struct MessageRow: View {
 
     private var neutralPlaceholder: String {
         if summary.sectionFlags.map({ $0 & 8 != 0 }) == true { return "Image or attachment" }
-        if summary.hasError { return "Error recorded without text details." }
+        if summary.hasError { return "Error recorded." }
         return hydrationFailed ? "Unable to load visible content." : "Loading visible content…"
     }
 
@@ -530,9 +526,16 @@ private struct MessageRow: View {
     }
 
     private func hasVisibleContent(in sections: MessageSections) -> Bool {
-        (visibility.includes(role: summary.role) && (!sections.prose.isEmpty || sections.hasNonTextContent))
-            || (visibility.tools && (!sections.toolInvocation.isEmpty || !sections.toolOutput.isEmpty))
-            || (visibility.reasoning && !sections.reasoning.isEmpty)
+        visibility.includes(role: summary.role)
+            && (!sections.prose.isEmpty || sections.hasNonTextContent
+                || (visibility.tools && (!sections.toolInvocation.isEmpty || !sections.toolOutput.isEmpty))
+                || (visibility.reasoning && !sections.reasoning.isEmpty))
+    }
+
+    private func hasAnyContent(in sections: MessageSections) -> Bool {
+        !sections.prose.isEmpty || !sections.toolInvocation.isEmpty
+            || !sections.toolOutput.isEmpty || !sections.reasoning.isEmpty
+            || sections.hasNonTextContent
     }
     private var roleTitle: String { summary.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
     private var icon: String {

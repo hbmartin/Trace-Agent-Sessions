@@ -11,6 +11,8 @@ final class SessionSearchModel: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var error: String?
     @Published private(set) var hasLoadedAdditionalPages = false
+    @Published private(set) var resultsMayBeStale = false
+    @Published private(set) var resultSetID = UUID()
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
     private var task: Task<Void, Never>?
@@ -25,6 +27,10 @@ final class SessionSearchModel: ObservableObject {
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
 
+    func markResultsStale() {
+        if !query.isEmpty { resultsMayBeStale = true }
+    }
+
     func attach(database: IndexDatabase, coordinator: IndexCoordinator, diagnostics: DiagnosticsStore? = nil) {
         self.database = database
         self.coordinator = coordinator
@@ -34,6 +40,8 @@ final class SessionSearchModel: ObservableObject {
     func search(sort: SearchSort? = nil, reset: Bool = true) {
         if let sort { self.sort = sort }
         if reset {
+            resultsMayBeStale = false
+            resultSetID = UUID()
             task?.cancel()
             task = nil
             requestID = UUID()
@@ -106,6 +114,7 @@ final class SessionSearchModel: ObservableObject {
         error = nil
         loadingAdditionalPage = false
         hasLoadedAdditionalPages = false
+        resultsMayBeStale = false
     }
 
     func hydrate(_ result: SearchResult) async {

@@ -298,19 +298,38 @@ struct SearchResultList: View {
         } else if search.results.isEmpty {
             ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try another word or project."))
         } else {
-            ScrollViewReader { proxy in
-                SearchScrollSurface(native: usesNativeScrolling) {
-                    Group {
-                        if usesNativeScrolling {
-                            VStack(alignment: .leading, spacing: 5) { resultRows }
-                        } else {
-                            LazyVStack(alignment: .leading, spacing: 5) { resultRows }
+            VStack(spacing: 0) {
+                if search.resultsMayBeStale {
+                    HStack {
+                        Text("Results may be out of date.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Refresh") {
+                            if isMainSearch { model.searchMain() }
+                            else { model.search() }
                         }
+                        .accessibilityIdentifier("refreshSearchResults")
                     }
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                 }
-                .onChange(of: selectedResultID) { _, id in
-                    if let id { proxy.scrollTo(id, anchor: .center) }
+                ScrollViewReader { proxy in
+                    SearchScrollSurface(native: usesNativeScrolling) {
+                        Group {
+                            if usesNativeScrolling {
+                                VStack(alignment: .leading, spacing: 5) { resultRows }
+                            } else {
+                                LazyVStack(alignment: .leading, spacing: 5) { resultRows }
+                            }
+                        }
+                        .padding(.vertical, 5)
+                    }
+                    .accessibilityIdentifier("searchResultsScroll")
+                    .id(search.resultSetID)
+                    .onChange(of: selectedResultID) { _, id in
+                        if let id { proxy.scrollTo(id, anchor: .center) }
+                    }
                 }
             }
         }
@@ -428,7 +447,10 @@ struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            if session.hadError { SessionErrorIcon(loadError: loadError) }
+            if session.hadError {
+                SessionErrorIcon(loadError: loadError)
+                    .id("\(session.id):\(session.messageCount):\(session.lastActivityMilliseconds):\(session.sourceGeneration):\(session.hadError)")
+            }
             else { Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary) }
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
@@ -460,6 +482,7 @@ private struct SessionErrorIcon: View {
     @State private var showing = false
     @State private var detail: String?
     @State private var loadTask: Task<Void, Never>?
+    @State private var loadRequestID: UUID?
 
     var body: some View {
         Image(systemName: "exclamationmark.circle.fill")
@@ -482,16 +505,30 @@ private struct SessionErrorIcon: View {
                 }
                 .frame(width: 420, height: 220)
             }
-            .onDisappear { loadTask?.cancel() }
+            .onDisappear { cancelLoading() }
+    }
+
+    private func cancelLoading() {
+        let task = loadTask
+        loadRequestID = nil
+        loadTask = nil
+        task?.cancel()
     }
 
     private func beginLoading() {
         guard detail == nil, loadTask == nil else { return }
+        let requestID = UUID()
+        loadRequestID = requestID
         loadTask = Task {
+            defer {
+                if loadRequestID == requestID {
+                    loadTask = nil
+                    loadRequestID = nil
+                }
+            }
             let loaded = await loadError()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadRequestID == requestID else { return }
             detail = loaded
-            loadTask = nil
         }
     }
 }

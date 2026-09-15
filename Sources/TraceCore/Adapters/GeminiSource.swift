@@ -25,14 +25,21 @@ public struct GeminiSource: SessionSource {
             return AsyncThrowingStream(unfolding: { try state.next() })
         }
         let metadata = geminiMetadata(for: file.url)
+        var currentSessionID = metadata.sessionID
+        var loadedContext = offset == 0
         return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
+            if !loadedContext {
+                currentSessionID = try GeminiJSONLSessionIdentity.id(before: offset, in: file.url)
+                    ?? metadata.sessionID
+                loadedContext = true
+            }
             guard let root = try? JSONHelpers.object(from: line.data) else { return [] }
-            let sessionID = root["sessionId"] as? String ?? metadata.sessionID
+            currentSessionID = GeminiJSONLSessionIdentity.explicitID(in: root) ?? currentSessionID
             return JSONDocumentScanner.objectRanges(in: line.data, arrayKey: "messages").compactMap { range in
                 guard let object = try? JSONHelpers.object(from: line.data.subdata(in: range)) else { return nil }
                 let absoluteOffset = line.offset + Int64(range.lowerBound)
                 return parseGeminiMessage(
-                    object, sessionID: sessionID, cwd: metadata.cwd,
+                    object, sessionID: currentSessionID, cwd: metadata.cwd,
                     fallbackTimestamp: metadata.timestamp + absoluteOffset,
                     locator: .byteRange(offset: absoluteOffset, length: Int64(range.count), key: object["id"] as? String),
                     sourceKey: object["id"] as? String ?? "\(absoluteOffset)"
@@ -57,6 +64,32 @@ public struct GeminiSource: SessionSource {
             sourceKey: locator.key ?? "\(offset)"
         ) else { throw SessionSourceError.malformedRecord("not a displayable Gemini message") }
         return .init(role: message.role, sections: message.sections, toolName: message.toolName, hasError: message.hasError)
+    }
+}
+
+enum GeminiJSONLSessionIdentity {
+    static func explicitID(in root: [String: Any]) -> String? {
+        func nonempty(_ value: Any?) -> String? {
+            guard let value = value as? String else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        func id(_ object: [String: Any]) -> String? {
+            nonempty(object["sessionId"])
+                ?? nonempty(object["session_id"])
+                ?? nonempty(object["sessionID"])
+        }
+        return id(root) ?? (root["$set"] as? [String: Any]).flatMap(id)
+    }
+
+    static func id(before offset: Int64, in url: URL) throws -> String? {
+        let cursor = try JSONLineCursor(url: url, from: 0, through: offset)
+        var inherited: String?
+        while let line = try cursor.next() {
+            guard let root = try? JSONHelpers.object(from: line.data) else { continue }
+            inherited = explicitID(in: root) ?? inherited
+        }
+        return inherited
     }
 }
 

@@ -254,8 +254,14 @@ final class TraceCoreTests: XCTestCase {
         let root = directory.appendingPathComponent("claude")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("session.jsonl")
-        let rows = ["one", "two"].enumerated().map { index, text in
-            #"{"type":"assistant","uuid":"line-\#(index)","sessionId":"session","cwd":"/tmp/project","timestamp":1700000000000,"message":{"id":"response-one","model":"claude-sonnet-5","content":"\#(text)","usage":{"input_tokens":100,"output_tokens":20}}}"#
+        let snapshots: [(usage: String, model: String, project: String, timestamp: String, sidechain: Bool)] = [
+            (#"{"input_tokens":100,"output_tokens":1,"cache_read_input_tokens":30}"#, "claude-sonnet-5", "AlphaProject", "2026-09-14T20:00:00Z", false),
+            (#"{"output_tokens":20,"cache_creation_input_tokens":10}"#, "claude-opus-4-7", "BetaProject", "2026-09-15T20:00:00Z", true),
+            (#"{"output_tokens":20}"#, "claude-haiku-4-5", "GammaProject", "2026-09-16T20:00:00Z", false),
+            (#"{"output_tokens":5}"#, "claude-sonnet-5", "DeltaProject", "2026-09-17T20:00:00Z", true),
+        ]
+        let rows = snapshots.enumerated().map { index, snapshot in
+            #"{"type":"assistant","uuid":"line-\#(index)","sessionId":"session","cwd":"/tmp/\#(snapshot.project)","timestamp":"\#(snapshot.timestamp)","isSidechain":\#(snapshot.sidechain),"message":{"id":"response-one","model":"\#(snapshot.model)","content":"line \#(index)","usage":\#(snapshot.usage)}}"#
         }.joined(separator: "\n") + "\n"
         try Data(rows.utf8).write(to: file)
 
@@ -265,13 +271,32 @@ final class TraceCoreTests: XCTestCase {
         let sessions = try await database.sessions()
         let session = try XCTUnwrap(sessions.first)
         let contentRows = try await database.messages(sessionID: session.id)
-        XCTAssertEqual(contentRows.count, 2)
+        XCTAssertEqual(contentRows.count, 4)
         let rollups = try await database.usage(
             fromDay: nil, throughDay: nil, includeSidechains: true
         )
         let usage = try XCTUnwrap(rollups.first)
         XCTAssertEqual(usage.inputTokens, 100)
         XCTAssertEqual(usage.outputTokens, 20)
+        XCTAssertEqual(usage.cacheReadTokens, 30)
+        XCTAssertEqual(usage.cacheWriteTokens, 10)
+        XCTAssertEqual(rollups.count, 1)
+        XCTAssertEqual(usage.model, "claude-haiku-4-5")
+        XCTAssertEqual(usage.projectName, "GammaProject")
+        XCTAssertEqual(usage.day, "2026-09-16")
+        XCTAssertFalse(usage.isSidechain)
+    }
+
+    func testAttachmentDetectionSkipsToolArgumentsAndEmptyValues() {
+        let ordinaryTool: [String: Any] = [
+            "type": "tool_use", "name": "Read",
+            "input": ["file": [Any](), "nested": ["type": "image"]],
+        ]
+        XCTAssertFalse(JSONHelpers.hasNonTextContent([ordinaryTool]))
+        XCTAssertFalse(JSONHelpers.hasNonTextContent([["attachments": [Any]()]]))
+        XCTAssertFalse(JSONHelpers.hasNonTextContent([["type": "image", "source": ["type": "base64", "data": ""]]]))
+        XCTAssertFalse(JSONHelpers.hasNonTextContent([["type": "file", "file": ""]]))
+        XCTAssertTrue(JSONHelpers.hasNonTextContent([["type": "image", "source": ["data": "encoded"]]]))
     }
 
     func testAttachmentOnlyClaudeMessageIsClassifiedWithoutStoringMedia() async throws {
@@ -368,7 +393,8 @@ final class TraceCoreTests: XCTestCase {
             PricingFile.self, from: Data(contentsOf: bundled)
         ))
         let observed = [
-            "claude-opus-4-8", "claude-opus-5", "claude-fable-5", "claude-fable-5-1",
+            "claude-opus-4-8", "claude-opus-4-7", "claude-opus-5", "claude-haiku-4-5",
+            "claude-fable-5", "claude-fable-5-1",
             "claude-sonnet-5", "gemini-3-flash-preview", "gemini-3-pro-preview",
             "gemini-3.1-pro-preview",
         ]
@@ -376,6 +402,14 @@ final class TraceCoreTests: XCTestCase {
         XCTAssertEqual(catalog.rate(for: "claude-sonnet-5")?.inputPerMillion, 2)
         XCTAssertEqual(catalog.rate(for: "claude-sonnet-4-5")?.inputPerMillion, 3)
         XCTAssertEqual(catalog.rate(for: "claude-opus-4-8")?.outputPerMillion, 25)
+        XCTAssertEqual(catalog.rate(for: "claude-opus-4-7")?.inputPerMillion, 5)
+        XCTAssertEqual(catalog.rate(for: "claude-opus-4-7")?.outputPerMillion, 25)
+        XCTAssertEqual(catalog.rate(for: "claude-opus-4-7")?.cacheWritePerMillion, 6.25)
+        XCTAssertEqual(catalog.rate(for: "claude-opus-4-7")?.cacheReadPerMillion, 0.5)
+        XCTAssertEqual(catalog.rate(for: "claude-haiku-4-5")?.inputPerMillion, 1)
+        XCTAssertEqual(catalog.rate(for: "claude-haiku-4-5")?.outputPerMillion, 5)
+        XCTAssertEqual(catalog.rate(for: "claude-haiku-4-5")?.cacheWritePerMillion, 1.25)
+        XCTAssertEqual(catalog.rate(for: "claude-haiku-4-5")?.cacheReadPerMillion, 0.1)
         XCTAssertEqual(catalog.rate(for: "claude-fable-5-1")?.cacheReadPerMillion, 0.25)
         XCTAssertEqual(catalog.rate(for: "gemini-3-flash-preview")?.additionalReasoningPerMillion, 3)
     }

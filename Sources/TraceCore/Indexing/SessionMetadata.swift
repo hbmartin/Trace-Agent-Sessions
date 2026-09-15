@@ -44,6 +44,10 @@ enum SessionMetadataReader {
     ) throws -> SessionMetadataScan {
         let fallbackSessionID = file.url.deletingPathExtension().lastPathComponent
         var currentSessionID = initialSessionID ?? fallbackSessionID
+        if file.format == .geminiJSONL, offset > 0 {
+            currentSessionID = try GeminiJSONLSessionIdentity.id(before: offset, in: file.url)
+                ?? currentSessionID
+        }
         var accumulators: [String: Accumulator] = [:]
 
         func sessionID(in object: [String: Any]) -> String? {
@@ -152,13 +156,15 @@ enum SessionMetadataReader {
                 try Task.checkCancellation()
                 guard let object = try? JSONHelpers.object(from: line.data) else { continue }
                 let update = object["$set"] as? [String: Any]
-                let rootSessionID = sessionID(in: object) ?? update.flatMap(sessionID(in:))
+                let rootSessionID = file.format == .geminiJSONL
+                    ? GeminiJSONLSessionIdentity.explicitID(in: object)
+                    : sessionID(in: object) ?? update.flatMap(sessionID(in:))
                 inspect(object, sessionID: rootSessionID)
                 if let update { inspect(update, sessionID: rootSessionID) }
                 if file.agent == .gemini {
                     for range in JSONDocumentScanner.objectRanges(in: line.data, arrayKey: "messages") {
                         guard let message = try? JSONHelpers.object(from: line.data.subdata(in: range)) else { continue }
-                        inspect(message, sessionID: rootSessionID)
+                        inspect(message, sessionID: file.format == .geminiJSONL ? currentSessionID : rootSessionID)
                     }
                 }
             }
