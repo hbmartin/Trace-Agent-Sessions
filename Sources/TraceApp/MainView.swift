@@ -58,13 +58,21 @@ struct MainView: View {
 
 private struct SessionSidebar: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject private var settings: AppSettings
     @State private var dragStart: CGFloat?
+    @State private var transientPaneFraction: Double?
+
+    init(model: TraceModel) {
+        self.model = model
+        settings = model.settings
+    }
 
     var body: some View {
         GeometryReader { geometry in
             let available = max(0, geometry.size.height - 7)
             let minimum = min(180.0, available / 2)
-            let height = min(available - minimum, max(minimum, available * model.settings.projectPaneFraction))
+            let paneFraction = transientPaneFraction ?? settings.projectPaneFraction
+            let height = min(available - minimum, max(minimum, available * paneFraction))
             VStack(spacing: 0) {
                 VStack(spacing: 0) {
                     HStack {
@@ -92,18 +100,30 @@ private struct SessionSidebar: View {
                     .accessibilityIdentifier("projectSessionDivider")
                     .accessibilityAdjustableAction { direction in
                         let delta = direction == .increment ? 0.05 : -0.05
-                        model.settings.projectPaneFraction = min(0.8, max(0.2, model.settings.projectPaneFraction + delta))
+                        settings.projectPaneFraction = min(0.8, max(0.2, settings.projectPaneFraction + delta))
                     }
                     .onHover { hovering in
                         if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                     }
                     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("sessionSidebar"))
                         .onChanged { value in
-                            if dragStart == nil { dragStart = height }
+                            if dragStart == nil {
+                                dragStart = height
+                                transientPaneFraction = settings.projectPaneFraction
+                            }
                             guard available > 0 else { return }
-                            model.settings.projectPaneFraction = min(available - minimum, max(minimum, (dragStart ?? height) + value.translation.height)) / available
+                            transientPaneFraction = min(
+                                available - minimum,
+                                max(minimum, (dragStart ?? height) + value.translation.height)
+                            ) / available
                         }
-                        .onEnded { _ in dragStart = nil })
+                        .onEnded { _ in
+                            if let transientPaneFraction {
+                                settings.projectPaneFraction = transientPaneFraction
+                            }
+                            transientPaneFraction = nil
+                            dragStart = nil
+                        })
                 VStack(spacing: 0) {
                     HStack {
                         Text("Sessions").font(.headline)
@@ -114,7 +134,8 @@ private struct SessionSidebar: View {
                         if let id { model.selectSession(id) }
                     })) {
                         ForEach(model.sessions) { session in
-                            SessionRow(session: session, model: model).tag(Optional(session.id))
+                            SessionRow(session: session) { await model.sessionErrorText(session) }
+                                .tag(Optional(session.id))
                         }
                     }
                 }.frame(maxHeight: .infinity)
@@ -127,25 +148,33 @@ private struct SessionSidebar: View {
 
 struct TranscriptView: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject private var settings: AppSettings
+    @ObservedObject private var search: SessionSearchModel
+
+    init(model: TraceModel) {
+        self.model = model
+        settings = model.settings
+        search = model.mainSearch
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if model.selectedSessionID == nil {
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(model.selectedProjectID == nil ? "Search all sessions" : "Search this project", text: $model.mainSearch.query)
+                    TextField(model.selectedProjectID == nil ? "Search all sessions" : "Search this project", text: $search.query)
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("mainSearch")
-                        .onChange(of: model.mainSearch.query) { _, _ in model.searchMain() }
-                    if !model.mainSearch.query.isEmpty {
-                        Button("Clear search", systemImage: "xmark.circle.fill") { model.mainSearch.query = "" }
+                        .onChange(of: search.query) { _, _ in model.searchMain() }
+                    if !search.query.isEmpty {
+                        Button("Clear search", systemImage: "xmark.circle.fill") { search.query = "" }
                             .labelStyle(.iconOnly).buttonStyle(.plain)
                     }
                 }
                 .padding(14)
                 Divider()
             }
-            if model.selectedSessionID == nil && !model.mainSearch.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if model.selectedSessionID == nil && !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 SearchResultList(model: model, search: model.mainSearch, maximum: .max, isMainSearch: true, selectedResultID: .constant(nil))
             } else if let session = model.selectedSession, session.id == model.selectedSessionID {
                 HStack(spacing: 12) {
@@ -164,11 +193,11 @@ struct TranscriptView: View {
                 }
                 .padding(16)
                 HStack(spacing: 14) {
-                    Toggle("Tools", isOn: $model.settings.showTools)
-                    Toggle("System", isOn: $model.settings.showSystem)
-                    Toggle("Reasoning", isOn: $model.settings.showReasoning)
+                    Toggle("Tools", isOn: $settings.showTools)
+                    Toggle("System", isOn: $settings.showSystem)
+                    Toggle("Reasoning", isOn: $settings.showReasoning)
                     Spacer()
-                    Picker("Display", selection: $model.settings.transcriptDensity) {
+                    Picker("Display", selection: $settings.transcriptDensity) {
                         ForEach(TranscriptDensity.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
@@ -179,7 +208,12 @@ struct TranscriptView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
                 Divider()
-                TranscriptRenderer(model: model, sessionID: session.id)
+                TranscriptRenderer(
+                    model: model,
+                    sessionID: session.id,
+                    visibility: settings.transcriptVisibility,
+                    density: settings.transcriptDensity
+                )
                     .id(session.id)
             } else {
                 ContentUnavailableView("Search your agent history", systemImage: "text.magnifyingglass",
@@ -206,6 +240,8 @@ private struct MessageFrames: PreferenceKey {
 private struct TranscriptRenderer: View {
     @ObservedObject var model: TraceModel
     let sessionID: Int64
+    let visibility: TranscriptVisibility
+    let density: TranscriptDensity
     @State private var position = ScrollPosition(edge: .top)
     @State private var contentOffset: CGFloat = 0
     @State private var frames: [Int64: CGRect] = [:]
@@ -215,80 +251,98 @@ private struct TranscriptRenderer: View {
     @State private var lastRequest: UUID?
 
     private var visibleMessages: [MessageSummary] {
-        model.messages.filter { model.settings.transcriptVisibility.includes($0) }
+        model.messages.filter(visibility.includes)
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: model.settings.transcriptDensity == .compact ? 6 : 14) {
-                ForEach(visibleMessages) { message in
-                    MessageRow(
-                        summary: message,
-                        hydrated: model.hydratedMessages[message.id],
-                        reasoningExpanded: Binding(
-                            get: { model.expandedReasoningIDs.contains(message.id) },
-                            set: { expanded in
-                                if expanded { model.expandedReasoningIDs.insert(message.id) }
-                                else { model.expandedReasoningIDs.remove(message.id) }
-                            }
-                        ),
-                        visibility: model.settings.transcriptVisibility,
-                        compact: model.settings.transcriptDensity == .compact,
-                        hydrate: { model.hydrate(message) },
-                        copyMessage: { model.copyMessage(id: message.id) }
-                    )
-                    .contextMenu { Button("Copy Message") { model.copyMessage(id: message.id) } }
-                    .id(message.id)
-                    .background(GeometryReader { geometry in
-                        Color.clear.preference(key: MessageFrames.self, value: [message.id: geometry.frame(in: .named("transcriptContent"))])
-                    })
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: density == .compact ? 6 : 14) {
+                    ForEach(visibleMessages) { message in
+                        MessageRow(
+                            summary: message,
+                            hydrated: model.hydratedMessages[message.id],
+                            hydrationFailed: model.hydrationFailures.contains(message.id),
+                            reasoningExpanded: Binding(
+                                get: { model.expandedReasoningIDs.contains(message.id) },
+                                set: { expanded in
+                                    if expanded { model.expandedReasoningIDs.insert(message.id) }
+                                    else { model.expandedReasoningIDs.remove(message.id) }
+                                }
+                            ),
+                            visibility: visibility,
+                            compact: density == .compact,
+                            hydrate: { model.hydrate(message) },
+                            copyMessage: { model.copyMessage(id: message.id) }
+                        )
+                        .contextMenu { Button("Copy Message") { model.copyMessage(id: message.id) } }
+                        .id(message.id)
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: MessageFrames.self, value: [message.id: geometry.frame(in: .named("transcriptContent"))])
+                        })
+                    }
+                }
+                .scrollTargetLayout()
+                .padding(density == .compact ? 12 : 20)
+                .frame(maxWidth: 920)
+                .frame(maxWidth: .infinity)
+                .coordinateSpace(name: "transcriptContent")
+            }
+            .accessibilityIdentifier("transcriptScroll")
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
+                contentOffset = offset
+                if userScrolling { savePosition() }
+            }
+            .onScrollPhaseChange { oldPhase, phase in
+                userScrolling = phase != .idle
+                if userScrolling, !(restoring && phase == .animating) {
+                    restoring = false
+                    pending = nil
+                }
+                if phase == .idle && oldPhase != .idle { savePosition() }
+            }
+            .onPreferenceChange(MessageFrames.self) { newFrames in
+                let previousFrames = frames
+                frames = newFrames
+                if let pending, let frame = frames[pending.messageID] {
+                    position.scrollTo(y: max(0, frame.minY - pending.offset))
+                } else if !userScrolling, !restoring,
+                          let bookmark = model.scrollPositions[sessionID],
+                          let previousFrame = previousFrames[bookmark.messageID],
+                          let frame = frames[bookmark.messageID] {
+                    // Hydration changes row heights above the viewport. Hold the same visible anchor.
+                    let target = max(0, contentOffset + frame.minY - previousFrame.minY)
+                    if abs(target - contentOffset) > 1 { position.scrollTo(y: target) }
                 }
             }
-            .scrollTargetLayout()
-            .padding(model.settings.transcriptDensity == .compact ? 12 : 20)
-            .frame(maxWidth: 920)
-            .frame(maxWidth: .infinity)
-            .coordinateSpace(name: "transcriptContent")
-        }
-        .accessibilityIdentifier("transcriptScroll")
-        .scrollPosition($position)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
-            contentOffset = offset
-            if userScrolling { savePosition() }
-        }
-        .onScrollPhaseChange { oldPhase, phase in
-            userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
-            if userScrolling { restoring = false; pending = nil }
-            if phase == .idle && (oldPhase == .interacting || oldPhase == .decelerating) { savePosition() }
-        }
-        .onPreferenceChange(MessageFrames.self) { newFrames in
-            frames = newFrames
-            if let pending, let frame = frames[pending.messageID] {
-                position.scrollTo(y: max(0, frame.minY - pending.offset))
+            .onAppear { restore(using: proxy) }
+            .onChange(of: model.scrollRequest) { _, _ in restore(using: proxy) }
+            .onChange(of: visibleMessages.map(\.id)) { _, ids in
+                if let bookmark = model.scrollPositions[sessionID], !ids.contains(bookmark.messageID) {
+                    restore(force: true, using: proxy)
+                }
+            }
+            .task(id: pending?.messageID) {
+                guard let pending else { return }
+                // Hydration can expand nearby lazy rows in several waves. Keep retrying
+                // this explicit restoration from view-local state while layout settles.
+                for _ in 0..<10 {
+                    guard self.pending?.messageID == pending.messageID, !userScrolling else { return }
+                    proxy.scrollTo(pending.messageID, anchor: .top)
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                guard self.pending?.messageID == pending.messageID, !userScrolling else { return }
+                if let frame = frames[pending.messageID] {
+                    position.scrollTo(y: max(0, frame.minY - pending.offset))
+                }
                 self.pending = nil
                 restoring = false
-            } else if !userScrolling, !restoring,
-                      let bookmark = model.scrollPositions[sessionID], let frame = frames[bookmark.messageID] {
-                // Hydration changes row heights above the viewport. Hold the same visible anchor.
-                let target = max(0, frame.minY - bookmark.offset)
-                if abs(target - contentOffset) > 1 { position.scrollTo(y: target) }
-            } else if !userScrolling, !restoring, let bookmark = model.scrollPositions[sessionID],
-                      visibleMessages.contains(where: { $0.id == bookmark.messageID }) {
-                pending = bookmark
-                restoring = true
-                position.scrollTo(id: bookmark.messageID, anchor: .top)
-            }
-        }
-        .onAppear { restore() }
-        .onChange(of: model.scrollRequest) { _, _ in restore() }
-        .onChange(of: visibleMessages.map(\.id)) { _, ids in
-            if let bookmark = model.scrollPositions[sessionID], !ids.contains(bookmark.messageID) {
-                restore(force: true)
             }
         }
     }
 
-    private func restore(force: Bool = false) {
+    private func restore(force: Bool = false, using proxy: ScrollViewProxy) {
         guard force || lastRequest != model.scrollRequest else { return }
         lastRequest = model.scrollRequest
         let ids = visibleMessages.map(\.id)
@@ -296,6 +350,7 @@ private struct TranscriptRenderer: View {
         var bookmark = model.scrollPositions[sessionID]
         if let target = model.requestedMessageID, ids.contains(target), !force {
             bookmark = .init(messageID: target, offset: 0, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)
+            model.consumeRequestedMessageID(target)
         }
         guard let saved = bookmark else {
             position.scrollTo(edge: .top)
@@ -309,7 +364,7 @@ private struct TranscriptRenderer: View {
         pending = .init(messageID: target, offset: saved.offset, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)
         model.scrollPositions[sessionID] = pending
         restoring = true
-        position.scrollTo(id: target, anchor: .top)
+        proxy.scrollTo(target, anchor: .top)
         if let frame = frames[target] {
             position.scrollTo(y: max(0, frame.minY - saved.offset))
             pending = nil
@@ -328,6 +383,7 @@ private struct TranscriptRenderer: View {
 private struct MessageRow: View {
     let summary: MessageSummary
     let hydrated: HydratedMessage?
+    let hydrationFailed: Bool
     @Binding var reasoningExpanded: Bool
     let visibility: TranscriptVisibility
     let compact: Bool
@@ -368,11 +424,14 @@ private struct MessageRow: View {
     }
 
     private var hasVisibleContent: Bool {
+        if summary.hasError { return true }
         guard let hydrated else { return true }
         let sections = hydrated.sections
         return !sections.prose.isEmpty
             || (visibility.tools && (!sections.toolInvocation.isEmpty || !sections.toolOutput.isEmpty))
             || (visibility.reasoning && !sections.reasoning.isEmpty)
+            || sections.hasNonTextContent
+            || [.user, .assistant].contains(summary.role)
     }
 
     @ViewBuilder private var content: some View {
@@ -381,7 +440,7 @@ private struct MessageRow: View {
                 DisclosureGroup(isExpanded: $auxiliaryExpanded) {
                     sectionContents(hydrated)
                 } label: {
-                    Text(summary.toolSummary ?? summary.prefix)
+                    Text(safePreview ?? neutralPlaceholder)
                         .font(.callout.monospaced())
                         .lineLimit(auxiliaryExpanded ? nil : 2)
                 }
@@ -391,24 +450,31 @@ private struct MessageRow: View {
             }
         } else if isLazyAuxiliary {
             DisclosureGroup(isExpanded: $auxiliaryExpanded) {
-                ProgressView().controlSize(.small)
+                if hydrationFailed { Text("Unable to load visible content.").foregroundStyle(.secondary) }
+                else { ProgressView().controlSize(.small) }
             } label: {
-                Text(summary.toolSummary ?? summary.prefix)
+                Text(safePreview ?? neutralPlaceholder)
                     .font(.callout.monospaced())
                     .lineLimit(2)
             }
             .onChange(of: auxiliaryExpanded) { _, expanded in if expanded { hydrate() } }
-        } else if summary.sectionFlags == nil && (!visibility.tools || !visibility.reasoning) {
-            // Legacy previews may contain a now-hidden section. Wait for hydration to classify it.
-            ProgressView().controlSize(.small)
+        } else if let safePreview, !safePreview.isEmpty {
+            Text(safePreview).foregroundStyle(.secondary)
+        } else if summary.sectionFlags.map({ $0 & 8 != 0 }) == true {
+            Label("Image or attachment", systemImage: "paperclip").foregroundStyle(.secondary)
+        } else if summary.hasError {
+            Text("Error recorded without text details.").foregroundStyle(.secondary)
+        } else if hydrationFailed {
+            Text("Unable to load visible content.").foregroundStyle(.secondary)
         } else {
-            Text(summary.prefix).foregroundStyle(.secondary)
-                .redacted(reason: summary.prefix.isEmpty ? .placeholder : [])
+            ProgressView().controlSize(.small)
         }
     }
 
     @ViewBuilder private func sectionContents(_ message: HydratedMessage) -> some View {
-        if !message.sections.prose.isEmpty { MarkdownText(source: message.sections.prose, copyMessage: copyMessage) }
+        if visibility.includes(role: summary.role), !message.sections.prose.isEmpty {
+            MarkdownText(source: message.sections.prose, copyMessage: copyMessage)
+        }
         if visibility.tools && !message.sections.toolInvocation.isEmpty {
             DisclosureGroup("Tool invocation") {
                 SelectableMessageText(text: AttributedString(message.sections.toolInvocation), monospaced: true, copyMessage: copyMessage)
@@ -426,11 +492,47 @@ private struct MessageRow: View {
                 Label("Reasoning", systemImage: "brain")
             }
         }
+        if visibility.includes(role: summary.role), message.sections.hasNonTextContent {
+            Label("Image or attachment", systemImage: "paperclip")
+                .foregroundStyle(.secondary)
+        } else if summary.hasError
+                    && !hasVisibleContent(in: message.sections) {
+            Text("Error recorded without text details.").foregroundStyle(.secondary)
+        } else if [.user, .assistant].contains(summary.role)
+                    && message.sections.prose.isEmpty
+                    && message.sections.toolInvocation.isEmpty
+                    && message.sections.toolOutput.isEmpty
+                    && message.sections.reasoning.isEmpty {
+            Text("No text content.").foregroundStyle(.secondary)
+        }
+    }
+
+    private var safePreview: String? {
+        guard visibility.includes(role: summary.role) else { return nil }
+        guard let flags = summary.sectionFlags else {
+            return visibility.tools && visibility.reasoning ? summary.prefix : nil
+        }
+        if flags & 1 != 0 { return summary.prefix }
+        if flags & 2 != 0 { return visibility.tools ? (summary.toolSummary ?? summary.prefix) : nil }
+        if flags & 4 != 0 { return visibility.reasoning ? summary.prefix : nil }
+        return nil
+    }
+
+    private var neutralPlaceholder: String {
+        if summary.sectionFlags.map({ $0 & 8 != 0 }) == true { return "Image or attachment" }
+        if summary.hasError { return "Error recorded without text details." }
+        return hydrationFailed ? "Unable to load visible content." : "Loading visible content…"
     }
 
     private var isLazyAuxiliary: Bool {
-        ([.toolResult, .toolUse].contains(summary.role) && visibility.tools)
-            || [.system, .reasoning].contains(summary.role)
+        visibility.includes(role: summary.role)
+            && [.toolResult, .toolUse, .system, .reasoning].contains(summary.role)
+    }
+
+    private func hasVisibleContent(in sections: MessageSections) -> Bool {
+        (visibility.includes(role: summary.role) && (!sections.prose.isEmpty || sections.hasNonTextContent))
+            || (visibility.tools && (!sections.toolInvocation.isEmpty || !sections.toolOutput.isEmpty))
+            || (visibility.reasoning && !sections.reasoning.isEmpty)
     }
     private var roleTitle: String { summary.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
     private var icon: String {

@@ -56,6 +56,27 @@ enum JSONHelpers {
         }.joined(separator: "\n")
     }
 
+    static func hasNonTextContent(_ content: Any?) -> Bool {
+        let attachmentTypes: Set<String> = [
+            "audio", "document", "file", "image", "image_url", "input_audio",
+            "input_file", "input_image", "output_audio", "output_file", "output_image",
+        ]
+        if let object = content as? [String: Any] {
+            if let type = object["type"] as? String, attachmentTypes.contains(type.lowercased()) {
+                return true
+            }
+            if object.contains(where: { key, value in
+                ["attachment", "attachments", "file", "fileData", "image", "image_url", "inlineData"].contains(key)
+                    && !(value is NSNull)
+            }) { return true }
+            return object.values.contains(where: hasNonTextContent)
+        }
+        if let array = content as? [Any] {
+            return array.contains(where: hasNonTextContent)
+        }
+        return false
+    }
+
     static func normalizedPreview(_ text: String, limit: Int = 160) -> String {
         let compact = text
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
@@ -82,7 +103,10 @@ private extension ISO8601DateFormatter {
 extension JSONHelpers {
     static func errorDescription(_ object: [String: Any]) -> String? {
         for key in ["error", "message", "reason", "detail"] {
-            if let text = object[key] as? String, !text.isEmpty { return text }
+            if let text = object[key] as? String {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
             if let nested = object[key] as? [String: Any] {
                 if let text = errorDescription(nested) { return text }
             }

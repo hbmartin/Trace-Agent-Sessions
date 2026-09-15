@@ -45,8 +45,8 @@ final class SessionMetadataTests: XCTestCase {
         try await queue.write { db in
             XCTAssertEqual(try String.fetchOne(db, sql: "SELECT first_user_message FROM session"), "First real request")
             // Emulate an interrupted metadata backfill. Content/checkpoints stay intact.
-            try db.execute(sql: "UPDATE source_file SET metadata_revision=NULL")
-            try db.execute(sql: "UPDATE session SET title='stale', has_plan=0")
+            try db.execute(sql: "UPDATE source_file SET metadata_revision='1:0:0'")
+            try db.execute(sql: "UPDATE session SET title='Adapter fallback', has_plan=0")
         }
         await coordinator.indexAll(scope: .everything)
         let refreshed = try await database.session(id: session.id)
@@ -54,6 +54,10 @@ final class SessionMetadataTests: XCTestCase {
         let refreshedState = try await database.sourceState(path: file.path)
         XCTAssertEqual(refreshed?.title, "Chosen title")
         XCTAssertEqual(refreshed?.hasPlan, true)
+        let adapterTitle = try await queue.read { db in
+            try String.fetchOne(db, sql: "SELECT title FROM session")
+        }
+        XCTAssertEqual(adapterTitle, "Adapter fallback")
         XCTAssertEqual(refreshedMessages.map(\.id), originalMessages.map(\.id))
         XCTAssertEqual(refreshedState?.scannedBytes, originalState?.scannedBytes)
         let results = try await database.search(query: "request", filters: .init(), sort: .recency)
@@ -77,8 +81,7 @@ final class SessionMetadataTests: XCTestCase {
         let file = sessions.appendingPathComponent("rollout-test.jsonl")
         try write([
             ["type": "session_meta", "payload": ["id": "codex-one", "cwd": "/tmp/codex"]],
-            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": "Fallback request"]]]],
-            ["type": "response_item", "payload": ["type": "plan", "text": "A structured plan"]]
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": "Fallback request"]]]]
         ], to: file)
         let sidecar = root.appendingPathComponent("session_index.jsonl")
         try write([["id": "codex-one", "thread_name": "New index title", "updated_at": "2026-09-14"],
@@ -94,7 +97,16 @@ final class SessionMetadataTests: XCTestCase {
         let initial = try await database.sessions()
         let session = try XCTUnwrap(initial.first)
         XCTAssertEqual(session.title, "App title")
-        XCTAssertTrue(session.hasPlan)
+        XCTAssertFalse(session.hasPlan)
+        try await external.write { try $0.execute(sql: "UPDATE threads SET name='Unobserved database title'") }
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"response_item\",\"payload\":{\"type\":\"plan\",\"text\":\"A structured plan\"}}\n".utf8))
+        try handle.close()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let plannedSession = try await database.session(id: session.id)
+        XCTAssertEqual(plannedSession?.hasPlan, true)
+        XCTAssertEqual(plannedSession?.title, "App title", "ordinary rollout appends must not reload Codex names")
         try await external.write { try $0.execute(sql: "UPDATE threads SET name=NULL") }
         await coordinator.refresh(paths: [sidecar.path], scope: .proseOnly)
         let indexed = try await database.session(id: session.id)
@@ -107,6 +119,12 @@ final class SessionMetadataTests: XCTestCase {
         await coordinator.refresh(paths: [sidecar.path], scope: .proseOnly)
         let fallback = try await database.session(id: session.id)
         XCTAssertEqual(fallback?.title, "Fallback request")
+
+        try await external.write { try $0.execute(sql: "UPDATE threads SET title='Stale older database title'") }
+        try Data("not a database".utf8).write(to: root.appendingPathComponent("state_6.sqlite"))
+        await coordinator.refresh(paths: [sidecar.path], scope: .proseOnly)
+        let newestUnreadable = try await database.session(id: session.id)
+        XCTAssertEqual(newestUnreadable?.title, "Fallback request")
     }
 
     func testPlanFalsePositivesAndProviderSubmissions() throws {
@@ -117,10 +135,12 @@ final class SessionMetadataTests: XCTestCase {
                    message("assistant", "I plan to investigate.\n- Read\n- Test", id: "progress"),
                    message("assistant", "<proposed_plan> \n </proposed_plan>", id: "empty"),
                    ["type": "assistant", "message": ["content": [["type": "tool_use", "name": "ExitPlanMode", "input": [:]]]]]], to: file)
-        var metadata = try SessionMetadataReader.scan(file: source, boundary: Int64(Data(contentsOf: file).count))
+        var scan = try SessionMetadataReader.scan(file: source, through: Int64(Data(contentsOf: file).count))
+        var metadata = try XCTUnwrap(scan.sessions["session"])
         XCTAssertFalse(metadata.hasPlan)
         try write([["type": "assistant", "message": ["content": [["type": "tool_use", "name": "ExitPlanMode", "input": ["plan": "Implement the feature"]]]]]], to: file)
-        metadata = try SessionMetadataReader.scan(file: source, boundary: Int64(Data(contentsOf: file).count))
+        scan = try SessionMetadataReader.scan(file: source, through: Int64(Data(contentsOf: file).count))
+        metadata = try XCTUnwrap(scan.sessions["session"])
         XCTAssertTrue(metadata.hasPlan)
         XCTAssertNil(metadata.firstUserMessage)
     }
@@ -131,14 +151,122 @@ final class SessionMetadataTests: XCTestCase {
         let source = DiscoveredSourceFile(agent: .gemini, root: root, url: file, format: .geminiJSON)
         let object: [String: Any] = ["title": " ", "summary": "Gemini summary", "sessionId": "gemini-one",
             "messages": [["type": "user", "content": "Actual request"],
-                         ["type": "gemini", "content": "<proposed_plan>Generated plan</proposed_plan>"]]]
+                         ["type": "gemini", "content": "",
+                          "toolCalls": [["name": "ExitPlanMode", "args": ["plan": "Generated plan"]]]]]]
         try JSONSerialization.data(withJSONObject: object).write(to: file)
-        let result = try SessionMetadataReader.scan(file: source, boundary: Int64(Data(contentsOf: file).count))
+        let scan = try SessionMetadataReader.scan(file: source, through: Int64(Data(contentsOf: file).count))
+        XCTAssertEqual(scan.sessions.count, 1)
+        let result = try XCTUnwrap(scan.sessions.values.first)
         XCTAssertEqual(result.title, "Gemini summary")
         XCTAssertEqual(result.firstUserMessage, "Actual request")
         XCTAssertTrue(result.hasPlan)
         XCTAssertEqual(SessionMetadataReader.userTitle("<environment_context>metadata</environment_context>\nUser request"), "User request")
         XCTAssertNil(SessionMetadataReader.userTitle("# AGENTS.md instructions for /tmp\nInjected instructions"))
+    }
+
+    func testGeminiJSONLSetMessagesAndIncrementalMetadataTail() throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session-current.jsonl")
+        let source = DiscoveredSourceFile(agent: .gemini, root: root, url: file, format: .geminiJSONL)
+        try write([[
+            "sessionId": "gemini-current",
+            "$set": [
+                "summary": "Generated summary",
+                "messages": [
+                    ["type": "user", "content": [["text": "Request from an untyped part"]]],
+                    ["type": "gemini", "content": [["content": "<proposed_plan>Ship it</proposed_plan>"]]],
+                ],
+            ],
+        ]], to: file)
+        let initialBoundary = Int64(try Data(contentsOf: file).count)
+        let initial = try SessionMetadataReader.scan(file: source, through: initialBoundary)
+        let metadata = try XCTUnwrap(initial.sessions["gemini-current"])
+        XCTAssertEqual(metadata.title, "Generated summary")
+        XCTAssertEqual(metadata.firstUserMessage, "Request from an untyped part")
+        XCTAssertTrue(metadata.hasPlan)
+        XCTAssertEqual(initial.checkpoint, initialBoundary)
+
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"sessionId\":\"gemini-current\",\"title\":\"Explicit title\"}\n".utf8))
+        try handle.close()
+        let finalBoundary = Int64(try Data(contentsOf: file).count)
+        let tail = try SessionMetadataReader.scan(file: source, from: initial.checkpoint, through: finalBoundary)
+        let tailMetadata = try XCTUnwrap(tail.sessions["gemini-current"])
+        XCTAssertEqual(tailMetadata.title, "Explicit title")
+        XCTAssertTrue(tailMetadata.titleIsExplicit)
+        XCTAssertNil(tailMetadata.firstUserMessage)
+        XCTAssertEqual(tail.checkpoint, finalBoundary)
+    }
+
+    func testMetadataIsScopedToExternalSessionIDAndCodexPlanShapes() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("mixed.jsonl")
+        try write([
+            message("user", "First session request", id: "one").merging(["sessionId": "one"]) { _, new in new },
+            ["type": "custom-title", "sessionId": "one", "customTitle": "First title"],
+            message("user", "Second session request", id: "two").merging(["sessionId": "two"]) { _, new in new },
+            ["type": "summary", "sessionId": "two", "summary": "Second summary"],
+        ], to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .everything)
+        let sessions = try await database.sessions()
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: sessions.map { ($0.title, $0.messageCount) }), [
+            "First title": 1,
+            "Second summary": 1,
+        ])
+
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"custom-title\",\"customTitle\":\"Newest second title\"}\n".utf8))
+        try handle.close()
+        await coordinator.refresh(paths: [file.path], scope: .everything)
+        let refreshedTitles = try await database.sessions().map(\.title)
+        XCTAssertEqual(Set(refreshedTitles), ["First title", "Newest second title"])
+
+        let codexFile = root.appendingPathComponent("rollout-plans.jsonl")
+        let codexSource = DiscoveredSourceFile(agent: .codex, root: root, url: codexFile, format: .codexJSONL)
+        for (field, value) in [
+            ("text", "Text plan"),
+            ("message", "Message plan"),
+            ("content", [["output": "Content plan"]]),
+        ] as [(String, Any)] {
+            try write([
+                ["type": "session_meta", "payload": ["id": "codex-\(field)"]],
+                ["type": "response_item", "payload": ["type": "plan", field: value]],
+            ], to: codexFile)
+            let scan = try SessionMetadataReader.scan(
+                file: codexSource,
+                through: Int64(try Data(contentsOf: codexFile).count)
+            )
+            XCTAssertTrue(try XCTUnwrap(scan.sessions["codex-\(field)"]).hasPlan)
+        }
+    }
+
+    func testReplacementClearsStaleDerivedMetadata() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try write([
+            message("user", "Original request", id: "original"),
+            ["type": "custom-title", "sessionId": "session", "customTitle": "Stale title"],
+            message("assistant", "<proposed_plan>Old plan</proposed_plan>", id: "plan"),
+        ], to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .everything)
+        let originalSessions = try await database.sessions()
+        let original = try XCTUnwrap(originalSessions.first)
+        XCTAssertEqual(original.title, "Stale title")
+        XCTAssertTrue(original.hasPlan)
+
+        try write([message("user", "Replacement request", id: "replacement")], to: file)
+        await coordinator.refresh(paths: [file.path], scope: .everything)
+
+        let replacementSessions = try await database.sessions()
+        let replacement = try XCTUnwrap(replacementSessions.first)
+        XCTAssertEqual(replacement.title, "Replacement request")
+        XCTAssertFalse(replacement.hasPlan)
     }
 
     func testV2MigrationPreservesContentAndBackfills() async throws {

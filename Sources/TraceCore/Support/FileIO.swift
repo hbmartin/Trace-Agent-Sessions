@@ -3,6 +3,60 @@ import Darwin
 import Foundation
 
 public enum TraceFileIO {
+    public struct CanonicalPath: Hashable, Sendable {
+        public let path: String
+        public let comparisonKey: String
+
+        public func contains(_ other: CanonicalPath) -> Bool {
+            if comparisonKey == other.comparisonKey { return true }
+            let prefix = comparisonKey == "/" || comparisonKey.hasSuffix("/")
+                ? comparisonKey
+                : comparisonKey + "/"
+            return other.comparisonKey.hasPrefix(prefix)
+        }
+
+        public func intersects(_ other: CanonicalPath) -> Bool {
+            contains(other) || other.contains(self)
+        }
+    }
+
+    public static func canonicalPath(_ rawPath: String) -> CanonicalPath {
+        let standardized = URL(fileURLWithPath: rawPath).standardizedFileURL
+        let resolved: URL
+        if FileManager.default.fileExists(atPath: standardized.path) {
+            resolved = standardized.resolvingSymlinksInPath()
+        } else {
+            let parent = standardized.deletingLastPathComponent().resolvingSymlinksInPath()
+            resolved = parent.appendingPathComponent(standardized.lastPathComponent).standardizedFileURL
+        }
+        let path = resolved.path
+        let comparisonKey = path.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+        return .init(path: path, comparisonKey: comparisonKey)
+    }
+
+    public static func isCodexMetadataSidecar(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        if name == "session_index.jsonl" { return true }
+        guard name.hasPrefix("state_"), name.hasSuffix(".sqlite") else { return false }
+        let start = name.index(name.startIndex, offsetBy: "state_".count)
+        let end = name.index(name.endIndex, offsetBy: -".sqlite".count)
+        let generation = name[start..<end]
+        return !generation.isEmpty && generation.allSatisfy(\.isNumber)
+    }
+
+    public static func modificationMilliseconds(url: URL) -> Int64 {
+        if let fingerprint = try? fingerprint(url: url) {
+            return fingerprint.modificationNanoseconds / 1_000_000
+        }
+        if let modified = try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date {
+            return Int64(modified.timeIntervalSince1970 * 1_000)
+        }
+        return 0
+    }
+
     public static func read(url: URL, offset: Int64, length: Int64) throws -> Data {
         guard length >= 0, length <= Int64(Int.max) else {
             throw SessionSourceError.unreadableFile(url.path)
@@ -144,7 +198,7 @@ public enum JSONDocumentScanner {
     /// with `arrayKey`. The scanner handles escaped strings and nested values.
     public static func objectRanges(in data: Data, arrayKey: String) -> [Range<Int>] {
         let bytes = [UInt8](data)
-        guard let arrayStart = findArrayStart(bytes: bytes, key: arrayKey) else { return [] }
+        guard let arrayStart = arrayStart(bytes: bytes, key: arrayKey) else { return [] }
 
         var result: [Range<Int>] = []
         var index = arrayStart + 1
@@ -186,7 +240,11 @@ public enum JSONDocumentScanner {
         return result
     }
 
-    private static func findArrayStart(bytes: [UInt8], key: String) -> Int? {
+    static func arrayStart(in data: Data, arrayKey: String) -> Int? {
+        arrayStart(bytes: [UInt8](data), key: arrayKey)
+    }
+
+    private static func arrayStart(bytes: [UInt8], key: String) -> Int? {
         guard let keyData = "\"\(key)\"".data(using: .utf8) else { return nil }
         let needle = [UInt8](keyData)
         guard bytes.count >= needle.count else { return nil }

@@ -17,7 +17,13 @@ final class TraceUITests: XCTestCase {
             ["type": "user", "uuid": "three", "message": ["content": [
                 ["type": "tool_result", "is_error": true, "content": "UniqueOutput: file missing"]
             ]]],
-            ["type": "system", "uuid": "four", "message": ["content": "System marker"]]
+            ["type": "system", "uuid": "four", "message": ["content": "System marker"]],
+            ["type": "user", "uuid": "five", "message": ["content": [
+                ["type": "image", "source": ["type": "base64", "data": "not-indexed"]]
+            ]]],
+            ["type": "user", "uuid": "six", "message": ["content": [
+                ["type": "tool_result", "is_error": true, "content": ""]
+            ]]]
         ]
         var data = Data()
         for (index, var object) in records.enumerated() {
@@ -77,6 +83,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["System marker"].exists)
         XCTAssertFalse(app.staticTexts["Tool invocation"].exists)
         XCTAssertFalse(app.staticTexts["Reasoning explanation"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniqueInvocation")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Image or attachment"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Error recorded without text details."].waitForExistence(timeout: 5))
         let filter = app.textFields["projectFilter"]
         filter.click()
         filter.typeText("Find the sample answer")
@@ -86,7 +95,10 @@ final class TraceUITests: XCTestCase {
         let icon = app.images["Session error"].firstMatch
         if icon.exists {
             icon.hover()
-            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniqueOutput: file missing")).firstMatch.waitForExistence(timeout: 5))
+            let detail = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniqueOutput: file missing")).firstMatch
+            XCTAssertTrue(detail.waitForExistence(timeout: 5))
+            detail.hover()
+            XCTAssertTrue(detail.exists, "moving from the icon into the popover must keep it open")
         } else { XCTFail("Session error icon missing") }
         attach(app, name: "compact-and-error-details")
         app.terminate()
@@ -96,6 +108,33 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(app.checkBoxes["System"].value as? Int, 0)
         XCTAssertEqual(app.checkBoxes["Reasoning"].value as? Int, 0)
         XCTAssertEqual(app.radioButtons["Compact"].value as? Int, 1)
+    }
+
+    func testLiveAppendRetainsHydratedTranscriptRows() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let session = app.staticTexts["Find the sample answer"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 15))
+        session.click()
+        let existing = app.staticTexts["Here is the visible answer"]
+        XCTAssertTrue(existing.waitForExistence(timeout: 10))
+
+        let file = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        let appended: [String: Any] = [
+            "type": "assistant", "uuid": "live-append", "sessionId": "test-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:10Z",
+            "message": ["content": "Live append arrived"],
+        ]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: appended))
+        try handle.write(contentsOf: Data([10]))
+        try handle.close()
+
+        XCTAssertTrue(app.staticTexts["Live append arrived"].waitForExistence(timeout: 15))
+        XCTAssertTrue(existing.exists, "an append must not discard already hydrated message bodies")
     }
 
     func testPopoverKeepsSearchAndFooterVisibleWithTenSessions() throws {
@@ -180,6 +219,15 @@ final class TraceUITests: XCTestCase {
         let anchorText = (anchor.value as? String) ?? anchor.label
         let anchorY = anchor.frame.minY
         XCTAssertFalse(first.isHittable)
+        app.radioButtons["Compact"].click()
+        let compactAnchor = scroll.staticTexts.matching(NSPredicate(format: "value == %@", anchorText)).firstMatch
+        XCTAssertTrue(compactAnchor.waitForExistence(timeout: 5))
+        let compactAnchorSettled = NSPredicate { _, _ in
+            compactAnchor.isHittable && abs(compactAnchor.frame.minY - anchorY) <= 35
+        }
+        expectation(for: compactAnchorSettled, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
+        app.radioButtons["Comfortable"].click()
         app.staticTexts["ProjectBeta"].firstMatch.click()
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertFalse(scroll.exists)
@@ -253,6 +301,11 @@ final class TraceUITests: XCTestCase {
             "message": ["content": "<proposed_plan>UniquePlanNeedle. Build the requested feature.</proposed_plan>"]]
         try handle.write(contentsOf: JSONSerialization.data(withJSONObject: plan))
         try handle.write(contentsOf: Data([10]))
+        let target: [String: Any] = ["type": "assistant", "uuid": "search-target", "sessionId": "Search session",
+            "cwd": "/tmp/SearchProject", "timestamp": "2026-09-14T12:01:01Z",
+            "message": ["content": "UniqueSearchNeedle. This message must be visible after the jump."]]
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: target))
+        try handle.write(contentsOf: Data([10]))
         try handle.close()
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
@@ -262,16 +315,26 @@ final class TraceUITests: XCTestCase {
         project.click()
         let search = app.textFields["mainSearch"]
         search.click()
-        search.typeText("UniquePlanNeedle")
-        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "UniquePlanNeedle")).firstMatch
+        search.typeText("UniqueSearchNeedle")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "UniqueSearchNeedle")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 10))
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "Generated plan").firstMatch.exists)
         result.click()
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
-        let match = scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniquePlanNeedle")).firstMatch
+        let match = scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniqueSearchNeedle")).firstMatch
         XCTAssertTrue(match.waitForExistence(timeout: 10))
         XCTAssertTrue(match.isHittable)
+        scroll.scroll(byDeltaX: 0, deltaY: 20_000)
+        let first = scroll.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Search session message 0")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(first.isHittable)
+        app.radioButtons["Compact"].click()
+        let searchJumpStayedConsumed = NSPredicate { _, _ in
+            first.isHittable && !match.isHittable
+        }
+        expectation(for: searchJumpStayedConsumed, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
     }
 
     private func attach(_ app: XCUIApplication, name: String) {

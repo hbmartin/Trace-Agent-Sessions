@@ -3,24 +3,30 @@ import TraceCore
 
 struct RecentPopoverView: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject private var search: SessionSearchModel
     @FocusState private var searchFocused: Bool
+
+    init(model: TraceModel) {
+        self.model = model
+        search = model.globalSearch
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search all sessions", text: $model.searchQuery)
+                TextField("Search all sessions", text: $search.query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit { NotificationCenter.default.post(name: .traceShowLauncher, object: nil) }
-                    .onChange(of: model.searchQuery) { _, _ in model.search() }
+                    .onChange(of: search.query) { _, _ in model.search() }
             }
             .padding(12)
             .background(.quaternary.opacity(0.45))
 
             Group {
-                if !model.searchQuery.isEmpty {
+                if !search.query.isEmpty {
                     SearchResultList(model: model, search: model.globalSearch, maximum: 10, usesNativeScrolling: true, selectedResultID: .constant(nil))
                 } else {
                     NativeScrollView {
@@ -35,7 +41,7 @@ struct RecentPopoverView: View {
                             } else {
                                 ForEach(model.recentSessions.prefix(10)) { session in
                                     Button { model.selectSession(session.id, showWindow: true) } label: {
-                                        SessionRow(session: session, model: model)
+                                        SessionRow(session: session) { await model.sessionErrorText(session) }
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -66,9 +72,17 @@ struct RecentPopoverView: View {
 
 struct LauncherView: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject private var search: SessionSearchModel
+    @ObservedObject private var settings: AppSettings
     @FocusState private var searchFocused: Bool
     @State private var datePreset = SearchDatePreset.anyTime
     @State private var selectedResultID: Int64?
+
+    init(model: TraceModel) {
+        self.model = model
+        search = model.globalSearch
+        settings = model.settings
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,11 +90,11 @@ struct LauncherView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                TextField("Search Claude Code, Codex, and Gemini", text: $model.searchQuery)
+                TextField("Search Claude Code, Codex, and Gemini", text: $search.query)
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .focused($searchFocused)
-                    .onChange(of: model.searchQuery) { _, _ in model.search() }
+                    .onChange(of: search.query) { _, _ in model.search() }
                     .onSubmit { openSelectedResult() }
                     .onKeyPress(.downArrow) {
                         moveSelection(by: 1)
@@ -99,18 +113,18 @@ struct LauncherView: View {
                 ForEach(AgentKind.allCases) { agent in
                     FilterChip(
                         title: agent.displayName,
-                        selected: model.searchFilters.agents.contains(agent)
+                        selected: search.filters.agents.contains(agent)
                     ) {
-                        if model.searchFilters.agents.contains(agent) {
-                            model.searchFilters.agents.remove(agent)
+                        if search.filters.agents.contains(agent) {
+                            search.filters.agents.remove(agent)
                         } else {
-                            model.searchFilters.agents.insert(agent)
+                            search.filters.agents.insert(agent)
                         }
                         model.search()
                     }
                 }
-                FilterChip(title: "Errors", selected: model.searchFilters.errorsOnly) {
-                    model.searchFilters.errorsOnly.toggle()
+                FilterChip(title: "Errors", selected: search.filters.errorsOnly) {
+                    search.filters.errorsOnly.toggle()
                     model.search()
                 }
                 Menu {
@@ -135,20 +149,20 @@ struct LauncherView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 Spacer()
-                Picker("Sort", selection: $model.settings.searchSort) {
+                Picker("Sort", selection: $settings.searchSort) {
                     Text("Recent").tag(SearchSort.recency)
                     Text("Relevant").tag(SearchSort.relevance)
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 170)
-                .onChange(of: model.settings.searchSort) { _, _ in model.search() }
+                .onChange(of: settings.searchSort) { _, _ in model.search() }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
 
             Divider()
-            if model.searchQuery.isEmpty {
+            if search.query.isEmpty {
                 ContentUnavailableView(
                     "Search your agent history",
                     systemImage: "text.magnifyingglass",
@@ -173,7 +187,7 @@ struct LauncherView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(radius: 30, y: 12)
         .onAppear { searchFocused = true }
-        .onChange(of: model.searchResults.map(\.id)) { _, ids in
+        .onChange(of: search.results.map(\.id)) { _, ids in
             if let selectedResultID, ids.contains(selectedResultID) { return }
             selectedResultID = ids.first
         }
@@ -181,25 +195,25 @@ struct LauncherView: View {
     }
 
     private var selectedProjectName: String {
-        guard let id = model.searchFilters.projectID else { return "All projects" }
+        guard let id = search.filters.projectID else { return "All projects" }
         return model.projects.first(where: { $0.id == id })?.displayName ?? "All projects"
     }
 
     private func selectProject(_ id: Int64?) {
-        model.searchFilters.projectID = id
+        search.filters.projectID = id
         model.search()
     }
 
     private func selectDate(_ preset: SearchDatePreset) {
         datePreset = preset
         let bounds = preset.bounds(now: Date())
-        model.searchFilters.fromMilliseconds = bounds.from
-        model.searchFilters.toMilliseconds = bounds.to
+        search.filters.fromMilliseconds = bounds.from
+        search.filters.toMilliseconds = bounds.to
         model.search()
     }
 
     private func moveSelection(by delta: Int) {
-        let results = model.searchResults
+        let results = search.results
         guard !results.isEmpty else { return }
         let current = selectedResultID.flatMap { selected in results.firstIndex(where: { $0.id == selected }) } ?? -1
         let next = min(results.count - 1, max(0, current + delta))
@@ -208,7 +222,7 @@ struct LauncherView: View {
 
     private func openSelectedResult() {
         guard let selectedResultID,
-              let result = model.searchResults.first(where: { $0.id == selectedResultID }) else { return }
+              let result = search.results.first(where: { $0.id == selectedResultID }) else { return }
         model.openSearchResult(result)
     }
 }
@@ -410,11 +424,11 @@ private struct SearchSessionGroup: Identifiable {
 
 struct SessionRow: View {
     let session: SessionSummary
-    @ObservedObject var model: TraceModel
+    let loadError: @MainActor () async -> String
 
     var body: some View {
         HStack(spacing: 9) {
-            if session.hadError { SessionErrorIcon(session: session, model: model) }
+            if session.hadError { SessionErrorIcon(loadError: loadError) }
             else { Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary) }
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
@@ -442,23 +456,23 @@ struct SessionRow: View {
 }
 
 private struct SessionErrorIcon: View {
-    let session: SessionSummary
-    @ObservedObject var model: TraceModel
+    let loadError: @MainActor () async -> String
     @State private var showing = false
+    @State private var detail: String?
+    @State private var loadTask: Task<Void, Never>?
 
     var body: some View {
         Image(systemName: "exclamationmark.circle.fill")
             .foregroundStyle(.red)
             .accessibilityLabel("Session error")
-            .accessibilityValue(model.sessionErrors[session.id] ?? "Hover for error details")
+            .accessibilityValue(detail ?? "Hover for error details")
             .onHover { hovering in
-                showing = hovering
-                if hovering { model.loadSessionError(session) }
+                if hovering { showing = true; beginLoading() }
             }
-            .onTapGesture { showing.toggle(); model.loadSessionError(session) }
+            .onTapGesture { showing = true; beginLoading() }
             .popover(isPresented: $showing, arrowEdge: .trailing) {
                 ScrollView {
-                    Text(model.sessionErrors[session.id] ?? "Loading error details…")
+                    Text(detail ?? "Loading error details…")
                         .font(.callout)
                         .lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
@@ -468,6 +482,17 @@ private struct SessionErrorIcon: View {
                 }
                 .frame(width: 420, height: 220)
             }
+            .onDisappear { loadTask?.cancel() }
+    }
+
+    private func beginLoading() {
+        guard detail == nil, loadTask == nil else { return }
+        loadTask = Task {
+            let loaded = await loadError()
+            guard !Task.isCancelled else { return }
+            detail = loaded
+            loadTask = nil
+        }
     }
 }
 
