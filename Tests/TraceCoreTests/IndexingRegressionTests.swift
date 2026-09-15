@@ -153,6 +153,18 @@ final class IndexingRegressionTests: XCTestCase {
         )
         XCTAssertTrue(visibility.includes(attachment))
         XCTAssertTrue(visibility.includes(emptyError), "error metadata must survive hidden tool content")
+        let emptyAssistant = MessageSummary(
+            id: 3, role: .assistant, timestampMilliseconds: 1, prefix: "", toolSummary: nil,
+            characterCount: 0, hasError: false, sourcePath: "/tmp/source",
+            sourceFormat: .claudeJSONL, locator: .byteRange(offset: 2, length: 1), sectionFlags: 0
+        )
+        let emptyReasoning = MessageSummary(
+            id: 4, role: .reasoning, timestampMilliseconds: 1, prefix: "", toolSummary: nil,
+            characterCount: 0, hasError: false, sourcePath: "/tmp/source",
+            sourceFormat: .codexJSONL, locator: .byteRange(offset: 3, length: 1), sectionFlags: 0
+        )
+        XCTAssertFalse(all.includes(emptyAssistant))
+        XCTAssertFalse(all.includes(emptyReasoning))
     }
 
     func testSourceGenerationChangesOnlyForReplacement() async throws {
@@ -231,7 +243,9 @@ final class IndexingRegressionTests: XCTestCase {
         let raw = try DatabaseQueue(path: databaseURL.path)
         try await raw.write { db in
             try db.execute(sql: "ALTER TABLE source_file DROP COLUMN content_generation")
+            try db.execute(sql: "ALTER TABLE usage_observation DROP COLUMN project_id")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v4-source-generation'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v5-usage-project'")
             try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
         }
 
@@ -244,7 +258,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "4")
+        XCTAssertEqual(schema, "5")
     }
 
     func testIncrementalRollupsSkipUnchangedPassAndRunAfterChangedInput() async throws {
@@ -284,6 +298,48 @@ final class IndexingRegressionTests: XCTestCase {
         await coordinator.refresh(paths: [file.path], scope: .proseOnly)
         let changedDeletes = try await raw.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM rollup_audit") }
         XCTAssertEqual(changedDeletes, 1)
+    }
+
+    func testNoOpPassAndReopenRepairRollupsAfterDestructiveChanges() async throws {
+        let root = try directory()
+        var files: [URL] = []
+        for (key, tokens) in [("a", 10), ("b", 20), ("c", 30)] {
+            let file = root.appendingPathComponent("\(key).jsonl")
+            let row = #"{"type":"assistant","uuid":"\#(key)","sessionId":"session-\#(key)","cwd":"/tmp/project","timestamp":1700000000000,"message":{"id":"response-\#(key)","model":"claude-sonnet-5","content":"answer","usage":{"input_tokens":\#(tokens),"output_tokens":1}}}"# + "\n"
+            try Data(row.utf8).write(to: file)
+            files.append(file)
+        }
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+
+        let stateB = try await database.sourceState(path: files[1].path)
+        let removedB = try XCTUnwrap(stateB)
+        try await database.deleteSource(id: removedB.id)
+        let empty = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertTrue(empty.isEmpty)
+        await coordinator.refresh(paths: [files[0].path], scope: .proseOnly)
+        let repaired = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertEqual(repaired.first?.inputTokens, 40)
+
+        let stateC = try await database.sourceState(path: files[2].path)
+        let removedC = try XCTUnwrap(stateC)
+        try await database.deleteSource(id: removedC.id)
+        let reopened = try IndexDatabase(url: url)
+        try await reopened.rebuildUsageRollupsIfDirty()
+        let onOpen = try await reopened.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertEqual(onOpen.first?.inputTokens, 10)
+
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "DELETE FROM trace_meta WHERE key='usage_rollups_dirty'")
+            try db.execute(sql: "DELETE FROM usage_daily")
+        }
+        let legacyMarker = try IndexDatabase(url: url)
+        try await legacyMarker.rebuildUsageRollupsIfDirty()
+        let legacyRepair = try await legacyMarker.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertEqual(legacyRepair.first?.inputTokens, 10)
     }
 
     func testCommittedBatchRebuildsRollupsEvenWhenThePassLaterFails() async throws {

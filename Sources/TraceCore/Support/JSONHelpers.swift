@@ -61,15 +61,33 @@ enum JSONHelpers {
             "audio", "document", "file", "image", "image_url", "input_audio",
             "input_file", "input_image", "output_audio", "output_file", "output_image",
         ]
-        if let object = content as? [String: Any] {
-            if let type = object["type"] as? String, attachmentTypes.contains(type.lowercased()) {
-                return true
+        func meaningful(_ value: Any) -> Bool {
+            if value is NSNull { return false }
+            if let string = value as? String {
+                return !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
+            if let array = value as? [Any] { return array.contains(where: meaningful) }
+            if let object = value as? [String: Any] {
+                return object.contains { key, nested in key != "type" && meaningful(nested) }
+            }
+            return true
+        }
+        if let object = content as? [String: Any] {
+            let type = (object["type"] as? String)?.lowercased()
+            if ["tool_use", "function_call", "custom_tool_call"].contains(type ?? "") {
+                return false
+            }
+            if let type, attachmentTypes.contains(type), meaningful(object) { return true }
             if object.contains(where: { key, value in
                 ["attachment", "attachments", "file", "fileData", "image", "image_url", "inlineData"].contains(key)
-                    && !(value is NSNull)
+                    && meaningful(value)
             }) { return true }
-            return object.values.contains(where: hasNonTextContent)
+            if ["text", "input_text", "output_text", "thinking", "reasoning"].contains(type ?? "") {
+                return false
+            }
+            return object.contains { key, value in
+                !["input", "args", "arguments"].contains(key) && hasNonTextContent(value)
+            }
         }
         if let array = content as? [Any] {
             return array.contains(where: hasNonTextContent)

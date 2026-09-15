@@ -127,6 +127,44 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(newestUnreadable?.title, "Fallback request")
     }
 
+    func testNewAndReplacedCodexRolloutsFillSidecarNames() async throws {
+        let root = try directory()
+        let rollouts = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: rollouts, withIntermediateDirectories: true)
+        let original = rollouts.appendingPathComponent("rollout-original.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "original-id", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": "Original request"]]]],
+        ], to: original)
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try write([
+            ["id": "original-id", "thread_name": "Original name"],
+            ["id": "new-id", "thread_name": "New name"],
+        ], to: sidecar)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: rollouts)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let initial = try await database.sessions()
+        XCTAssertEqual(initial.first?.title, "Original name")
+
+        let added = rollouts.appendingPathComponent("rollout-added.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "new-id", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": "New request"]]]],
+        ], to: added)
+        await coordinator.refresh(paths: [added.path], scope: .proseOnly)
+        let afterAdd = try await database.sessions()
+        XCTAssertEqual(Set(afterAdd.map(\.title)), ["Original name", "New name"])
+
+        try write([
+            ["type": "session_meta", "payload": ["id": "original-id", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": "Rewritten request"]]]],
+        ], to: original)
+        await coordinator.refresh(paths: [original.path], scope: .proseOnly)
+        let afterReplace = try await database.sessions()
+        XCTAssertEqual(Set(afterReplace.map(\.title)), ["Original name", "New name"])
+    }
+
     func testPlanFalsePositivesAndProviderSubmissions() throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")
@@ -197,6 +235,45 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertTrue(tailMetadata.titleIsExplicit)
         XCTAssertNil(tailMetadata.firstUserMessage)
         XCTAssertEqual(tail.checkpoint, finalBoundary)
+    }
+
+    func testGeminiJSONLInheritedAndSetSessionIDsMatchMetadata() async throws {
+        let root = try directory()
+        let chats = root.appendingPathComponent("project/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let headerFile = chats.appendingPathComponent("session-header.jsonl")
+        try write([
+            ["sessionId": "header-id", "$set": ["messages": [
+                ["id": "user-1", "type": "user", "content": "First request"]]]],
+            ["$set": ["summary": "Inherited title", "messages": [
+                ["id": "reply-1", "type": "gemini", "content": "First answer"]]]],
+        ], to: headerFile)
+        let setFile = chats.appendingPathComponent("session-set.jsonl")
+        try write([
+            ["$set": ["sessionId": "set-id", "title": "Set title", "messages": [
+                ["id": "user-2", "type": "user", "content": "Second request"]]]],
+            ["$set": ["messages": [
+                ["id": "reply-2", "type": "gemini", "content": "Second answer"]]]],
+        ], to: setFile)
+
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [GeminiSource(root: root)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let sessions = try await database.sessions()
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: sessions.map { ($0.title, $0.messageCount) }), [
+            "Inherited title": 2, "Set title": 2,
+        ])
+
+        let handle = try FileHandle(forWritingTo: headerFile)
+        try handle.seekToEnd()
+        let tail: [String: Any] = ["$set": ["messages": [
+            ["id": "user-3", "sessionId": "nested-id", "type": "user", "content": "Follow-up request"]]]]
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: tail) + Data([10]))
+        try handle.close()
+        await coordinator.refresh(paths: [headerFile.path], scope: .proseOnly)
+        let afterAppend = try await database.sessions()
+        XCTAssertEqual(afterAppend.count, 2)
+        XCTAssertEqual(afterAppend.first(where: { $0.title == "Inherited title" })?.messageCount, 3)
     }
 
     func testMetadataIsScopedToExternalSessionIDAndCodexPlanShapes() async throws {

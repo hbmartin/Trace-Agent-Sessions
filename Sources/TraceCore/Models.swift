@@ -496,9 +496,9 @@ public struct TranscriptVisibility: Hashable, Sendable {
     public func includes(_ message: MessageSummary) -> Bool {
         if message.hasError { return true }
         // System is a record category; section switches also apply inside it.
-        if message.role == .system && !system { return false }
+        if !includes(role: message.role) { return false }
         if let flags = message.sectionFlags {
-            if flags == 0 { return includes(role: message.role) }
+            if flags == 0 { return false }
             let includesAttachment = flags & 8 != 0 && includes(role: message.role)
             return flags & 1 != 0 || (tools && flags & 2 != 0) || (reasoning && flags & 4 != 0) || includesAttachment
         }

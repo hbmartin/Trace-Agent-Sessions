@@ -61,9 +61,19 @@ final class TraceModel: ObservableObject {
         Task {
             do {
                 try await diagnostics.markLaunchStarted()
-                let database = try IndexDatabase(url: TraceRuntime.testDirectory?.appendingPathComponent("index.sqlite") ?? IndexDatabase.defaultURL())
+                let isolatedURL = TraceRuntime.testDirectory?.appendingPathComponent("index.sqlite")
+                let database = try await Task.detached(priority: .userInitiated) {
+                    if isolatedURL != nil,
+                       let delay = ProcessInfo.processInfo.environment["TRACE_TEST_INDEX_OPEN_DELAY_MS"].flatMap(Double.init),
+                       delay > 0 {
+                        try await Task.sleep(for: .milliseconds(Int(min(delay, 5_000))))
+                    }
+                    let url = try isolatedURL ?? IndexDatabase.defaultURL()
+                    return try IndexDatabase(url: url)
+                }.value
                 self.database = database
                 if database.contentWasResetOnOpen { prepareForIndexReset() }
+                try await database.rebuildUsageRollupsIfDirty()
                 let sources = makeSources()
                 let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
@@ -120,7 +130,8 @@ final class TraceModel: ObservableObject {
                 incrementalProgressTask?.cancel()
                 incrementalProgressTask = nil
                 pendingIncrementalProgress = nil
-                if incrementalProgressVisible || update.phase == .failed || update.failedFiles > 0 {
+                if incrementalProgressVisible || update.phase == .failed || update.failedFiles > 0
+                    || progress.phase == .failed || progress.failedFiles > 0 {
                     progress = update
                 }
                 incrementalProgressVisible = false
@@ -147,8 +158,16 @@ final class TraceModel: ObservableObject {
         if shouldRefresh {
             lastSummaryRefresh = .now
             await reloadSummaries(lightweight: !terminal)
-            if !globalSearch.query.isEmpty, !globalSearch.protectsPagination { search() }
-            if !mainSearch.query.isEmpty, !mainSearch.protectsPagination { searchMain() }
+            if terminal && update.indexChanged {
+                if !globalSearch.query.isEmpty {
+                    if globalSearch.protectsPagination { globalSearch.markResultsStale() }
+                    else { search() }
+                }
+                if !mainSearch.query.isEmpty {
+                    if mainSearch.protectsPagination { mainSearch.markResultsStale() }
+                    else { searchMain() }
+                }
+            }
         }
     }
 
@@ -195,6 +214,11 @@ final class TraceModel: ObservableObject {
     }
 
     func sessionErrorText(_ session: SessionSummary) async -> String {
+        if TraceRuntime.testDirectory != nil,
+           let delay = ProcessInfo.processInfo.environment["TRACE_TEST_ERROR_LOAD_DELAY_MS"].flatMap(Double.init),
+           delay > 0 {
+            try? await Task.sleep(for: .milliseconds(Int(min(delay, 5_000))))
+        }
         guard let coordinator else {
             return "Error details are unavailable while the index is starting."
         }

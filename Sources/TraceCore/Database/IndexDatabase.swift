@@ -28,8 +28,8 @@ struct IndexedSourceState: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 4
-    public static let indexFormatVersion = 2
+    public static let schemaVersion = 5
+    public static let indexFormatVersion = 3
     public nonisolated let contentWasResetOnOpen: Bool
     private let pool: DatabasePool
     private let url: URL
@@ -58,7 +58,14 @@ public actor IndexDatabase {
         }
         pool = try DatabasePool(path: url.path, configuration: configuration)
         try Self.migrate(pool)
+        try pool.write { db in
+            try db.execute(sql: "INSERT OR IGNORE INTO trace_meta(key, value) VALUES ('usage_rollups_dirty', '1')")
+        }
         contentWasResetOnOpen = try Self.rebuildContentIfNeeded(pool)
+    }
+
+    private static func markRollupsDirty(_ db: Database) throws {
+        try db.execute(sql: "UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty'")
     }
 
     private static func migrate(_ pool: DatabasePool) throws {
@@ -225,6 +232,11 @@ public actor IndexDatabase {
             try db.execute(sql: "ALTER TABLE source_file ADD COLUMN content_generation INTEGER NOT NULL DEFAULT 0")
             try db.execute(sql: "UPDATE trace_meta SET value='4' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v5-usage-project") { db in
+            try db.execute(sql: "ALTER TABLE usage_observation ADD COLUMN project_id INTEGER REFERENCES project(id)")
+            try db.execute(sql: "UPDATE usage_observation SET project_id=(SELECT project_id FROM session WHERE session.id=usage_observation.session_id)")
+            try db.execute(sql: "UPDATE trace_meta SET value='5' WHERE key='schema_version'")
+        }
         try migrator.migrate(pool)
     }
 
@@ -240,6 +252,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM project")
+                try markRollupsDirty(db)
                 try db.execute(
                     sql: "INSERT INTO trace_meta(key, value) VALUES ('index_format_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     arguments: [String(indexFormatVersion)]
@@ -273,6 +286,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM project")
+                try Self.markRollupsDirty(db)
                 if !keepingRoots { try db.execute(sql: "DELETE FROM source_root") }
                 return .commit
             }
@@ -393,6 +407,7 @@ public actor IndexDatabase {
                 )
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file WHERE id=?", arguments: [id])
+                try Self.markRollupsDirty(db)
                 try deleteOrphanedProjects(db: db)
                 return .commit
             }
@@ -412,6 +427,7 @@ public actor IndexDatabase {
                 )
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM session WHERE source_file_id=?", arguments: [id])
+                try Self.markRollupsDirty(db)
                 try deleteOrphanedProjects(db: db)
                 try db.execute(
                     sql: "UPDATE source_file SET scanned_bytes=0, last_error=NULL, metadata_revision=NULL, content_generation=content_generation+1 WHERE id=?",
@@ -458,6 +474,7 @@ public actor IndexDatabase {
                 )
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM session WHERE source_file_id=?", arguments: [id])
+                try Self.markRollupsDirty(db)
                 try deleteOrphanedProjects(db: db)
                 try insert(records: records, sourceFileID: id, scope: scope, db: db)
                 try db.execute(
@@ -689,6 +706,10 @@ public actor IndexDatabase {
             arguments: [project.key, project.path, project.name]
         )
         let projectID = try Int64.fetchOne(db, sql: "SELECT id FROM project WHERE canonical_key=?", arguments: [project.key])!
+        let previousProjectID = try Int64.fetchOne(
+            db, sql: "SELECT project_id FROM session WHERE source_file_id=? AND external_id=?",
+            arguments: [sourceFileID, externalID]
+        )
         try db.execute(
             sql: """
                 INSERT INTO session(project_id, source_file_id, agent, external_id, started_at, last_activity_at, message_count)
@@ -700,6 +721,9 @@ public actor IndexDatabase {
                 """,
             arguments: [projectID, sourceFileID, agent.rawValue, externalID, timestamp, timestamp]
         )
+        if let previousProjectID, previousProjectID != projectID {
+            try Self.markRollupsDirty(db)
+        }
         return try Int64.fetchOne(
             db,
             sql: "SELECT id FROM session WHERE source_file_id=? AND external_id=?",
@@ -717,20 +741,22 @@ public actor IndexDatabase {
         agent: AgentKind,
         db: Database
     ) throws {
+        let projectID = try Int64.fetchOne(db, sql: "SELECT project_id FROM session WHERE id=?", arguments: [sessionID])!
         try db.execute(
             sql: """
                 INSERT OR IGNORE INTO usage_observation(
-                    source_file_id, session_id, source_key, agent, dedupe_key, ts, model,
+                    source_file_id, session_id, project_id, source_key, agent, dedupe_key, ts, model,
                     input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
                     reasoning_tokens, is_sidechain
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             arguments: [
-                sourceFileID, sessionID, sourceKey, agent.rawValue, usage.dedupeKey,
+                sourceFileID, sessionID, projectID, sourceKey, agent.rawValue, usage.dedupeKey,
                 timestamp, usage.model, usage.inputTokens, usage.outputTokens,
                 usage.cacheWriteTokens, usage.cacheReadTokens, usage.reasoningTokens, sidechain,
             ]
         )
+        if db.changesCount > 0 { try Self.markRollupsDirty(db) }
     }
 
     private func nextMessageID(timestamp: Int64, db: Database) throws -> Int64 {
@@ -790,7 +816,7 @@ public actor IndexDatabase {
     }
 
     private func deleteOrphanedProjects(db: Database) throws {
-        try db.execute(sql: "DELETE FROM project WHERE NOT EXISTS (SELECT 1 FROM session WHERE session.project_id=project.id)")
+        try db.execute(sql: "DELETE FROM project WHERE NOT EXISTS (SELECT 1 FROM session WHERE session.project_id=project.id) AND NOT EXISTS (SELECT 1 FROM usage_observation WHERE usage_observation.project_id=project.id)")
     }
 
     func recordSourceError(path: String, error: String) throws {
@@ -835,24 +861,41 @@ public actor IndexDatabase {
                     )
                     WITH canonical AS (
                         SELECT u.*,
-                               row_number() OVER (PARTITION BY u.agent, u.dedupe_key ORDER BY u.id) AS occurrence
+                               row_number() OVER (
+                                   PARTITION BY u.agent, u.dedupe_key
+                                   ORDER BY coalesce(u.output_tokens, -1) DESC, u.id DESC
+                               ) AS occurrence,
+                               max(u.input_tokens) OVER response AS total_input,
+                               max(u.output_tokens) OVER response AS total_output,
+                               max(u.cache_write_tokens) OVER response AS total_cache_write,
+                               max(u.cache_read_tokens) OVER response AS total_cache_read,
+                               max(u.reasoning_tokens) OVER response AS total_reasoning
                         FROM usage_observation u
+                        WINDOW response AS (PARTITION BY u.agent, u.dedupe_key)
                     )
                     SELECT strftime('%Y-%m-%d', c.ts / 1000, 'unixepoch', 'localtime'),
-                           s.project_id, c.model, c.is_sidechain,
-                           sum(coalesce(c.input_tokens, 0)),
-                           sum(coalesce(c.output_tokens, 0)),
-                           sum(coalesce(c.cache_write_tokens, 0)),
-                           sum(coalesce(c.cache_read_tokens, 0)),
-                           sum(coalesce(c.reasoning_tokens, 0))
+                           coalesce(c.project_id, s.project_id), c.model, c.is_sidechain,
+                           sum(coalesce(c.total_input, 0)),
+                           sum(coalesce(c.total_output, 0)),
+                           sum(coalesce(c.total_cache_write, 0)),
+                           sum(coalesce(c.total_cache_read, 0)),
+                           sum(coalesce(c.total_reasoning, 0))
                     FROM canonical c
                     JOIN session s ON s.id = c.session_id
                     WHERE c.occurrence = 1
                     GROUP BY 1, 2, 3, 4
                     """)
+                try db.execute(sql: "UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty'")
                 return .commit
             }
         }
+    }
+
+    public func rebuildUsageRollupsIfDirty() throws {
+        let dirty = try pool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'") != "0"
+        }
+        if dirty { try rebuildUsageRollups() }
     }
 
     public func search(
@@ -997,11 +1040,12 @@ public actor IndexDatabase {
                     try db.execute(sql: """
                         UPDATE session SET
                             first_user_message=?,
-                            generated_title=?,
+                            generated_title=CASE WHEN agent=? THEN generated_title ELSE ? END,
                             has_plan=?
                         WHERE source_file_id=? AND external_id=?
                         """, arguments: [
                             metadata.firstUserMessage,
+                            AgentKind.codex.rawValue,
                             metadata.title,
                             metadata.hasPlan,
                             sourceID,
@@ -1029,20 +1073,40 @@ public actor IndexDatabase {
         }
     }
 
-    func updateCodexNames(_ names: [String: String], root: URL) throws {
+    func hasUntitledCodexSessions(sourceID: Int64) throws -> Bool {
+        try pool.read { db in
+            try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM session WHERE source_file_id=? AND agent=? AND generated_title IS NULL)",
+                              arguments: [sourceID, AgentKind.codex.rawValue]) ?? false
+        }
+    }
+
+    func updateCodexNames(
+        _ names: [String: String], root: URL,
+        sourceID: Int64? = nil, onlyMissing: Bool = false
+    ) throws -> Bool {
         try pool.write { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT s.id, s.external_id FROM session s JOIN source_file sf ON sf.id=s.source_file_id
-                JOIN source_root sr ON sr.id=sf.root_id WHERE s.agent=? AND sr.path=?
-                """, arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path])
+                SELECT s.id, s.external_id, s.generated_title FROM session s
+                JOIN source_file sf ON sf.id=s.source_file_id
+                JOIN source_root sr ON sr.id=sf.root_id
+                WHERE s.agent=? AND sr.path=? AND (? IS NULL OR sf.id=?)
+                """, arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path, sourceID, sourceID])
+            var changed = false
             for row in rows {
                 let externalID: String = row["external_id"]
                 let id: Int64 = row["id"]
+                let existing: String? = row["generated_title"]
+                if onlyMissing && existing != nil { continue }
+                let title = names[externalID]
+                if onlyMissing && title == nil { continue }
+                if title == existing { continue }
                 try db.execute(
                     sql: "UPDATE session SET generated_title=? WHERE id=?",
-                    arguments: [names[externalID], id]
+                    arguments: [title, id]
                 )
+                changed = true
             }
+            return changed
         }
     }
 

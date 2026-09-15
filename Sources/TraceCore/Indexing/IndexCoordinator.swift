@@ -10,6 +10,7 @@ public struct IndexProgress: Sendable {
     public var completedFiles: Int
     public var totalFiles: Int
     public var indexedFiles: Int = 0
+    public var indexChanged: Bool = false
     public var unchangedFiles: Int = 0
     public var failedFiles: Int = 0
     public var committedBytes: Int64 = 0
@@ -82,7 +83,10 @@ public actor IndexCoordinator {
         do {
             try Task.checkCancellation()
             let oldScope = try await database.storedIndexScope()
-            if rebuild || oldScope != scope { try await database.clearIndex() }
+            if rebuild || oldScope != scope {
+                try await database.clearIndex()
+                await mutations.markChanged()
+            }
             try await database.setIndexScope(scope)
             await progress(status)
             var rootIDs: [String: Int64] = [:]
@@ -138,7 +142,16 @@ public actor IndexCoordinator {
                         update.committedBytes += newlyCommitted
                         await progress(update)
                     }
-                    try await refreshMetadata(file: file)
+                    let metadataChanged = try await refreshMetadata(file: file)
+                    if metadataChanged { await mutations.markChanged() }
+                    if !fullScan, file.agent == .codex, (outcome.changed || metadataChanged),
+                       let state = try await database.sourceState(path: file.url.path),
+                       try await database.hasUntitledCodexSessions(sourceID: state.id) {
+                        let names = await Self.loadCodexNames(directory: file.root.deletingLastPathComponent())
+                        if try await database.updateCodexNames(
+                            names, root: file.root, sourceID: state.id, onlyMissing: true
+                        ) { await mutations.markChanged() }
+                    }
                     if outcome.changed { status.indexedFiles += 1 } else { status.unchangedFiles += 1 }
                     status.committedBytes += outcome.committedBytes
                 } catch is CancellationError { throw CancellationError() }
@@ -171,15 +184,14 @@ public actor IndexCoordinator {
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots {
                     let names = await Self.loadCodexNames(directory: root.url.deletingLastPathComponent())
-                    try await database.updateCodexNames(names, root: root.url)
+                    if try await database.updateCodexNames(names, root: root.url) {
+                        await mutations.markChanged()
+                    }
                 }
             }
             status.phase = .aggregating
             await progress(status)
-            let rollupInputChanged = await mutations.hasChanges()
-            if fullScan || rollupInputChanged {
-                try await database.rebuildUsageRollups()
-            }
+            try await database.rebuildUsageRollupsIfDirty()
             try Task.checkCancellation()
             status.phase = .complete
             status.currentPath = nil
@@ -190,6 +202,7 @@ public actor IndexCoordinator {
             status.phase = .failed
             status.error = error.localizedDescription
         }
+        status.indexChanged = await mutations.hasChanges()
         await progress(status)
     }
 
@@ -245,14 +258,14 @@ public actor IndexCoordinator {
         return failures.sorted { $0.timestampMilliseconds > $1.timestampMilliseconds }
     }
 
-    private func refreshMetadata(file: DiscoveredSourceFile) async throws {
-        guard let state = try await database.sourceState(path: file.url.path) else { return }
+    private func refreshMetadata(file: DiscoveredSourceFile) async throws -> Bool {
+        guard let state = try await database.sourceState(path: file.url.path) else { return false }
         let storedRevision = try await database.metadataRevision(sourceID: state.id)
         let stored = storedRevision.flatMap(MetadataRevision.init)
         if stored?.version == 2,
            stored?.contentGeneration == state.contentGeneration,
            stored?.checkpoint == state.scannedBytes {
-            return
+            return false
         }
         let canMerge = file.format != .geminiJSON
             && stored?.version == 2
@@ -265,16 +278,17 @@ public actor IndexCoordinator {
             ? try await database.metadataSessionContext(sourceID: state.id, before: startOffset)
             : nil
         let before = try TraceFileIO.fingerprint(url: file.url)
-        guard before.size == state.size, before.modificationNanoseconds == state.modificationNanoseconds else { return }
+        guard before.size == state.size, before.modificationNanoseconds == state.modificationNanoseconds else { return false }
         let scan = try await Self.scanMetadata(
             file: file,
             from: startOffset,
             through: state.scannedBytes,
             initialSessionID: initialSessionID
         )
-        guard before == (try TraceFileIO.fingerprint(url: file.url)) else { return }
+        guard before == (try TraceFileIO.fingerprint(url: file.url)) else { return false }
         let revision = "2:\(state.contentGeneration):\(scan.checkpoint)"
         try await database.updateMetadata(sourceID: state.id, revision: revision, scan: scan, mode: mode)
+        return !scan.sessions.isEmpty
     }
 
     private nonisolated static func scanMetadata(

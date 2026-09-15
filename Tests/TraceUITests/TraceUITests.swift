@@ -85,6 +85,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Reasoning explanation"].exists)
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniqueInvocation")).firstMatch.exists)
         XCTAssertTrue(app.staticTexts["Image or attachment"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Error details hidden by current toggles."].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Error recorded without text details."].waitForExistence(timeout: 5))
         let filter = app.textFields["projectFilter"]
         filter.click()
@@ -135,6 +136,181 @@ final class TraceUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Live append arrived"].waitForExistence(timeout: 15))
         XCTAssertTrue(existing.exists, "an append must not discard already hydrated message bodies")
+    }
+
+    func testErrorPopoverInvalidatesAfterNewFailure() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let icon = app.images["Session error"].firstMatch
+        XCTAssertTrue(icon.waitForExistence(timeout: 15))
+        icon.hover()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "UniqueOutput: file missing"
+        )).firstMatch.waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
+
+        let file = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        let appended: [String: Any] = [
+            "type": "user", "uuid": "later-failure", "sessionId": "test-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:10Z",
+            "message": ["content": [["type": "tool_result", "is_error": true,
+                                    "content": "Later failure detail"]]],
+        ]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: appended) + Data([10]))
+        try handle.close()
+        icon.hover()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "Later failure detail"
+        )).firstMatch.waitForExistence(timeout: 15))
+    }
+
+    func testCancelledErrorPopoverLoadRetriesWhenRowReturns() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let source = directory.appendingPathComponent("Sources/Claude")
+        for index in 0..<35 {
+            let row: [String: Any] = [
+                "type": "user", "uuid": "older-\(index)", "sessionId": "older-\(index)",
+                "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T09:00:00Z",
+                "message": ["content": "Older session \(index)"],
+            ]
+            try (JSONSerialization.data(withJSONObject: row) + Data([10]))
+                .write(to: source.appendingPathComponent("older-\(index).jsonl"))
+        }
+        app.launchEnvironment["TRACE_TEST_ERROR_LOAD_DELAY_MS"] = "2000"
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let icon = app.images["Session error"].firstMatch
+        XCTAssertTrue(icon.waitForExistence(timeout: 20))
+        icon.hover()
+        XCTAssertTrue(app.staticTexts["Loading error details…"].waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
+        let list = app.descendants(matching: .any).matching(identifier: "sessionSidebarList").firstMatch
+        XCTAssertTrue(list.exists)
+        list.scroll(byDeltaX: 0, deltaY: -5_000)
+        XCTAssertFalse(icon.isHittable)
+        list.scroll(byDeltaX: 0, deltaY: 5_000)
+        XCTAssertTrue(icon.isHittable)
+        icon.hover()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "UniqueOutput: file missing"
+        )).firstMatch.waitForExistence(timeout: 10))
+    }
+
+    func testPaginatedSearchOffersManualRefreshAfterIndexChange() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/paginated.jsonl")
+        var data = Data()
+        for index in 0..<215 {
+            let row: [String: Any] = [
+                "type": "assistant", "uuid": "paged-\(index)", "sessionId": "paged-session",
+                "cwd": "/tmp/TraceUIExample", "timestamp": 1_700_000_000_000 + index * 1_000,
+                "message": ["content": "PaginatedNeedle row \(index)"],
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: row))
+            data.append(10)
+        }
+        try data.write(to: file)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 15))
+        query.click()
+        query.typeText("PaginatedNeedle")
+        let scroll = app.scrollViews["searchResultsScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 15))
+        let originalTop = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "PaginatedNeedle row 214"
+        )).firstMatch
+        XCTAssertTrue(originalTop.waitForExistence(timeout: 10))
+        for _ in 0..<3 { scroll.scroll(byDeltaX: 0, deltaY: -20_000) }
+        XCTAssertFalse(originalTop.isHittable)
+
+        let appended: [String: Any] = [
+            "type": "assistant", "uuid": "paged-new", "sessionId": "paged-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": 1_700_000_400_000,
+            "message": ["content": "PaginatedNeedle newest row"],
+        ]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: appended) + Data([10]))
+        try handle.close()
+        let refresh = app.buttons["refreshSearchResults"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 15))
+        XCTAssertFalse(originalTop.isHittable, "marking results stale must keep the current scroll position")
+        refresh.click()
+        XCTAssertFalse(app.staticTexts["Results may be out of date."].exists)
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "PaginatedNeedle newest row"
+        )).firstMatch.waitForExistence(timeout: 10))
+    }
+
+    func testVersionOneIndexUpgradeKeepsMainWindowResponsive() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let current = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Index current"
+        )).firstMatch
+        XCTAssertTrue(current.waitForExistence(timeout: 15))
+        app.terminate()
+
+        let sqlite = Process()
+        sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        sqlite.arguments = [directory.appendingPathComponent("index.sqlite").path,
+            "UPDATE trace_meta SET value='1' WHERE key='index_format_version';"]
+        try sqlite.run()
+        sqlite.waitUntilExit()
+        XCTAssertEqual(sqlite.terminationStatus, 0)
+
+        app.launchEnvironment["TRACE_TEST_INDEX_OPEN_DELAY_MS"] = "5000"
+        app.launch()
+        let status = app.buttons["indexProgress"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(status.isHittable)
+        status.click()
+        XCTAssertTrue(app.staticTexts["Ready to build index"].exists,
+                      "the main window should respond while the index opens")
+        XCTAssertTrue(current.waitForExistence(timeout: 20))
+    }
+
+    func testSuccessfulIncrementalPassClearsEarlierFileFailure() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let current = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Index current"
+        )).firstMatch
+        XCTAssertTrue(current.waitForExistence(timeout: 15))
+
+        let file = directory.appendingPathComponent("Sources/Claude/retry.jsonl")
+        let row: [String: Any] = [
+            "type": "user", "uuid": "retry-one", "sessionId": "retry-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "message": ["content": "Recovered index file"],
+        ]
+        try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+
+        let failed = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "failed files"
+        )).firstMatch
+        XCTAssertTrue(failed.waitForExistence(timeout: 15))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data([10]))
+        try handle.close()
+        XCTAssertTrue(current.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Recovered index file"].waitForExistence(timeout: 10))
     }
 
     func testPopoverKeepsSearchAndFooterVisibleWithTenSessions() throws {
@@ -242,6 +418,16 @@ final class TraceUITests: XCTestCase {
         let restored = scroll.staticTexts.matching(NSPredicate(format: "value == %@", anchorText)).firstMatch
         XCTAssertTrue(restored.waitForExistence(timeout: 10))
         XCTAssertTrue(restored.isHittable)
+        let offsetRestored = NSPredicate { _, _ in
+            restored.isHittable && abs(restored.frame.minY - anchorY) <= 35
+        }
+        expectation(for: offsetRestored, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
+        for _ in 0..<5 {
+            XCTAssertEqual(restored.frame.minY, anchorY, accuracy: 35,
+                           "restoration retries must retain the saved offset")
+            Thread.sleep(forTimeInterval: 0.08)
+        }
         XCTAssertEqual(restored.frame.minY, anchorY, accuracy: 35)
         app.buttons["backToProject"].click()
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
