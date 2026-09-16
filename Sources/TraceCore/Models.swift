@@ -338,7 +338,7 @@ public struct SearchFilters: Equatable, Sendable {
     }
 }
 
-public struct SearchCursor: Codable, Sendable {
+public struct SearchCursor: Codable, Hashable, Sendable {
     public let rowID: Int64
     public let rank: Double?
 }
@@ -370,6 +370,7 @@ public struct SearchPage: Sendable {
 
 public struct ProjectSummary: Identifiable, Sendable {
     public let id: Int64
+    public let canonicalKey: String
     public let displayName: String
     public let rootPath: String
     public let sessionCount: Int

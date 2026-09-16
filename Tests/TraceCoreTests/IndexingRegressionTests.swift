@@ -524,6 +524,59 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(dirty, "0")
     }
 
+    func testConcurrentDirtyRollupRequestsRebuildExactlyOnce() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let usage = #"{"type":"assistant","uuid":"one","sessionId":"session","cwd":"/tmp/project","timestamp":1700000000000,"message":{"id":"response","model":"claude-sonnet-5","content":"answer","usage":{"input_tokens":10,"output_tokens":2}}}"# + "\n"
+        try Data(usage.utf8).write(to: file)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        await IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+            .indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "CREATE TABLE concurrent_rollup_audit(value INTEGER)")
+            try db.execute(sql: """
+                CREATE TRIGGER concurrent_rollup AFTER DELETE ON usage_daily
+                BEGIN INSERT INTO concurrent_rollup_audit VALUES (1); END
+                """)
+            try db.execute(
+                sql: "UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty'"
+            )
+        }
+
+        let results = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<20 {
+                group.addTask {
+                    try await database.rebuildUsageRollupsIfDirty(
+                        timeZoneID: "Test/Concurrent"
+                    )
+                }
+            }
+            var results: [Bool] = []
+            for try await result in group { results.append(result) }
+            return results
+        }
+
+        XCTAssertEqual(results.filter { $0 }.count, 1)
+        let (deletes, dirty, zone) = try await raw.read { db in
+            (
+                try Int.fetchOne(
+                    db, sql: "SELECT count(*) FROM concurrent_rollup_audit"
+                ),
+                try String.fetchOne(
+                    db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'"
+                ),
+                try String.fetchOne(
+                    db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_timezone'"
+                )
+            )
+        }
+        XCTAssertEqual(deletes, 1)
+        XCTAssertEqual(dirty, "0")
+        XCTAssertEqual(zone, "Test/Concurrent")
+    }
+
     func testIndexFormatResetIsReportedAndBatchCheckpointsAreBounded() async throws {
         let root = try directory()
         let databaseURL = root.appendingPathComponent("index.sqlite")
@@ -907,7 +960,7 @@ final class IndexingRegressionTests: XCTestCase {
         )
     }
 
-    func testCanonicalPathProbesCaseSensitivityOncePerDevice() throws {
+    func testCanonicalPathProbesCaseSensitivityOncePerVolume() throws {
         let root = try directory()
         TraceFileIO.resetVolumeCaseSensitivityCacheForTesting()
         defer { TraceFileIO.resetVolumeCaseSensitivityCacheForTesting() }
@@ -915,6 +968,40 @@ final class IndexingRegressionTests: XCTestCase {
         _ = TraceFileIO.canonicalPath(root.appendingPathComponent("first/missing.jsonl").path)
         _ = TraceFileIO.canonicalPath(root.appendingPathComponent("second/missing.jsonl").path)
         XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 1)
+    }
+
+    func testCaseSensitivityCacheUsesVolumeUUIDAndSkipsUnknownVolumes() {
+        TraceFileIO.resetVolumeCaseSensitivityCacheForTesting()
+        defer { TraceFileIO.resetVolumeCaseSensitivityCacheForTesting() }
+        var firstVolumeProbes = 0
+        var secondVolumeProbes = 0
+        var unknownVolumeProbes = 0
+
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-a") {
+            firstVolumeProbes += 1
+            return true
+        })
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-a") {
+            firstVolumeProbes += 1
+            return false
+        })
+        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-b") {
+            secondVolumeProbes += 1
+            return false
+        })
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: nil) {
+            unknownVolumeProbes += 1
+            return true
+        })
+        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: nil) {
+            unknownVolumeProbes += 1
+            return false
+        })
+
+        XCTAssertEqual(firstVolumeProbes, 1)
+        XCTAssertEqual(secondVolumeProbes, 1)
+        XCTAssertEqual(unknownVolumeProbes, 2)
+        XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 2)
     }
 
     func testFailureDetailsAndProjectSearchAcrossProviders() async throws {

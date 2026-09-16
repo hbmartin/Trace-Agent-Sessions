@@ -145,7 +145,7 @@ struct LauncherView: View {
                     Button("All projects") { selectProject(nil) }
                     Divider()
                     ForEach(model.projects) { project in
-                        Button(project.displayName) { selectProject(project.id) }
+                        Button(project.displayName) { selectProject(project) }
                     }
                 } label: {
                     Label(selectedProjectName, systemImage: "folder")
@@ -191,6 +191,10 @@ struct LauncherView: View {
             HStack {
                 IndexProgressLabel(progress: model.progress)
                 Spacer()
+                if TraceTestHooks.isUITesting {
+                    Button("Rebuild Index") { model.rebuildIndex() }
+                        .accessibilityIdentifier("testRebuildIndex")
+                }
                 Text("↩ Open  ·  esc Close")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -210,20 +214,18 @@ struct LauncherView: View {
     }
 
     private var selectedProjectName: String {
+        if let name = search.projectFilterDisplayName { return name }
         guard let id = search.filters.projectID else { return "All projects" }
         return model.projects.first(where: { $0.id == id })?.displayName ?? "All projects"
     }
 
-    private func selectProject(_ id: Int64?) {
-        search.filters.projectID = id
+    private func selectProject(_ project: ProjectSummary?) {
+        search.selectProject(project)
         model.search()
     }
 
     private func selectDate(_ preset: SearchDatePreset) {
         search.datePreset = preset
-        let bounds = preset.bounds(now: Date())
-        search.filters.fromMilliseconds = bounds.from
-        search.filters.toMilliseconds = bounds.to
         model.search()
     }
 
@@ -325,6 +327,7 @@ struct SearchResultList: View {
     @State private var pendingAnchor: SearchResultAnchor?
     @State private var pendingAnchorToken = UUID()
     @State private var nativeScrollCommand: NativeScrollCommand?
+    @State private var testKeyboardScrollRequestID: UUID?
 
     var body: some View {
         if search.isSearching && search.results.isEmpty {
@@ -335,6 +338,10 @@ struct SearchResultList: View {
             ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try another word or project."))
         } else {
             VStack(spacing: 0) {
+                if usesNativeScrolling && TraceTestHooks.isUITesting {
+                    Button("Keyboard page down") { testKeyboardScrollRequestID = UUID() }
+                        .accessibilityIdentifier("testKeyboardPageDown")
+                }
                 if search.resultsMayBeStale {
                     HStack {
                         Text("Results may be out of date.")
@@ -357,6 +364,7 @@ struct SearchResultList: View {
                                 onScroll: { contentOffset = $0 },
                                 onUserScroll: { cancelCapturedAnchorForUser() },
                                 scrollCommand: nativeScrollCommand,
+                                testKeyboardScrollRequestID: testKeyboardScrollRequestID,
                                 resultSetID: search.resultSetID
                             ) {
                                 rowsContent.onPreferenceChange(RowFramesPreference.self) {
@@ -405,6 +413,10 @@ struct SearchResultList: View {
     private var rowsContent: some View {
         Group {
             if usesNativeScrolling {
+                VStack(alignment: .leading, spacing: 5) { resultRows }
+            } else if TraceTestHooks.isUITesting,
+                      TraceTestHooks.environment["TRACE_TEST_DUPLICATE_FIRST_ADDITIONAL_SEARCH_PAGE"]
+                        != nil {
                 VStack(alignment: .leading, spacing: 5) { resultRows }
             } else {
                 LazyVStack(alignment: .leading, spacing: 5) { resultRows }

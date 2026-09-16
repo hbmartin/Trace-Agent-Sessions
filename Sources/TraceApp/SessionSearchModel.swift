@@ -11,6 +11,8 @@ final class SessionSearchModel: ObservableObject {
     @Published var query = ""
     @Published var filters = SearchFilters()
     @Published var datePreset = SearchDatePreset.anyTime
+    @Published private(set) var projectFilterCanonicalKey: String?
+    @Published private(set) var projectFilterDisplayName: String?
     @Published private(set) var results: [SearchResult] = []
     @Published private(set) var snippets: [Int64: String] = [:]
     @Published private(set) var isSearching = false
@@ -36,6 +38,9 @@ final class SessionSearchModel: ObservableObject {
     private var injectedDuplicateAdditionalPage = false
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
+    var isWaitingForProjectFilterResolution: Bool {
+        projectFilterCanonicalKey != nil && filters.projectID == nil
+    }
 
     func markResultsStale() {
         if !query.isEmpty { resultsMayBeStale = true }
@@ -47,10 +52,42 @@ final class SessionSearchModel: ObservableObject {
         self.diagnostics = diagnostics
     }
 
+    func selectProject(_ project: ProjectSummary?) {
+        filters.projectID = project?.id
+        projectFilterCanonicalKey = project?.canonicalKey
+        projectFilterDisplayName = project?.displayName
+    }
+
+    @discardableResult
+    func resolveProjectFilter(in projects: [ProjectSummary], final: Bool) -> Bool {
+        guard let projectFilterCanonicalKey else { return false }
+        if let project = projects.first(where: { $0.canonicalKey == projectFilterCanonicalKey }) {
+            let changed = filters.projectID != project.id
+                || projectFilterDisplayName != project.displayName
+            filters.projectID = project.id
+            projectFilterDisplayName = project.displayName
+            return changed
+        }
+        guard final else { return false }
+        filters.projectID = nil
+        self.projectFilterCanonicalKey = nil
+        projectFilterDisplayName = nil
+        return true
+    }
+
+    func clearProjectFilter() {
+        filters.projectID = nil
+        projectFilterCanonicalKey = nil
+        projectFilterDisplayName = nil
+    }
+
     func search(sort: SearchSort? = nil, reset: Bool = true,
                 trigger: SearchTrigger = .user) {
         if let sort { self.sort = sort }
         if reset {
+            let bounds = datePreset.bounds(now: Date())
+            filters.fromMilliseconds = bounds.from
+            filters.toMilliseconds = bounds.to
             if trigger == .automatic { automaticRefreshToken = UUID() }
             resultsMayBeStale = false
             let criteriaChanged = query != lastQuery || filters != lastFilters || self.sort != lastSort
@@ -84,6 +121,11 @@ final class SessionSearchModel: ObservableObject {
             error = nil
             return
         }
+        guard !isWaitingForProjectFilterResolution else {
+            isSearching = false
+            error = nil
+            return
+        }
         let id = UUID()
         requestID = id
         let query = query
@@ -111,27 +153,43 @@ final class SessionSearchModel: ObservableObject {
                 let started = ContinuousClock.now
                 guard let self, self.requestID == id else { return }
                 var cursor = initialCursor
-                var visitedCursors = Set<SearchCursorIdentity>()
-                if let cursor { visitedCursors.insert(.init(cursor)) }
+                var visitedCursors = Set<SearchCursor>()
+                if let cursor { visitedCursors.insert(cursor) }
+                var seenResultIDs = reset ? Set<Int64>() : Set(self.results.map(\.id))
+                var bufferedTestPage: SearchPage?
                 while true {
-                    let page = try await database.search(
-                        query: query, filters: filters, sort: sort, cursor: cursor
-                    )
+                    let page: SearchPage
+                    if let buffered = bufferedTestPage {
+                        page = buffered
+                        bufferedTestPage = nil
+                    } else {
+                        page = try await database.search(
+                            query: query, filters: filters, sort: sort, cursor: cursor
+                        )
+                    }
                     try Task.checkCancellation()
                     guard self.requestID == id else { return }
-                    var pageResults = page.results
+                    var effectiveResults = page.results
+                    var effectiveNextCursor = page.nextCursor
+                    var injectedTestPage = false
                     var appendedUniqueResults = true
                     if !reset, TraceTestHooks.isUITesting,
                        TraceTestHooks.environment["TRACE_TEST_DUPLICATE_FIRST_ADDITIONAL_SEARCH_PAGE"] != nil,
-                       !self.injectedDuplicateAdditionalPage {
+                        !self.injectedDuplicateAdditionalPage {
                         self.injectedDuplicateAdditionalPage = true
-                        pageResults = Array(self.results.prefix(page.results.count))
+                        bufferedTestPage = page
+                        effectiveResults = Array(self.results.prefix(max(1, page.results.count)))
+                        effectiveNextCursor = cursor
+                        injectedTestPage = true
                     }
+                    let unique = injectedTestPage
+                        ? []
+                        : page.uniqueResults(excluding: seenResultIDs)
+                    seenResultIDs.formUnion(unique.map(\.id))
                     if reset {
                         let previous = Dictionary(
                             self.results.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }
                         )
-                        let unique = Self.uniqueResults(pageResults, excluding: [])
                         let current = Dictionary(
                             unique.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }
                         )
@@ -141,26 +199,30 @@ final class SessionSearchModel: ObservableObject {
                             return old.sourcePath == new.sourcePath && old.prefix == new.prefix
                                 && old.timestampMilliseconds == new.timestampMilliseconds
                         }
-                        if unique.count != pageResults.count { self.resultsMayBeStale = true }
-                        if trigger == .automatic { self.automaticResultRevision += 1 }
+                        if unique.count != effectiveResults.count { self.resultsMayBeStale = true }
+                        if trigger == .automatic {
+                            self.automaticResultRevision += 1
+                            TraceTestHooks.appendLine(
+                                "results:\(unique.count)",
+                                pathKey: "TRACE_TEST_AUTOMATIC_SEARCH_COMPLETED_PATH"
+                            )
+                        }
                     } else {
-                        let unique = Self.uniqueResults(pageResults, excluding: Set(self.results.map(\.id)))
                         self.results += unique
                         appendedUniqueResults = !unique.isEmpty
-                        if unique.count != pageResults.count { self.resultsMayBeStale = true }
+                        if unique.count != effectiveResults.count { self.resultsMayBeStale = true }
                     }
-                    self.nextCursor = page.nextCursor
-                    if !reset, let next = page.nextCursor,
-                       !visitedCursors.insert(.init(next)).inserted {
+                    self.nextCursor = effectiveNextCursor
+                    if !reset, !injectedTestPage, let next = effectiveNextCursor,
+                       !visitedCursors.insert(next).inserted {
                         self.resultsMayBeStale = true
                         self.nextCursor = nil
                         break
                     }
-                    if reset || appendedUniqueResults || page.nextCursor == nil {
+                    if reset || appendedUniqueResults || effectiveNextCursor == nil {
                         break
                     }
-                    guard let next = page.nextCursor else { break }
-                    cursor = next
+                    cursor = effectiveNextCursor
                 }
                 if !reset { self.hasLoadedAdditionalPages = true }
                 self.task = nil
@@ -210,6 +272,7 @@ final class SessionSearchModel: ObservableObject {
         hasLoadedAdditionalPages = false
         resultsMayBeStale = false
         automaticRefreshToken = nil
+        filters.projectID = nil
     }
 
     func hydrate(_ result: SearchResult) async {
@@ -232,20 +295,4 @@ final class SessionSearchModel: ObservableObject {
             .first { !$0.isEmpty }
     }
 
-    private static func uniqueResults(
-        _ results: [SearchResult], excluding existingIDs: Set<Int64>
-    ) -> [SearchResult] {
-        var seen = existingIDs
-        return results.filter { seen.insert($0.id).inserted }
-    }
-}
-
-private struct SearchCursorIdentity: Hashable {
-    let rowID: Int64
-    let rankBits: UInt64?
-
-    init(_ cursor: SearchCursor) {
-        rowID = cursor.rowID
-        rankBits = cursor.rank?.bitPattern
-    }
 }
