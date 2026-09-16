@@ -5,8 +5,8 @@ import os
 
 public enum TraceFileIO {
     private struct VolumeCaseSensitivityCache {
-        var values: [UInt64: Bool] = [:]
-        var probeCounts: [UInt64: Int] = [:]
+        var values: [String: Bool] = [:]
+        var probeCounts: [String: Int] = [:]
     }
 
     private static let volumeCaseSensitivity = OSAllocatedUnfairLock(
@@ -16,6 +16,7 @@ public enum TraceFileIO {
     public struct CanonicalPath: Hashable, Sendable {
         public let path: String
         public let comparisonKey: String
+        let isCaseSensitive: Bool
 
         public func contains(_ other: CanonicalPath) -> Bool {
             if comparisonKey == other.comparisonKey { return true }
@@ -47,9 +48,12 @@ public enum TraceFileIO {
         }
         resolved = resolved.standardizedFileURL
         let path = resolved.path
-        let device = status.st_dev >= 0 ? UInt64(status.st_dev) : nil
-        let caseSensitive = volumeIsCaseSensitive(at: ancestor, device: device)
-        return .init(path: path, comparisonKey: comparisonKey(path, caseSensitive: caseSensitive))
+        let caseSensitive = volumeIsCaseSensitive(at: ancestor)
+        return .init(
+            path: path,
+            comparisonKey: comparisonKey(path, caseSensitive: caseSensitive),
+            isCaseSensitive: caseSensitive
+        )
     }
 
     static func comparisonKey(_ path: String, caseSensitive: Bool) -> String {
@@ -59,25 +63,43 @@ public enum TraceFileIO {
         )
     }
 
-    private static func volumeIsCaseSensitive(at existingURL: URL, device: UInt64?) -> Bool {
-        guard let device else { return probeVolumeCaseSensitivity(at: existingURL) }
+    private static func volumeIsCaseSensitive(at existingURL: URL) -> Bool {
+        let values = try? existingURL.resourceValues(forKeys: [
+            .volumeUUIDStringKey,
+            .volumeSupportsCaseSensitiveNamesKey,
+        ])
+        return cachedVolumeCaseSensitivity(volumeID: values?.volumeUUIDString) {
+            probeVolumeCaseSensitivity(
+                at: existingURL,
+                resourceValue: values?.volumeSupportsCaseSensitiveNames
+            )
+        }
+    }
+
+    static func cachedVolumeCaseSensitivity(
+        volumeID: String?, probe: () -> Bool
+    ) -> Bool {
+        guard let volumeID else { return probe() }
+        if let cached = volumeCaseSensitivity.withLock({ $0.values[volumeID] }) {
+            return cached
+        }
+        let detected = probe()
         return volumeCaseSensitivity.withLock { cache in
-            if let cached = cache.values[device] { return cached }
-            let detected = probeVolumeCaseSensitivity(at: existingURL)
-            cache.values[device] = detected
-            cache.probeCounts[device, default: 0] += 1
+            if let cached = cache.values[volumeID] { return cached }
+            cache.values[volumeID] = detected
+            cache.probeCounts[volumeID, default: 0] += 1
             return detected
         }
     }
 
-    private static func probeVolumeCaseSensitivity(at existingURL: URL) -> Bool {
+    private static func probeVolumeCaseSensitivity(
+        at existingURL: URL, resourceValue: Bool?
+    ) -> Bool {
         let pathConfiguration = pathconf(existingURL.path, _PC_CASE_SENSITIVE)
         if pathConfiguration == 0 || pathConfiguration == 1 {
             return pathConfiguration == 1
-        } else if let value = try? existingURL.resourceValues(
-            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
-        ).volumeSupportsCaseSensitiveNames {
-            return value
+        } else if let resourceValue {
+            return resourceValue
         }
         // Avoid merging distinct paths when the volume cannot report its behavior.
         return true

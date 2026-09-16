@@ -35,6 +35,13 @@ struct IndexedSourceState: Sendable {
 public actor IndexDatabase {
     public static let schemaVersion = 7
     public static let indexFormatVersion = 3
+    private static let sourceStateSelection = """
+        sf.*,
+        (sf.last_error IS NOT NULL OR EXISTS (
+            SELECT 1 FROM adapter_health ah
+            WHERE ah.source_file_id=sf.id AND ah.last_error IS NOT NULL
+        )) AS had_recorded_error
+        """
     public nonisolated let contentWasResetOnOpen: Bool
     private let pool: DatabasePool
     private let url: URL
@@ -356,11 +363,7 @@ public actor IndexDatabase {
     func sourceState(path: String) throws -> IndexedSourceState? {
         try pool.read { db in
             guard let row = try Row.fetchOne(db, sql: """
-                SELECT sf.*,
-                       (sf.last_error IS NOT NULL OR EXISTS (
-                           SELECT 1 FROM adapter_health ah
-                           WHERE ah.source_file_id=sf.id AND ah.last_error IS NOT NULL
-                       )) AS had_recorded_error
+                SELECT \(Self.sourceStateSelection)
                 FROM source_file sf
                 WHERE sf.path=?
                 """, arguments: [path]) else {
@@ -376,11 +379,7 @@ public actor IndexDatabase {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT sf.*,
-                           (sf.last_error IS NOT NULL OR EXISTS (
-                               SELECT 1 FROM adapter_health ah
-                               WHERE ah.source_file_id=sf.id AND ah.last_error IS NOT NULL
-                           )) AS had_recorded_error
+                    SELECT \(Self.sourceStateSelection)
                     FROM source_file sf
                     WHERE sf.dev=? AND sf.inode=? AND sf.agent=? AND sf.format=?
                         AND sf.is_placeholder=0
@@ -389,15 +388,11 @@ public actor IndexDatabase {
                 arguments: [Int64(bitPattern: device), Int64(bitPattern: inode),
                             agent.rawValue, format.rawValue]
             )
-            let target = URL(fileURLWithPath: targetPath)
-            let caseInsensitiveVolume = (try? target.resourceValues(
-                forKeys: [.volumeSupportsCaseSensitiveNamesKey]
-            ).volumeSupportsCaseSensitiveNames) == false
-            let targetKey = TraceFileIO.canonicalPath(targetPath).comparisonKey
+            let target = TraceFileIO.canonicalPath(targetPath)
             return rows.map(sourceState(from:)).first {
                 !FileManager.default.fileExists(atPath: $0.path)
-                    || (caseInsensitiveVolume && $0.path != targetPath
-                        && TraceFileIO.canonicalPath($0.path).comparisonKey == targetKey)
+                    || (!target.isCaseSensitive && $0.path != targetPath
+                        && TraceFileIO.canonicalPath($0.path).comparisonKey == target.comparisonKey)
             }
         }
     }
@@ -968,65 +963,108 @@ public actor IndexDatabase {
     public func rebuildUsageRollups(
         timeZoneID: String = TimeZone.autoupdatingCurrent.identifier
     ) async throws {
+        try await delayUsageRollupRebuildForTesting()
+        try Task.checkCancellation()
+        try await pool.writeWithoutTransaction { db in
+            _ = try Self.rebuildUsageRollups(
+                in: db, timeZoneID: timeZoneID, onlyIfDirty: false
+            )
+        }
+        TraceTestHooks.appendLine("rebuilt", pathKey: "TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH")
+    }
+
+    private func delayUsageRollupRebuildForTesting() async throws {
         if TraceTestHooks.isUITesting,
            let delay = TraceTestHooks.environment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"].flatMap(Int.init),
            delay > 0 {
             TraceTestHooks.appendLine("started", pathKey: "TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH")
             try await Task.sleep(for: .milliseconds(min(delay, 5_000)))
         }
-        try await pool.writeWithoutTransaction { db in
-            try db.inTransaction {
-                try db.execute(sql: "DELETE FROM usage_daily")
-                try db.execute(sql: """
-                    INSERT INTO usage_daily(
-                        day, project_id, model, is_sidechain, input_tokens, output_tokens,
-                        cache_write_tokens, cache_read_tokens, reasoning_tokens
-                    )
-                    WITH canonical AS (
-                        SELECT u.*,
-                               row_number() OVER (
-                                   PARTITION BY u.agent, u.dedupe_key
-                                   ORDER BY coalesce(u.output_tokens, -1) DESC, u.id DESC
-                               ) AS occurrence,
-                               max(u.input_tokens) OVER response AS total_input,
-                               max(u.output_tokens) OVER response AS total_output,
-                               max(u.cache_write_tokens) OVER response AS total_cache_write,
-                               max(u.cache_read_tokens) OVER response AS total_cache_read,
-                               max(u.reasoning_tokens) OVER response AS total_reasoning
-                        FROM usage_observation u
-                        WINDOW response AS (PARTITION BY u.agent, u.dedupe_key)
-                    )
-                    SELECT strftime('%Y-%m-%d', c.ts / 1000, 'unixepoch', 'localtime'),
-                           coalesce(c.project_id, s.project_id), c.model, c.is_sidechain,
-                           sum(coalesce(c.total_input, 0)),
-                           sum(coalesce(c.total_output, 0)),
-                           sum(coalesce(c.total_cache_write, 0)),
-                           sum(coalesce(c.total_cache_read, 0)),
-                           sum(coalesce(c.total_reasoning, 0))
-                    FROM canonical c
-                    JOIN session s ON s.id = c.session_id
-                    WHERE c.occurrence = 1
-                    GROUP BY 1, 2, 3, 4
-                    """)
-                try db.execute(sql: "UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty'")
-                try db.execute(sql: "INSERT INTO trace_meta(key, value) VALUES ('usage_rollups_timezone', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", arguments: [timeZoneID])
-                return .commit
-            }
-        }
-        TraceTestHooks.appendLine("rebuilt", pathKey: "TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH")
     }
 
     @discardableResult
     public func rebuildUsageRollupsIfDirty(
         timeZoneID: String = TimeZone.autoupdatingCurrent.identifier
     ) async throws -> Bool {
-        let dirty = try await pool.read { db in
-            let flag = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'")
-            let storedZone = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_timezone'")
-            return flag != "0" || storedZone != timeZoneID
+        let mightBeDirty = try await pool.read {
+            try Self.usageRollupsAreDirty(in: $0, timeZoneID: timeZoneID)
         }
-        if dirty { try await rebuildUsageRollups(timeZoneID: timeZoneID) }
-        return dirty
+        guard mightBeDirty else { return false }
+        try await delayUsageRollupRebuildForTesting()
+        try Task.checkCancellation()
+        let rebuilt = try await pool.writeWithoutTransaction { db in
+            try Self.rebuildUsageRollups(
+                in: db, timeZoneID: timeZoneID, onlyIfDirty: true
+            )
+        }
+        if rebuilt {
+            TraceTestHooks.appendLine("rebuilt", pathKey: "TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH")
+        }
+        return rebuilt
+    }
+
+    private static func usageRollupsAreDirty(
+        in db: Database, timeZoneID: String
+    ) throws -> Bool {
+        let flag = try String.fetchOne(
+            db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'"
+        )
+        let storedZone = try String.fetchOne(
+            db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_timezone'"
+        )
+        return flag != "0" || storedZone != timeZoneID
+    }
+
+    private static func rebuildUsageRollups(
+        in db: Database, timeZoneID: String, onlyIfDirty: Bool
+    ) throws -> Bool {
+        var rebuilt = false
+        try db.inTransaction {
+            if onlyIfDirty {
+                let dirty = try usageRollupsAreDirty(in: db, timeZoneID: timeZoneID)
+                if !dirty { return .commit }
+            }
+            try db.execute(sql: "DELETE FROM usage_daily")
+            try db.execute(sql: """
+                INSERT INTO usage_daily(
+                    day, project_id, model, is_sidechain, input_tokens, output_tokens,
+                    cache_write_tokens, cache_read_tokens, reasoning_tokens
+                )
+                WITH canonical AS (
+                    SELECT u.*,
+                           row_number() OVER (
+                               PARTITION BY u.agent, u.dedupe_key
+                               ORDER BY coalesce(u.output_tokens, -1) DESC, u.id DESC
+                           ) AS occurrence,
+                           max(u.input_tokens) OVER response AS total_input,
+                           max(u.output_tokens) OVER response AS total_output,
+                           max(u.cache_write_tokens) OVER response AS total_cache_write,
+                           max(u.cache_read_tokens) OVER response AS total_cache_read,
+                           max(u.reasoning_tokens) OVER response AS total_reasoning
+                    FROM usage_observation u
+                    WINDOW response AS (PARTITION BY u.agent, u.dedupe_key)
+                )
+                SELECT strftime('%Y-%m-%d', c.ts / 1000, 'unixepoch', 'localtime'),
+                       coalesce(c.project_id, s.project_id), c.model, c.is_sidechain,
+                       sum(coalesce(c.total_input, 0)),
+                       sum(coalesce(c.total_output, 0)),
+                       sum(coalesce(c.total_cache_write, 0)),
+                       sum(coalesce(c.total_cache_read, 0)),
+                       sum(coalesce(c.total_reasoning, 0))
+                FROM canonical c
+                JOIN session s ON s.id = c.session_id
+                WHERE c.occurrence = 1
+                GROUP BY 1, 2, 3, 4
+                """)
+            try db.execute(sql: "UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty'")
+            try db.execute(
+                sql: "INSERT INTO trace_meta(key, value) VALUES ('usage_rollups_timezone', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                arguments: [timeZoneID]
+            )
+            rebuilt = true
+            return .commit
+        }
+        return rebuilt
     }
 
     public func search(
@@ -1260,13 +1298,15 @@ public actor IndexDatabase {
     public func projects() throws -> [ProjectSummary] {
         try pool.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT p.id, p.display_name, p.root_path, count(s.id) AS session_count,
+                SELECT p.id, p.canonical_key, p.display_name, p.root_path,
+                       count(s.id) AS session_count,
                        coalesce(max(s.last_activity_at), 0) AS last_activity
                 FROM project p JOIN session s ON s.project_id=p.id
                 GROUP BY p.id ORDER BY last_activity DESC
                 """).map {
                     .init(
-                        id: $0["id"], displayName: $0["display_name"], rootPath: $0["root_path"],
+                        id: $0["id"], canonicalKey: $0["canonical_key"],
+                        displayName: $0["display_name"], rootPath: $0["root_path"],
                         sessionCount: $0["session_count"], lastActivityMilliseconds: $0["last_activity"]
                     )
                 }

@@ -214,22 +214,8 @@ final class TraceModel: ObservableObject {
             progress = update
         }
 
-        if terminal, let rollupError = update.rollupError { costsError = rollupError }
-        if terminal && update.phase != .complete
-            && (update.indexChanged || update.rollupsChanged) {
-            usageRepairPending = true
-            usageRefreshPending = true
-        }
-        if terminal, update.phase == .complete, update.rollupError == nil {
-            if usageRepairPending {
-                scheduleDeferredUsageRepair()
-            } else if update.indexChanged || update.rollupsChanged || usageRefreshPending {
-                scheduleCompletedUsageRefresh(repairIfDirty: false)
-            }
-        } else if terminal, usageRepairPending {
-            scheduleDeferredUsageRepair()
-        }
-        updateCostsTotalsUpdating()
+        if terminal { handleTerminalUsageProgress(update) }
+        else { updateCostsTotalsUpdating() }
         observeSearchMutation(update, terminal: terminal)
 
         let shouldRefresh = terminal
@@ -239,6 +225,29 @@ final class TraceModel: ObservableObject {
             lastSummaryRefresh = .now
             await reloadSummaries(lightweight: !terminal)
         }
+    }
+
+    private func handleTerminalUsageProgress(_ update: IndexProgress) {
+        if let rollupError = update.rollupError { costsError = rollupError }
+        if update.phase != .complete && (update.indexChanged || update.rollupsChanged) {
+            usageRepairPending = true
+            usageRefreshPending = true
+        }
+        if update.phase == .complete {
+            if update.rollupError != nil {
+                if usageRepairPending { scheduleDeferredUsageRepair() }
+                else { usageRefreshPending = false }
+            } else if usageRepairPending {
+                scheduleDeferredUsageRepair()
+            } else if update.indexChanged || update.rollupsChanged || usageRefreshPending {
+                scheduleCompletedUsageRefresh(repairIfDirty: false)
+            }
+        } else if usageRepairPending {
+            scheduleDeferredUsageRepair()
+        } else if usageRefreshPending {
+            scheduleCompletedUsageRefresh(repairIfDirty: false)
+        }
+        updateCostsTotalsUpdating()
     }
 
     private func observeSearchMutation(_ update: IndexProgress, terminal: Bool) {
@@ -272,7 +281,8 @@ final class TraceModel: ObservableObject {
 
     private var hasVisibleAutomaticSearch: Bool {
         (globalSearchNeedsRefresh && !globalSearchSurfaces.isEmpty
-            && !globalSearch.query.isEmpty && !globalSearch.protectsPagination)
+            && !globalSearch.query.isEmpty && !globalSearch.protectsPagination
+            && !globalSearch.isWaitingForProjectFilterResolution)
         || (mainSearchNeedsRefresh && mainSearchIsVisible
             && !mainSearch.query.isEmpty && !mainSearch.protectsPagination)
     }
@@ -290,7 +300,9 @@ final class TraceModel: ObservableObject {
             if settings.clearGlobalFiltersOnClose {
                 changed = changed || globalSearch.filters != SearchFilters()
                     || globalSearch.datePreset != .anyTime
+                    || globalSearch.projectFilterCanonicalKey != nil
                 globalSearch.filters = SearchFilters()
+                globalSearch.clearProjectFilter()
                 globalSearch.datePreset = .anyTime
             }
             if changed {
@@ -302,8 +314,10 @@ final class TraceModel: ObservableObject {
     }
 
     func clearGlobalSearchFilters() {
-        guard globalSearch.filters != SearchFilters() || globalSearch.datePreset != .anyTime else { return }
+        guard globalSearch.filters != SearchFilters() || globalSearch.datePreset != .anyTime
+                || globalSearch.projectFilterCanonicalKey != nil else { return }
         globalSearch.filters = SearchFilters()
+        globalSearch.clearProjectFilter()
         globalSearch.datePreset = .anyTime
         globalSearchNeedsRefresh = false
         globalSearch.search(sort: settings.searchSort)
@@ -359,7 +373,8 @@ final class TraceModel: ObservableObject {
         lastSearchedPassID = lastObservedPassID
         lastSearchedMutationRevision = lastObservedMutationRevision
         if globalSearchNeedsRefresh, !globalSearchSurfaces.isEmpty,
-           !globalSearch.query.isEmpty, !globalSearch.protectsPagination {
+           !globalSearch.query.isEmpty, !globalSearch.protectsPagination,
+           !globalSearch.isWaitingForProjectFilterResolution {
             globalSearchNeedsRefresh = false
             globalSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
@@ -694,6 +709,16 @@ final class TraceModel: ObservableObject {
         let request = UUID()
         usageSnapshotRequestID = request
         do {
+            if TraceTestHooks.isUITesting,
+               let delay = TraceTestHooks.environment["TRACE_TEST_USAGE_SNAPSHOT_DELAY_MS"]
+                .flatMap(Int.init),
+               delay > 0 {
+                TraceTestHooks.appendLine(
+                    "started", pathKey: "TRACE_TEST_USAGE_SNAPSHOT_STARTED_PATH"
+                )
+                try await Task.sleep(for: .milliseconds(min(delay, 5_000)))
+                guard usageSnapshotRequestID == request else { return }
+            }
             if repairIfDirty { try await database.rebuildUsageRollupsIfDirty() }
             let snapshot = try await database.usage(
                 fromDay: nil, throughDay: nil, includeSidechains: true
@@ -805,8 +830,15 @@ final class TraceModel: ObservableObject {
         let projectRequest = projectRequestID
         let loadedSessions = (try? await database.sessions(projectID: project)) ?? []
         guard summaryRequestID == refresh else { return }
+        let projectFilterChanged = globalSearch.resolveProjectFilter(
+            in: loadedProjects, final: !lightweight
+        )
         projects = loadedProjects
         recentSessions = loadedRecent
+        if projectFilterChanged, !globalSearch.query.isEmpty {
+            globalSearchNeedsRefresh = true
+            scheduleAutomaticSearch()
+        }
         if selectedProjectID == project, projectRequestID == projectRequest { sessions = loadedSessions }
         if let sessionID = selectedSessionID {
             let request = sessionRequestID

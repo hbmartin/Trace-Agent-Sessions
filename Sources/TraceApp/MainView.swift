@@ -16,6 +16,12 @@ struct MainView: View {
                     if model.selectedSessionID != nil {
                         Button("Back to project", systemImage: "chevron.left") { model.clearSession() }
                             .accessibilityIdentifier("backToProject")
+                        if TraceTestHooks.isUITesting {
+                            Button("Open search", systemImage: "magnifyingglass") {
+                                NotificationCenter.default.post(name: .traceShowLauncher, object: nil)
+                            }
+                            .accessibilityIdentifier("testOpenLauncher")
+                        }
                     } else {
                         Picker("Section", selection: $section) {
                             Text("Transcript").tag(MainSection.transcript)
@@ -185,15 +191,12 @@ struct TranscriptView: View {
                     .id(search.resultSetID)
             } else if let session = model.selectedSession, session.id == model.selectedSessionID {
                 HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(session.title).font(.title3.weight(.semibold)).lineLimit(1)
-                        HStack {
-                            AgentBadge(agent: session.agent)
-                            if session.hasPlan { PlanBadge() }
-                            Text("\(session.messageCount.formatted()) messages")
-                            Text(session.lastActivityMilliseconds.traceDate)
-                        }.font(.caption).foregroundStyle(.secondary)
-                    }
+                    HStack {
+                        AgentBadge(agent: session.agent)
+                        if session.hasPlan { PlanBadge() }
+                        Text("\(session.messageCount.formatted()) messages")
+                        Text(session.lastActivityMilliseconds.traceDate)
+                    }.font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Reveal", systemImage: "folder") { model.revealSelectedSession() }
                     Button("Copy", systemImage: "doc.on.doc") { model.copyTranscript() }
@@ -256,6 +259,9 @@ private struct TranscriptRenderer: View {
     @State private var restorationDelayPending = false
     @State private var restoring = true
     @State private var userScrolling = false
+    @State private var scrollPhase = ScrollPhase.idle
+    @State private var restorationDeferred = false
+    @State private var testScrollIdleDelayPending = false
     @State private var lastRequest: UUID?
 
     private var visibleMessages: [MessageSummary] {
@@ -304,6 +310,7 @@ private struct TranscriptRenderer: View {
                 contentOffset = geometry.offset
                 viewportHeight = geometry.height
                 if restoring && position.isPositionedByUser {
+                    userScrolling = true
                     cancelRestorationForUser()
                     return
                 }
@@ -314,14 +321,18 @@ private struct TranscriptRenderer: View {
                 if userScrolling { savePosition() }
             }
             .onScrollPhaseChange { oldPhase, phase in
-                userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
-                if userScrolling { cancelRestorationForUser() }
-                if phase == .idle && oldPhase != .idle { savePosition() }
-            }
-            .onChange(of: position.isPositionedByUser) { wasPositionedByUser, positionedByUser in
-                if !wasPositionedByUser && positionedByUser && restoring {
+                scrollPhase = phase
+                if phase == .tracking || phase == .interacting || phase == .decelerating {
                     userScrolling = true
                     cancelRestorationForUser()
+                } else if phase == .idle && oldPhase != .idle {
+                    finishUserScrolling(using: proxy)
+                }
+            }
+            .onChange(of: position.isPositionedByUser) { wasPositionedByUser, positionedByUser in
+                if !wasPositionedByUser && positionedByUser {
+                    userScrolling = true
+                    if restoring || pending != nil { cancelRestorationForUser() }
                 }
             }
             .onPreferenceChange(RowFramesPreference.self) { newFrames in
@@ -386,11 +397,17 @@ private struct TranscriptRenderer: View {
 
     private func restore(force: Bool = false, using proxy: ScrollViewProxy) {
         guard force || lastRequest != model.scrollRequest else { return }
-        lastRequest = model.scrollRequest
         guard !userScrolling else {
+            restorationDeferred = true
+            if let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_DEFERRED_PATH"],
+               TraceTestHooks.isUITesting {
+                try? Data().write(to: URL(fileURLWithPath: path))
+            }
             cancelRestorationForUser()
             return
         }
+        restorationDeferred = false
+        lastRequest = model.scrollRequest
         let ids = visibleMessages.map(\.id)
         guard !ids.isEmpty else { restoring = false; return }
         position.isPositionedByUser = false
@@ -433,6 +450,27 @@ private struct TranscriptRenderer: View {
         restorationDelayPending = false
     }
 
+    private func finishUserScrolling(using proxy: ScrollViewProxy) {
+        let finish = {
+            guard scrollPhase == .idle else { return }
+            userScrolling = false
+            if restorationDeferred || lastRequest != model.scrollRequest {
+                restorationDeferred = false
+                restore(using: proxy)
+            }
+            savePosition()
+        }
+        guard testScrollIdleDelayPending, let delay = testScrollIdleDelay else {
+            finish()
+            return
+        }
+        testScrollIdleDelayPending = false
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(delay))
+            finish()
+        }
+    }
+
     private var testRestorationDelay: Int? {
         guard TraceTestHooks.isUITesting,
               let delay = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"].flatMap(Int.init),
@@ -440,8 +478,17 @@ private struct TranscriptRenderer: View {
         return delay
     }
 
+    private var testScrollIdleDelay: Int? {
+        guard TraceTestHooks.isUITesting,
+              let delay = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"]
+                .flatMap(Int.init),
+              delay > 0 else { return nil }
+        return delay
+    }
+
     private func cancelRestorationForUser() {
         guard restoring || pending != nil else { return }
+        if testScrollIdleDelay != nil { testScrollIdleDelayPending = true }
         if let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"],
            TraceTestHooks.isUITesting {
             try? Data().write(to: URL(fileURLWithPath: path))
