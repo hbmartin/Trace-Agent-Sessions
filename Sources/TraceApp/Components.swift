@@ -8,6 +8,25 @@ enum TraceTheme {
     static let panelBackground = Color(nsColor: .windowBackgroundColor).opacity(0.96)
 }
 
+struct RowFramesPreference: PreferenceKey {
+    static let defaultValue: [Int64: CGRect] = [:]
+    static func reduce(value: inout [Int64: CGRect], nextValue: () -> [Int64: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+enum RowFrameGeometry {
+    static func firstVisible(in frames: [Int64: CGRect], offset: CGFloat) -> (id: Int64, frame: CGRect)? {
+        frames.filter { $0.value.maxY > offset + 1 }
+            .min { $0.value.minY < $1.value.minY }
+            .map { (id: $0.key, frame: $0.value) }
+    }
+
+    static func intersectsViewport(_ frame: CGRect, offset: CGFloat, height: CGFloat) -> Bool {
+        height > 0 && frame.maxY > offset && frame.minY < offset + height
+    }
+}
+
 struct AgentBadge: View {
     let agent: AgentKind
 

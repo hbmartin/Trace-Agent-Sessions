@@ -5,6 +5,7 @@ import TraceCore
 
 @MainActor
 final class TraceModel: ObservableObject {
+    enum GlobalSearchSurface: Hashable { case popover, launcher }
     let settings: AppSettings
     let globalSearch = SessionSearchModel()
     var mainSearch = SessionSearchModel()
@@ -21,6 +22,7 @@ final class TraceModel: ObservableObject {
     @Published private(set) var selectedSession: SessionSummary?
     @Published private(set) var sourceHealth: [SourceHealth] = []
     @Published private(set) var usage: [UsageRollup] = []
+    @Published private(set) var costsTotalsUpdating = false
     @Published private(set) var statistics: IndexStatistics?
     @Published private(set) var diagnosticsSnapshot = DiagnosticsSnapshot()
     @Published private(set) var pricing: PricingCatalog?
@@ -43,6 +45,16 @@ final class TraceModel: ObservableObject {
     private var pendingIncrementalProgress: IndexProgress?
     private var incrementalProgressVisible = false
     private var automaticSearchTask: Task<Void, Never>?
+    private var automaticSearchTaskID: UUID?
+    private var globalSearchNeedsRefresh = false
+    private var mainSearchNeedsRefresh = false
+    private var globalSearchSurfaces: Set<GlobalSearchSurface> = []
+    private var mainWindowVisible = false
+    private var mainSearchPanelVisible = false
+    private var completedUsage: [UsageRollup] = []
+    private var usageSnapshotRequestID = UUID()
+    private var timeZoneRepairPending = false
+    private var indexingPassActive = false
     private var lastAutomaticSearchRefresh: ContinuousClock.Instant?
     private var lastObservedPassID: UUID?
     private var lastObservedMutationRevision = 0
@@ -94,10 +106,18 @@ final class TraceModel: ObservableObject {
                     object: nil, queue: .main
                 ) { [weak self] _ in
                     tzset()
-                    Task { @MainActor [weak self] in self?.reloadCosts() }
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        if self.costsTotalsUpdating {
+                            self.timeZoneRepairPending = true
+                            return
+                        }
+                        await self.refreshCompletedUsage(repairIfDirty: true)
+                    }
                 }
                 loadPricing()
                 await reloadSummaries(loadCosts: false)
+                await refreshCompletedUsage(repairIfDirty: true)
                 if settings.onboardingComplete {
                     startWatching(sources.flatMap(\.roots).map(\.url))
                     if ProcessInfo.processInfo.arguments.contains("--index-smoke"), TraceRuntime.testDirectory != nil {
@@ -113,9 +133,7 @@ final class TraceModel: ObservableObject {
                         exit(progress.phase == .complete && progress.failedFiles == 0 ? 0 : 1)
                     } else { startIndexing() }
                 }
-                if settings.onboardingComplete {
-                    reloadCosts()
-                }
+                reloadCosts()
             } catch {
                 startupError = error.localizedDescription
                 progress = .init(phase: .failed, error: error.localizedDescription)
@@ -133,7 +151,6 @@ final class TraceModel: ObservableObject {
         if coordinator != nil {
             startWatching(makeSources().flatMap(\.roots).map(\.url))
             startIndexing()
-            reloadCosts()
         }
     }
 
@@ -145,6 +162,13 @@ final class TraceModel: ObservableObject {
 
     private func receiveProgress(_ update: IndexProgress) async {
         let terminal = [.complete, .failed, .cancelled].contains(update.phase)
+        indexingPassActive = !terminal
+        if !terminal { usageSnapshotRequestID = UUID() }
+        if terminal, ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+           let path = ProcessInfo.processInfo.environment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] {
+            try? Data().write(to: URL(fileURLWithPath: path))
+        }
+        costsTotalsUpdating = !terminal || (update.phase != .complete && update.indexChanged)
         if update.incremental {
             if terminal {
                 incrementalProgressTask?.cancel()
@@ -175,6 +199,14 @@ final class TraceModel: ObservableObject {
         }
 
         if terminal, let rollupError = update.rollupError { costsError = rollupError }
+        if terminal, update.phase == .complete {
+            if timeZoneRepairPending {
+                timeZoneRepairPending = false
+                await refreshCompletedUsage(repairIfDirty: true)
+            } else if update.rollupError == nil {
+                await refreshCompletedUsage(repairIfDirty: false)
+            }
+        }
         observeSearchMutation(update, terminal: terminal)
 
         let shouldRefresh = terminal
@@ -193,42 +225,104 @@ final class TraceModel: ObservableObject {
         }
         if update.mutationRevision > lastObservedMutationRevision {
             lastObservedMutationRevision = update.mutationRevision
-            if globalSearch.protectsPagination { globalSearch.markResultsStale() }
-            if mainSearch.protectsPagination { mainSearch.markResultsStale() }
+            if !globalSearch.query.isEmpty {
+                if globalSearch.protectsPagination { globalSearch.markResultsStale() }
+                else { globalSearchNeedsRefresh = true }
+            }
+            if !mainSearch.query.isEmpty {
+                if mainSearch.protectsPagination { mainSearch.markResultsStale() }
+                else { mainSearchNeedsRefresh = true }
+            }
             scheduleAutomaticSearch()
         }
         if terminal && update.indexChanged
             && (lastSearchedPassID != update.passID
                 || lastSearchedMutationRevision < update.mutationRevision) {
-            automaticSearchTask?.cancel()
-            automaticSearchTask = nil
+            cancelAutomaticSearch()
             performAutomaticSearch()
         }
     }
 
+    private var mainSearchIsVisible: Bool {
+        mainWindowVisible && mainSearchPanelVisible && selectedSessionID == nil
+    }
+
+    private var hasVisibleAutomaticSearch: Bool {
+        (globalSearchNeedsRefresh && !globalSearchSurfaces.isEmpty
+            && !globalSearch.query.isEmpty && !globalSearch.protectsPagination)
+        || (mainSearchNeedsRefresh && mainSearchIsVisible
+            && !mainSearch.query.isEmpty && !mainSearch.protectsPagination)
+    }
+
+    func setGlobalSearchSurface(_ surface: GlobalSearchSurface, visible: Bool) {
+        guard globalSearchSurfaces.contains(surface) != visible else { return }
+        if visible { globalSearchSurfaces.insert(surface) }
+        else { globalSearchSurfaces.remove(surface) }
+        if !visible && globalSearchSurfaces.isEmpty && settings.clearGlobalSearchOnClose {
+            globalSearch.query = ""
+            globalSearch.search(sort: settings.searchSort)
+            globalSearchNeedsRefresh = false
+        }
+        searchVisibilityChanged()
+    }
+
+    func setMainWindowVisible(_ visible: Bool) {
+        mainWindowVisible = visible
+        searchVisibilityChanged()
+    }
+
+    func setMainSearchPanelVisible(_ visible: Bool) {
+        mainSearchPanelVisible = visible
+        searchVisibilityChanged()
+    }
+
+    private func searchVisibilityChanged() {
+        if !hasVisibleAutomaticSearch {
+            cancelAutomaticSearch()
+            return
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(20))
+            self?.scheduleAutomaticSearch()
+        }
+    }
+
+    private func cancelAutomaticSearch() {
+        automaticSearchTaskID = nil
+        automaticSearchTask?.cancel()
+        automaticSearchTask = nil
+    }
+
     private func scheduleAutomaticSearch() {
-        guard (!globalSearch.query.isEmpty && !globalSearch.protectsPagination)
-            || (!mainSearch.query.isEmpty && !mainSearch.protectsPagination) else { return }
+        guard hasVisibleAutomaticSearch else { return }
         guard automaticSearchTask == nil else { return }
         let elapsed = lastAutomaticSearchRefresh?.duration(to: .now) ?? .seconds(1)
         if elapsed >= .seconds(1) { performAutomaticSearch(); return }
+        let id = UUID()
+        automaticSearchTaskID = id
         automaticSearchTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(1) - elapsed) }
             catch { return }
-            guard let self else { return }
+            guard let self, !Task.isCancelled, self.automaticSearchTaskID == id else { return }
+            self.automaticSearchTaskID = nil
             self.automaticSearchTask = nil
             self.performAutomaticSearch()
         }
     }
 
     private func performAutomaticSearch() {
+        guard hasVisibleAutomaticSearch else { return }
         lastAutomaticSearchRefresh = .now
         lastSearchedPassID = lastObservedPassID
         lastSearchedMutationRevision = lastObservedMutationRevision
-        if !globalSearch.query.isEmpty, !globalSearch.protectsPagination {
+        if globalSearchNeedsRefresh, !globalSearchSurfaces.isEmpty,
+           !globalSearch.query.isEmpty, !globalSearch.protectsPagination {
+            globalSearchNeedsRefresh = false
             globalSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
-        if !mainSearch.query.isEmpty, !mainSearch.protectsPagination {
+        if mainSearchNeedsRefresh, mainSearchIsVisible,
+           !mainSearch.query.isEmpty, !mainSearch.protectsPagination {
+            mainSearchNeedsRefresh = false
             mainSearch.filters.projectID = selectedProjectID
             mainSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
@@ -266,8 +360,12 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    func search(reset: Bool = true) { globalSearch.search(sort: settings.searchSort, reset: reset) }
+    func search(reset: Bool = true) {
+        if reset { globalSearchNeedsRefresh = false }
+        globalSearch.search(sort: settings.searchSort, reset: reset)
+    }
     func searchMain() {
+        mainSearchNeedsRefresh = false
         mainSearch.filters.projectID = selectedProjectID
         mainSearch.search(sort: settings.searchSort)
     }
@@ -327,8 +425,9 @@ final class TraceModel: ObservableObject {
     }
 
     private func prepareForIndexReset() {
-        automaticSearchTask?.cancel()
-        automaticSearchTask = nil
+        cancelAutomaticSearch()
+        globalSearchNeedsRefresh = false
+        mainSearchNeedsRefresh = false
         lastObservedPassID = nil
         lastSearchedPassID = nil
         lastObservedMutationRevision = 0
@@ -351,7 +450,6 @@ final class TraceModel: ObservableObject {
         scrollPositions = [:]
         requestedMessageID = nil
         sourceHealth = []
-        usage = []
         statistics = nil
         globalSearch.resetForIndexReset()
         mainSearch.resetForIndexReset()
@@ -481,26 +579,35 @@ final class TraceModel: ObservableObject {
     }
 
     func reloadCosts() {
-        guard let database else { return }
         let dates = costDateBounds()
-        Task {
-            await repairUsageRollups()
-            do {
-                usage = try await database.usage(
-                    fromDay: dates.from,
-                    throughDay: dates.through,
-                    includeSidechains: settings.includeSidechains
-                )
-            } catch { costsError = error.localizedDescription }
+        usage = completedUsage.filter { row in
+            (dates.from.map { row.day >= $0 } ?? true)
+                && (dates.through.map { row.day <= $0 } ?? true)
+                && (settings.includeSidechains || !row.isSidechain)
         }
     }
 
-    private func repairUsageRollups() async {
+    private func refreshCompletedUsage(repairIfDirty: Bool) async {
         guard let database else { return }
+        let request = UUID()
+        usageSnapshotRequestID = request
         do {
-            try await database.rebuildUsageRollupsIfDirty()
+            if repairIfDirty { try await database.rebuildUsageRollupsIfDirty() }
+            let snapshot = try await database.usage(
+                fromDay: nil, throughDay: nil, includeSidechains: true
+            )
+            guard usageSnapshotRequestID == request else { return }
+            if indexingPassActive {
+                timeZoneRepairPending = timeZoneRepairPending || repairIfDirty
+                return
+            }
+            completedUsage = snapshot
             costsError = nil
-        } catch { costsError = "Could not update token totals: \(error.localizedDescription)" }
+            reloadCosts()
+        } catch {
+            guard usageSnapshotRequestID == request else { return }
+            costsError = "Could not update token totals: \(error.localizedDescription)"
+        }
     }
 
     func refreshDiagnostics() {
@@ -521,7 +628,7 @@ final class TraceModel: ObservableObject {
     func prepareToTerminate() async {
         watcher?.stop()
         sourceChangeTask?.cancel()
-        automaticSearchTask?.cancel()
+        cancelAutomaticSearch()
         if let timeZoneObserver {
             NotificationCenter.default.removeObserver(timeZoneObserver)
             self.timeZoneObserver = nil

@@ -46,6 +46,8 @@ private struct GeneralPreferences: View {
                     Text("Most recent").tag(SearchSort.recency)
                     Text("BM25 relevance").tag(SearchSort.relevance)
                 }
+                Toggle("Clear global search when closing popover and launcher",
+                       isOn: $settings.clearGlobalSearchOnClose)
             }
 
             Section("Global hotkey") {

@@ -156,6 +156,7 @@ public actor IndexCoordinator {
                 status.mutationRevision = await mutations.version()
                 await progress(status)
                 var shouldRefreshMissingCodexTitle = false
+                var needsFailureRecount = false
                 do {
                     // The callback runs serially after committed batches, and never mutates the database.
                     let baseStatus = status
@@ -172,7 +173,10 @@ public actor IndexCoordinator {
                     }
                     let metadataChanged = try await refreshMetadata(file: file)
                     if metadataChanged { await mutations.markChanged() }
-                    try await database.clearSourceError(path: file.url.path)
+                    if outcome.hadRecordedError {
+                        try await database.clearSourceError(path: file.url.path)
+                        needsFailureRecount = true
+                    }
                     shouldRefreshMissingCodexTitle = !fullScan && file.agent == .codex
                         && (outcome.changed || metadataChanged)
                     if outcome.changed { status.indexedFiles += 1 } else { status.unchangedFiles += 1 }
@@ -180,6 +184,7 @@ public actor IndexCoordinator {
                 } catch is CancellationError { throw CancellationError() }
                 catch {
                     status.failedFiles += 1
+                    needsFailureRecount = true
                     status.error = error.localizedDescription
                     try? await database.recordSourceError(
                         file: file, rootID: rootID, error: error.localizedDescription
@@ -199,8 +204,10 @@ public actor IndexCoordinator {
                     catch { status.metadataWarning = "Codex title lookup: \(error.localizedDescription)" }
                 }
                 status.completedFiles += 1
-                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
-                    ?? status.unresolvedFailedFiles
+                if needsFailureRecount {
+                    status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
+                        ?? status.unresolvedFailedFiles
+                }
                 status.mutationRevision = await mutations.version()
                 await progress(status)
             }
@@ -381,6 +388,16 @@ public actor IndexCoordinator {
         )
     }
 
+    private nonisolated static func legacyGeminiSessionID(before offset: Int64, in url: URL) async throws -> String? {
+        let task = Task.detached(priority: .utility) {
+            try GeminiJSONLSessionIdentity.id(before: offset, in: url)
+        }
+        return try await withTaskCancellationHandler(
+            operation: { try await task.value },
+            onCancel: { task.cancel() }
+        )
+    }
+
     private nonisolated static func loadCodexNames(directory: URL) async -> [String: String] {
         let task = Task.detached(priority: .utility) { CodexSessionNames.load(directory: directory) }
         return await withTaskCancellationHandler(
@@ -397,19 +414,49 @@ public actor IndexCoordinator {
         attempt: Int = 0,
         mutation: @escaping @Sendable () async -> Void = {},
         committed: @escaping @Sendable (Int64, Int64, String?) async -> Void = { _, _, _ in }
-    ) async throws -> (changed: Bool, committedBytes: Int64) {
+    ) async throws -> (changed: Bool, committedBytes: Int64, hadRecordedError: Bool) {
         try Task.checkCancellation()
         let initialFingerprint = try TraceFileIO.fingerprint(url: file.url)
         var state = try await database.sourceState(path: file.url.path)
+        var hadRecordedError = state?.lastError != nil
+        var promotedPlaceholder = false
 
-        if state == nil,
-           let moved = try await database.sourceState(device: initialFingerprint.device, inode: initialFingerprint.inode) {
+        if let placeholder = state, placeholder.isPlaceholder {
+            if let moved = try await database.movableSourceState(
+                device: initialFingerprint.device, inode: initialFingerprint.inode,
+                agent: file.agent, format: file.format
+            ) {
+                try await database.replacePlaceholderWithMovedSource(
+                    placeholderID: placeholder.id, movedID: moved.id,
+                    rootID: rootID, path: file.url.path
+                )
+                hadRecordedError = hadRecordedError || moved.lastError != nil
+            } else {
+                try await database.promotePlaceholder(
+                    id: placeholder.id, rootID: rootID, file: file, fingerprint: initialFingerprint
+                )
+                promotedPlaceholder = true
+            }
+            await mutation()
+            state = try await database.sourceState(path: file.url.path)
+        } else if state == nil,
+                  let moved = try await database.movableSourceState(
+                    device: initialFingerprint.device, inode: initialFingerprint.inode,
+                    agent: file.agent, format: file.format
+                  ) {
             try await database.moveSource(id: moved.id, rootID: rootID, path: file.url.path)
+            hadRecordedError = moved.lastError != nil
             await mutation()
             state = try await database.sourceState(path: file.url.path)
         }
 
-        if let state,
+        if let existing = state, existing.agent != file.agent || existing.format != file.format {
+            try await database.deleteSource(id: existing.id)
+            await mutation()
+            state = nil
+        }
+
+        if let state, !promotedPlaceholder,
            state.device == initialFingerprint.device,
            state.inode == initialFingerprint.inode,
            state.size == initialFingerprint.size,
@@ -417,7 +464,7 @@ public actor IndexCoordinator {
            state.scannedBytes == state.size,
            state.headLength == initialFingerprint.headLength,
            state.headHash == initialFingerprint.headHash {
-            return (false, 0)
+            return (false, 0, hadRecordedError)
         }
 
         if file.format == .geminiJSON {
@@ -437,7 +484,7 @@ public actor IndexCoordinator {
                 mutation: mutation
             )
             await committed(initialFingerprint.size, initialFingerprint.size, nil)
-            return (true, initialFingerprint.size)
+            return (true, initialFingerprint.size, hadRecordedError)
         }
 
         let sourceID: Int64
@@ -451,7 +498,9 @@ public actor IndexCoordinator {
                 && (comparison.size > state.size
                     || comparison.modificationNanoseconds == state.modificationNanoseconds)
             sourceID = state.id
-            if appendable {
+            if promotedPlaceholder {
+                startOffset = 0
+            } else if appendable {
                 startOffset = state.scannedBytes
             } else {
                 try await database.replaceSourceContents(id: state.id)
@@ -469,7 +518,7 @@ public actor IndexCoordinator {
             if startOffset == 0 { contentSessionID = fallback }
             else if let inherited = state?.contentSessionID { contentSessionID = inherited }
             else {
-                contentSessionID = try GeminiJSONLSessionIdentity.id(before: startOffset, in: file.url)
+                contentSessionID = try await Self.legacyGeminiSessionID(before: startOffset, in: file.url)
                     ?? fallback
             }
         }
@@ -547,14 +596,16 @@ public actor IndexCoordinator {
             guard attempt < 2 else {
                 throw SessionSourceError.unreadableFile("\(file.url.path) changed repeatedly while indexing")
             }
-            return try await process(
+            let retried = try await process(
                 file: file, using: source, rootID: rootID, scope: scope,
                 attempt: attempt + 1, mutation: mutation, committed: committed
             )
+            return (retried.changed, retried.committedBytes,
+                    hadRecordedError || retried.hadRecordedError)
         }
         // Persist the fingerprint of the boundary actually consumed. Later appends remain detectable.
         try await database.finishSource(id: sourceID, fingerprint: initialFingerprint, scannedBytes: checkpoint)
-        return (checkpoint > startOffset, max(0, checkpoint - startOffset))
+        return (checkpoint > startOffset, max(0, checkpoint - startOffset), hadRecordedError)
     }
 
     private func processSnapshot(

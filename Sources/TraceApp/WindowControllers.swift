@@ -3,7 +3,7 @@ import SwiftUI
 import Combine
 
 @MainActor
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSPopoverDelegate {
     private let model: TraceModel
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = NSPopover()
@@ -12,6 +12,7 @@ final class StatusItemController: NSObject {
         self.model = model
         super.init()
         popover.behavior = .transient
+        popover.delegate = self
         popover.contentSize = NSSize(width: 480, height: 600)
         popover.contentViewController = NSHostingController(rootView: RecentPopoverView(model: model))
         if let button = statusItem.button {
@@ -43,8 +44,13 @@ final class StatusItemController: NSObject {
         let available = screen?.visibleFrame.size ?? NSSize(width: 480, height: 640)
         popover.contentSize = NSSize(width: min(480, available.width - 24), height: min(600, available.height - 40))
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        model.setGlobalSearchSurface(.popover, visible: true)
         popover.contentViewController?.view.window?.makeKey()
         NotificationCenter.default.post(name: .traceFocusPopover, object: nil)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        model.setGlobalSearchSurface(.popover, visible: false)
     }
 
     private func contextMenu() -> NSMenu {
@@ -75,7 +81,9 @@ final class StatusItemController: NSObject {
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var titleObservation: AnyCancellable?
+    private let model: TraceModel
     init(model: TraceModel) {
+        self.model = model
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -103,22 +111,41 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        model.setMainWindowVisible(true)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func windowWillClose(_ notification: Notification) {
+        model.setMainWindowVisible(false)
         NSApp.setActivationPolicy(.accessory)
     }
+
+    func windowDidMiniaturize(_ notification: Notification) { model.setMainWindowVisible(false) }
+    func windowDidDeminiaturize(_ notification: Notification) { model.setMainWindowVisible(true) }
 }
 
 private final class LauncherPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            NotificationCenter.default.post(name: .traceHideLauncher, object: nil)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        NotificationCenter.default.post(name: .traceHideLauncher, object: nil)
+    }
 }
 
 @MainActor
 final class LauncherPanelController: NSWindowController, NSWindowDelegate {
+    private let model: TraceModel
     init(model: TraceModel) {
+        self.model = model
         let panel = LauncherPanel(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 540),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
@@ -141,7 +168,7 @@ final class LauncherPanelController: NSWindowController, NSWindowDelegate {
     func show() {
         guard let panel = window else { return }
         if panel.isVisible {
-            panel.orderOut(nil)
+            hide()
             return
         }
         if let screen = NSScreen.main {
@@ -151,11 +178,17 @@ final class LauncherPanelController: NSWindowController, NSWindowDelegate {
                 y: screen.visibleFrame.midY - frame.height / 2 + 80
             ))
         }
+        model.setGlobalSearchSurface(.launcher, visible: true)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func windowDidResignKey(_ notification: Notification) { window?.orderOut(nil) }
+    func hide() {
+        window?.orderOut(nil)
+        model.setGlobalSearchSurface(.launcher, visible: false)
+    }
+
+    func windowDidResignKey(_ notification: Notification) { hide() }
 }
 
 @MainActor

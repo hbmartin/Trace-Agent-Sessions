@@ -33,6 +33,13 @@ public struct ClaudeCodeSource: SessionSource {
         }
     }
 
+    public func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
+    }
+
     public func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
         guard format == .claudeJSONL,
               locator.kind == .byteRange,
