@@ -362,16 +362,23 @@ public actor IndexDatabase {
     }
 
     func movableSourceState(device: UInt64, inode: UInt64, agent: AgentKind,
-                            format: SourceFormat) throws -> IndexedSourceState? {
+                            format: SourceFormat, targetPath: String) throws -> IndexedSourceState? {
         try pool.read { db in
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT * FROM source_file WHERE dev=? AND inode=? AND agent=? AND format=? AND is_placeholder=0",
+                sql: "SELECT * FROM source_file WHERE dev=? AND inode=? AND agent=? AND format=? AND is_placeholder=0 ORDER BY id",
                 arguments: [Int64(bitPattern: device), Int64(bitPattern: inode),
                             agent.rawValue, format.rawValue]
             )
+            let target = URL(fileURLWithPath: targetPath)
+            let caseInsensitiveVolume = (try? target.resourceValues(
+                forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+            ).volumeSupportsCaseSensitiveNames) == false
+            let targetKey = TraceFileIO.canonicalPath(targetPath).comparisonKey
             return rows.map(sourceState(from:)).first {
                 !FileManager.default.fileExists(atPath: $0.path)
+                    || (caseInsensitiveVolume && $0.path != targetPath
+                        && TraceFileIO.canonicalPath($0.path).comparisonKey == targetKey)
             }
         }
     }
@@ -903,15 +910,16 @@ public actor IndexDatabase {
         }
     }
 
-    func clearSourceError(path: String) throws {
+    func clearSourceError(path: String) throws -> Bool {
         try pool.write { db in
             guard let id = try Int64.fetchOne(db, sql: """
                 SELECT sf.id FROM source_file sf
                 LEFT JOIN adapter_health ah ON ah.source_file_id=sf.id
                 WHERE sf.path=? AND (sf.last_error IS NOT NULL OR ah.last_error IS NOT NULL)
-                """, arguments: [path]) else { return }
+                """, arguments: [path]) else { return false }
             try db.execute(sql: "UPDATE source_file SET last_error=NULL WHERE id=?", arguments: [id])
             try db.execute(sql: "UPDATE adapter_health SET last_error=NULL WHERE source_file_id=?", arguments: [id])
+            return true
         }
     }
 
@@ -938,6 +946,12 @@ public actor IndexDatabase {
     }
 
     public func rebuildUsageRollups(timeZoneID: String = TimeZone.autoupdatingCurrent.identifier) throws {
+        if TraceTestHooks.isUITesting,
+           let delay = TraceTestHooks.environment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"].flatMap(Int.init),
+           delay > 0 {
+            TraceTestHooks.appendLine("started", pathKey: "TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH")
+            Thread.sleep(forTimeInterval: Double(min(delay, 5_000)) / 1_000)
+        }
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM usage_daily")
@@ -977,26 +991,18 @@ public actor IndexDatabase {
                 return .commit
             }
         }
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
-           let path = ProcessInfo.processInfo.environment["TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH"] {
-            if !FileManager.default.fileExists(atPath: path) {
-                _ = FileManager.default.createFile(atPath: path, contents: nil)
-            }
-            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: Data("rebuilt\n".utf8))
-                try? handle.close()
-            }
-        }
+        TraceTestHooks.appendLine("rebuilt", pathKey: "TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH")
     }
 
-    public func rebuildUsageRollupsIfDirty(timeZoneID: String = TimeZone.autoupdatingCurrent.identifier) throws {
+    @discardableResult
+    public func rebuildUsageRollupsIfDirty(timeZoneID: String = TimeZone.autoupdatingCurrent.identifier) throws -> Bool {
         let dirty = try pool.read { db in
             let flag = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'")
             let storedZone = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_timezone'")
             return flag != "0" || storedZone != timeZoneID
         }
         if dirty { try rebuildUsageRollups(timeZoneID: timeZoneID) }
+        return dirty
     }
 
     public func search(

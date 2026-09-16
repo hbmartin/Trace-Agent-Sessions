@@ -303,7 +303,6 @@ private struct TranscriptRenderer: View {
             } action: { _, geometry in
                 contentOffset = geometry.offset
                 viewportHeight = geometry.height
-                if restoring && position.isPositionedByUser { cancelRestorationForUser() }
                 if !restorationDelayPending, let pending, let frame = frames[pending.messageID],
                    abs(contentOffset - max(0, frame.minY - pending.offset)) <= 2 {
                     finishRestoration()
@@ -312,12 +311,11 @@ private struct TranscriptRenderer: View {
             }
             .onScrollPhaseChange { oldPhase, phase in
                 userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
-                    || (phase == .animating && position.isPositionedByUser)
                 if userScrolling { cancelRestorationForUser() }
                 if phase == .idle && oldPhase != .idle { savePosition() }
             }
-            .onChange(of: position.isPositionedByUser) { _, positionedByUser in
-                if positionedByUser && restoring {
+            .onChange(of: position.isPositionedByUser) { wasPositionedByUser, positionedByUser in
+                if !wasPositionedByUser && positionedByUser && restoring {
                     userScrolling = true
                     cancelRestorationForUser()
                 }
@@ -387,6 +385,8 @@ private struct TranscriptRenderer: View {
         lastRequest = model.scrollRequest
         let ids = visibleMessages.map(\.id)
         guard !ids.isEmpty else { restoring = false; return }
+        position.isPositionedByUser = false
+        userScrolling = false
         var bookmark = model.scrollPositions[sessionID]
         if let target = model.requestedMessageID, ids.contains(target), !force {
             bookmark = .init(messageID: target, offset: 0, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)
@@ -407,7 +407,7 @@ private struct TranscriptRenderer: View {
         restoring = true
         if testRestorationDelay != nil {
             restorationDelayPending = true
-            if let path = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] {
+            if let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] {
                 try? Data().write(to: URL(fileURLWithPath: path))
             }
             return
@@ -427,16 +427,16 @@ private struct TranscriptRenderer: View {
     }
 
     private var testRestorationDelay: Int? {
-        guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
-              let delay = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"].flatMap(Int.init),
+        guard TraceTestHooks.isUITesting,
+              let delay = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"].flatMap(Int.init),
               delay > 0 else { return nil }
         return delay
     }
 
     private func cancelRestorationForUser() {
         guard restoring || pending != nil else { return }
-        if let path = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"],
-           ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+        if let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"],
+           TraceTestHooks.isUITesting {
             try? Data().write(to: URL(fileURLWithPath: path))
         }
         pending = nil
@@ -451,8 +451,8 @@ private struct TranscriptRenderer: View {
               let first = RowFrameGeometry.firstVisible(in: frames, offset: contentOffset),
               let index = model.messages.firstIndex(where: { $0.id == first.id }) else { return }
         model.scrollPositions[sessionID] = .init(messageID: first.id, offset: first.frame.minY - contentOffset, index: index)
-        if let path = ProcessInfo.processInfo.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"],
-           ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+        if let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"],
+           TraceTestHooks.isUITesting {
             try? Data("\(index)".utf8).write(to: URL(fileURLWithPath: path))
         }
     }

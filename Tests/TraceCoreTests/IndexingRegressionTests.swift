@@ -231,6 +231,33 @@ final class IndexingRegressionTests: XCTestCase {
         }
     }
 
+    func testCaseOnlyRenameKeepsSourceAndMessageIDs() async throws {
+        let root = try directory()
+        let original = root.appendingPathComponent("Session.jsonl")
+        let renamed = root.appendingPathComponent("session.jsonl")
+        let caseSensitive = try root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+            .volumeSupportsCaseSensitiveNames
+        if caseSensitive != false { throw XCTSkip("Requires a case-insensitive volume") }
+        try Data(line(1).utf8).write(to: original)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let oldState = try await database.sourceState(path: original.path)
+        let oldID = try XCTUnwrap(oldState?.id)
+        let oldResults = try await database.search(query: "searchable")
+        let oldMessageID = try XCTUnwrap(oldResults.results.first?.id)
+
+        try FileManager.default.moveItem(at: original, to: renamed)
+        await coordinator.refresh(paths: [original.path, renamed.path], scope: .proseOnly)
+        let missing = try await database.sourceState(path: original.path)
+        let moved = try await database.sourceState(path: renamed.path)
+        XCTAssertNil(missing)
+        XCTAssertEqual(moved?.id, oldID)
+        let results = try await database.search(query: "searchable")
+        XCTAssertEqual(results.results.map(\.id), [oldMessageID])
+        XCTAssertEqual(results.results.first?.sourcePath, renamed.path)
+    }
+
     func testPlaceholderRecoveryMovesSameFormatInodeWithoutLosingIDs() async throws {
         let root = try directory()
         let original = root.appendingPathComponent("original.jsonl")
@@ -365,6 +392,66 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(cancelled.terminal?.unresolvedFailedFiles, 1)
         let unresolved = try await database.unresolvedSourceFailureCount()
         XCTAssertEqual(unresolved, 1)
+    }
+
+    func testSuccessfulQuietPassClearsAdapterHealthOnlyError() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE adapter_health SET last_error='legacy error'")
+            try db.execute(sql: "UPDATE source_file SET last_error=NULL")
+        }
+        let unhealthy = try await database.sourceHealth()
+        XCTAssertTrue(unhealthy.contains { $0.error != nil })
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let healthy = try await database.sourceHealth()
+        let clearedAgain = try await database.clearSourceError(path: file.path)
+        XCTAssertFalse(healthy.contains { $0.error != nil })
+        XCTAssertFalse(clearedAgain)
+    }
+
+    func testQuietPassReportsDirtyRollupRepairWithoutIndexMutation() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { try $0.execute(sql: "UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty'") }
+        let repaired = ProgressRecorder()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly) { repaired.receive($0) }
+        XCTAssertEqual(repaired.terminal?.phase, .complete)
+        XCTAssertEqual(repaired.terminal?.indexChanged, false)
+        XCTAssertEqual(repaired.terminal?.rollupsChanged, true)
+        let quiet = ProgressRecorder()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly) { quiet.receive($0) }
+        XCTAssertEqual(quiet.terminal?.rollupsChanged, false)
+    }
+
+    func testRelevancePageMergeDropsRepeatedIDsAndPreservesCursor() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data((line(1) + line(2)).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+            .indexAll(scope: .proseOnly)
+        let ranked = try await database.search(query: "searchable", sort: .relevance)
+        XCTAssertEqual(ranked.results.count, 2)
+        let first = try XCTUnwrap(ranked.results.first)
+        let second = try XCTUnwrap(ranked.results.last)
+        let cursor = SearchCursor(rowID: second.id, rank: second.rank)
+        let shiftedPage = SearchPage(results: [first, first, second], nextCursor: cursor)
+        let unique = shiftedPage.uniqueResults(excluding: [first.id])
+        XCTAssertEqual(unique.map(\.id), [second.id])
+        XCTAssertEqual(shiftedPage.nextCursor?.rowID, cursor.rowID)
     }
 
     func testRollupFailureLeavesSearchAvailableAndDirtyForRetry() async throws {

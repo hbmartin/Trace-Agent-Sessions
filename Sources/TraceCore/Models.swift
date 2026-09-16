@@ -361,6 +361,11 @@ public struct SearchResult: Identifiable, Sendable {
 public struct SearchPage: Sendable {
     public let results: [SearchResult]
     public let nextCursor: SearchCursor?
+
+    public func uniqueResults(excluding existingIDs: Set<Int64>) -> [SearchResult] {
+        var seen = existingIDs
+        return results.filter { seen.insert($0.id).inserted }
+    }
 }
 
 public struct ProjectSummary: Identifiable, Sendable {

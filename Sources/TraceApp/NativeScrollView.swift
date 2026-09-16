@@ -21,6 +21,9 @@ struct NativeScrollView<Content: View>: NSViewRepresentable {
         let scroll = UserObservedScrollView()
         scroll.onUserScroll = onUserScroll
         scroll.hasVerticalScroller = true
+        let scroller = UserObservedScroller()
+        scroller.onUserScroll = onUserScroll
+        scroll.verticalScroller = scroller
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
         let host = WheelHostingView(rootView: AnyView(content().fixedSize(horizontal: false, vertical: true)))
@@ -43,6 +46,7 @@ struct NativeScrollView<Content: View>: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.onScroll = onScroll
         (scroll as? UserObservedScrollView)?.onUserScroll = onUserScroll
+        (scroll.verticalScroller as? UserObservedScroller)?.onUserScroll = onUserScroll
         (scroll.documentView as? WheelHostingView<AnyView>)?.rootView = AnyView(content().fixedSize(horizontal: false, vertical: true))
         if let command = scrollCommand, command.resultSetID == resultSetID,
            context.coordinator.lastCommandID != command.id {
@@ -55,11 +59,22 @@ struct NativeScrollView<Content: View>: NSViewRepresentable {
     @MainActor final class Coordinator: NSObject {
         var onScroll: ((CGFloat) -> Void)?
         var lastCommandID: UUID?
+        private var pendingY: CGFloat?
+        private var deliveryScheduled = false
 
         @objc func boundsChanged(_ notification: Notification) {
             guard let clipView = notification.object as? NSClipView else { return }
-            let y = clipView.bounds.origin.y
-            Task { @MainActor [weak self] in self?.onScroll?(y) }
+            pendingY = clipView.bounds.origin.y
+            guard !deliveryScheduled else { return }
+            deliveryScheduled = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.deliveryScheduled = false
+                if let y = self.pendingY {
+                    self.pendingY = nil
+                    self.onScroll?(y)
+                }
+            }
         }
 
         deinit { NotificationCenter.default.removeObserver(self) }
@@ -72,6 +87,23 @@ private final class UserObservedScrollView: NSScrollView {
     override func scrollWheel(with event: NSEvent) {
         onUserScroll?()
         super.scrollWheel(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // Arrows, Home/End, and Page Up/Down can move the viewport without a wheel event.
+        if [123, 124, 125, 126, 115, 116, 119, 121].contains(event.keyCode) {
+            onUserScroll?()
+        }
+        super.keyDown(with: event)
+    }
+}
+
+private final class UserObservedScroller: NSScroller {
+    var onUserScroll: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onUserScroll?()
+        super.mouseDown(with: event)
     }
 }
 

@@ -11,6 +11,7 @@ public struct IndexProgress: Sendable {
     public var totalFiles: Int
     public var indexedFiles: Int = 0
     public var indexChanged: Bool = false
+    public var rollupsChanged: Bool = false
     public var passID = UUID()
     public var mutationRevision: Int = 0
     public var unchangedFiles: Int = 0
@@ -173,8 +174,7 @@ public actor IndexCoordinator {
                     }
                     let metadataChanged = try await refreshMetadata(file: file)
                     if metadataChanged { await mutations.markChanged() }
-                    if outcome.hadRecordedError {
-                        try await database.clearSourceError(path: file.url.path)
+                    if try await database.clearSourceError(path: file.url.path) {
                         needsFailureRecount = true
                     }
                     shouldRefreshMissingCodexTitle = !fullScan && file.agent == .codex
@@ -260,7 +260,7 @@ public actor IndexCoordinator {
             status.phase = .aggregating
             status.mutationRevision = await mutations.version()
             await progress(status)
-            do { try await database.rebuildUsageRollupsIfDirty() }
+            do { status.rollupsChanged = try await database.rebuildUsageRollupsIfDirty() }
             catch is CancellationError { throw CancellationError() }
             catch { status.rollupError = error.localizedDescription }
             try Task.checkCancellation()
@@ -414,23 +414,21 @@ public actor IndexCoordinator {
         attempt: Int = 0,
         mutation: @escaping @Sendable () async -> Void = {},
         committed: @escaping @Sendable (Int64, Int64, String?) async -> Void = { _, _, _ in }
-    ) async throws -> (changed: Bool, committedBytes: Int64, hadRecordedError: Bool) {
+    ) async throws -> (changed: Bool, committedBytes: Int64) {
         try Task.checkCancellation()
         let initialFingerprint = try TraceFileIO.fingerprint(url: file.url)
         var state = try await database.sourceState(path: file.url.path)
-        var hadRecordedError = state?.lastError != nil
         var promotedPlaceholder = false
 
         if let placeholder = state, placeholder.isPlaceholder {
             if let moved = try await database.movableSourceState(
                 device: initialFingerprint.device, inode: initialFingerprint.inode,
-                agent: file.agent, format: file.format
+                agent: file.agent, format: file.format, targetPath: file.url.path
             ) {
                 try await database.replacePlaceholderWithMovedSource(
                     placeholderID: placeholder.id, movedID: moved.id,
                     rootID: rootID, path: file.url.path
                 )
-                hadRecordedError = hadRecordedError || moved.lastError != nil
             } else {
                 try await database.promotePlaceholder(
                     id: placeholder.id, rootID: rootID, file: file, fingerprint: initialFingerprint
@@ -442,10 +440,9 @@ public actor IndexCoordinator {
         } else if state == nil,
                   let moved = try await database.movableSourceState(
                     device: initialFingerprint.device, inode: initialFingerprint.inode,
-                    agent: file.agent, format: file.format
+                    agent: file.agent, format: file.format, targetPath: file.url.path
                   ) {
             try await database.moveSource(id: moved.id, rootID: rootID, path: file.url.path)
-            hadRecordedError = moved.lastError != nil
             await mutation()
             state = try await database.sourceState(path: file.url.path)
         }
@@ -464,7 +461,7 @@ public actor IndexCoordinator {
            state.scannedBytes == state.size,
            state.headLength == initialFingerprint.headLength,
            state.headHash == initialFingerprint.headHash {
-            return (false, 0, hadRecordedError)
+            return (false, 0)
         }
 
         if file.format == .geminiJSON {
@@ -484,7 +481,7 @@ public actor IndexCoordinator {
                 mutation: mutation
             )
             await committed(initialFingerprint.size, initialFingerprint.size, nil)
-            return (true, initialFingerprint.size, hadRecordedError)
+            return (true, initialFingerprint.size)
         }
 
         let sourceID: Int64
@@ -600,12 +597,11 @@ public actor IndexCoordinator {
                 file: file, using: source, rootID: rootID, scope: scope,
                 attempt: attempt + 1, mutation: mutation, committed: committed
             )
-            return (retried.changed, retried.committedBytes,
-                    hadRecordedError || retried.hadRecordedError)
+            return (retried.changed, retried.committedBytes)
         }
         // Persist the fingerprint of the boundary actually consumed. Later appends remain detectable.
         try await database.finishSource(id: sourceID, fingerprint: initialFingerprint, scannedBytes: checkpoint)
-        return (checkpoint > startOffset, max(0, checkpoint - startOffset), hadRecordedError)
+        return (checkpoint > startOffset, max(0, checkpoint - startOffset))
     }
 
     private func processSnapshot(

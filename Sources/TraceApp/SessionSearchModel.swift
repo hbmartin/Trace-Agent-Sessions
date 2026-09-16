@@ -10,6 +10,7 @@ final class SessionSearchModel: ObservableObject {
     }
     @Published var query = ""
     @Published var filters = SearchFilters()
+    @Published var datePreset = SearchDatePreset.anyTime
     @Published private(set) var results: [SearchResult] = []
     @Published private(set) var snippets: [Int64: String] = [:]
     @Published private(set) var isSearching = false
@@ -91,26 +92,16 @@ final class SessionSearchModel: ObservableObject {
         activeTaskIsReset = reset
         isSearching = true
         error = nil
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
-           let path = ProcessInfo.processInfo.environment["TRACE_TEST_SEARCH_REQUEST_AUDIT_PATH"] {
-            let url = URL(fileURLWithPath: path)
-            if !FileManager.default.fileExists(atPath: path) {
-                FileManager.default.createFile(atPath: path, contents: nil)
-            }
-            if let handle = try? FileHandle(forWritingTo: url) {
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: Data("\(trigger == .automatic ? "automatic" : reset ? "reset" : "more")\n".utf8))
-                try? handle.close()
-            }
-        }
+        TraceTestHooks.appendLine(trigger == .automatic ? "automatic" : reset ? "reset" : "more",
+                                  pathKey: "TRACE_TEST_SEARCH_REQUEST_AUDIT_PATH")
         task = Task { [weak self] in
             do {
                 if reset { try await Task.sleep(for: .milliseconds(100)) }
                 if reset, trigger == .automatic,
-                   ProcessInfo.processInfo.arguments.contains("--ui-testing"),
-                   let delay = ProcessInfo.processInfo.environment["TRACE_TEST_AUTOMATIC_SEARCH_DELAY_MS"].flatMap(Int.init),
+                   TraceTestHooks.isUITesting,
+                   let delay = TraceTestHooks.environment["TRACE_TEST_AUTOMATIC_SEARCH_DELAY_MS"].flatMap(Int.init),
                    delay > 0 {
-                    if let path = ProcessInfo.processInfo.environment["TRACE_TEST_AUTOMATIC_SEARCH_STARTED_PATH"] {
+                    if let path = TraceTestHooks.environment["TRACE_TEST_AUTOMATIC_SEARCH_STARTED_PATH"] {
                         try? Data().write(to: URL(fileURLWithPath: path))
                     }
                     try await Task.sleep(for: .milliseconds(delay))
@@ -120,8 +111,8 @@ final class SessionSearchModel: ObservableObject {
                 try Task.checkCancellation()
                 guard let self, self.requestID == id else { return }
                 if reset {
-                    let previous = Dictionary(uniqueKeysWithValues: self.results.map { ($0.id, $0) })
-                    let current = Dictionary(uniqueKeysWithValues: page.results.map { ($0.id, $0) })
+                    let previous = Dictionary(self.results.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+                    let current = Dictionary(page.results.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
                     self.results = page.results
                     self.snippets = self.snippets.filter { key, _ in
                         guard let old = previous[key], let new = current[key] else { return false }
@@ -129,7 +120,11 @@ final class SessionSearchModel: ObservableObject {
                             && old.timestampMilliseconds == new.timestampMilliseconds
                     }
                     if trigger == .automatic { self.automaticResultRevision += 1 }
-                } else { self.results += page.results }
+                } else {
+                    let unique = page.uniqueResults(excluding: Set(self.results.map(\.id)))
+                    self.results += unique
+                    if unique.isEmpty && !page.results.isEmpty { self.resultsMayBeStale = true }
+                }
                 if !reset { self.hasLoadedAdditionalPages = true }
                 self.nextCursor = page.nextCursor
                 self.task = nil
@@ -171,6 +166,7 @@ final class SessionSearchModel: ObservableObject {
         nextCursor = nil
         results = []
         snippets = [:]
+        datePreset = .anyTime
         isSearching = false
         error = nil
         loadingAdditionalPage = false
@@ -184,12 +180,10 @@ final class SessionSearchModel: ObservableObject {
     func hydrate(_ result: SearchResult) async {
         guard snippets[result.id] == nil, let coordinator else { return }
         let setID = resultSetID
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
-           let delay = ProcessInfo.processInfo.environment["TRACE_TEST_SNIPPET_HYDRATION_DELAY_MS"].flatMap(Int.init),
+        if TraceTestHooks.isUITesting,
+           let delay = TraceTestHooks.environment["TRACE_TEST_SNIPPET_HYDRATION_DELAY_MS"].flatMap(Int.init),
            delay > 0 {
-            if let path = ProcessInfo.processInfo.environment["TRACE_TEST_SNIPPET_HYDRATION_STARTED_PATH"] {
-                try? Data().write(to: URL(fileURLWithPath: path))
-            }
+            TraceTestHooks.appendLine("started", pathKey: "TRACE_TEST_SNIPPET_HYDRATION_STARTED_PATH")
             do { try await Task.sleep(for: .milliseconds(delay)) }
             catch { return }
         }

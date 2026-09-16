@@ -48,6 +48,7 @@ private struct GeneralPreferences: View {
                 }
                 Toggle("Clear global search when closing popover and launcher",
                        isOn: $settings.clearGlobalSearchOnClose)
+                Toggle("Clear search filters on close", isOn: $settings.clearGlobalFiltersOnClose)
             }
 
             Section("Global hotkey") {
