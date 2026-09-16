@@ -78,7 +78,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.windows["Find the sample answer"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts.matching(NSPredicate(
             format: "label == %@", "Find the sample answer"
-        )).count, 1, "the session title should appear in the sidebar, not again in the transcript header")
+        )).count, 0, "the session title should remain in the window chrome, not the transcript content")
         XCTAssertTrue(app.checkBoxes["Tools"].waitForExistence(timeout: 5))
         app.checkBoxes["Tools"].click()
         app.checkBoxes["System"].click()
