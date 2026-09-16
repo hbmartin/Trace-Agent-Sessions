@@ -303,6 +303,10 @@ private struct TranscriptRenderer: View {
             } action: { _, geometry in
                 contentOffset = geometry.offset
                 viewportHeight = geometry.height
+                if restoring && position.isPositionedByUser {
+                    cancelRestorationForUser()
+                    return
+                }
                 if !restorationDelayPending, let pending, let frame = frames[pending.messageID],
                    abs(contentOffset - max(0, frame.minY - pending.offset)) <= 2 {
                     finishRestoration()
@@ -383,10 +387,13 @@ private struct TranscriptRenderer: View {
     private func restore(force: Bool = false, using proxy: ScrollViewProxy) {
         guard force || lastRequest != model.scrollRequest else { return }
         lastRequest = model.scrollRequest
+        guard !userScrolling else {
+            cancelRestorationForUser()
+            return
+        }
         let ids = visibleMessages.map(\.id)
         guard !ids.isEmpty else { restoring = false; return }
         position.isPositionedByUser = false
-        userScrolling = false
         var bookmark = model.scrollPositions[sessionID]
         if let target = model.requestedMessageID, ids.contains(target), !force {
             bookmark = .init(messageID: target, offset: 0, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)

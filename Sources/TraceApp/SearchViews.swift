@@ -264,7 +264,7 @@ enum SearchDatePreset: String, CaseIterable, Identifiable {
         let start: Date?
         switch self {
         case .anyTime:
-            start = nil
+            return (nil, nil)
         case .sevenDays:
             start = calendar.date(byAdding: .day, value: -7, to: now)
         case .thirtyDays:

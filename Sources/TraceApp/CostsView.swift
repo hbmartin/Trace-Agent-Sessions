@@ -63,7 +63,7 @@ struct CostsView: View {
                     .padding(.bottom, 12)
             }
             if model.costsTotalsUpdating {
-                Text("Totals update when indexing finishes.")
+                Text("Updating token totals…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 20)

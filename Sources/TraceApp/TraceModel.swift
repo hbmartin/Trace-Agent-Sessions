@@ -55,7 +55,8 @@ final class TraceModel: ObservableObject {
     private var completedUsageRevision = 0
     private var usageSnapshotRequestID = UUID()
     private var usageRefreshPending = false
-    private var timeZoneRepairPending = false
+    private var usageRepairPending = false
+    private var deferredUsageRepairTask: Task<Void, Never>?
     private var indexingPassActive = false
     private var lastAutomaticSearchRefresh: ContinuousClock.Instant?
     private var lastObservedPassID: UUID?
@@ -111,7 +112,9 @@ final class TraceModel: ObservableObject {
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         if self.indexingPassActive {
-                            self.timeZoneRepairPending = true
+                            self.usageRepairPending = true
+                            self.usageRefreshPending = true
+                            self.updateCostsTotalsUpdating()
                             return
                         }
                         await self.refreshCompletedUsage(repairIfDirty: true)
@@ -182,7 +185,6 @@ final class TraceModel: ObservableObject {
            let path = TraceTestHooks.environment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] {
             try? Data().write(to: URL(fileURLWithPath: path))
         }
-        if costsTotalsUpdating != !terminal { costsTotalsUpdating = !terminal }
         if update.incremental {
             if terminal {
                 incrementalProgressTask?.cancel()
@@ -213,24 +215,21 @@ final class TraceModel: ObservableObject {
         }
 
         if terminal, let rollupError = update.rollupError { costsError = rollupError }
-        if terminal && update.phase != .complete && update.rollupsChanged {
+        if terminal && update.phase != .complete
+            && (update.indexChanged || update.rollupsChanged) {
+            usageRepairPending = true
             usageRefreshPending = true
         }
         if terminal, update.phase == .complete, update.rollupError == nil {
-            if timeZoneRepairPending {
-                scheduleCompletedUsageRefresh(repairIfDirty: true)
+            if usageRepairPending {
+                scheduleDeferredUsageRepair()
             } else if update.indexChanged || update.rollupsChanged || usageRefreshPending {
                 scheduleCompletedUsageRefresh(repairIfDirty: false)
             }
-        } else if terminal, timeZoneRepairPending {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.scheduler?.waitUntilIdle()
-                if self.timeZoneRepairPending {
-                    await self.refreshCompletedUsage(repairIfDirty: true)
-                }
-            }
+        } else if terminal, usageRepairPending {
+            scheduleDeferredUsageRepair()
         }
+        updateCostsTotalsUpdating()
         observeSearchMutation(update, terminal: terminal)
 
         let shouldRefresh = terminal
@@ -470,8 +469,13 @@ final class TraceModel: ObservableObject {
 
     private func prepareForIndexReset() {
         cancelAutomaticSearch()
+        deferredUsageRepairTask?.cancel()
+        deferredUsageRepairTask = nil
         completedUsageRevision += 1
         usageSnapshotRequestID = UUID()
+        usageRefreshPending = false
+        usageRepairPending = false
+        updateCostsTotalsUpdating()
         globalSearchNeedsRefresh = false
         mainSearchNeedsRefresh = false
         lastObservedPassID = nil
@@ -650,15 +654,41 @@ final class TraceModel: ObservableObject {
 
     private func scheduleCompletedUsageRefresh(repairIfDirty: Bool) {
         usageRefreshPending = true
+        if repairIfDirty { usageRepairPending = true }
+        updateCostsTotalsUpdating()
         Task { [weak self] in
             await self?.refreshCompletedUsage(repairIfDirty: repairIfDirty)
         }
     }
 
+    private func scheduleDeferredUsageRepair() {
+        usageRepairPending = true
+        usageRefreshPending = true
+        updateCostsTotalsUpdating()
+        guard deferredUsageRepairTask == nil else { return }
+        deferredUsageRepairTask = Task { [weak self] in
+            guard let self else { return }
+            await self.scheduler?.waitUntilIdle()
+            guard !Task.isCancelled else { return }
+            self.deferredUsageRepairTask = nil
+            if self.usageRepairPending {
+                await self.refreshCompletedUsage(repairIfDirty: true)
+            }
+        }
+    }
+
     private func refreshCompletedUsage(repairIfDirty: Bool) async {
-        guard let database else { return }
+        usageRefreshPending = true
+        if repairIfDirty { usageRepairPending = true }
+        updateCostsTotalsUpdating()
+        guard let database else {
+            usageRefreshPending = false
+            if repairIfDirty { usageRepairPending = false }
+            updateCostsTotalsUpdating()
+            return
+        }
         if repairIfDirty && indexingPassActive {
-            timeZoneRepairPending = true
+            usageRepairPending = true
             return
         }
         let request = UUID()
@@ -670,19 +700,28 @@ final class TraceModel: ObservableObject {
             )
             guard usageSnapshotRequestID == request else { return }
             if indexingPassActive {
-                timeZoneRepairPending = timeZoneRepairPending || repairIfDirty
+                usageRepairPending = usageRepairPending || repairIfDirty
                 return
             }
             completedUsage = snapshot
             completedUsageRevision += 1
-            usageRefreshPending = false
-            if repairIfDirty { timeZoneRepairPending = false }
+            if repairIfDirty { usageRepairPending = false }
+            usageRefreshPending = usageRepairPending
             costsError = nil
+            updateCostsTotalsUpdating()
             reloadCosts()
         } catch {
             guard usageSnapshotRequestID == request else { return }
             costsError = "Could not update token totals: \(error.localizedDescription)"
+            if repairIfDirty { usageRepairPending = false }
+            usageRefreshPending = usageRepairPending
+            updateCostsTotalsUpdating()
         }
+    }
+
+    private func updateCostsTotalsUpdating() {
+        let updating = indexingPassActive || usageRefreshPending
+        if costsTotalsUpdating != updating { costsTotalsUpdating = updating }
     }
 
     func refreshDiagnostics() {

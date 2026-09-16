@@ -407,10 +407,14 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "UPDATE adapter_health SET last_error='legacy error'")
             try db.execute(sql: "UPDATE source_file SET last_error=NULL")
         }
+        let recordedError = try await database.sourceState(path: file.path)?.hadRecordedError
+        XCTAssertEqual(recordedError, true)
         let unhealthy = try await database.sourceHealth()
         XCTAssertTrue(unhealthy.contains { $0.error != nil })
         await coordinator.refresh(paths: [file.path], scope: .proseOnly)
         let healthy = try await database.sourceHealth()
+        let clearedError = try await database.sourceState(path: file.path)?.hadRecordedError
+        XCTAssertEqual(clearedError, false)
         let clearedAgain = try await database.clearSourceError(path: file.path)
         XCTAssertFalse(healthy.contains { $0.error != nil })
         XCTAssertFalse(clearedAgain)
@@ -449,9 +453,15 @@ final class IndexingRegressionTests: XCTestCase {
         let second = try XCTUnwrap(ranked.results.last)
         let cursor = SearchCursor(rowID: second.id, rank: second.rank)
         let shiftedPage = SearchPage(results: [first, first, second], nextCursor: cursor)
+        XCTAssertEqual(shiftedPage.uniqueResults(excluding: []).map(\.id), [first.id, second.id],
+                       "reset pages must also drop duplicate IDs")
         let unique = shiftedPage.uniqueResults(excluding: [first.id])
         XCTAssertEqual(unique.map(\.id), [second.id])
         XCTAssertEqual(shiftedPage.nextCursor?.rowID, cursor.rowID)
+        let duplicateOnly = SearchPage(results: [first, first], nextCursor: cursor)
+        XCTAssertTrue(duplicateOnly.uniqueResults(excluding: [first.id]).isEmpty)
+        XCTAssertEqual(duplicateOnly.nextCursor?.rowID, cursor.rowID,
+                       "deduplication must retain the cursor needed to advance")
     }
 
     func testRollupFailureLeavesSearchAvailableAndDirtyForRetry() async throws {
@@ -869,6 +879,42 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: "/tmp/state_5.sqlite")))
         XCTAssertFalse(TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: "/tmp/state_5.sqlite-wal")))
         XCTAssertFalse(TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: "/tmp/state_latest.sqlite")))
+    }
+
+    func testCanonicalPathResolvesNestedMissingPathThroughSymlinkedAncestor() throws {
+        let root = try directory()
+        let real = root.appendingPathComponent("real")
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+
+        let canonical = TraceFileIO.canonicalPath(
+            alias.appendingPathComponent("missing/child/session.jsonl").path
+        )
+        XCTAssertEqual(
+            canonical.path,
+            real.resolvingSymlinksInPath()
+                .appendingPathComponent("missing/child/session.jsonl").path
+        )
+    }
+
+    func testCanonicalComparisonKeyCanBeForcedForEitherVolumeBehavior() {
+        let path = "/tmp/Trace/Résumé.JSONL"
+        XCTAssertEqual(TraceFileIO.comparisonKey(path, caseSensitive: true), path)
+        XCTAssertEqual(
+            TraceFileIO.comparisonKey(path, caseSensitive: false),
+            "/tmp/trace/resume.jsonl"
+        )
+    }
+
+    func testCanonicalPathProbesCaseSensitivityOncePerDevice() throws {
+        let root = try directory()
+        TraceFileIO.resetVolumeCaseSensitivityCacheForTesting()
+        defer { TraceFileIO.resetVolumeCaseSensitivityCacheForTesting() }
+
+        _ = TraceFileIO.canonicalPath(root.appendingPathComponent("first/missing.jsonl").path)
+        _ = TraceFileIO.canonicalPath(root.appendingPathComponent("second/missing.jsonl").path)
+        XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 1)
     }
 
     func testFailureDetailsAndProjectSearchAcrossProviders() async throws {

@@ -1,8 +1,18 @@
 import CryptoKit
 import Darwin
 import Foundation
+import os
 
 public enum TraceFileIO {
+    private struct VolumeCaseSensitivityCache {
+        var values: [UInt64: Bool] = [:]
+        var probeCounts: [UInt64: Int] = [:]
+    }
+
+    private static let volumeCaseSensitivity = OSAllocatedUnfairLock(
+        initialState: VolumeCaseSensitivityCache()
+    )
+
     public struct CanonicalPath: Hashable, Sendable {
         public let path: String
         public let comparisonKey: String
@@ -22,24 +32,65 @@ public enum TraceFileIO {
 
     public static func canonicalPath(_ rawPath: String) -> CanonicalPath {
         let standardized = URL(fileURLWithPath: rawPath).standardizedFileURL
-        let resolved: URL
-        if FileManager.default.fileExists(atPath: standardized.path) {
-            resolved = standardized.resolvingSymlinksInPath()
-        } else {
-            let parent = standardized.deletingLastPathComponent().resolvingSymlinksInPath()
-            resolved = parent.appendingPathComponent(standardized.lastPathComponent).standardizedFileURL
+        var ancestor = standardized
+        var missingComponents: [String] = []
+        var status = stat()
+        while stat(ancestor.path, &status) != 0 {
+            let parent = ancestor.deletingLastPathComponent()
+            guard parent.path != ancestor.path else { break }
+            missingComponents.append(ancestor.lastPathComponent)
+            ancestor = parent
         }
+        var resolved = ancestor.resolvingSymlinksInPath()
+        for component in missingComponents.reversed() {
+            resolved.appendPathComponent(component)
+        }
+        resolved = resolved.standardizedFileURL
         let path = resolved.path
-        let volumeURL = FileManager.default.fileExists(atPath: path)
-            ? resolved : resolved.deletingLastPathComponent()
-        let caseSensitive = (try? volumeURL.resourceValues(
-            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
-        ).volumeSupportsCaseSensitiveNames) == true
-        let comparisonKey = caseSensitive ? path : path.folding(
+        let device = status.st_dev >= 0 ? UInt64(status.st_dev) : nil
+        let caseSensitive = volumeIsCaseSensitive(at: ancestor, device: device)
+        return .init(path: path, comparisonKey: comparisonKey(path, caseSensitive: caseSensitive))
+    }
+
+    static func comparisonKey(_ path: String, caseSensitive: Bool) -> String {
+        caseSensitive ? path : path.folding(
             options: [.caseInsensitive, .diacriticInsensitive],
             locale: Locale(identifier: "en_US_POSIX")
         )
-        return .init(path: path, comparisonKey: comparisonKey)
+    }
+
+    private static func volumeIsCaseSensitive(at existingURL: URL, device: UInt64?) -> Bool {
+        guard let device else { return probeVolumeCaseSensitivity(at: existingURL) }
+        return volumeCaseSensitivity.withLock { cache in
+            if let cached = cache.values[device] { return cached }
+            let detected = probeVolumeCaseSensitivity(at: existingURL)
+            cache.values[device] = detected
+            cache.probeCounts[device, default: 0] += 1
+            return detected
+        }
+    }
+
+    private static func probeVolumeCaseSensitivity(at existingURL: URL) -> Bool {
+        let pathConfiguration = pathconf(existingURL.path, _PC_CASE_SENSITIVE)
+        if pathConfiguration == 0 || pathConfiguration == 1 {
+            return pathConfiguration == 1
+        } else if let value = try? existingURL.resourceValues(
+            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+        ).volumeSupportsCaseSensitiveNames {
+            return value
+        }
+        // Avoid merging distinct paths when the volume cannot report its behavior.
+        return true
+    }
+
+    static func resetVolumeCaseSensitivityCacheForTesting() {
+        volumeCaseSensitivity.withLock { $0 = .init() }
+    }
+
+    static var volumeCaseSensitivityProbeCountForTesting: Int {
+        volumeCaseSensitivity.withLock { cache in
+            cache.probeCounts.values.reduce(0, +)
+        }
     }
 
     public static func isCodexMetadataSidecar(_ url: URL) -> Bool {

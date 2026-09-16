@@ -33,6 +33,7 @@ final class SessionSearchModel: ObservableObject {
     private var loadingAdditionalPage = false
     private var activeTaskIsReset = false
     private var pendingLoadMore = false
+    private var injectedDuplicateAdditionalPage = false
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
 
@@ -69,6 +70,7 @@ final class SessionSearchModel: ObservableObject {
             nextCursor = nil
             loadingAdditionalPage = false
             hasLoadedAdditionalPages = false
+            injectedDuplicateAdditionalPage = false
         } else {
             if task != nil {
                 if activeTaskIsReset { pendingLoadMore = true }
@@ -87,7 +89,7 @@ final class SessionSearchModel: ObservableObject {
         let query = query
         let filters = filters
         let sort = self.sort
-        let cursor = reset ? nil : nextCursor
+        let initialCursor = reset ? nil : nextCursor
         loadingAdditionalPage = !reset
         activeTaskIsReset = reset
         isSearching = true
@@ -107,26 +109,60 @@ final class SessionSearchModel: ObservableObject {
                     try await Task.sleep(for: .milliseconds(delay))
                 }
                 let started = ContinuousClock.now
-                let page = try await database.search(query: query, filters: filters, sort: sort, cursor: cursor)
-                try Task.checkCancellation()
                 guard let self, self.requestID == id else { return }
-                if reset {
-                    let previous = Dictionary(self.results.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
-                    let current = Dictionary(page.results.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
-                    self.results = page.results
-                    self.snippets = self.snippets.filter { key, _ in
-                        guard let old = previous[key], let new = current[key] else { return false }
-                        return old.sourcePath == new.sourcePath && old.prefix == new.prefix
-                            && old.timestampMilliseconds == new.timestampMilliseconds
+                var cursor = initialCursor
+                var visitedCursors = Set<SearchCursorIdentity>()
+                if let cursor { visitedCursors.insert(.init(cursor)) }
+                while true {
+                    let page = try await database.search(
+                        query: query, filters: filters, sort: sort, cursor: cursor
+                    )
+                    try Task.checkCancellation()
+                    guard self.requestID == id else { return }
+                    var pageResults = page.results
+                    var appendedUniqueResults = true
+                    if !reset, TraceTestHooks.isUITesting,
+                       TraceTestHooks.environment["TRACE_TEST_DUPLICATE_FIRST_ADDITIONAL_SEARCH_PAGE"] != nil,
+                       !self.injectedDuplicateAdditionalPage {
+                        self.injectedDuplicateAdditionalPage = true
+                        pageResults = Array(self.results.prefix(page.results.count))
                     }
-                    if trigger == .automatic { self.automaticResultRevision += 1 }
-                } else {
-                    let unique = page.uniqueResults(excluding: Set(self.results.map(\.id)))
-                    self.results += unique
-                    if unique.isEmpty && !page.results.isEmpty { self.resultsMayBeStale = true }
+                    if reset {
+                        let previous = Dictionary(
+                            self.results.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }
+                        )
+                        let unique = Self.uniqueResults(pageResults, excluding: [])
+                        let current = Dictionary(
+                            unique.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }
+                        )
+                        self.results = unique
+                        self.snippets = self.snippets.filter { key, _ in
+                            guard let old = previous[key], let new = current[key] else { return false }
+                            return old.sourcePath == new.sourcePath && old.prefix == new.prefix
+                                && old.timestampMilliseconds == new.timestampMilliseconds
+                        }
+                        if unique.count != pageResults.count { self.resultsMayBeStale = true }
+                        if trigger == .automatic { self.automaticResultRevision += 1 }
+                    } else {
+                        let unique = Self.uniqueResults(pageResults, excluding: Set(self.results.map(\.id)))
+                        self.results += unique
+                        appendedUniqueResults = !unique.isEmpty
+                        if unique.count != pageResults.count { self.resultsMayBeStale = true }
+                    }
+                    self.nextCursor = page.nextCursor
+                    if !reset, let next = page.nextCursor,
+                       !visitedCursors.insert(.init(next)).inserted {
+                        self.resultsMayBeStale = true
+                        self.nextCursor = nil
+                        break
+                    }
+                    if reset || appendedUniqueResults || page.nextCursor == nil {
+                        break
+                    }
+                    guard let next = page.nextCursor else { break }
+                    cursor = next
                 }
                 if !reset { self.hasLoadedAdditionalPages = true }
-                self.nextCursor = page.nextCursor
                 self.task = nil
                 self.loadingAdditionalPage = false
                 self.activeTaskIsReset = false
@@ -166,7 +202,6 @@ final class SessionSearchModel: ObservableObject {
         nextCursor = nil
         results = []
         snippets = [:]
-        datePreset = .anyTime
         isSearching = false
         error = nil
         loadingAdditionalPage = false
@@ -195,5 +230,22 @@ final class SessionSearchModel: ObservableObject {
               }) else { return }
         snippets[result.id] = [message.sections.prose, message.sections.toolInvocation, message.sections.toolOutput]
             .first { !$0.isEmpty }
+    }
+
+    private static func uniqueResults(
+        _ results: [SearchResult], excluding existingIDs: Set<Int64>
+    ) -> [SearchResult] {
+        var seen = existingIDs
+        return results.filter { seen.insert($0.id).inserted }
+    }
+}
+
+private struct SearchCursorIdentity: Hashable {
+    let rowID: Int64
+    let rankBits: UInt64?
+
+    init(_ cursor: SearchCursor) {
+        rowID = cursor.rowID
+        rankBits = cursor.rank?.bitPattern
     }
 }
