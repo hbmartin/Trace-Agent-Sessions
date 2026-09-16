@@ -580,6 +580,42 @@ final class TraceUITests: XCTestCase {
                       "the queued request must load the next page with the refreshed cursor")
     }
 
+    func testDuplicateOnlyAdditionalPageAutomaticallyAdvances() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/duplicate-page.jsonl")
+        app.launchEnvironment["TRACE_TEST_DUPLICATE_FIRST_ADDITIONAL_SEARCH_PAGE"] = "1"
+        var data = Data()
+        for index in 0..<420 {
+            let row: [String: Any] = [
+                "type": "assistant", "uuid": "duplicate-page-\(index)",
+                "sessionId": "duplicate-page-session", "cwd": "/tmp/TraceUIExample",
+                "timestamp": 1_700_000_000_000 + index * 1_000,
+                "message": ["content": "DuplicatePageNeedle row \(index)"],
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: row))
+            data.append(10)
+        }
+        try data.write(to: file)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 15))
+        query.click()
+        query.typeText("DuplicatePageNeedle")
+        let scroll = app.scrollViews["searchResultsScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "DuplicatePageNeedle row 419"
+        )).firstMatch.waitForExistence(timeout: 10))
+
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "DuplicatePageNeedle row 0"
+        )).firstMatch.waitForExistence(timeout: 15),
+        "a duplicate-only page must drain through to the following page")
+    }
+
     func testScrolledSearchQueryChangeStartsNewMainResultsAtTop() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let file = directory.appendingPathComponent("Sources/Claude/query-change.jsonl")
@@ -801,6 +837,57 @@ final class TraceUITests: XCTestCase {
         }
     }
 
+    func testDateFiltersSurviveRebuildAndAnyTimeIsUnbounded() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let defaults = UserDefaults(suiteName: "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)")
+        defaults?.set(false, forKey: "clearGlobalSearchOnClose")
+        defaults?.set(false, forKey: "clearGlobalFiltersOnClose")
+        let completed = directory.appendingPathComponent("index-pass-completed")
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let popoverSearch = app.textFields["Search all sessions"]
+        XCTAssertTrue(popoverSearch.waitForExistence(timeout: 15))
+        popoverSearch.click()
+        popoverSearch.typeText("Find")
+        popoverSearch.typeKey(.return, modifierFlags: [])
+        let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
+        app.buttons["Any time"].click()
+        app.menuItems["7 days"].click()
+        app.buttons["Claude Code"].click()
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Find the sample answer"
+        )).firstMatch.waitForExistence(timeout: 10))
+
+        try? FileManager.default.removeItem(at: completed)
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.buttons["Rebuild Index…"].click()
+        XCTAssertTrue(waitForFile(completed, timeout: 20))
+        settings.typeKey("w", modifierFlags: .command)
+
+        reopenPopover(app)
+        XCTAssertTrue(app.staticTexts["Search filters active"].waitForExistence(timeout: 10))
+        popoverSearch.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.buttons["7 days"].waitForExistence(timeout: 10))
+        XCTAssertEqual(launcherSearch.value as? String, "Find")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Find the sample answer"
+        )).firstMatch.waitForExistence(timeout: 10),
+        "the query and non-default filters must remain effective after rebuild")
+
+        app.buttons["Claude Code"].click()
+        app.buttons["7 days"].click()
+        app.menuItems["Any time"].click()
+        launcherSearch.typeKey(.escape, modifierFlags: [])
+        reopenPopover(app)
+        XCTAssertFalse(app.staticTexts["Search filters active"].exists,
+                       "Any time must clear both date bounds")
+    }
+
     func testRetainedHiddenGlobalSearchRefreshesOnlyOnReopening() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let defaults = UserDefaults(suiteName: "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)")
@@ -893,7 +980,7 @@ final class TraceUITests: XCTestCase {
         try handle.seekToEnd()
         try handle.write(contentsOf: added)
         try handle.close()
-        XCTAssertTrue(app.staticTexts["Totals update when indexing finishes."].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Updating token totals…"].waitForExistence(timeout: 15))
         let range = app.windows["Trace"].popUpButtons.matching(NSPredicate(
             format: "value == %@", "30 days"
         )).firstMatch
@@ -936,8 +1023,59 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["14"].exists,
                       "a rollup failure must retain the last completed Costs snapshot")
-        XCTAssertFalse(app.staticTexts["Totals update when indexing finishes."].exists,
+        XCTAssertFalse(app.staticTexts["Updating token totals…"].exists,
                        "a failed pass must clear the active-indexing banner")
+    }
+
+    func testFailedPassDefersDirtyUsageRepairAndKeepsCompletedSnapshot() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/failed-pass-costs.jsonl")
+        let repairStarted = directory.appendingPathComponent("deferred-rollup-started")
+        let initial: [String: Any] = [
+            "type": "assistant", "uuid": "failed-pass-initial", "sessionId": "failed-pass",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
+            "message": ["id": "failed-pass-initial-response", "model": "claude-sonnet-5",
+                        "content": "Failed pass baseline",
+                        "usage": ["input_tokens": 10, "output_tokens": 2]],
+        ]
+        try (JSONSerialization.data(withJSONObject: initial) + Data([10])).write(to: file)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        app.radioButtons["Costs"].click()
+        XCTAssertTrue(app.staticTexts["10"].waitForExistence(timeout: 15))
+        app.terminate()
+
+        let sqlite = Process()
+        sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        sqlite.arguments = [directory.appendingPathComponent("index.sqlite").path,
+            "CREATE TRIGGER fail_root_scan BEFORE UPDATE OF last_scan_ms ON source_root BEGIN SELECT RAISE(ABORT, 'full scan failed'); END;"]
+        try sqlite.run()
+        sqlite.waitUntilExit()
+        XCTAssertEqual(sqlite.terminationStatus, 0)
+        let added: [String: Any] = [
+            "type": "assistant", "uuid": "failed-pass-added", "sessionId": "failed-pass",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "message": ["id": "failed-pass-added-response", "model": "claude-sonnet-5",
+                        "content": "Failed pass committed mutation",
+                        "usage": ["input_tokens": 6, "output_tokens": 1]],
+        ]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: added) + Data([10]))
+        try handle.close()
+
+        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"] = "3000"
+        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH"] = repairStarted.path
+        app.launch()
+        XCTAssertTrue(waitForFile(repairStarted, timeout: 15),
+                      "a failed pass with committed mutations must schedule dirty-rollup repair")
+        app.radioButtons["Costs"].click()
+        XCTAssertTrue(app.staticTexts["10"].exists,
+                      "the last completed snapshot must remain visible during repair")
+        XCTAssertTrue(app.staticTexts["Updating token totals…"].exists)
+        XCTAssertTrue(app.staticTexts["16"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Updating token totals…"].exists)
     }
 
     private func reopenPopover(_ app: XCUIApplication) {
@@ -1052,7 +1190,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(rebuilding, timeout: 15), "initial indexing must repair dirty rollups")
         XCTAssertTrue(app.staticTexts["10"].exists,
                       "cached Costs totals should remain visible while startup repair runs")
-        XCTAssertTrue(app.staticTexts["Totals update when indexing finishes."].exists)
+        XCTAssertTrue(app.staticTexts["Updating token totals…"].exists)
 
         let watched = directory.appendingPathComponent("Sources/Claude/startup-watched.jsonl")
         let row: [String: Any] = [

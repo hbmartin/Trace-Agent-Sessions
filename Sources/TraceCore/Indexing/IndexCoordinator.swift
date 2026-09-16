@@ -174,7 +174,8 @@ public actor IndexCoordinator {
                     }
                     let metadataChanged = try await refreshMetadata(file: file)
                     if metadataChanged { await mutations.markChanged() }
-                    if try await database.clearSourceError(path: file.url.path) {
+                    if outcome.hadRecordedError,
+                       try await database.clearSourceError(path: file.url.path) {
                         needsFailureRecount = true
                     }
                     shouldRefreshMissingCodexTitle = !fullScan && file.agent == .codex
@@ -414,10 +415,11 @@ public actor IndexCoordinator {
         attempt: Int = 0,
         mutation: @escaping @Sendable () async -> Void = {},
         committed: @escaping @Sendable (Int64, Int64, String?) async -> Void = { _, _, _ in }
-    ) async throws -> (changed: Bool, committedBytes: Int64) {
+    ) async throws -> (changed: Bool, committedBytes: Int64, hadRecordedError: Bool) {
         try Task.checkCancellation()
         let initialFingerprint = try TraceFileIO.fingerprint(url: file.url)
         var state = try await database.sourceState(path: file.url.path)
+        var hadRecordedError = state?.hadRecordedError ?? false
         var promotedPlaceholder = false
 
         if let placeholder = state, placeholder.isPlaceholder {
@@ -429,6 +431,7 @@ public actor IndexCoordinator {
                     placeholderID: placeholder.id, movedID: moved.id,
                     rootID: rootID, path: file.url.path
                 )
+                hadRecordedError = hadRecordedError || moved.hadRecordedError
             } else {
                 try await database.promotePlaceholder(
                     id: placeholder.id, rootID: rootID, file: file, fingerprint: initialFingerprint
@@ -437,12 +440,14 @@ public actor IndexCoordinator {
             }
             await mutation()
             state = try await database.sourceState(path: file.url.path)
+            hadRecordedError = hadRecordedError || (state?.hadRecordedError ?? false)
         } else if state == nil,
                   let moved = try await database.movableSourceState(
                     device: initialFingerprint.device, inode: initialFingerprint.inode,
                     agent: file.agent, format: file.format, targetPath: file.url.path
                   ) {
             try await database.moveSource(id: moved.id, rootID: rootID, path: file.url.path)
+            hadRecordedError = moved.hadRecordedError
             await mutation()
             state = try await database.sourceState(path: file.url.path)
         }
@@ -451,6 +456,7 @@ public actor IndexCoordinator {
             try await database.deleteSource(id: existing.id)
             await mutation()
             state = nil
+            hadRecordedError = false
         }
 
         if let state, !promotedPlaceholder,
@@ -461,7 +467,7 @@ public actor IndexCoordinator {
            state.scannedBytes == state.size,
            state.headLength == initialFingerprint.headLength,
            state.headHash == initialFingerprint.headHash {
-            return (false, 0)
+            return (false, 0, hadRecordedError)
         }
 
         if file.format == .geminiJSON {
@@ -481,7 +487,7 @@ public actor IndexCoordinator {
                 mutation: mutation
             )
             await committed(initialFingerprint.size, initialFingerprint.size, nil)
-            return (true, initialFingerprint.size)
+            return (true, initialFingerprint.size, hadRecordedError)
         }
 
         let sourceID: Int64
@@ -597,11 +603,14 @@ public actor IndexCoordinator {
                 file: file, using: source, rootID: rootID, scope: scope,
                 attempt: attempt + 1, mutation: mutation, committed: committed
             )
-            return (retried.changed, retried.committedBytes)
+            return (
+                retried.changed, retried.committedBytes,
+                hadRecordedError || retried.hadRecordedError
+            )
         }
         // Persist the fingerprint of the boundary actually consumed. Later appends remain detectable.
         try await database.finishSource(id: sourceID, fingerprint: initialFingerprint, scannedBytes: checkpoint)
-        return (checkpoint > startOffset, max(0, checkpoint - startOffset))
+        return (checkpoint > startOffset, max(0, checkpoint - startOffset), hadRecordedError)
     }
 
     private func processSnapshot(
