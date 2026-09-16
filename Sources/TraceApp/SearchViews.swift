@@ -25,6 +25,20 @@ struct RecentPopoverView: View {
             .padding(12)
             .background(.quaternary.opacity(0.45))
 
+            if search.filters != SearchFilters() {
+                HStack {
+                    Text("Search filters active")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear filters") { model.clearGlobalSearchFilters() }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+            }
+
             Group {
                 if !search.query.isEmpty {
                     SearchResultList(model: model, search: model.globalSearch, maximum: 10, usesNativeScrolling: true, selectedResultID: .constant(nil))
@@ -76,7 +90,6 @@ struct LauncherView: View {
     @ObservedObject private var search: SessionSearchModel
     @ObservedObject private var settings: AppSettings
     @FocusState private var searchFocused: Bool
-    @State private var datePreset = SearchDatePreset.anyTime
     @State private var selectedResultID: Int64?
 
     init(model: TraceModel) {
@@ -145,7 +158,7 @@ struct LauncherView: View {
                         Button(preset.title) { selectDate(preset) }
                     }
                 } label: {
-                    Label(datePreset.title, systemImage: "calendar")
+                    Label(search.datePreset.title, systemImage: "calendar")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -207,7 +220,7 @@ struct LauncherView: View {
     }
 
     private func selectDate(_ preset: SearchDatePreset) {
-        datePreset = preset
+        search.datePreset = preset
         let bounds = preset.bounds(now: Date())
         search.filters.fromMilliseconds = bounds.from
         search.filters.toMilliseconds = bounds.to
@@ -229,7 +242,7 @@ struct LauncherView: View {
     }
 }
 
-private enum SearchDatePreset: String, CaseIterable, Identifiable {
+enum SearchDatePreset: String, CaseIterable, Identifiable {
     case anyTime
     case sevenDays
     case thirtyDays
@@ -263,6 +276,20 @@ private enum SearchDatePreset: String, CaseIterable, Identifiable {
             start.map { Int64($0.timeIntervalSince1970 * 1_000) },
             Int64(now.timeIntervalSince1970 * 1_000)
         )
+    }
+}
+
+private struct SnippetHydrationKey: Hashable {
+    let id: Int64
+    let sourcePath: String
+    let prefix: String
+    let timestampMilliseconds: Int64
+
+    init(_ result: SearchResult) {
+        id = result.id
+        sourcePath = result.sourcePath
+        prefix = result.prefix
+        timestampMilliseconds = result.timestampMilliseconds
     }
 }
 
@@ -328,7 +355,7 @@ struct SearchResultList: View {
                         if usesNativeScrolling {
                             NativeScrollView(
                                 onScroll: { contentOffset = $0 },
-                                onUserScroll: { cancelPendingAnchor() },
+                                onUserScroll: { cancelCapturedAnchorForUser() },
                                 scrollCommand: nativeScrollCommand,
                                 resultSetID: search.resultSetID
                             ) {
@@ -342,10 +369,12 @@ struct SearchResultList: View {
                                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y }
                                     action: { _, offset in
                                         contentOffset = offset
-                                        if pendingAnchor != nil && searchPosition.isPositionedByUser {
-                                            cancelPendingAnchor()
-                                        }
                                     }
+                                .onScrollPhaseChange { _, phase in
+                                    if phase == .tracking || phase == .interacting || phase == .decelerating {
+                                        cancelCapturedAnchorForUser()
+                                    }
+                                }
                                 .onPreferenceChange(RowFramesPreference.self) { receiveFrames($0) }
                         }
                     }
@@ -441,6 +470,11 @@ struct SearchResultList: View {
         pendingAnchorToken = UUID()
     }
 
+    private func cancelCapturedAnchorForUser() {
+        savedAnchor = nil
+        cancelPendingAnchor()
+    }
+
     @ViewBuilder private var resultRows: some View {
         ForEach(groups) { project in
             Text(project.name.uppercased())
@@ -493,7 +527,7 @@ struct SearchResultList: View {
                             value: [result.id: geometry.frame(in: .named("searchResultContent"))]
                         )
                     })
-                    .task(id: result.id) { await search.hydrate(result) }
+                    .task(id: SnippetHydrationKey(result)) { await search.hydrate(result) }
                     .onAppear {
                         if result.id == search.results.last?.id {
                             search.search(reset: false)

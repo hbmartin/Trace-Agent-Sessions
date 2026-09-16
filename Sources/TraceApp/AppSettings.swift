@@ -11,6 +11,7 @@ final class AppSettings: ObservableObject {
         static let indexScope = "indexScope"
         static let searchSort = "searchSort"
         static let clearGlobalSearchOnClose = "clearGlobalSearchOnClose"
+        static let clearGlobalFiltersOnClose = "clearGlobalFiltersOnClose"
         static let additionalClaudeRoots = "additionalClaudeRoots"
         static let hotkeyKeyCode = "hotkeyKeyCode"
         static let hotkeyModifiers = "hotkeyModifiers"
@@ -36,6 +37,9 @@ final class AppSettings: ObservableObject {
     @Published var searchSort: SearchSort { didSet { defaults.set(searchSort.rawValue, forKey: Key.searchSort) } }
     @Published var clearGlobalSearchOnClose: Bool {
         didSet { defaults.set(clearGlobalSearchOnClose, forKey: Key.clearGlobalSearchOnClose) }
+    }
+    @Published var clearGlobalFiltersOnClose: Bool {
+        didSet { defaults.set(clearGlobalFiltersOnClose, forKey: Key.clearGlobalFiltersOnClose) }
     }
     @Published var additionalClaudeRoots: [String] { didSet { defaults.set(additionalClaudeRoots, forKey: Key.additionalClaudeRoots) } }
     @Published var hotkeyKeyCode: UInt32 { didSet { defaults.set(Int(hotkeyKeyCode), forKey: Key.hotkeyKeyCode) } }
@@ -66,6 +70,7 @@ final class AppSettings: ObservableObject {
         indexScope = IndexScope(rawValue: defaults.object(forKey: Key.indexScope) as? Int ?? 0) ?? .proseOnly
         searchSort = SearchSort(rawValue: defaults.string(forKey: Key.searchSort) ?? "") ?? .recency
         clearGlobalSearchOnClose = defaults.object(forKey: Key.clearGlobalSearchOnClose) as? Bool ?? true
+        clearGlobalFiltersOnClose = defaults.object(forKey: Key.clearGlobalFiltersOnClose) as? Bool ?? true
         additionalClaudeRoots = defaults.stringArray(forKey: Key.additionalClaudeRoots) ?? []
         hotkeyKeyCode = UInt32(defaults.object(forKey: Key.hotkeyKeyCode) as? Int ?? kVK_Space)
         hotkeyModifiers = UInt32(defaults.object(forKey: Key.hotkeyModifiers) as? Int ?? (cmdKey | shiftKey))

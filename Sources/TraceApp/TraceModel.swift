@@ -52,7 +52,9 @@ final class TraceModel: ObservableObject {
     private var mainWindowVisible = false
     private var mainSearchPanelVisible = false
     private var completedUsage: [UsageRollup] = []
+    private var completedUsageRevision = 0
     private var usageSnapshotRequestID = UUID()
+    private var usageRefreshPending = false
     private var timeZoneRepairPending = false
     private var indexingPassActive = false
     private var lastAutomaticSearchRefresh: ContinuousClock.Instant?
@@ -108,7 +110,7 @@ final class TraceModel: ObservableObject {
                     tzset()
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        if self.costsTotalsUpdating {
+                        if self.indexingPassActive {
                             self.timeZoneRepairPending = true
                             return
                         }
@@ -117,7 +119,6 @@ final class TraceModel: ObservableObject {
                 }
                 loadPricing()
                 await reloadSummaries(loadCosts: false)
-                await refreshCompletedUsage(repairIfDirty: true)
                 if settings.onboardingComplete {
                     startWatching(sources.flatMap(\.roots).map(\.url))
                     if ProcessInfo.processInfo.arguments.contains("--index-smoke"), TraceRuntime.testDirectory != nil {
@@ -131,9 +132,22 @@ final class TraceModel: ObservableObject {
                         FileHandle.standardOutput.write(data + Data("\n".utf8))
                         await prepareToTerminate()
                         exit(progress.phase == .complete && progress.failedFiles == 0 ? 0 : 1)
-                    } else { startIndexing() }
+                    } else {
+                        Task { [weak self] in
+                            guard let self else { return }
+                            await self.loadCachedUsageAtStartup()
+                            self.startIndexing()
+                        }
+                    }
+                } else {
+                    Task { [weak self] in
+                        guard let self else { return }
+                        await self.loadCachedUsageAtStartup()
+                        if !self.settings.onboardingComplete {
+                            await self.refreshCompletedUsage(repairIfDirty: true)
+                        }
+                    }
                 }
-                reloadCosts()
             } catch {
                 startupError = error.localizedDescription
                 progress = .init(phase: .failed, error: error.localizedDescription)
@@ -164,11 +178,11 @@ final class TraceModel: ObservableObject {
         let terminal = [.complete, .failed, .cancelled].contains(update.phase)
         indexingPassActive = !terminal
         if !terminal { usageSnapshotRequestID = UUID() }
-        if terminal, ProcessInfo.processInfo.arguments.contains("--ui-testing"),
-           let path = ProcessInfo.processInfo.environment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] {
+        if terminal, TraceTestHooks.isUITesting,
+           let path = TraceTestHooks.environment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] {
             try? Data().write(to: URL(fileURLWithPath: path))
         }
-        costsTotalsUpdating = !terminal || (update.phase != .complete && update.indexChanged)
+        if costsTotalsUpdating != !terminal { costsTotalsUpdating = !terminal }
         if update.incremental {
             if terminal {
                 incrementalProgressTask?.cancel()
@@ -199,12 +213,22 @@ final class TraceModel: ObservableObject {
         }
 
         if terminal, let rollupError = update.rollupError { costsError = rollupError }
-        if terminal, update.phase == .complete {
+        if terminal && update.phase != .complete && update.rollupsChanged {
+            usageRefreshPending = true
+        }
+        if terminal, update.phase == .complete, update.rollupError == nil {
             if timeZoneRepairPending {
-                timeZoneRepairPending = false
-                await refreshCompletedUsage(repairIfDirty: true)
-            } else if update.rollupError == nil {
-                await refreshCompletedUsage(repairIfDirty: false)
+                scheduleCompletedUsageRefresh(repairIfDirty: true)
+            } else if update.indexChanged || update.rollupsChanged || usageRefreshPending {
+                scheduleCompletedUsageRefresh(repairIfDirty: false)
+            }
+        } else if terminal, timeZoneRepairPending {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.scheduler?.waitUntilIdle()
+                if self.timeZoneRepairPending {
+                    await self.refreshCompletedUsage(repairIfDirty: true)
+                }
             }
         }
         observeSearchMutation(update, terminal: terminal)
@@ -258,12 +282,32 @@ final class TraceModel: ObservableObject {
         guard globalSearchSurfaces.contains(surface) != visible else { return }
         if visible { globalSearchSurfaces.insert(surface) }
         else { globalSearchSurfaces.remove(surface) }
-        if !visible && globalSearchSurfaces.isEmpty && settings.clearGlobalSearchOnClose {
-            globalSearch.query = ""
-            globalSearch.search(sort: settings.searchSort)
-            globalSearchNeedsRefresh = false
+        if !visible && globalSearchSurfaces.isEmpty {
+            var changed = false
+            if settings.clearGlobalSearchOnClose && !globalSearch.query.isEmpty {
+                globalSearch.query = ""
+                changed = true
+            }
+            if settings.clearGlobalFiltersOnClose {
+                changed = changed || globalSearch.filters != SearchFilters()
+                    || globalSearch.datePreset != .anyTime
+                globalSearch.filters = SearchFilters()
+                globalSearch.datePreset = .anyTime
+            }
+            if changed {
+                globalSearch.search(sort: settings.searchSort)
+                globalSearchNeedsRefresh = false
+            }
         }
         searchVisibilityChanged()
+    }
+
+    func clearGlobalSearchFilters() {
+        guard globalSearch.filters != SearchFilters() || globalSearch.datePreset != .anyTime else { return }
+        globalSearch.filters = SearchFilters()
+        globalSearch.datePreset = .anyTime
+        globalSearchNeedsRefresh = false
+        globalSearch.search(sort: settings.searchSort)
     }
 
     func setMainWindowVisible(_ visible: Bool) {
@@ -426,6 +470,8 @@ final class TraceModel: ObservableObject {
 
     private func prepareForIndexReset() {
         cancelAutomaticSearch()
+        completedUsageRevision += 1
+        usageSnapshotRequestID = UUID()
         globalSearchNeedsRefresh = false
         mainSearchNeedsRefresh = false
         lastObservedPassID = nil
@@ -587,8 +633,34 @@ final class TraceModel: ObservableObject {
         }
     }
 
+    private func loadCachedUsageAtStartup() async {
+        guard let database else { return }
+        let revision = completedUsageRevision
+        do {
+            let snapshot = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+            guard completedUsageRevision == revision else { return }
+            completedUsage = snapshot
+            reloadCosts()
+        } catch {
+            if completedUsageRevision == revision {
+                costsError = "Could not load cached token totals: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func scheduleCompletedUsageRefresh(repairIfDirty: Bool) {
+        usageRefreshPending = true
+        Task { [weak self] in
+            await self?.refreshCompletedUsage(repairIfDirty: repairIfDirty)
+        }
+    }
+
     private func refreshCompletedUsage(repairIfDirty: Bool) async {
         guard let database else { return }
+        if repairIfDirty && indexingPassActive {
+            timeZoneRepairPending = true
+            return
+        }
         let request = UUID()
         usageSnapshotRequestID = request
         do {
@@ -602,6 +674,9 @@ final class TraceModel: ObservableObject {
                 return
             }
             completedUsage = snapshot
+            completedUsageRevision += 1
+            usageRefreshPending = false
+            if repairIfDirty { timeZoneRepairPending = false }
             costsError = nil
             reloadCosts()
         } catch {

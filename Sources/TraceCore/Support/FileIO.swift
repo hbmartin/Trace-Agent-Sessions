@@ -30,7 +30,12 @@ public enum TraceFileIO {
             resolved = parent.appendingPathComponent(standardized.lastPathComponent).standardizedFileURL
         }
         let path = resolved.path
-        let comparisonKey = path.folding(
+        let volumeURL = FileManager.default.fileExists(atPath: path)
+            ? resolved : resolved.deletingLastPathComponent()
+        let caseSensitive = (try? volumeURL.resourceValues(
+            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+        ).volumeSupportsCaseSensitiveNames) == true
+        let comparisonKey = caseSensitive ? path : path.folding(
             options: [.caseInsensitive, .diacriticInsensitive],
             locale: Locale(identifier: "en_US_POSIX")
         )
