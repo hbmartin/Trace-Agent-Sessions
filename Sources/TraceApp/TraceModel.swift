@@ -181,9 +181,8 @@ final class TraceModel: ObservableObject {
         let terminal = [.complete, .failed, .cancelled].contains(update.phase)
         indexingPassActive = !terminal
         if !terminal { usageSnapshotRequestID = UUID() }
-        if terminal, TraceTestHooks.isUITesting,
-           let path = TraceTestHooks.environment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] {
-            try? Data().write(to: URL(fileURLWithPath: path))
+        if terminal {
+            TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
         }
         if update.incremental {
             if terminal {
@@ -233,18 +232,15 @@ final class TraceModel: ObservableObject {
             usageRepairPending = true
             usageRefreshPending = true
         }
-        if update.phase == .complete {
-            if update.rollupError != nil {
-                if usageRepairPending { scheduleDeferredUsageRepair() }
-                else { usageRefreshPending = false }
-            } else if usageRepairPending {
-                scheduleDeferredUsageRepair()
-            } else if update.indexChanged || update.rollupsChanged || usageRefreshPending {
-                scheduleCompletedUsageRefresh(repairIfDirty: false)
-            }
-        } else if usageRepairPending {
+        if usageRepairPending {
             scheduleDeferredUsageRepair()
         } else if usageRefreshPending {
+            scheduleCompletedUsageRefresh(
+                repairIfDirty: false,
+                clearCostsErrorOnSuccess: update.rollupError == nil
+            )
+        } else if update.phase == .complete, update.rollupError == nil,
+                  (update.indexChanged || update.rollupsChanged) {
             scheduleCompletedUsageRefresh(repairIfDirty: false)
         }
         updateCostsTotalsUpdating()
@@ -281,8 +277,7 @@ final class TraceModel: ObservableObject {
 
     private var hasVisibleAutomaticSearch: Bool {
         (globalSearchNeedsRefresh && !globalSearchSurfaces.isEmpty
-            && !globalSearch.query.isEmpty && !globalSearch.protectsPagination
-            && !globalSearch.isWaitingForProjectFilterResolution)
+            && !globalSearch.query.isEmpty && !globalSearch.protectsPagination)
         || (mainSearchNeedsRefresh && mainSearchIsVisible
             && !mainSearch.query.isEmpty && !mainSearch.protectsPagination)
     }
@@ -298,12 +293,8 @@ final class TraceModel: ObservableObject {
                 changed = true
             }
             if settings.clearGlobalFiltersOnClose {
-                changed = changed || globalSearch.filters != SearchFilters()
-                    || globalSearch.datePreset != .anyTime
-                    || globalSearch.projectFilterCanonicalKey != nil
-                globalSearch.filters = SearchFilters()
-                globalSearch.clearProjectFilter()
-                globalSearch.datePreset = .anyTime
+                changed = changed || globalSearch.hasActiveFilters
+                globalSearch.clearFilters()
             }
             if changed {
                 globalSearch.search(sort: settings.searchSort)
@@ -314,11 +305,8 @@ final class TraceModel: ObservableObject {
     }
 
     func clearGlobalSearchFilters() {
-        guard globalSearch.filters != SearchFilters() || globalSearch.datePreset != .anyTime
-                || globalSearch.projectFilterCanonicalKey != nil else { return }
-        globalSearch.filters = SearchFilters()
-        globalSearch.clearProjectFilter()
-        globalSearch.datePreset = .anyTime
+        guard globalSearch.hasActiveFilters else { return }
+        globalSearch.clearFilters()
         globalSearchNeedsRefresh = false
         globalSearch.search(sort: settings.searchSort)
     }
@@ -373,15 +361,14 @@ final class TraceModel: ObservableObject {
         lastSearchedPassID = lastObservedPassID
         lastSearchedMutationRevision = lastObservedMutationRevision
         if globalSearchNeedsRefresh, !globalSearchSurfaces.isEmpty,
-           !globalSearch.query.isEmpty, !globalSearch.protectsPagination,
-           !globalSearch.isWaitingForProjectFilterResolution {
+           !globalSearch.query.isEmpty, !globalSearch.protectsPagination {
             globalSearchNeedsRefresh = false
             globalSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
         if mainSearchNeedsRefresh, mainSearchIsVisible,
            !mainSearch.query.isEmpty, !mainSearch.protectsPagination {
             mainSearchNeedsRefresh = false
-            mainSearch.filters.projectID = selectedProjectID
+            mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
             mainSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
     }
@@ -424,8 +411,12 @@ final class TraceModel: ObservableObject {
     }
     func searchMain() {
         mainSearchNeedsRefresh = false
-        mainSearch.filters.projectID = selectedProjectID
+        mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
         mainSearch.search(sort: settings.searchSort)
+    }
+    private var selectedProjectCanonicalKey: String? {
+        guard let selectedProjectID else { return nil }
+        return projects.first(where: { $0.id == selectedProjectID })?.canonicalKey
     }
     var filteredProjects: [ProjectSummary] {
         let query = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -667,12 +658,17 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    private func scheduleCompletedUsageRefresh(repairIfDirty: Bool) {
+    private func scheduleCompletedUsageRefresh(
+        repairIfDirty: Bool, clearCostsErrorOnSuccess: Bool = true
+    ) {
         usageRefreshPending = true
         if repairIfDirty { usageRepairPending = true }
         updateCostsTotalsUpdating()
         Task { [weak self] in
-            await self?.refreshCompletedUsage(repairIfDirty: repairIfDirty)
+            await self?.refreshCompletedUsage(
+                repairIfDirty: repairIfDirty,
+                clearCostsErrorOnSuccess: clearCostsErrorOnSuccess
+            )
         }
     }
 
@@ -692,7 +688,9 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    private func refreshCompletedUsage(repairIfDirty: Bool) async {
+    private func refreshCompletedUsage(
+        repairIfDirty: Bool, clearCostsErrorOnSuccess: Bool = true
+    ) async {
         usageRefreshPending = true
         if repairIfDirty { usageRepairPending = true }
         updateCostsTotalsUpdating()
@@ -709,16 +707,12 @@ final class TraceModel: ObservableObject {
         let request = UUID()
         usageSnapshotRequestID = request
         do {
-            if TraceTestHooks.isUITesting,
-               let delay = TraceTestHooks.environment["TRACE_TEST_USAGE_SNAPSHOT_DELAY_MS"]
-                .flatMap(Int.init),
-               delay > 0 {
-                TraceTestHooks.appendLine(
-                    "started", pathKey: "TRACE_TEST_USAGE_SNAPSHOT_STARTED_PATH"
-                )
-                try await Task.sleep(for: .milliseconds(min(delay, 5_000)))
-                guard usageSnapshotRequestID == request else { return }
-            }
+            try await TraceTestHooks.waitIfConfigured(
+                delayKey: "TRACE_TEST_USAGE_SNAPSHOT_DELAY_MS",
+                cappedAt: 5_000,
+                marker: .line("started", pathKey: "TRACE_TEST_USAGE_SNAPSHOT_STARTED_PATH")
+            )
+            guard usageSnapshotRequestID == request else { return }
             if repairIfDirty { try await database.rebuildUsageRollupsIfDirty() }
             let snapshot = try await database.usage(
                 fromDay: nil, throughDay: nil, includeSidechains: true
@@ -732,7 +726,7 @@ final class TraceModel: ObservableObject {
             completedUsageRevision += 1
             if repairIfDirty { usageRepairPending = false }
             usageRefreshPending = usageRepairPending
-            costsError = nil
+            if clearCostsErrorOnSuccess { costsError = nil }
             updateCostsTotalsUpdating()
             reloadCosts()
         } catch {
@@ -830,15 +824,8 @@ final class TraceModel: ObservableObject {
         let projectRequest = projectRequestID
         let loadedSessions = (try? await database.sessions(projectID: project)) ?? []
         guard summaryRequestID == refresh else { return }
-        let projectFilterChanged = globalSearch.resolveProjectFilter(
-            in: loadedProjects, final: !lightweight
-        )
         projects = loadedProjects
         recentSessions = loadedRecent
-        if projectFilterChanged, !globalSearch.query.isEmpty {
-            globalSearchNeedsRefresh = true
-            scheduleAutomaticSearch()
-        }
         if selectedProjectID == project, projectRequestID == projectRequest { sessions = loadedSessions }
         if let sessionID = selectedSessionID {
             let request = sessionRequestID

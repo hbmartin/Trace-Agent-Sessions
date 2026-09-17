@@ -974,12 +974,11 @@ public actor IndexDatabase {
     }
 
     private func delayUsageRollupRebuildForTesting() async throws {
-        if TraceTestHooks.isUITesting,
-           let delay = TraceTestHooks.environment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"].flatMap(Int.init),
-           delay > 0 {
-            TraceTestHooks.appendLine("started", pathKey: "TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH")
-            try await Task.sleep(for: .milliseconds(min(delay, 5_000)))
-        }
+        try await TraceTestHooks.waitIfConfigured(
+            delayKey: "TRACE_TEST_ROLLUP_REBUILD_DELAY_MS",
+            cappedAt: 5_000,
+            marker: .line("started", pathKey: "TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH")
+        )
     }
 
     @discardableResult
@@ -1084,9 +1083,9 @@ public actor IndexDatabase {
                 predicates.append("s.agent IN (\(Array(repeating: "?", count: values.count).joined(separator: ",")))")
                 for value in values { filterArguments += [value.rawValue] }
             }
-            if let projectID = filters.projectID {
-                predicates.append("s.project_id = ?")
-                filterArguments += [projectID]
+            if let projectCanonicalKey = filters.projectCanonicalKey {
+                predicates.append("p.canonical_key = ?")
+                filterArguments += [projectCanonicalKey]
             }
             if let from = filters.fromMilliseconds {
                 predicates.append("m.ts >= ?")

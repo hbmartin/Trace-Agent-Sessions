@@ -2,8 +2,46 @@ import Foundation
 
 /// Launch-time hooks used by the isolated UI test process.
 public enum TraceTestHooks {
+    public enum DelayMarker: Sendable {
+        case touch(pathKey: String)
+        case line(String, pathKey: String)
+    }
+
     public static let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing")
     public static let environment = ProcessInfo.processInfo.environment
+
+    public static func delayMilliseconds(for key: String, cappedAt maximum: Int? = nil) -> Int? {
+        guard isUITesting, let raw = environment[key], let delay = Int(raw), delay > 0 else {
+            return nil
+        }
+        return maximum.map { min(delay, $0) } ?? delay
+    }
+
+    public static func touch(pathKey: String) {
+        guard isUITesting, let path = environment[pathKey] else { return }
+        try? Data().write(to: URL(fileURLWithPath: path))
+    }
+
+    @discardableResult
+    public static func waitIfConfigured(
+        delayKey: String,
+        cappedAt maximum: Int? = nil,
+        marker: DelayMarker? = nil
+    ) async throws -> Bool {
+        guard let delay = delayMilliseconds(for: delayKey, cappedAt: maximum) else {
+            return false
+        }
+        switch marker {
+        case .touch(let pathKey):
+            touch(pathKey: pathKey)
+        case .line(let line, let pathKey):
+            appendLine(line, pathKey: pathKey)
+        case nil:
+            break
+        }
+        try await Task.sleep(for: .milliseconds(delay))
+        return true
+    }
 
     public static func appendLine(_ line: String, pathKey: String) {
         guard isUITesting, let path = environment[pathKey] else { return }

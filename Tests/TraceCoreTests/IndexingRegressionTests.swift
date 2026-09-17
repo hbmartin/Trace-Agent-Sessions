@@ -940,7 +940,12 @@ final class IndexingRegressionTests: XCTestCase {
         let alias = root.appendingPathComponent("alias")
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        TraceFileIO.resetVolumeCaseSensitivityCacheForTesting()
+        defer { TraceFileIO.resetVolumeCaseSensitivityCacheForTesting() }
 
+        let direct = TraceFileIO.canonicalPath(
+            real.appendingPathComponent("missing/child/session.jsonl").path
+        )
         let canonical = TraceFileIO.canonicalPath(
             alias.appendingPathComponent("missing/child/session.jsonl").path
         )
@@ -949,6 +954,9 @@ final class IndexingRegressionTests: XCTestCase {
             real.resolvingSymlinksInPath()
                 .appendingPathComponent("missing/child/session.jsonl").path
         )
+        XCTAssertEqual(canonical.comparisonKey, direct.comparisonKey)
+        XCTAssertEqual(canonical.isCaseSensitive, direct.isCaseSensitive)
+        XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 1)
     }
 
     func testCanonicalComparisonKeyCanBeForcedForEitherVolumeBehavior() {
@@ -970,37 +978,27 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 1)
     }
 
-    func testCaseSensitivityCacheUsesVolumeUUIDAndSkipsUnknownVolumes() {
+    func testCaseSensitivityCacheUsesDeviceIdentity() {
         TraceFileIO.resetVolumeCaseSensitivityCacheForTesting()
         defer { TraceFileIO.resetVolumeCaseSensitivityCacheForTesting() }
         var firstVolumeProbes = 0
         var secondVolumeProbes = 0
-        var unknownVolumeProbes = 0
 
-        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-a") {
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(deviceID: 1) {
             firstVolumeProbes += 1
             return true
         })
-        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-a") {
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(deviceID: 1) {
             firstVolumeProbes += 1
             return false
         })
-        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-b") {
+        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(deviceID: 2) {
             secondVolumeProbes += 1
-            return false
-        })
-        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: nil) {
-            unknownVolumeProbes += 1
-            return true
-        })
-        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: nil) {
-            unknownVolumeProbes += 1
             return false
         })
 
         XCTAssertEqual(firstVolumeProbes, 1)
         XCTAssertEqual(secondVolumeProbes, 1)
-        XCTAssertEqual(unknownVolumeProbes, 2)
         XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 2)
     }
 
@@ -1017,8 +1015,44 @@ final class IndexingRegressionTests: XCTestCase {
             XCTAssertTrue(failures.allSatisfy { !$0.detail.isEmpty })
         }
         for project in try await database.projects() {
-            let page = try await database.search(query: "the", filters: .init(projectID: project.id))
+            let page = try await database.search(
+                query: "the", filters: .init(projectCanonicalKey: project.canonicalKey)
+            )
             XCTAssertTrue(page.results.allSatisfy { $0.projectID == project.id })
+        }
+    }
+
+    func testCanonicalProjectFilterSurvivesNumericIDReuse() async throws {
+        let root = try directory()
+        let wanted = root.appendingPathComponent("wanted.jsonl")
+        try Data(line(1, project: "/tmp/WantedProject").utf8).write(to: wanted)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [root])]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+        let originalProjects = try await database.projects()
+        let original = try XCTUnwrap(
+            originalProjects.first { $0.displayName == "WantedProject" }
+        )
+
+        let decoy = root.appendingPathComponent("000-decoy.jsonl")
+        try Data(line(2, project: "/tmp/DecoyProject").utf8).write(to: decoy)
+        await coordinator.indexAll(scope: .proseOnly, rebuild: true)
+        let rebuiltProjects = try await database.projects()
+        let rebuilt = try XCTUnwrap(
+            rebuiltProjects.first { $0.canonicalKey == original.canonicalKey }
+        )
+        XCTAssertNotEqual(rebuilt.id, original.id)
+
+        for sort in [SearchSort.recency, .relevance] {
+            let page = try await database.search(
+                query: "searchable",
+                filters: .init(projectCanonicalKey: original.canonicalKey),
+                sort: sort
+            )
+            XCTAssertFalse(page.results.isEmpty)
+            XCTAssertTrue(page.results.allSatisfy { $0.projectName == "WantedProject" })
         }
     }
 }
