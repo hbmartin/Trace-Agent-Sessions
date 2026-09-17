@@ -11,6 +11,7 @@ final class SessionSearchModel: ObservableObject {
     @Published var query = ""
     @Published var filters = SearchFilters()
     @Published var datePreset = SearchDatePreset.anyTime
+    @Published private(set) var projectFilterCanonicalKey: String?
     @Published private(set) var projectFilterDisplayName: String?
     @Published private(set) var results: [SearchResult] = []
     @Published private(set) var snippets: [Int64: String] = [:]
@@ -31,7 +32,7 @@ final class SessionSearchModel: ObservableObject {
     private var lastFilters = SearchFilters()
     private var lastDatePreset = SearchDatePreset.anyTime
     private var lastSort = SearchSort.recency
-    private var activeRequestFilters = SearchFilters()
+    private var activeRequestCriteria: SearchRequestCriteria?
     private var diagnostics: DiagnosticsStore?
     private var loadingAdditionalPage = false
     private var activeTaskIsReset = false
@@ -39,13 +40,35 @@ final class SessionSearchModel: ObservableObject {
     private var injectedDuplicateAdditionalPage = false
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
-    var projectFilterCanonicalKey: String? { filters.projectCanonicalKey }
+    var isWaitingForProjectFilterResolution: Bool {
+        projectFilterCanonicalKey != nil && filters.projectID == nil
+    }
     var hasActiveFilters: Bool {
         filters != SearchFilters() || datePreset != .anyTime
+            || projectFilterCanonicalKey != nil
+    }
+
+    private struct SearchRequestCriteria: Sendable {
+        let query: String
+        let filters: SearchFilters
+        let sort: SearchSort
     }
 
     func markResultsStale() {
         if !query.isEmpty { resultsMayBeStale = true }
+    }
+
+    func mutateLiveCriteriaAndLoadMoreForTesting() {
+        guard TraceTestHooks.isUITesting,
+              let query = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_QUERY"] else {
+            return
+        }
+        self.query = query
+        if let rawSort = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_SORT"],
+           let sort = SearchSort(rawValue: rawSort) {
+            self.sort = sort
+        }
+        search(reset: false)
     }
 
     func attach(database: IndexDatabase, coordinator: IndexCoordinator, diagnostics: DiagnosticsStore? = nil) {
@@ -55,19 +78,39 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func selectProject(_ project: ProjectSummary?) {
-        filters.projectCanonicalKey = project?.canonicalKey
+        filters.projectID = project?.id
+        projectFilterCanonicalKey = project?.canonicalKey
         projectFilterDisplayName = project?.displayName
+    }
+
+    @discardableResult
+    func resolveProjectFilter(in projects: [ProjectSummary], final: Bool) -> Bool {
+        guard let projectFilterCanonicalKey else { return false }
+        if let project = projects.first(where: { $0.canonicalKey == projectFilterCanonicalKey }) {
+            let changed = filters.projectID != project.id
+                || projectFilterDisplayName != project.displayName
+            filters.projectID = project.id
+            projectFilterDisplayName = project.displayName
+            return changed
+        }
+        guard final else { return false }
+        filters.projectID = nil
+        self.projectFilterCanonicalKey = nil
+        projectFilterDisplayName = nil
+        return true
     }
 
     func clearFilters() {
         filters = SearchFilters()
         datePreset = .anyTime
+        projectFilterCanonicalKey = nil
         projectFilterDisplayName = nil
     }
 
     func search(sort: SearchSort? = nil, reset: Bool = true,
                 trigger: SearchTrigger = .user) {
         if let sort { self.sort = sort }
+        let criteria: SearchRequestCriteria
         if reset {
             let bounds = datePreset.bounds(now: Date())
             var requestFilters = filters
@@ -95,23 +138,30 @@ final class SessionSearchModel: ObservableObject {
             loadingAdditionalPage = false
             hasLoadedAdditionalPages = false
             injectedDuplicateAdditionalPage = false
-            activeRequestFilters = requestFilters
-            performSearch(reset: reset, trigger: trigger, requestFilters: requestFilters)
-            return
+            criteria = .init(query: query, filters: requestFilters, sort: self.sort)
+            activeRequestCriteria = criteria
         } else {
             if task != nil {
                 if activeTaskIsReset { pendingLoadMore = true }
                 return
             }
-            guard nextCursor != nil else { return }
+            guard nextCursor != nil, let activeRequestCriteria else { return }
+            criteria = activeRequestCriteria
         }
-        performSearch(reset: reset, trigger: trigger, requestFilters: activeRequestFilters)
+        performSearch(reset: reset, trigger: trigger, criteria: criteria)
     }
 
     private func performSearch(
-        reset: Bool, trigger: SearchTrigger, requestFilters: SearchFilters
+        reset: Bool, trigger: SearchTrigger, criteria: SearchRequestCriteria
     ) {
-        guard let database, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let database,
+              !criteria.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            results = []
+            isSearching = false
+            error = nil
+            return
+        }
+        guard !isWaitingForProjectFilterResolution else {
             results = []
             isSearching = false
             error = nil
@@ -119,9 +169,9 @@ final class SessionSearchModel: ObservableObject {
         }
         let id = UUID()
         requestID = id
-        let query = query
-        let filters = requestFilters
-        let sort = self.sort
+        let query = criteria.query
+        let filters = criteria.filters
+        let sort = criteria.sort
         let initialCursor = reset ? nil : nextCursor
         loadingAdditionalPage = !reset
         activeTaskIsReset = reset
@@ -129,14 +179,20 @@ final class SessionSearchModel: ObservableObject {
         error = nil
         TraceTestHooks.appendLine(trigger == .automatic ? "automatic" : reset ? "reset" : "more",
                                   pathKey: "TRACE_TEST_SEARCH_REQUEST_AUDIT_PATH")
+        TraceTestHooks.appendLine(
+            "\(reset ? "reset" : "more")|\(query)|\(sort.rawValue)|\(filters.projectID.map(String.init) ?? "all")",
+            pathKey: "TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"
+        )
         task = Task { [weak self] in
             do {
                 if reset { try await Task.sleep(for: .milliseconds(100)) }
                 if reset, trigger == .automatic {
-                    try await TraceTestHooks.waitIfConfigured(
-                        delayKey: "TRACE_TEST_AUTOMATIC_SEARCH_DELAY_MS",
+                    if let delay = TraceTestHooks.delayMilliseconds(
+                        for: "TRACE_TEST_AUTOMATIC_SEARCH_DELAY_MS",
                         marker: .touch(pathKey: "TRACE_TEST_AUTOMATIC_SEARCH_STARTED_PATH")
-                    )
+                    ) {
+                        try await Task.sleep(for: .milliseconds(delay))
+                    }
                 }
                 let started = ContinuousClock.now
                 guard let self, self.requestID == id else { return }
@@ -249,6 +305,7 @@ final class SessionSearchModel: ObservableObject {
         task = nil
         requestID = UUID()
         resultSetID = UUID()
+        if projectFilterCanonicalKey != nil { filters.projectID = nil }
         nextCursor = nil
         results = []
         snippets = [:]
@@ -260,18 +317,19 @@ final class SessionSearchModel: ObservableObject {
         hasLoadedAdditionalPages = false
         resultsMayBeStale = false
         automaticRefreshToken = nil
-        activeRequestFilters = SearchFilters()
+        activeRequestCriteria = nil
     }
 
     func hydrate(_ result: SearchResult) async {
         guard snippets[result.id] == nil, let coordinator else { return }
         let setID = resultSetID
-        do {
-            try await TraceTestHooks.waitIfConfigured(
-                delayKey: "TRACE_TEST_SNIPPET_HYDRATION_DELAY_MS",
+        if let delay = TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_SNIPPET_HYDRATION_DELAY_MS",
                 marker: .line("started", pathKey: "TRACE_TEST_SNIPPET_HYDRATION_STARTED_PATH")
-            )
-        } catch { return }
+        ) {
+            do { try await Task.sleep(for: .milliseconds(delay)) }
+            catch { return }
+        }
         guard let message = try? await coordinator.hydrate(messageID: result.id),
               !Task.isCancelled, setID == resultSetID,
               results.contains(where: {

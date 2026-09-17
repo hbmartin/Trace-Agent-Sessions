@@ -531,9 +531,9 @@ public actor IndexCoordinator {
         var completedLines = 0
         var lastProgress: ContinuousClock.Instant?
         var projectName: String?
-        let testBatchDelay = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-            ? ProcessInfo.processInfo.environment["TRACE_TEST_INDEX_BATCH_DELAY_MS"].flatMap(Int.init)
-            : nil
+        let testBatchDelay = TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_INDEX_BATCH_DELAY_MS", cappedAt: 5_000
+        )
         for try await record in source.records(
             in: file, from: startOffset, through: initialFingerprint.size,
             initialSessionID: contentSessionID
@@ -552,8 +552,8 @@ public actor IndexCoordinator {
                 batch.append(record)
             }
             if case .checkpoint = record, batch.count >= 250 || completedLines >= 250 {
-                if persistedCheckpoint == startOffset, let testBatchDelay, testBatchDelay > 0 {
-                    try await Task.sleep(for: .milliseconds(min(testBatchDelay, 5_000)))
+                if persistedCheckpoint == startOffset, let testBatchDelay {
+                    try await Task.sleep(for: .milliseconds(testBatchDelay))
                 }
                 let batchChanged = !batch.isEmpty
                 try await database.insert(
@@ -568,8 +568,8 @@ public actor IndexCoordinator {
                     lastProgress = .now
                     await committed(checkpoint, max(0, checkpoint - startOffset), projectName)
                 }
-                if let testBatchDelay, testBatchDelay > 0 {
-                    try await Task.sleep(for: .milliseconds(min(testBatchDelay, 5_000)))
+                if let testBatchDelay {
+                    try await Task.sleep(for: .milliseconds(testBatchDelay))
                 }
             }
         }

@@ -88,9 +88,10 @@ final class TraceModel: ObservableObject {
                 let isolatedURL = TraceRuntime.testDirectory?.appendingPathComponent("index.sqlite")
                 let database = try await Task.detached(priority: .userInitiated) {
                     if isolatedURL != nil,
-                       let delay = ProcessInfo.processInfo.environment["TRACE_TEST_INDEX_OPEN_DELAY_MS"].flatMap(Double.init),
-                       delay > 0 {
-                        try await Task.sleep(for: .milliseconds(Int(min(delay, 5_000))))
+                       let delay = TraceTestHooks.delayMilliseconds(
+                        for: "TRACE_TEST_INDEX_OPEN_DELAY_MS", cappedAt: 5_000
+                       ) {
+                        try await Task.sleep(for: .milliseconds(delay))
                     }
                     let url = try isolatedURL ?? IndexDatabase.defaultURL()
                     return try IndexDatabase(url: url)
@@ -227,7 +228,11 @@ final class TraceModel: ObservableObject {
     }
 
     private func handleTerminalUsageProgress(_ update: IndexProgress) {
-        if let rollupError = update.rollupError { costsError = rollupError }
+        if let rollupError = update.rollupError {
+            costsError = rollupError
+            usageRepairPending = true
+            usageRefreshPending = true
+        }
         if update.phase != .complete && (update.indexChanged || update.rollupsChanged) {
             usageRepairPending = true
             usageRefreshPending = true
@@ -277,7 +282,8 @@ final class TraceModel: ObservableObject {
 
     private var hasVisibleAutomaticSearch: Bool {
         (globalSearchNeedsRefresh && !globalSearchSurfaces.isEmpty
-            && !globalSearch.query.isEmpty && !globalSearch.protectsPagination)
+            && !globalSearch.query.isEmpty && !globalSearch.protectsPagination
+            && !globalSearch.isWaitingForProjectFilterResolution)
         || (mainSearchNeedsRefresh && mainSearchIsVisible
             && !mainSearch.query.isEmpty && !mainSearch.protectsPagination)
     }
@@ -361,14 +367,15 @@ final class TraceModel: ObservableObject {
         lastSearchedPassID = lastObservedPassID
         lastSearchedMutationRevision = lastObservedMutationRevision
         if globalSearchNeedsRefresh, !globalSearchSurfaces.isEmpty,
-           !globalSearch.query.isEmpty, !globalSearch.protectsPagination {
+           !globalSearch.query.isEmpty, !globalSearch.protectsPagination,
+           !globalSearch.isWaitingForProjectFilterResolution {
             globalSearchNeedsRefresh = false
             globalSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
         if mainSearchNeedsRefresh, mainSearchIsVisible,
            !mainSearch.query.isEmpty, !mainSearch.protectsPagination {
             mainSearchNeedsRefresh = false
-            mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
+            mainSearch.filters.projectID = selectedProjectID
             mainSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
     }
@@ -411,12 +418,8 @@ final class TraceModel: ObservableObject {
     }
     func searchMain() {
         mainSearchNeedsRefresh = false
-        mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
+        mainSearch.filters.projectID = selectedProjectID
         mainSearch.search(sort: settings.searchSort)
-    }
-    private var selectedProjectCanonicalKey: String? {
-        guard let selectedProjectID else { return nil }
-        return projects.first(where: { $0.id == selectedProjectID })?.canonicalKey
     }
     var filteredProjects: [ProjectSummary] {
         let query = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -425,9 +428,10 @@ final class TraceModel: ObservableObject {
 
     func sessionErrorText(_ session: SessionSummary) async -> String {
         if TraceRuntime.testDirectory != nil,
-           let delay = ProcessInfo.processInfo.environment["TRACE_TEST_ERROR_LOAD_DELAY_MS"].flatMap(Double.init),
-           delay > 0 {
-            try? await Task.sleep(for: .milliseconds(Int(min(delay, 5_000))))
+           let delay = TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_ERROR_LOAD_DELAY_MS", cappedAt: 5_000
+           ) {
+            try? await Task.sleep(for: .milliseconds(delay))
         }
         guard let coordinator else {
             return "Error details are unavailable while the index is starting."
@@ -707,11 +711,13 @@ final class TraceModel: ObservableObject {
         let request = UUID()
         usageSnapshotRequestID = request
         do {
-            try await TraceTestHooks.waitIfConfigured(
-                delayKey: "TRACE_TEST_USAGE_SNAPSHOT_DELAY_MS",
+            if let delay = TraceTestHooks.delayMilliseconds(
+                for: "TRACE_TEST_USAGE_SNAPSHOT_DELAY_MS",
                 cappedAt: 5_000,
                 marker: .line("started", pathKey: "TRACE_TEST_USAGE_SNAPSHOT_STARTED_PATH")
-            )
+            ) {
+                try await Task.sleep(for: .milliseconds(delay))
+            }
             guard usageSnapshotRequestID == request else { return }
             if repairIfDirty { try await database.rebuildUsageRollupsIfDirty() }
             let snapshot = try await database.usage(
@@ -818,14 +824,26 @@ final class TraceModel: ObservableObject {
         guard let database else { return }
         let refresh = UUID()
         summaryRequestID = refresh
-        let loadedProjects = (try? await database.projects()) ?? []
+        let loadedProjects = try? await database.projects()
         let loadedRecent = (try? await database.sessions(limit: 10)) ?? []
         let project = selectedProjectID
         let projectRequest = projectRequestID
         let loadedSessions = (try? await database.sessions(projectID: project)) ?? []
         guard summaryRequestID == refresh else { return }
-        projects = loadedProjects
+        let projectFilterChanged: Bool
+        if let loadedProjects {
+            projectFilterChanged = globalSearch.resolveProjectFilter(
+                in: loadedProjects, final: !lightweight
+            )
+            projects = loadedProjects
+        } else {
+            projectFilterChanged = false
+        }
         recentSessions = loadedRecent
+        if projectFilterChanged, !globalSearch.query.isEmpty {
+            globalSearchNeedsRefresh = true
+            scheduleAutomaticSearch()
+        }
         if selectedProjectID == project, projectRequestID == projectRequest { sessions = loadedSessions }
         if let sessionID = selectedSessionID {
             let request = sessionRequestID
