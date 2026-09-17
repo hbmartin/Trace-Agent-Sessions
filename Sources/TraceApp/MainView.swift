@@ -174,7 +174,12 @@ struct TranscriptView: View {
             if model.selectedSessionID == nil {
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(model.selectedProjectID == nil ? "Search all sessions" : "Search this project", text: $search.query)
+                    TextField(
+                        model.selectedProjectCanonicalKey == nil
+                            ? "Search all sessions"
+                            : "Search this project",
+                        text: $search.query
+                    )
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("mainSearch")
                         .onChange(of: search.query) { _, _ in model.searchMain() }
@@ -426,7 +431,8 @@ private struct TranscriptRenderer: View {
     }
 
     private func restore(force: Bool = false, using proxy: ScrollViewProxy) {
-        guard force || lastRequest != model.scrollRequest else { return }
+        let hasNewRequest = lastRequest != model.scrollRequest
+        guard force || hasNewRequest else { return }
         guard !userScrolling else {
             restorationDeferred = true
             deferredRestorationForced = deferredRestorationForced || force
@@ -434,14 +440,14 @@ private struct TranscriptRenderer: View {
             cancelRestorationForUser()
             return
         }
-        restorationDeferred = false
-        deferredRestorationForced = false
-        lastRequest = model.scrollRequest
         let ids = visibleMessages.map(\.id)
         guard !ids.isEmpty else { restoring = false; return }
+        restorationDeferred = false
+        deferredRestorationForced = false
+        if hasNewRequest { lastRequest = model.scrollRequest }
         position.isPositionedByUser = false
         var bookmark = model.scrollPositions[sessionID]
-        if let target = model.requestedMessageID, ids.contains(target), !force {
+        if hasNewRequest, let target = model.requestedMessageID, ids.contains(target) {
             bookmark = .init(messageID: target, offset: 0, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)
             model.consumeRequestedMessageID(target)
         }

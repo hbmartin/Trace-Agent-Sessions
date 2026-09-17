@@ -28,7 +28,9 @@ final class TraceModel: ObservableObject {
     @Published private(set) var pricing: PricingCatalog?
     @Published private(set) var pricingError: String?
     @Published private(set) var costsError: String?
-    @Published var selectedProjectID: Int64?
+    @Published private(set) var selectedProjectID: Int64?
+    @Published private(set) var selectedProjectCanonicalKey: String?
+    @Published private(set) var selectedProjectDisplayName: String?
     @Published var selectedSessionID: Int64?
     @Published var customCostStart = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @Published var customCostEnd = Date()
@@ -215,7 +217,13 @@ final class TraceModel: ObservableObject {
         }
 
         if terminal { handleTerminalUsageProgress(update) }
-        else { updateCostsTotalsUpdating() }
+        else {
+            if usageRepairPending, deferredUsageRepairTask != nil {
+                deferredUsageRepairTask?.cancel()
+                deferredUsageRepairTask = nil
+            }
+            updateCostsTotalsUpdating()
+        }
         observeSearchMutation(update, terminal: terminal)
 
         let shouldRefresh = terminal
@@ -223,7 +231,10 @@ final class TraceModel: ObservableObject {
                 && lastSummaryRefresh.duration(to: .now) >= .milliseconds(250))
         if shouldRefresh {
             lastSummaryRefresh = .now
-            await reloadSummaries(lightweight: !terminal)
+            await reloadSummaries(
+                lightweight: !terminal,
+                finalProjectReconciliation: update.phase == .complete
+            )
         }
     }
 
@@ -240,12 +251,9 @@ final class TraceModel: ObservableObject {
         if usageRepairPending {
             scheduleDeferredUsageRepair()
         } else if usageRefreshPending {
-            scheduleCompletedUsageRefresh(
-                repairIfDirty: false,
-                clearCostsErrorOnSuccess: update.rollupError == nil
-            )
-        } else if update.phase == .complete, update.rollupError == nil,
-                  (update.indexChanged || update.rollupsChanged) {
+            scheduleCompletedUsageRefresh(repairIfDirty: false)
+        } else if update.phase == .complete,
+                  update.indexChanged || update.rollupsChanged {
             scheduleCompletedUsageRefresh(repairIfDirty: false)
         }
         updateCostsTotalsUpdating()
@@ -283,7 +291,7 @@ final class TraceModel: ObservableObject {
     private var hasVisibleAutomaticSearch: Bool {
         (globalSearchNeedsRefresh && !globalSearchSurfaces.isEmpty
             && !globalSearch.query.isEmpty && !globalSearch.protectsPagination
-            && !globalSearch.isWaitingForProjectFilterResolution)
+            && !globalSearch.isResolvingProjectFilter)
         || (mainSearchNeedsRefresh && mainSearchIsVisible
             && !mainSearch.query.isEmpty && !mainSearch.protectsPagination)
     }
@@ -368,14 +376,14 @@ final class TraceModel: ObservableObject {
         lastSearchedMutationRevision = lastObservedMutationRevision
         if globalSearchNeedsRefresh, !globalSearchSurfaces.isEmpty,
            !globalSearch.query.isEmpty, !globalSearch.protectsPagination,
-           !globalSearch.isWaitingForProjectFilterResolution {
+           !globalSearch.isResolvingProjectFilter {
             globalSearchNeedsRefresh = false
             globalSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
         if mainSearchNeedsRefresh, mainSearchIsVisible,
            !mainSearch.query.isEmpty, !mainSearch.protectsPagination {
             mainSearchNeedsRefresh = false
-            mainSearch.filters.projectID = selectedProjectID
+            mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
             mainSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
     }
@@ -418,7 +426,7 @@ final class TraceModel: ObservableObject {
     }
     func searchMain() {
         mainSearchNeedsRefresh = false
-        mainSearch.filters.projectID = selectedProjectID
+        mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
         mainSearch.search(sort: settings.searchSort)
     }
     var filteredProjects: [ProjectSummary] {
@@ -457,7 +465,7 @@ final class TraceModel: ObservableObject {
 
     var detailTitle: String {
         if let selectedSession, selectedSession.id == selectedSessionID { return selectedSession.title }
-        return projects.first { $0.id == selectedProjectID }?.displayName ?? "Trace"
+        return selectedProjectDisplayName ?? "Trace"
     }
 
     func clearSession() {
@@ -511,27 +519,46 @@ final class TraceModel: ObservableObject {
         requestedMessageID = nil
         sourceHealth = []
         statistics = nil
-        globalSearch.resetForIndexReset()
+        globalSearch.resetForIndexReset(awaitsProjectResolution: true)
         mainSearch.resetForIndexReset()
     }
 
     func selectProject(_ projectID: Int64?) {
-        guard selectedProjectID != projectID else { return }
+        if let projectID {
+            guard let project = projects.first(where: { $0.id == projectID }) else { return }
+            guard selectedProjectID != project.id
+                    || selectedProjectCanonicalKey != project.canonicalKey else { return }
+            clearSession()
+            selectedProjectID = project.id
+            selectedProjectCanonicalKey = project.canonicalKey
+            selectedProjectDisplayName = project.displayName
+            loadProjectSessions()
+            return
+        }
+        // SwiftUI can write nil when a selected row disappears. Once the transient ID
+        // has already been cleared, retain the canonical selection until the user picks
+        // another project.
+        guard selectedProjectID != nil else { return }
         clearSession()
-        selectedProjectID = projectID
+        selectedProjectID = nil
+        selectedProjectCanonicalKey = nil
+        selectedProjectDisplayName = nil
         loadProjectSessions()
     }
 
     private func loadProjectSessions() {
         let request = UUID()
         projectRequestID = request
-        let project = selectedProjectID
+        let projectCanonicalKey = selectedProjectCanonicalKey
         sessions = []
         searchMain()
         guard let database else { return }
         Task {
-            let rows = (try? await database.sessions(projectID: project)) ?? []
-            guard projectRequestID == request, selectedProjectID == project else { return }
+            let rows = (try? await database.sessions(
+                projectCanonicalKey: projectCanonicalKey
+            )) ?? []
+            guard projectRequestID == request,
+                  selectedProjectCanonicalKey == projectCanonicalKey else { return }
             sessions = rows
         }
     }
@@ -545,6 +572,7 @@ final class TraceModel: ObservableObject {
         selectedSessionID = sessionID
         settings.lastSessionID = sessionID
         selectedSession = (sessions + recentSessions).first { $0.id == sessionID }
+        if let selectedSession { adoptProjectIdentity(from: selectedSession) }
         let request = UUID()
         sessionRequestID = request
         requestedMessageID = messageID
@@ -560,8 +588,10 @@ final class TraceModel: ObservableObject {
             let rows = (try? await database.messages(sessionID: sessionID)) ?? []
             guard sessionRequestID == request, selectedSessionID == sessionID else { return }
             selectedSession = session
-            if let session, selectedProjectID != session.projectID {
-                selectedProjectID = session.projectID
+            if let session,
+               selectedProjectCanonicalKey != session.projectCanonicalKey
+                || selectedProjectID != session.projectID {
+                adoptProjectIdentity(from: session)
                 loadProjectSessions()
             }
             messages = rows
@@ -574,7 +604,24 @@ final class TraceModel: ObservableObject {
     }
 
     func openSearchResult(_ result: SearchResult) {
+        selectedProjectID = result.projectID
+        selectedProjectCanonicalKey = result.projectCanonicalKey
+        selectedProjectDisplayName = result.projectName
         selectSession(result.sessionID, showWindow: true, messageID: result.id)
+    }
+
+    private func adoptProjectIdentity(from session: SessionSummary) {
+        let previousCanonicalKey = selectedProjectCanonicalKey
+        let previousDisplayName = selectedProjectDisplayName
+        selectedProjectCanonicalKey = session.projectCanonicalKey
+        selectedProjectID = session.projectID
+        selectedProjectDisplayName = projects.first {
+            $0.canonicalKey == session.projectCanonicalKey
+        }?.displayName ?? (
+            previousCanonicalKey == session.projectCanonicalKey
+                ? previousDisplayName
+                : nil
+        )
     }
 
     func copyMessage(id: Int64) {
@@ -662,17 +709,12 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    private func scheduleCompletedUsageRefresh(
-        repairIfDirty: Bool, clearCostsErrorOnSuccess: Bool = true
-    ) {
+    private func scheduleCompletedUsageRefresh(repairIfDirty: Bool) {
         usageRefreshPending = true
         if repairIfDirty { usageRepairPending = true }
         updateCostsTotalsUpdating()
         Task { [weak self] in
-            await self?.refreshCompletedUsage(
-                repairIfDirty: repairIfDirty,
-                clearCostsErrorOnSuccess: clearCostsErrorOnSuccess
-            )
+            await self?.refreshCompletedUsage(repairIfDirty: repairIfDirty)
         }
     }
 
@@ -683,8 +725,24 @@ final class TraceModel: ObservableObject {
         guard deferredUsageRepairTask == nil else { return }
         deferredUsageRepairTask = Task { [weak self] in
             guard let self else { return }
-            await self.scheduler?.waitUntilIdle()
-            guard !Task.isCancelled else { return }
+            while self.usageRepairPending {
+                await self.scheduler?.waitUntilIdle()
+                guard !Task.isCancelled else { return }
+                if self.indexingPassActive { continue }
+                TraceTestHooks.touch(
+                    pathKey: "TRACE_TEST_USAGE_REPAIR_QUIET_PERIOD_STARTED_PATH"
+                )
+                let delay = TraceTestHooks.delayMilliseconds(
+                    for: "TRACE_TEST_USAGE_REPAIR_QUIET_DELAY_MS", cappedAt: 5_000
+                ) ?? 1_000
+                do { try await Task.sleep(for: .milliseconds(delay)) }
+                catch { return }
+                guard !Task.isCancelled else { return }
+                await self.scheduler?.waitUntilIdle()
+                guard !Task.isCancelled else { return }
+                if self.indexingPassActive { continue }
+                break
+            }
             self.deferredUsageRepairTask = nil
             if self.usageRepairPending {
                 await self.refreshCompletedUsage(repairIfDirty: true)
@@ -692,9 +750,7 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    private func refreshCompletedUsage(
-        repairIfDirty: Bool, clearCostsErrorOnSuccess: Bool = true
-    ) async {
+    private func refreshCompletedUsage(repairIfDirty: Bool) async {
         usageRefreshPending = true
         if repairIfDirty { usageRepairPending = true }
         updateCostsTotalsUpdating()
@@ -732,12 +788,14 @@ final class TraceModel: ObservableObject {
             completedUsageRevision += 1
             if repairIfDirty { usageRepairPending = false }
             usageRefreshPending = usageRepairPending
-            if clearCostsErrorOnSuccess { costsError = nil }
+            costsError = nil
             updateCostsTotalsUpdating()
             reloadCosts()
         } catch {
             guard usageSnapshotRequestID == request else { return }
-            costsError = "Could not update token totals: \(error.localizedDescription)"
+            if costsError == nil {
+                costsError = "Could not update token totals: \(error.localizedDescription)"
+            }
             if repairIfDirty { usageRepairPending = false }
             usageRefreshPending = usageRepairPending
             updateCostsTotalsUpdating()
@@ -820,31 +878,50 @@ final class TraceModel: ObservableObject {
         self.watcher = watcher
     }
 
-    private func reloadSummaries(lightweight: Bool = false, loadCosts: Bool = true) async {
+    private func reloadSummaries(
+        lightweight: Bool = false,
+        loadCosts: Bool = true,
+        finalProjectReconciliation: Bool = false
+    ) async {
         guard let database else { return }
         let refresh = UUID()
         summaryRequestID = refresh
         let loadedProjects = try? await database.projects()
         let loadedRecent = (try? await database.sessions(limit: 10)) ?? []
-        let project = selectedProjectID
+        let projectCanonicalKey = selectedProjectCanonicalKey
         let projectRequest = projectRequestID
-        let loadedSessions = (try? await database.sessions(projectID: project)) ?? []
+        let loadedSessions = (try? await database.sessions(
+            projectCanonicalKey: projectCanonicalKey
+        )) ?? []
+        if finalProjectReconciliation,
+           let delay = TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_PROJECT_RECONCILIATION_DELAY_MS",
+            cappedAt: 5_000,
+            marker: .touch(pathKey: "TRACE_TEST_PROJECT_RECONCILIATION_STARTED_PATH")
+           ) {
+            try? await Task.sleep(for: .milliseconds(delay))
+        }
         guard summaryRequestID == refresh else { return }
-        let projectFilterChanged: Bool
+        let projectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
         if let loadedProjects {
-            projectFilterChanged = globalSearch.resolveProjectFilter(
-                in: loadedProjects, final: !lightweight
+            projectFilterReconciliation = globalSearch.resolveProjectFilter(
+                in: loadedProjects, final: finalProjectReconciliation
             )
             projects = loadedProjects
+            reconcileSelectedProject(in: loadedProjects)
         } else {
-            projectFilterChanged = false
+            projectFilterReconciliation = .unchanged
         }
         recentSessions = loadedRecent
-        if projectFilterChanged, !globalSearch.query.isEmpty {
+        if projectFilterReconciliation.requiresSearchRefresh,
+           !globalSearch.query.isEmpty {
             globalSearchNeedsRefresh = true
             scheduleAutomaticSearch()
         }
-        if selectedProjectID == project, projectRequestID == projectRequest { sessions = loadedSessions }
+        if selectedProjectCanonicalKey == projectCanonicalKey,
+           projectRequestID == projectRequest {
+            sessions = loadedSessions
+        }
         if let sessionID = selectedSessionID {
             let request = sessionRequestID
             let loadedSession = try? await database.session(id: sessionID)
@@ -891,6 +968,24 @@ final class TraceModel: ObservableObject {
         }
         if loadCosts { reloadCosts() }
         refreshDiagnostics()
+    }
+
+    private func reconcileSelectedProject(in loadedProjects: [ProjectSummary]) {
+        guard let selectedProjectCanonicalKey else {
+            if selectedProjectID != nil { selectedProjectID = nil }
+            if selectedProjectDisplayName != nil { selectedProjectDisplayName = nil }
+            return
+        }
+        guard let project = loadedProjects.first(where: {
+            $0.canonicalKey == selectedProjectCanonicalKey
+        }) else {
+            if selectedProjectID != nil { selectedProjectID = nil }
+            return
+        }
+        if selectedProjectID != project.id { selectedProjectID = project.id }
+        if selectedProjectDisplayName != project.displayName {
+            selectedProjectDisplayName = project.displayName
+        }
     }
 
     private func loadPricing() {

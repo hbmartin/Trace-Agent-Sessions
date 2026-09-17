@@ -673,6 +673,8 @@ final class TraceUITests: XCTestCase {
         popoverSearch.typeKey(.return, modifierFlags: [])
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
+        app.popUpButtons["All projects"].click()
+        app.menuItems["TraceUIExample"].click()
         app.buttons["Claude Code"].click()
         XCTAssertTrue(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "StablePageNeedle row 219"
@@ -682,7 +684,7 @@ final class TraceUITests: XCTestCase {
         action.click()
         XCTAssertTrue(waitForLineCount(
             audit,
-            line: "more|StablePageNeedle|recency|all|agents:claude_code",
+            line: "more|StablePageNeedle|recency|/tmp/traceuiexample|agents:claude_code",
             count: 1,
             timeout: 10
         ), "load-more must keep the query, filters, sort, and cursor from its active request")
@@ -1017,7 +1019,13 @@ final class TraceUITests: XCTestCase {
     func testDateFiltersSurviveRebuildAndAnyTimeIsUnbounded() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let completed = directory.appendingPathComponent("index-pass-completed")
+        let reconciliationStarted = directory.appendingPathComponent(
+            "project-reconciliation-started"
+        )
         app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launchEnvironment["TRACE_TEST_PROJECT_RECONCILIATION_DELAY_MS"] = "2000"
+        app.launchEnvironment["TRACE_TEST_PROJECT_RECONCILIATION_STARTED_PATH"] =
+            reconciliationStarted.path
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
@@ -1067,9 +1075,15 @@ final class TraceUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2.2)
 
         try? FileManager.default.removeItem(at: completed)
+        try? FileManager.default.removeItem(at: reconciliationStarted)
         let rebuild = app.buttons["testRebuildIndex"]
         XCTAssertTrue(rebuild.waitForExistence(timeout: 5))
         rebuild.click()
+        rebuild.click()
+        let resolving = app.descendants(matching: .any)["projectFilterResolving"].firstMatch
+        XCTAssertTrue(resolving.waitForExistence(timeout: 5),
+                      "a retained launcher filter must show reconciliation progress")
+        XCTAssertTrue(waitForFile(reconciliationStarted, timeout: 20))
         XCTAssertTrue(waitForFile(completed, timeout: 20))
 
         XCTAssertTrue(app.popUpButtons["7 days"].waitForExistence(timeout: 10))
@@ -1144,6 +1158,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "from other project"
         )).firstMatch.exists)
+        let databaseURL = directory.appendingPathComponent("index.sqlite")
+        let selectedProjectID = try sqliteInteger(
+            databaseURL,
+            sql: "SELECT id FROM project WHERE canonical_key='/tmp/traceuiexample';"
+        )
 
         try? FileManager.default.removeItem(at: completed)
         try FileManager.default.removeItem(at: selectedSource)
@@ -1153,6 +1172,32 @@ final class TraceUITests: XCTestCase {
             format: "label CONTAINS %@", "from other project"
         )).firstMatch.exists,
         "a stale selected project ID must remain restrictive instead of becoming all projects")
+
+        try? FileManager.default.removeItem(at: completed)
+        let replacement: [String: Any] = [
+            "type": "assistant", "uuid": "replacement-project-match",
+            "sessionId": "replacement-project", "cwd": "/tmp/ReplacementProject",
+            "timestamp": "2026-09-14T10:02:00Z",
+            "message": ["content": "RestrictedProjectNeedle from replacement project"],
+        ]
+        let replacementSource = directory.appendingPathComponent(
+            "Sources/Claude/zzz-replacement-project.jsonl"
+        )
+        try (JSONSerialization.data(withJSONObject: replacement) + Data([10]))
+            .write(to: replacementSource)
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        let replacementProjectID = try sqliteInteger(
+            databaseURL,
+            sql: "SELECT id FROM project WHERE canonical_key='/tmp/replacementproject';"
+        )
+        XCTAssertEqual(replacementProjectID, selectedProjectID,
+                       "the fixture must reproduce numeric project-ID reuse")
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from replacement project"
+        )).firstMatch.exists,
+        "a replacement project reusing the deleted numeric ID must remain excluded")
+        XCTAssertEqual(query.placeholderValue, "Search this project")
     }
 
     func testLauncherProjectFilterRenamesThenClearsWhenProjectDisappears() throws {
@@ -1428,10 +1473,16 @@ final class TraceUITests: XCTestCase {
         let repairStarted = directory.appendingPathComponent("rollup-repair-started")
         let repairAudit = directory.appendingPathComponent("rollup-repair-audit")
         let passCompleted = directory.appendingPathComponent("index-pass-completed")
+        let quietPeriodStarted = directory.appendingPathComponent(
+            "rollup-repair-quiet-period-started"
+        )
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"] = "3000"
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH"] = repairStarted.path
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH"] = repairAudit.path
         app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = passCompleted.path
+        app.launchEnvironment["TRACE_TEST_USAGE_REPAIR_QUIET_DELAY_MS"] = "3000"
+        app.launchEnvironment["TRACE_TEST_USAGE_REPAIR_QUIET_PERIOD_STARTED_PATH"] =
+            quietPeriodStarted.path
         let initial: [String: Any] = [
             "type": "assistant", "uuid": "repair-initial", "sessionId": "repair",
             "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
@@ -1448,6 +1499,7 @@ final class TraceUITests: XCTestCase {
         try? FileManager.default.removeItem(at: repairStarted)
         try? FileManager.default.removeItem(at: repairAudit)
         try? FileManager.default.removeItem(at: passCompleted)
+        try? FileManager.default.removeItem(at: quietPeriodStarted)
 
         let sqlite = Process()
         sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
@@ -1471,6 +1523,18 @@ final class TraceUITests: XCTestCase {
         try handle.close()
 
         XCTAssertTrue(waitForFile(passCompleted, timeout: 15))
+        XCTAssertTrue(waitForFile(quietPeriodStarted, timeout: 10))
+        XCTAssertEqual(
+            ((try? String(contentsOf: repairStarted, encoding: .utf8)) ?? "")
+                .components(separatedBy: "started\n").count - 1,
+            1,
+            "the deferred repair must not immediately repeat the failed terminal rebuild"
+        )
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "rollup unavailable"
+        )).firstMatch.exists,
+        "the original rollup error must remain visible during the quiet period")
+        XCTAssertTrue(app.staticTexts["Updating token totals…"].exists)
         XCTAssertTrue(waitForLineCount(repairStarted, line: "started", count: 2, timeout: 15),
                       "a terminal rollup error must schedule one deferred dirty-rollup repair")
         XCTAssertTrue(app.staticTexts["10"].exists,
@@ -2162,5 +2226,25 @@ final class TraceUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func sqliteInteger(_ database: URL, sql: String) throws -> Int64 {
+        let output = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [database.path, sql]
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "TraceUITests.SQLite", code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "sqlite3 query failed: \(sql)"]
+            )
+        }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let value = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try XCTUnwrap(Int64(value), "Expected integer sqlite3 output for: \(sql)")
     }
 }

@@ -1085,9 +1085,9 @@ public actor IndexDatabase {
                 predicates.append("s.agent IN (\(Array(repeating: "?", count: values.count).joined(separator: ",")))")
                 for value in values { filterArguments += [value.rawValue] }
             }
-            if let projectID = filters.projectID {
-                predicates.append("s.project_id = ?")
-                filterArguments += [projectID]
+            if let projectCanonicalKey = filters.projectCanonicalKey {
+                predicates.append("s.project_id = (SELECT id FROM project WHERE canonical_key = ?)")
+                filterArguments += [projectCanonicalKey]
             }
             if let from = filters.fromMilliseconds {
                 predicates.append("m.ts >= ?")
@@ -1111,7 +1111,9 @@ public actor IndexDatabase {
                 arguments += filterArguments
                 arguments += [limit + 1]
                 sql = """
-                    SELECT m.id, m.session_id, s.project_id, p.display_name AS project_name,
+                    SELECT m.id, m.session_id, s.project_id,
+                           p.canonical_key AS project_canonical_key,
+                           p.display_name AS project_name,
                            coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS session_title,
                            s.agent, s.has_plan,
                            m.role, m.ts, m.prefix, sf.path AS source_path, NULL AS score
@@ -1138,7 +1140,9 @@ public actor IndexDatabase {
                         FROM message_fts
                         WHERE message_fts MATCH ?
                     )
-                    SELECT m.id, m.session_id, s.project_id, p.display_name AS project_name,
+                    SELECT m.id, m.session_id, s.project_id,
+                           p.canonical_key AS project_canonical_key,
+                           p.display_name AS project_name,
                            coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS session_title,
                            s.agent, s.has_plan,
                            m.role, m.ts, m.prefix, sf.path AS source_path, r.score
@@ -1314,17 +1318,24 @@ public actor IndexDatabase {
         }
     }
 
-    public func sessions(projectID: Int64? = nil, limit: Int = 500) throws -> [SessionSummary] {
+    public func sessions(
+        projectCanonicalKey: String? = nil, limit: Int = 500
+    ) throws -> [SessionSummary] {
         try pool.read { db in
-            let predicate = projectID == nil ? "" : "WHERE s.project_id=?"
+            let predicate = projectCanonicalKey == nil
+                ? ""
+                : "WHERE s.project_id=(SELECT id FROM project WHERE canonical_key=?)"
             var arguments = StatementArguments()
-            if let projectID { arguments += [projectID] }
+            if let projectCanonicalKey { arguments += [projectCanonicalKey] }
             arguments += [limit]
             return try Row.fetchAll(db, sql: """
                 SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                        sf.path AS source_path,
-                       sf.content_generation AS source_generation
-                FROM session s JOIN source_file sf ON sf.id=s.source_file_id
+                       sf.content_generation AS source_generation,
+                       p.canonical_key AS project_canonical_key
+                FROM session s
+                JOIN source_file sf ON sf.id=s.source_file_id
+                JOIN project p ON p.id=s.project_id
                 \(predicate) ORDER BY s.last_activity_at DESC LIMIT ?
                 """, arguments: arguments).compactMap(sessionSummary(from:))
         }
@@ -1335,8 +1346,12 @@ public actor IndexDatabase {
             try Row.fetchOne(db, sql: """
                 SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                        sf.path AS source_path,
-                       sf.content_generation AS source_generation
-                FROM session s JOIN source_file sf ON sf.id=s.source_file_id WHERE s.id=?
+                       sf.content_generation AS source_generation,
+                       p.canonical_key AS project_canonical_key
+                FROM session s
+                JOIN source_file sf ON sf.id=s.source_file_id
+                JOIN project p ON p.id=s.project_id
+                WHERE s.id=?
                 """, arguments: [id]).flatMap(sessionSummary(from:))
         }
     }
@@ -1414,6 +1429,7 @@ private func searchResult(from row: Row) -> SearchResult? {
     let id: Int64 = row["id"]
     let sessionID: Int64 = row["session_id"]
     let projectID: Int64 = row["project_id"]
+    let projectCanonicalKey: String = row["project_canonical_key"]
     let projectName: String = row["project_name"]
     let sessionTitle: String = row["session_title"]
     let timestamp: Int64 = row["ts"]
@@ -1422,6 +1438,7 @@ private func searchResult(from row: Row) -> SearchResult? {
     let rank: Double? = row["score"]
     return SearchResult(
         id: id, sessionID: sessionID, projectID: projectID,
+        projectCanonicalKey: projectCanonicalKey,
         projectName: projectName, sessionTitle: sessionTitle, sessionHasPlan: row["has_plan"], agent: agent,
         role: role, timestampMilliseconds: timestamp, prefix: prefix,
         sourcePath: sourcePath, rank: rank
@@ -1433,6 +1450,7 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
     guard let agent = AgentKind(rawValue: agentRaw) else { return nil }
     let id: Int64 = row["id"]
     let projectID: Int64 = row["project_id"]
+    let projectCanonicalKey: String = row["project_canonical_key"]
     let title: String = row["resolved_title"]
     let startedAt: Int64 = row["started_at"]
     let lastActivity: Int64 = row["last_activity_at"]
@@ -1440,7 +1458,7 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
     let hadError: Bool = row["had_error"]
     let sourcePath: String = row["source_path"]
     return SessionSummary(
-        id: id, projectID: projectID, agent: agent,
+        id: id, projectID: projectID, projectCanonicalKey: projectCanonicalKey, agent: agent,
         title: title, hasPlan: row["has_plan"], startedAtMilliseconds: startedAt,
         lastActivityMilliseconds: lastActivity, messageCount: messageCount,
         hadError: hadError, sourcePath: sourcePath,
