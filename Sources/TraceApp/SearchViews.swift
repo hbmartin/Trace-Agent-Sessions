@@ -25,7 +25,7 @@ struct RecentPopoverView: View {
             .padding(12)
             .background(.quaternary.opacity(0.45))
 
-            if search.filters != SearchFilters() {
+            if search.hasActiveFilters {
                 HStack {
                     Text("Search filters active")
                         .font(.caption)
@@ -215,8 +215,9 @@ struct LauncherView: View {
 
     private var selectedProjectName: String {
         if let name = search.projectFilterDisplayName { return name }
-        guard let id = search.filters.projectID else { return "All projects" }
-        return model.projects.first(where: { $0.id == id })?.displayName ?? "All projects"
+        guard let key = search.filters.projectCanonicalKey else { return "All projects" }
+        return model.projects.first(where: { $0.canonicalKey == key })?.displayName
+            ?? "Selected project"
     }
 
     private func selectProject(_ project: ProjectSummary?) {
@@ -327,7 +328,6 @@ struct SearchResultList: View {
     @State private var pendingAnchor: SearchResultAnchor?
     @State private var pendingAnchorToken = UUID()
     @State private var nativeScrollCommand: NativeScrollCommand?
-    @State private var testKeyboardScrollRequestID: UUID?
 
     var body: some View {
         if search.isSearching && search.results.isEmpty {
@@ -338,10 +338,6 @@ struct SearchResultList: View {
             ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try another word or project."))
         } else {
             VStack(spacing: 0) {
-                if usesNativeScrolling && TraceTestHooks.isUITesting {
-                    Button("Keyboard page down") { testKeyboardScrollRequestID = UUID() }
-                        .accessibilityIdentifier("testKeyboardPageDown")
-                }
                 if search.resultsMayBeStale {
                     HStack {
                         Text("Results may be out of date.")
@@ -364,7 +360,6 @@ struct SearchResultList: View {
                                 onScroll: { contentOffset = $0 },
                                 onUserScroll: { cancelCapturedAnchorForUser() },
                                 scrollCommand: nativeScrollCommand,
-                                testKeyboardScrollRequestID: testKeyboardScrollRequestID,
                                 resultSetID: search.resultSetID
                             ) {
                                 rowsContent.onPreferenceChange(RowFramesPreference.self) {
@@ -413,10 +408,6 @@ struct SearchResultList: View {
     private var rowsContent: some View {
         Group {
             if usesNativeScrolling {
-                VStack(alignment: .leading, spacing: 5) { resultRows }
-            } else if TraceTestHooks.isUITesting,
-                      TraceTestHooks.environment["TRACE_TEST_DUPLICATE_FIRST_ADDITIONAL_SEARCH_PAGE"]
-                        != nil {
                 VStack(alignment: .leading, spacing: 5) { resultRows }
             } else {
                 LazyVStack(alignment: .leading, spacing: 5) { resultRows }

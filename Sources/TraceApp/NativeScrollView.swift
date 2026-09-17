@@ -13,7 +13,6 @@ struct NativeScrollView<Content: View>: NSViewRepresentable {
     var onScroll: ((CGFloat) -> Void)? = nil
     var onUserScroll: (() -> Void)? = nil
     var scrollCommand: NativeScrollCommand? = nil
-    var testKeyboardScrollRequestID: UUID? = nil
     var resultSetID: UUID? = nil
     @ViewBuilder var content: () -> Content
 
@@ -57,12 +56,6 @@ struct NativeScrollView<Content: View>: NSViewRepresentable {
         (scroll as? UserObservedScrollView)?.onUserScroll = onUserScroll
         (scroll.verticalScroller as? UserObservedScroller)?.onUserScroll = onUserScroll
         (scroll.documentView as? WheelHostingView<AnyView>)?.rootView = AnyView(content().fixedSize(horizontal: false, vertical: true))
-        if let request = testKeyboardScrollRequestID,
-           context.coordinator.lastTestKeyboardScrollRequestID != request,
-           let observed = scroll as? UserObservedScrollView {
-            context.coordinator.lastTestKeyboardScrollRequestID = request
-            DispatchQueue.main.async { observed.sendTestPageDown() }
-        }
         if let command = scrollCommand, command.resultSetID == resultSetID,
            context.coordinator.lastCommandID != command.id {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, command.y)))
@@ -75,7 +68,6 @@ struct NativeScrollView<Content: View>: NSViewRepresentable {
         var onScroll: ((CGFloat) -> Void)?
         var onUserScroll: (() -> Void)?
         var lastCommandID: UUID?
-        var lastTestKeyboardScrollRequestID: UUID?
         private var pendingY: CGFloat?
         private var deliveryScheduled = false
 
@@ -116,30 +108,9 @@ private final class UserObservedScrollView: NSScrollView {
 
     override func keyDown(with event: NSEvent) {
         if [123, 124, 125, 126, 115, 116, 119, 121].contains(event.keyCode) {
-            TraceTestHooks.appendLine(
-                "keyboard", pathKey: "TRACE_TEST_NATIVE_KEYBOARD_SCROLL_PATH"
-            )
             onUserScroll?()
         }
         super.keyDown(with: event)
-    }
-
-    func sendTestPageDown() {
-        let pageDown = String(UnicodeScalar(NSPageDownFunctionKey)!)
-        guard TraceTestHooks.isUITesting,
-              let event = NSEvent.keyEvent(
-                  with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                  windowNumber: window?.windowNumber ?? 0, context: nil,
-                  characters: pageDown, charactersIgnoringModifiers: pageDown, isARepeat: false,
-                  keyCode: 121
-              ) else { return }
-        keyDown(with: event)
-        let origin = contentView.bounds.origin
-        contentView.scroll(to: NSPoint(
-            x: origin.x,
-            y: origin.y + max(1, contentView.bounds.height * 0.9)
-        ))
-        reflectScrolledClipView(contentView)
     }
 }
 
@@ -147,10 +118,8 @@ private final class UserObservedScroller: NSScroller {
     var onUserScroll: (() -> Void)?
 
     override func mouseDown(with event: NSEvent) {
-        let scroll = enclosingScrollView
         onUserScroll?()
         super.mouseDown(with: event)
-        if let scroll { window?.makeFirstResponder(scroll) }
     }
 
 }
