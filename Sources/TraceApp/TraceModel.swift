@@ -5,13 +5,33 @@ import TraceCore
 
 struct SidebarRevealRequest: Equatable {
     let token = UUID()
-    let projectID: Int64
+    let projectCanonicalKey: String
     let sessionID: Int64
 }
 
 @MainActor
 final class TraceModel: ObservableObject {
     enum GlobalSearchSurface: Hashable { case popover, launcher }
+    private enum ProjectReconciliationMode: Equatable {
+        case ongoing
+        case completed
+        case terminalRetaining
+
+        var globalMissingProjectPolicy: SessionSearchModel.MissingProjectPolicy {
+            switch self {
+            case .ongoing: .keepResolving
+            case .completed: .clear
+            case .terminalRetaining: .retain
+            }
+        }
+
+        var mainMissingProjectPolicy: SessionSearchModel.MissingProjectPolicy {
+            switch self {
+            case .ongoing: .keepResolving
+            case .completed, .terminalRetaining: .retain
+            }
+        }
+    }
     let settings: AppSettings
     let globalSearch = SessionSearchModel()
     var mainSearch = SessionSearchModel()
@@ -82,6 +102,9 @@ final class TraceModel: ObservableObject {
     private var mayRestoreSession = true
     private var started = false
     private var initialIndexRequested = false
+    private var replacementIndexPassExpected = false
+    private var sidebarProjectRevealAcknowledged = false
+    private var sidebarSessionRevealAcknowledged = false
 
     init(settings: AppSettings = AppSettings()) {
         self.settings = settings
@@ -189,7 +212,24 @@ final class TraceModel: ObservableObject {
 
     private func receiveProgress(_ update: IndexProgress) async {
         let terminal = [.complete, .failed, .cancelled].contains(update.phase)
+        let reconciliationMode: ProjectReconciliationMode
+        switch update.phase {
+        case .complete:
+            reconciliationMode = .completed
+            replacementIndexPassExpected = false
+        case .failed:
+            reconciliationMode = .terminalRetaining
+            replacementIndexPassExpected = false
+        case .cancelled where replacementIndexPassExpected:
+            reconciliationMode = .ongoing
+        case .cancelled:
+            reconciliationMode = .terminalRetaining
+        default:
+            reconciliationMode = .ongoing
+            replacementIndexPassExpected = false
+        }
         indexingPassActive = !terminal
+            || (update.phase == .cancelled && replacementIndexPassExpected)
         if !terminal { usageSnapshotRequestID = UUID() }
         if terminal {
             TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
@@ -240,7 +280,7 @@ final class TraceModel: ObservableObject {
             lastSummaryRefresh = .now
             await reloadSummaries(
                 lightweight: !terminal,
-                finalProjectReconciliation: update.phase == .complete
+                projectReconciliation: reconciliationMode
             )
         }
     }
@@ -300,7 +340,8 @@ final class TraceModel: ObservableObject {
             && !globalSearch.query.isEmpty && !globalSearch.protectsPagination
             && !globalSearch.isResolvingProjectFilter)
         || (mainSearchNeedsRefresh && mainSearchIsVisible
-            && !mainSearch.query.isEmpty && !mainSearch.protectsPagination)
+            && !mainSearch.query.isEmpty && !mainSearch.protectsPagination
+            && !mainSearch.isResolvingProjectFilter)
     }
 
     func setGlobalSearchSurface(_ surface: GlobalSearchSurface, visible: Bool) {
@@ -388,7 +429,8 @@ final class TraceModel: ObservableObject {
             globalSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
         if mainSearchNeedsRefresh, mainSearchIsVisible,
-           !mainSearch.query.isEmpty, !mainSearch.protectsPagination {
+           !mainSearch.query.isEmpty, !mainSearch.protectsPagination,
+           !mainSearch.isResolvingProjectFilter {
             mainSearchNeedsRefresh = false
             mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
             mainSearch.search(sort: settings.searchSort, trigger: .automatic)
@@ -411,6 +453,7 @@ final class TraceModel: ObservableObject {
         sourceChangeTask?.cancel()
         watcher?.stop()
         watcher = nil
+        replacementIndexPassExpected = true
         sourceChangeTask = Task {
             await scheduler?.stop()
             guard !Task.isCancelled, let database else { return }
@@ -477,6 +520,7 @@ final class TraceModel: ObservableObject {
 
     func clearSession() {
         mayRestoreSession = false
+        invalidateSidebarRevealRequest()
         sessionRequestID = UUID()
         selectedSessionID = nil
         selectedSession = nil
@@ -493,6 +537,7 @@ final class TraceModel: ObservableObject {
     }
 
     private func prepareForIndexReset() {
+        replacementIndexPassExpected = true
         cancelAutomaticSearch()
         deferredUsageRepairTask?.cancel()
         deferredUsageRepairTask = nil
@@ -511,10 +556,10 @@ final class TraceModel: ObservableObject {
         sessionRequestID = UUID()
         projectRequestID = UUID()
         summaryRequestID = UUID()
-        selectedProjectID = nil
+        self.selectedProjectID = nil
         selectedSessionID = nil
         selectedSession = nil
-        sidebarRevealRequest = nil
+        invalidateSidebarRevealRequest()
         settings.lastSessionID = nil
         projects = []
         sessions = []
@@ -528,7 +573,7 @@ final class TraceModel: ObservableObject {
         sourceHealth = []
         statistics = nil
         globalSearch.resetForIndexReset(awaitsProjectResolution: true)
-        mainSearch.resetForIndexReset()
+        mainSearch.resetForIndexReset(awaitsProjectResolution: true)
     }
 
     func selectProject(_ projectID: Int64?) {
@@ -543,12 +588,13 @@ final class TraceModel: ObservableObject {
             loadProjectSessions()
             return
         }
-        // SwiftUI can write nil when a selected row disappears. Once the transient ID
-        // has already been cleared, retain the canonical selection until the user picks
-        // another project.
-        guard selectedProjectID != nil else { return }
+        // SwiftUI writes nil when a selected row temporarily disappears. Treat nil as
+        // deliberate only while the selected row is still visible and no session is open.
+        guard let selectedProjectID,
+              selectedSessionID == nil,
+              filteredProjects.contains(where: { $0.id == selectedProjectID }) else { return }
         clearSession()
-        selectedProjectID = nil
+        self.selectedProjectID = nil
         selectedProjectCanonicalKey = nil
         selectedProjectDisplayName = nil
         loadProjectSessions()
@@ -595,6 +641,9 @@ final class TraceModel: ObservableObject {
 
     func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil) {
         mayRestoreSession = false
+        if sidebarRevealRequest?.sessionID != sessionID {
+            invalidateSidebarRevealRequest()
+        }
         if selectedSessionID == sessionID, selectedSession != nil, messageID == nil {
             if showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
             return
@@ -602,7 +651,10 @@ final class TraceModel: ObservableObject {
         selectedSessionID = sessionID
         settings.lastSessionID = sessionID
         selectedSession = (sessions + recentSessions).first { $0.id == sessionID }
-        if let selectedSession { adoptProjectIdentity(from: selectedSession) }
+        if let selectedSession,
+           adoptProjectIdentity(from: selectedSession) {
+            loadProjectSessions(ensuring: sessionID)
+        }
         let request = UUID()
         sessionRequestID = request
         requestedMessageID = messageID
@@ -619,10 +671,8 @@ final class TraceModel: ObservableObject {
             guard sessionRequestID == request, selectedSessionID == sessionID else { return }
             selectedSession = session
             if let session,
-               selectedProjectCanonicalKey != session.projectCanonicalKey
-                || selectedProjectID != session.projectID {
-                adoptProjectIdentity(from: session)
-                loadProjectSessions()
+               adoptProjectIdentity(from: session) {
+                loadProjectSessions(ensuring: sessionID)
             }
             messages = rows
             scrollRequest = UUID()
@@ -635,7 +685,6 @@ final class TraceModel: ObservableObject {
 
     func openSession(_ session: SessionSummary) {
         prepareExternalSessionSelection(
-            projectID: session.projectID,
             projectCanonicalKey: session.projectCanonicalKey,
             projectDisplayName: nil,
             sessionID: session.id
@@ -645,7 +694,6 @@ final class TraceModel: ObservableObject {
 
     func openSearchResult(_ result: SearchResult) {
         prepareExternalSessionSelection(
-            projectID: result.projectID,
             projectCanonicalKey: result.projectCanonicalKey,
             projectDisplayName: result.projectName,
             sessionID: result.sessionID
@@ -654,15 +702,13 @@ final class TraceModel: ObservableObject {
     }
 
     private func prepareExternalSessionSelection(
-        projectID: Int64,
         projectCanonicalKey: String,
         projectDisplayName: String?,
         sessionID: Int64
     ) {
         let project = projects.first { $0.canonicalKey == projectCanonicalKey }
-        let resolvedProjectID = project?.id ?? projectID
         let resolvedDisplayName = project?.displayName ?? projectDisplayName
-        selectedProjectID = resolvedProjectID
+        selectedProjectID = project?.id
         selectedProjectCanonicalKey = projectCanonicalKey
         selectedProjectDisplayName = resolvedDisplayName
 
@@ -671,22 +717,55 @@ final class TraceModel: ObservableObject {
            resolvedDisplayName?.localizedCaseInsensitiveContains(filter) != true {
             projectFilter = ""
         }
-        sidebarRevealRequest = .init(projectID: resolvedProjectID, sessionID: sessionID)
+        setSidebarRevealRequest(
+            .init(projectCanonicalKey: projectCanonicalKey, sessionID: sessionID)
+        )
         loadProjectSessions(ensuring: sessionID)
     }
 
-    private func adoptProjectIdentity(from session: SessionSummary) {
+    @discardableResult
+    private func adoptProjectIdentity(from session: SessionSummary) -> Bool {
         let previousCanonicalKey = selectedProjectCanonicalKey
         let previousDisplayName = selectedProjectDisplayName
+        let project = projects.first { $0.canonicalKey == session.projectCanonicalKey }
         selectedProjectCanonicalKey = session.projectCanonicalKey
-        selectedProjectID = session.projectID
-        selectedProjectDisplayName = projects.first {
-            $0.canonicalKey == session.projectCanonicalKey
-        }?.displayName ?? (
+        selectedProjectID = project?.id
+        selectedProjectDisplayName = project?.displayName ?? (
             previousCanonicalKey == session.projectCanonicalKey
                 ? previousDisplayName
                 : nil
         )
+        return previousCanonicalKey != session.projectCanonicalKey
+    }
+
+    private func setSidebarRevealRequest(_ request: SidebarRevealRequest) {
+        sidebarProjectRevealAcknowledged = false
+        sidebarSessionRevealAcknowledged = false
+        sidebarRevealRequest = request
+    }
+
+    private func invalidateSidebarRevealRequest() {
+        sidebarRevealRequest = nil
+        sidebarProjectRevealAcknowledged = false
+        sidebarSessionRevealAcknowledged = false
+    }
+
+    func acknowledgeSidebarProjectReveal(token: UUID) {
+        guard sidebarRevealRequest?.token == token else { return }
+        sidebarProjectRevealAcknowledged = true
+        finishSidebarRevealIfAcknowledged()
+    }
+
+    func acknowledgeSidebarSessionReveal(token: UUID) {
+        guard sidebarRevealRequest?.token == token else { return }
+        sidebarSessionRevealAcknowledged = true
+        finishSidebarRevealIfAcknowledged()
+    }
+
+    private func finishSidebarRevealIfAcknowledged() {
+        guard sidebarProjectRevealAcknowledged,
+              sidebarSessionRevealAcknowledged else { return }
+        invalidateSidebarRevealRequest()
     }
 
     func copyMessage(id: Int64) {
@@ -858,9 +937,7 @@ final class TraceModel: ObservableObject {
             reloadCosts()
         } catch {
             guard usageSnapshotRequestID == request else { return }
-            if costsError == nil {
-                costsError = "Could not update token totals: \(error.localizedDescription)"
-            }
+            costsError = "Could not update token totals: \(error.localizedDescription)"
             if repairIfDirty { usageRepairPending = false }
             usageRefreshPending = usageRepairPending
             updateCostsTotalsUpdating()
@@ -946,7 +1023,7 @@ final class TraceModel: ObservableObject {
     private func reloadSummaries(
         lightweight: Bool = false,
         loadCosts: Bool = true,
-        finalProjectReconciliation: Bool = false
+        projectReconciliation: ProjectReconciliationMode = .ongoing
     ) async {
         guard let database else { return }
         let refresh = UUID()
@@ -955,17 +1032,13 @@ final class TraceModel: ObservableObject {
         let loadedRecent = (try? await database.sessions(limit: 10)) ?? []
         let projectCanonicalKey = selectedProjectCanonicalKey
         let projectRequest = projectRequestID
-        let ensuredSessionID = sidebarRevealRequest.flatMap { request in
-            request.projectID == selectedProjectID && request.sessionID == selectedSessionID
-                ? request.sessionID
-                : nil
-        }
+        let ensuredSessionID = selectedSessionID
         let loadedSessions = await projectSessions(
             canonicalKey: projectCanonicalKey,
             ensuring: ensuredSessionID,
             database: database
         )
-        if finalProjectReconciliation,
+        if projectReconciliation != .ongoing,
            let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_PROJECT_RECONCILIATION_DELAY_MS",
             cappedAt: 5_000,
@@ -974,20 +1047,44 @@ final class TraceModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(delay))
         }
         guard summaryRequestID == refresh else { return }
-        let projectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
+        let globalProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
+        let mainProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
         if let loadedProjects {
-            projectFilterReconciliation = globalSearch.resolveProjectFilter(
-                in: loadedProjects, final: finalProjectReconciliation
+            globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
+                in: loadedProjects,
+                missingProject: projectReconciliation.globalMissingProjectPolicy
+            )
+            mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+                in: loadedProjects,
+                missingProject: projectReconciliation.mainMissingProjectPolicy
             )
             projects = loadedProjects
             reconcileSelectedProject(in: loadedProjects)
         } else {
-            projectFilterReconciliation = .unchanged
+            switch projectReconciliation {
+            case .ongoing:
+                globalProjectFilterReconciliation = .unchanged
+                mainProjectFilterReconciliation = .unchanged
+            case .completed, .terminalRetaining:
+                // A failed summary read cannot establish that a canonical project was
+                // deleted. Retain both filters, but do not leave either search blocked.
+                globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
+                    in: projects, missingProject: .retain
+                )
+                mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+                    in: projects, missingProject: .retain
+                )
+            }
         }
         recentSessions = loadedRecent
-        if projectFilterReconciliation.requiresSearchRefresh,
+        if globalProjectFilterReconciliation.requiresSearchRefresh,
            !globalSearch.query.isEmpty {
             globalSearchNeedsRefresh = true
+            scheduleAutomaticSearch()
+        }
+        if mainProjectFilterReconciliation.requiresSearchRefresh,
+           !mainSearch.query.isEmpty {
+            mainSearchNeedsRefresh = true
             scheduleAutomaticSearch()
         }
         if selectedProjectCanonicalKey == projectCanonicalKey,

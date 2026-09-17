@@ -558,11 +558,16 @@ struct SearchResultList: View {
                         )
                     })
                     .task(id: SnippetHydrationKey(result)) { await search.hydrate(result) }
-                    .onAppear {
-                        if !search.isResolvingProjectFilter,
-                           result.id == search.results.last?.id {
-                            search.search(reset: false)
-                        }
+                    .task(id: SearchLoadMoreTaskID(
+                        resultID: result.id,
+                        resultSetID: search.resultSetID,
+                        automaticResultRevision: search.automaticResultRevision,
+                        isResolvingProjectFilter: search.isResolvingProjectFilter,
+                        isLastResult: result.id == search.results.last?.id
+                    )) {
+                        guard !search.isResolvingProjectFilter,
+                              result.id == search.results.last?.id else { return }
+                        search.search(reset: false)
                     }
                 }
             }
@@ -582,6 +587,14 @@ struct SearchResultList: View {
         }
         return projects
     }
+}
+
+private struct SearchLoadMoreTaskID: Hashable {
+    let resultID: Int64
+    let resultSetID: UUID
+    let automaticResultRevision: Int
+    let isResolvingProjectFilter: Bool
+    let isLastResult: Bool
 }
 
 private struct SearchProjectGroup: Identifiable {

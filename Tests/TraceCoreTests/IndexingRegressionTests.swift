@@ -30,6 +30,27 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    func testProjectSessionsUseSessionIDToBreakActivityTies() async throws {
+        let root = try directory()
+        for name in ["alpha", "beta"] {
+            let row = """
+            {"type":"user","uuid":"\(name)-message","sessionId":"\(name)","cwd":"/tmp/TraceExample","timestamp":"2026-09-14T10:00:00Z","message":{"content":"\(name)"}}
+            """
+            try Data((row + "\n").utf8).write(
+                to: root.appendingPathComponent("\(name).jsonl")
+            )
+        }
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(
+            database: database,
+            sources: [ClaudeCodeSource(roots: [root])]
+        ).indexAll(scope: .proseOnly)
+
+        let sessions = try await database.sessions(projectCanonicalKey: "/tmp/traceexample")
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(sessions.map(\.id), sessions.map(\.id).sorted(by: >))
+    }
+
     func testFiniteReaderDefersAppendsAndPartialLine() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")

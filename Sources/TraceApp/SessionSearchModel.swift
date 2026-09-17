@@ -11,14 +11,20 @@ final class SessionSearchModel: ObservableObject {
     enum ProjectFilterReconciliation {
         case unchanged
         case resolved
+        case retained
         case cleared
 
         var requiresSearchRefresh: Bool {
             switch self {
             case .unchanged: false
-            case .resolved, .cleared: true
+            case .resolved, .retained, .cleared: true
             }
         }
+    }
+    enum MissingProjectPolicy {
+        case keepResolving
+        case retain
+        case clear
     }
     @Published var query = ""
     @Published var filters = SearchFilters()
@@ -88,7 +94,10 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func shouldSearchAfterQueryChange(to query: String) -> Bool {
-        !TraceTestHooks.isUITesting || ignoredAutomaticQueryValueForTesting != query
+        guard TraceTestHooks.isUITesting,
+              ignoredAutomaticQueryValueForTesting == query else { return true }
+        ignoredAutomaticQueryValueForTesting = nil
+        return false
     }
 
     func attach(database: IndexDatabase, coordinator: IndexCoordinator, diagnostics: DiagnosticsStore? = nil) {
@@ -109,7 +118,7 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func resolveProjectFilter(
-        in projects: [ProjectSummary], final: Bool
+        in projects: [ProjectSummary], missingProject policy: MissingProjectPolicy
     ) -> ProjectFilterReconciliation {
         guard let projectFilterCanonicalKey else {
             if isResolvingProjectFilter { isResolvingProjectFilter = false }
@@ -123,18 +132,25 @@ final class SessionSearchModel: ObservableObject {
             if isResolvingProjectFilter { isResolvingProjectFilter = false }
             return wasResolving ? .resolved : .unchanged
         }
-        guard final else {
+        switch policy {
+        case .keepResolving:
             if !isResolvingProjectFilter {
                 isResolvingProjectFilter = true
                 invalidateActiveRequest(markStale: true)
             }
             return .unchanged
+        case .retain:
+            let wasResolving = isResolvingProjectFilter
+            if isResolvingProjectFilter { isResolvingProjectFilter = false }
+            if wasResolving { invalidateActiveRequest(markStale: true) }
+            return wasResolving ? .retained : .unchanged
+        case .clear:
+            filters.projectCanonicalKey = nil
+            if projectFilterDisplayName != nil { projectFilterDisplayName = nil }
+            if isResolvingProjectFilter { isResolvingProjectFilter = false }
+            invalidateActiveRequest(markStale: true)
+            return .cleared
         }
-        filters.projectCanonicalKey = nil
-        if projectFilterDisplayName != nil { projectFilterDisplayName = nil }
-        if isResolvingProjectFilter { isResolvingProjectFilter = false }
-        invalidateActiveRequest(markStale: true)
-        return .cleared
     }
 
     func clearFilters() {
@@ -223,9 +239,6 @@ final class SessionSearchModel: ObservableObject {
             pathKey: "TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"
         )
         task = Task { [weak self] in
-            defer {
-                if !reset { self?.ignoredAutomaticQueryValueForTesting = nil }
-            }
             do {
                 if reset { try await Task.sleep(for: .milliseconds(100)) }
                 if reset, trigger == .automatic {

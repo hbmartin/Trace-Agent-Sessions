@@ -1190,6 +1190,59 @@ final class TraceUITests: XCTestCase {
                        "Any time must clear both date bounds")
     }
 
+    func testFailedRebuildRetainsAndUnblocksGlobalProjectFilter() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let otherSource = directory.appendingPathComponent(
+            "Sources/Claude/failed-rebuild-other.jsonl"
+        )
+        let other: [String: Any] = [
+            "type": "assistant", "uuid": "failed-rebuild-other",
+            "sessionId": "failed-rebuild-other", "cwd": "/tmp/OtherProject",
+            "timestamp": "2026-09-14T10:01:00Z",
+            "message": ["content": "FailedRebuildNeedle from other project"],
+        ]
+        try (JSONSerialization.data(withJSONObject: other) + Data([10]))
+            .write(to: otherSource)
+
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15))
+        search.click()
+        search.typeText("FailedRebuildNeedle")
+        search.typeKey(.return, modifierFlags: [])
+        let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
+        app.popUpButtons["All projects"].click()
+        app.menuItems["TraceUIExample"].click()
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 10))
+
+        let sqlite = Process()
+        sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        sqlite.arguments = [directory.appendingPathComponent("index.sqlite").path,
+            "CREATE TRIGGER fail_rebuild_root BEFORE UPDATE OF agent ON source_root "
+                + "BEGIN SELECT RAISE(ABORT, 'forced rebuild failure'); END;"]
+        try sqlite.run()
+        sqlite.waitUntilExit()
+        XCTAssertEqual(sqlite.terminationStatus, 0)
+
+        app.buttons["testRebuildIndex"].click()
+        let resolving = app.descendants(matching: .any)["projectFilterResolving"].firstMatch
+        XCTAssertTrue(resolving.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["indexProgress"].firstMatch
+            .wait(for: \.label, toEqual: "forced rebuild failure", timeout: 15))
+        XCTAssertTrue(resolving.waitForNonExistence(timeout: 10),
+                      "a failed rebuild must finish project-filter resolution")
+        XCTAssertTrue(app.popUpButtons["TraceUIExample"].exists,
+                      "the failed rebuild must retain the canonical project filter")
+        XCTAssertEqual(launcherSearch.value as? String, "FailedRebuildNeedle")
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from other project"
+        )).firstMatch.exists, "failure recovery must not broaden to every project")
+    }
+
     func testMissingSelectedMainProjectNeverSearchesEveryProject() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let completed = directory.appendingPathComponent("main-project-pass-completed")
@@ -1604,29 +1657,52 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.exists,
         "the original rollup error must remain visible during the quiet period")
         XCTAssertTrue(app.staticTexts["Updating token totals…"].exists)
+
+        let replaceTrigger = Process()
+        replaceTrigger.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        replaceTrigger.arguments = [directory.appendingPathComponent("index.sqlite").path,
+            "DROP TRIGGER fail_next_rollup_refresh; "
+                + "CREATE TRIGGER fail_retry_rollup_refresh BEFORE DELETE ON usage_daily "
+                + "BEGIN SELECT RAISE(ABORT, 'repair retry unavailable'); END;"]
+        try replaceTrigger.run()
+        replaceTrigger.waitUntilExit()
+        XCTAssertEqual(replaceTrigger.terminationStatus, 0)
+
         XCTAssertTrue(waitForLineCount(repairStarted, line: "started", count: 2, timeout: 15),
                       "a terminal rollup error must schedule one deferred dirty-rollup repair")
         XCTAssertTrue(app.staticTexts["10"].exists,
                       "the last completed totals must remain visible during repair")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "rollup unavailable"
+            format: "value CONTAINS %@", "repair retry unavailable"
         )).firstMatch.waitForExistence(timeout: 10),
-        "the rollup error must remain visible while repair is pending")
-        XCTAssertTrue(app.staticTexts["Updating token totals…"].exists,
-                      "the updating banner must remain visible while repair is pending")
+        "a newer repair failure must replace the earlier terminal error")
+        XCTAssertFalse(app.staticTexts["Updating token totals…"].exists,
+                       "the updating banner must end after the deferred repair fails")
 
         let dropTrigger = Process()
         dropTrigger.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
         dropTrigger.arguments = [directory.appendingPathComponent("index.sqlite").path,
-                                 "DROP TRIGGER fail_next_rollup_refresh;"]
+                                 "DROP TRIGGER fail_retry_rollup_refresh;"]
         try dropTrigger.run()
         dropTrigger.waitUntilExit()
         XCTAssertEqual(dropTrigger.terminationStatus, 0)
 
+        let retryKick: [String: Any] = [
+            "type": "assistant", "uuid": "repair-retry-kick", "sessionId": "repair",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:02:00Z",
+            "message": ["content": "Retry dirty token rollups"],
+        ]
+        let retryHandle = try FileHandle(forWritingTo: file)
+        try retryHandle.seekToEnd()
+        try retryHandle.write(
+            contentsOf: JSONSerialization.data(withJSONObject: retryKick) + Data([10])
+        )
+        try retryHandle.close()
+
         XCTAssertTrue(waitForLineCount(repairAudit, line: "rebuilt", count: 1, timeout: 15))
         XCTAssertTrue(app.staticTexts["16"].waitForExistence(timeout: 15))
         let error = app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "rollup unavailable"
+            format: "value CONTAINS %@", "repair retry unavailable"
         )).firstMatch
         expectation(for: NSPredicate { _, _ in !error.exists }, evaluatedWith: nil)
         let banner = app.staticTexts["Updating token totals…"]
@@ -2111,6 +2187,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(scroll.waitForExistence(timeout: 15))
         XCTAssertTrue(first.waitForExistence(timeout: 10))
         XCTAssertTrue(first.isHittable, "scroll bookmarks must not survive process restart")
+        app.buttons["backToProject"].click()
+        XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Alpha session"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Beta session"].firstMatch.exists,
+                       "restart restoration must reload the restored project's sessions")
         attach(app, name: "session-navigation")
     }
 

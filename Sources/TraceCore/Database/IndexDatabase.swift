@@ -1086,7 +1086,7 @@ public actor IndexDatabase {
                 for value in values { filterArguments += [value.rawValue] }
             }
             if let projectCanonicalKey = filters.projectCanonicalKey {
-                predicates.append("s.project_id = (SELECT id FROM project WHERE canonical_key = ?)")
+                predicates.append("p.canonical_key = ?")
                 filterArguments += [projectCanonicalKey]
             }
             if let from = filters.fromMilliseconds {
@@ -1324,7 +1324,7 @@ public actor IndexDatabase {
         try pool.read { db in
             let predicate = projectCanonicalKey == nil
                 ? ""
-                : "WHERE s.project_id=(SELECT id FROM project WHERE canonical_key=?)"
+                : "WHERE p.canonical_key=?"
             var arguments = StatementArguments()
             if let projectCanonicalKey { arguments += [projectCanonicalKey] }
             arguments += [limit]
@@ -1336,7 +1336,7 @@ public actor IndexDatabase {
                 FROM session s
                 JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN project p ON p.id=s.project_id
-                \(predicate) ORDER BY s.last_activity_at DESC LIMIT ?
+                \(predicate) ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
                 """, arguments: arguments).compactMap(sessionSummary(from:))
         }
     }
