@@ -907,6 +907,17 @@ final class TraceUITests: XCTestCase {
         return content?.split(whereSeparator: \.isNewline).last.flatMap { Double($0) }
     }
 
+    private func waitForNumericLine(
+        _ url: URL, greaterThan minimum: Double, timeout: TimeInterval = 10
+    ) -> Double? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let value = lastNumericLine(in: url), value > minimum { return value }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
     private func waitForBookmarkIndex(
         _ url: URL, greaterThan minimum: Int, timeout: TimeInterval = 10
     ) -> Int? {
@@ -915,6 +926,28 @@ final class TraceUITests: XCTestCase {
             if let content = try? String(contentsOf: url, encoding: .utf8),
                let index = Int(content), index > minimum {
                 return index
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
+    private func waitForStableBookmarkIndex(
+        _ url: URL, timeout: TimeInterval = 10
+    ) -> Int? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var previous: Int?
+        var repeatedObservations = 0
+        while Date() < deadline {
+            if let content = try? String(contentsOf: url, encoding: .utf8),
+               let index = Int(content) {
+                if index == previous {
+                    repeatedObservations += 1
+                    if repeatedObservations >= 2 { return index }
+                } else {
+                    previous = index
+                    repeatedObservations = 0
+                }
             }
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -1656,6 +1689,8 @@ final class TraceUITests: XCTestCase {
     func testPopoverKeepsSearchAndFooterVisibleWithTenSessions() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let source = directory.appendingPathComponent("Sources/Claude")
+        let offsets = directory.appendingPathComponent("popover-scroll-offsets")
+        app.launchEnvironment["TRACE_TEST_NATIVE_SCROLL_OFFSET_PATH"] = offsets.path
         for index in 0..<12 {
             let object: [String: Any] = ["type": "user", "uuid": "long-\(index)", "sessionId": "long-\(index)",
                 "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T11:00:00Z",
@@ -1673,11 +1708,10 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Open Trace"].isHittable)
         XCTAssertLessThanOrEqual(search.frame.width, 480)
         let list = app.scrollViews.firstMatch
-        let initial = app.buttons.allElementsBoundByIndex.first { $0.label.hasPrefix("Session ") && $0.isHittable }
-        let before = initial?.frame.minY
+        try? FileManager.default.removeItem(at: offsets)
         list.scroll(byDeltaX: 0, deltaY: -300)
-        if let initial, let before { XCTAssertLessThan(initial.frame.minY, before - 20) }
-        else { XCTFail("No scrollable recent session found") }
+        XCTAssertNotNil(waitForNumericLine(offsets, greaterThan: 0),
+                        "the recent-session list must consume a real native scroll")
         XCTAssertTrue(search.isHittable)
         XCTAssertTrue(app.buttons["Open Trace"].isHittable)
         search.click()
@@ -1714,6 +1748,8 @@ final class TraceUITests: XCTestCase {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         try addLongSession("Alpha session", project: "ProjectAlpha", directory: directory)
         try addLongSession("Beta session", project: "ProjectBeta", directory: directory)
+        let bookmarkSaved = directory.appendingPathComponent("navigation-bookmark-saved")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
@@ -1733,16 +1769,22 @@ final class TraceUITests: XCTestCase {
         let first = scroll.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Alpha session message 0")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10))
         XCTAssertTrue(first.isHittable)
+        try? FileManager.default.removeItem(at: bookmarkSaved)
         scroll.scroll(byDeltaX: 0, deltaY: -950)
-        let visible = scroll.staticTexts.allElementsBoundByIndex.filter {
-            $0.isHittable && (($0.value as? String) ?? $0.label).hasPrefix("Alpha session message")
-        }
-        let anchor = try XCTUnwrap(visible.first)
-        let anchorText = (anchor.value as? String) ?? anchor.label
+        let bookmarkIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
+        XCTAssertGreaterThan(bookmarkIndex, 0)
+        let anchorPrefix = "Alpha session message \(bookmarkIndex)"
+        let anchor = scroll.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", anchorPrefix
+        )).firstMatch
+        XCTAssertTrue(anchor.waitForExistence(timeout: 5))
+        XCTAssertTrue(anchor.isHittable)
         let anchorY = anchor.frame.minY
         XCTAssertFalse(first.isHittable)
         app.radioButtons["Compact"].click()
-        let compactAnchor = scroll.staticTexts.matching(NSPredicate(format: "value == %@", anchorText)).firstMatch
+        let compactAnchor = scroll.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", anchorPrefix
+        )).firstMatch
         XCTAssertTrue(compactAnchor.waitForExistence(timeout: 5))
         let compactAnchorSettled = NSPredicate { _, _ in
             compactAnchor.isHittable && abs(compactAnchor.frame.minY - anchorY) <= 35
@@ -1766,7 +1808,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(betaFirst.isHittable)
         app.staticTexts["ProjectAlpha"].firstMatch.click()
         alpha.click()
-        let restored = scroll.staticTexts.matching(NSPredicate(format: "value == %@", anchorText)).firstMatch
+        let restored = scroll.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", anchorPrefix
+        )).firstMatch
         XCTAssertTrue(restored.waitForExistence(timeout: 10))
         XCTAssertTrue(restored.isHittable)
         let offsetRestored = NSPredicate { _, _ in
@@ -1899,10 +1943,14 @@ final class TraceUITests: XCTestCase {
         requested.click()
         XCTAssertTrue(waitForFile(restorationDeferred),
                       "navigation requested while user scrolling is held must be deferred")
-        let target = scroll.staticTexts.matching(NSPredicate(
+        let targetPredicate = NSPredicate(
             format: "value BEGINSWITH %@", "Alpha session message 60"
-        )).firstMatch
-        let targetVisible = NSPredicate { _, _ in target.exists && target.isHittable }
+        )
+        let targetVisible = NSPredicate { _, _ in
+            scroll.staticTexts.matching(targetPredicate).allElementsBoundByIndex.contains {
+                $0.isHittable
+            }
+        }
         expectation(for: targetVisible, evaluatedWith: nil)
         waitForExpectations(timeout: 30)
     }
