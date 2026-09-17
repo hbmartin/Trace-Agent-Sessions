@@ -34,14 +34,14 @@ public enum TraceTestHooks {
         try? Data().write(to: URL(fileURLWithPath: path))
     }
 
-    public static func appendLine(_ line: String, pathKey: String) {
+    public static func appendLine(_ line: @autoclosure () -> String, pathKey: String) {
         guard isUITesting, let path = environment[pathKey] else { return }
         if !FileManager.default.fileExists(atPath: path) {
             _ = FileManager.default.createFile(atPath: path, contents: nil)
         }
         guard let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) else { return }
         _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: Data((line + "\n").utf8))
+        try? handle.write(contentsOf: Data((line() + "\n").utf8))
         try? handle.close()
     }
 }

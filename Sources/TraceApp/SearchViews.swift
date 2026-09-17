@@ -20,7 +20,9 @@ struct RecentPopoverView: View {
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit { NotificationCenter.default.post(name: .traceShowLauncher, object: nil) }
-                    .onChange(of: search.query) { _, _ in model.search() }
+                    .onChange(of: search.query) { _, query in
+                        if search.shouldSearchAfterQueryChange(to: query) { model.search() }
+                    }
             }
             .padding(12)
             .background(.quaternary.opacity(0.45))
@@ -108,7 +110,9 @@ struct LauncherView: View {
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .focused($searchFocused)
-                    .onChange(of: search.query) { _, _ in model.search() }
+                    .onChange(of: search.query) { _, query in
+                        if search.shouldSearchAfterQueryChange(to: query) { model.search() }
+                    }
                     .onSubmit { openSelectedResult() }
                     .onKeyPress(.downArrow) {
                         moveSelection(by: 1)

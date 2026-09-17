@@ -404,9 +404,10 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(passCompleted, timeout: 15))
         let query = app.textFields["mainSearch"]
         XCTAssertTrue(query.waitForExistence(timeout: 15))
-        XCTAssertTrue(waitForInteractable(query, timeout: 10),
-                      "main search must be enabled after onboarding finishes dismissing")
         app.activate()
+        XCTAssertTrue(query.wait(for: \.isEnabled, toEqual: true, timeout: 10))
+        XCTAssertTrue(query.wait(for: \.isHittable, toEqual: true, timeout: 10),
+                      "main search must be interactive after onboarding finishes dismissing")
         query.click()
         query.typeText("ManualAnchorNeedle")
         let scroll = app.scrollViews["searchResultsScroll"]
@@ -643,26 +644,16 @@ final class TraceUITests: XCTestCase {
                       "the queued request must load the next page with the refreshed cursor")
     }
 
-    func testLoadMoreKeepsImmutableCriteriaWhenLiveControlsChange() throws {
+    func testLauncherLoadMoreKeepsImmutableCriteriaWhenLiveControlsChange() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
-        let file = directory.appendingPathComponent("Sources/Claude/immutable-page.jsonl")
         let audit = directory.appendingPathComponent("search-criteria-audit")
+        let completed = directory.appendingPathComponent("pagination-completed")
         app.launchEnvironment["TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_PAGINATION_COMPLETED_PATH"] = completed.path
         app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_QUERY"] = "OtherLiveNeedle"
         app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_SORT"] = "relevance"
         app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_AGENT"] = "codex"
-        var data = Data()
-        for index in 0..<220 {
-            let row: [String: Any] = [
-                "type": "assistant", "uuid": "immutable-page-\(index)",
-                "sessionId": "immutable-page-session", "cwd": "/tmp/TraceUIExample",
-                "timestamp": 1_700_000_000_000 + index * 1_000,
-                "message": ["content": "StablePageNeedle row \(index)"],
-            ]
-            data.append(try JSONSerialization.data(withJSONObject: row))
-            data.append(10)
-        }
-        try data.write(to: file)
+        try writeImmutablePaginationFixture(in: directory)
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
@@ -679,15 +670,73 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "StablePageNeedle row 219"
         )).firstMatch.waitForExistence(timeout: 10))
+        try? FileManager.default.removeItem(at: audit)
+        try? FileManager.default.removeItem(at: completed)
         let action = app.buttons["testPaginationCriteria"]
         XCTAssertTrue(action.waitForExistence(timeout: 5))
         action.click()
-        XCTAssertTrue(waitForLineCount(
-            audit,
-            line: "more|StablePageNeedle|recency|/tmp/traceuiexample|agents:claude_code",
-            count: 1,
-            timeout: 10
-        ), "load-more must keep the query, filters, sort, and cursor from its active request")
+        XCTAssertEqual(launcherSearch.value as? String, "OtherLiveNeedle")
+        XCTAssertTrue(waitForFile(completed, timeout: 10),
+                      "the immutable launcher page must finish loading")
+        let scroll = app.scrollViews["searchResultsScroll"]
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "StablePageNeedle row 0"
+        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(
+            fileLines(in: audit),
+            [
+                "more|StablePageNeedle|recency|/tmp/traceuiexample|"
+                    + "agents:claude_code|cursor:present",
+            ],
+            "load-more must issue exactly one request with the original launcher criteria"
+        )
+    }
+
+    func testMainLoadMoreKeepsImmutableCriteriaWhenLiveControlsChange() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let audit = directory.appendingPathComponent("main-search-criteria-audit")
+        let completed = directory.appendingPathComponent("main-pagination-completed")
+        app.launchEnvironment["TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_PAGINATION_COMPLETED_PATH"] = completed.path
+        app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_QUERY"] = "OtherLiveNeedle"
+        app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_SORT"] = "relevance"
+        app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_AGENT"] = "codex"
+        try writeImmutablePaginationFixture(in: directory)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let project = app.staticTexts["TraceUIExample"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 15))
+        project.click()
+        let mainSearch = app.textFields["mainSearch"]
+        XCTAssertTrue(mainSearch.waitForExistence(timeout: 10))
+        mainSearch.click()
+        mainSearch.typeText("StablePageNeedle")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "StablePageNeedle row 219"
+        )).firstMatch.waitForExistence(timeout: 10))
+        try? FileManager.default.removeItem(at: audit)
+        try? FileManager.default.removeItem(at: completed)
+        let action = app.buttons["testPaginationCriteria"]
+        XCTAssertTrue(action.waitForExistence(timeout: 5))
+        action.click()
+        XCTAssertEqual(mainSearch.value as? String, "OtherLiveNeedle")
+        XCTAssertTrue(waitForFile(completed, timeout: 10),
+                      "the immutable main-search page must finish loading")
+        let scroll = app.scrollViews["searchResultsScroll"]
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "StablePageNeedle row 0"
+        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(
+            fileLines(in: audit),
+            [
+                "more|StablePageNeedle|recency|/tmp/traceuiexample|"
+                    + "agents:all|cursor:present",
+            ],
+            "load-more must issue exactly one request with the original main-search criteria"
+        )
     }
 
     func testDuplicateOnlyAdditionalPageAutomaticallyAdvances() throws {
@@ -884,13 +933,26 @@ final class TraceUITests: XCTestCase {
         return false
     }
 
-    private func waitForInteractable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if element.exists, element.isEnabled, element.isHittable { return true }
-            Thread.sleep(forTimeInterval: 0.1)
+    private func fileLines(in url: URL) -> [String] {
+        ((try? String(contentsOf: url, encoding: .utf8)) ?? "")
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+    }
+
+    private func writeImmutablePaginationFixture(in directory: URL) throws {
+        let file = directory.appendingPathComponent("Sources/Claude/immutable-page.jsonl")
+        var data = Data()
+        for index in 0..<220 {
+            let row: [String: Any] = [
+                "type": "assistant", "uuid": "immutable-page-\(index)",
+                "sessionId": "immutable-page-session", "cwd": "/tmp/TraceUIExample",
+                "timestamp": 1_700_000_000_000 + index * 1_000,
+                "message": ["content": "StablePageNeedle row \(index)"],
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: row))
+            data.append(10)
         }
-        return false
+        try data.write(to: file)
     }
 
     private func waitForLineCount(_ url: URL, line: String, count: Int,
@@ -1906,7 +1968,9 @@ final class TraceUITests: XCTestCase {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         try addLongSession("Keyboard scroll", project: "KeyboardProject", directory: directory)
         let bookmarkSaved = directory.appendingPathComponent("keyboard-bookmark-saved")
+        let idleAudit = directory.appendingPathComponent("keyboard-scroll-idle-audit")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
@@ -1929,17 +1993,83 @@ final class TraceUITests: XCTestCase {
         ))
         XCTAssertGreaterThan(secondIndex, firstIndex,
                              "each keyboard movement must update the saved transcript position")
+        let finishesBeforeWheel = fileLines(in: idleAudit).filter {
+            $0 == "finished"
+        }.count
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
         let last = scroll.staticTexts.matching(NSPredicate(
             format: "value BEGINSWITH %@", "Keyboard scroll message 69"
         )).firstMatch
         XCTAssertTrue(last.waitForExistence(timeout: 10))
-        XCTAssertTrue(last.isHittable)
-        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertTrue(last.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        XCTAssertTrue(waitForLineCount(
+            idleAudit, line: "finished", count: finishesBeforeWheel + 1, timeout: 10
+        ), "the preceding wheel scroll must be fully idle before testing the boundary")
+        try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "started", count: 1, timeout: 3),
+                      "a boundary Page Down must schedule idle completion directly")
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 3),
+                      "a boundary Page Down must clear user scrolling without geometry changes")
         XCTAssertTrue(waitForFile(bookmarkSaved, timeout: 3),
                       "a boundary Page Down must still finish user scrolling and save its bookmark")
+    }
+
+    func testClosingWindowDuringScrollIdleDelayStillOpensSearchResult() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession(
+            "Window lifecycle", project: "WindowLifecycleProject", directory: directory
+        )
+        let idleAudit = directory.appendingPathComponent("window-scroll-idle-audit")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"] = "5000"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let project = app.staticTexts["WindowLifecycleProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 15))
+        project.click()
+        let session = app.staticTexts["Window lifecycle"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 10))
+        session.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.click()
+        try? FileManager.default.removeItem(at: idleAudit)
+        app.typeKey(.pageDown, modifierFlags: [])
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "started", count: 1, timeout: 3),
+                      "the scroll-idle delay must be pending before the window closes")
+
+        let mainWindow = app.windows["Window lifecycle"]
+        XCTAssertTrue(mainWindow.exists)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(mainWindow.waitForNonExistence(timeout: 5))
+
+        ensurePopoverOpen(app)
+        let popoverSearch = app.textFields["Search all sessions"]
+        XCTAssertTrue(popoverSearch.waitForExistence(timeout: 10))
+        popoverSearch.click()
+        popoverSearch.typeText("Window lifecycle message 60")
+        popoverSearch.typeKey(.return, modifierFlags: [])
+        let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
+        let result = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Window lifecycle message 60"
+        )).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        result.click()
+
+        let targetPredicate = NSPredicate(
+            format: "value BEGINSWITH %@", "Window lifecycle message 60"
+        )
+        let targetVisible = NSPredicate { _, _ in
+            scroll.staticTexts.matching(targetPredicate).allElementsBoundByIndex.contains {
+                $0.isHittable
+            }
+        }
+        expectation(for: targetVisible, evaluatedWith: nil)
+        waitForExpectations(timeout: 20)
     }
 
     func testUserScrollDuringTranscriptRestorationCancelsBookmarkRetry() throws {

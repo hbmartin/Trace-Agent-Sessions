@@ -182,7 +182,11 @@ struct TranscriptView: View {
                     )
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("mainSearch")
-                        .onChange(of: search.query) { _, _ in model.searchMain() }
+                        .onChange(of: search.query) { _, query in
+                            if search.shouldSearchAfterQueryChange(to: query) {
+                                model.searchMain()
+                            }
+                        }
                     if !search.query.isEmpty {
                         Button("Clear search", systemImage: "xmark.circle.fill") { search.query = "" }
                             .labelStyle(.iconOnly).buttonStyle(.plain)
@@ -252,6 +256,11 @@ private struct TranscriptScrollGeometry: Equatable {
     let height: CGFloat
 }
 
+private struct UserScrollIdleRequest: Equatable {
+    let token = UUID()
+    let delayMilliseconds: Int
+}
+
 private struct TranscriptRenderer: View {
     @ObservedObject var model: TraceModel
     let sessionID: Int64
@@ -269,7 +278,7 @@ private struct TranscriptRenderer: View {
     @State private var scrollPhase = ScrollPhase.idle
     @State private var restorationDeferred = false
     @State private var deferredRestorationForced = false
-    @State private var userScrollIdleTask: Task<Void, Never>?
+    @State private var userScrollIdleRequest: UserScrollIdleRequest?
     @State private var lastRequest: UUID?
     @FocusState private var transcriptFocused: Bool
 
@@ -278,10 +287,11 @@ private struct TranscriptRenderer: View {
     }
 
     var body: some View {
+        let displayedMessages = visibleMessages
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: density == .compact ? 6 : 14) {
-                    ForEach(visibleMessages) { message in
+                    ForEach(displayedMessages) { message in
                         MessageRow(
                             summary: message,
                             hydrated: model.hydratedMessages[message.id],
@@ -349,8 +359,7 @@ private struct TranscriptRenderer: View {
             .onScrollPhaseChange { oldPhase, phase in
                 scrollPhase = phase
                 if phase == .tracking || phase == .interacting || phase == .decelerating {
-                    userScrollIdleTask?.cancel()
-                    userScrollIdleTask = nil
+                    userScrollIdleRequest = nil
                     userScrolling = true
                     cancelRestorationForUser()
                 } else if phase == .idle && oldPhase != .idle {
@@ -383,12 +392,8 @@ private struct TranscriptRenderer: View {
                 }
             }
             .onAppear { restore(using: proxy) }
-            .onDisappear {
-                userScrollIdleTask?.cancel()
-                userScrollIdleTask = nil
-            }
             .onChange(of: model.scrollRequest) { _, _ in restore(using: proxy) }
-            .onChange(of: visibleMessages.map(\.id)) { _, ids in
+            .onChange(of: displayedMessages.map(\.id)) { _, ids in
                 if let bookmark = model.scrollPositions[sessionID], !ids.contains(bookmark.messageID) {
                     restore(force: true, using: proxy)
                 }
@@ -426,6 +431,21 @@ private struct TranscriptRenderer: View {
                     position.scrollTo(y: max(0, frame.minY - pending.offset))
                 }
                 finishRestoration()
+            }
+            .task(id: userScrollIdleRequest) {
+                guard let request = userScrollIdleRequest,
+                      userScrolling, scrollPhase == .idle else { return }
+                TraceTestHooks.appendLine(
+                    "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
+                )
+                do {
+                    try await Task.sleep(for: .milliseconds(request.delayMilliseconds))
+                } catch { return }
+                guard !Task.isCancelled,
+                      userScrollIdleRequest == request,
+                      userScrolling,
+                      scrollPhase == .idle else { return }
+                finishUserScrolling(using: proxy)
             }
         }
     }
@@ -488,27 +508,22 @@ private struct TranscriptRenderer: View {
     ) {
         guard userScrolling, scrollPhase == .idle else { return }
         let delay = testScrollIdleDelay ?? (afterPhaseTransition ? 0 : 200)
-        userScrollIdleTask?.cancel()
-        userScrollIdleTask = nil
         if delay == 0 {
+            userScrollIdleRequest = nil
             finishUserScrolling(using: proxy)
             return
         }
-        userScrollIdleTask = Task { @MainActor in
-            do { try await Task.sleep(for: .milliseconds(delay)) }
-            catch { return }
-            guard !Task.isCancelled, scrollPhase == .idle else { return }
-            userScrollIdleTask = nil
-            finishUserScrolling(using: proxy)
-        }
+        userScrollIdleRequest = .init(delayMilliseconds: delay)
     }
 
     private func finishUserScrolling(using proxy: ScrollViewProxy) {
         guard userScrolling, scrollPhase == .idle else { return }
-        userScrollIdleTask = nil
         savePosition()
         userScrolling = false
         position.isPositionedByUser = false
+        TraceTestHooks.appendLine(
+            "finished", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
+        )
         if restorationDeferred || lastRequest != model.scrollRequest {
             let force = lastRequest == model.scrollRequest && deferredRestorationForced
             restorationDeferred = false
@@ -518,8 +533,6 @@ private struct TranscriptRenderer: View {
     }
 
     private func beginKeyboardScroll(to offset: CGFloat, using proxy: ScrollViewProxy) {
-        userScrollIdleTask?.cancel()
-        userScrollIdleTask = nil
         userScrolling = true
         cancelRestorationForUser()
         position.scrollTo(y: offset)

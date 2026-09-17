@@ -50,6 +50,7 @@ final class SessionSearchModel: ObservableObject {
     private var activeTaskIsReset = false
     private var pendingLoadMore = false
     private var injectedDuplicateAdditionalPage = false
+    private var ignoredAutomaticQueryValueForTesting: String?
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
     var projectFilterCanonicalKey: String? { filters.projectCanonicalKey }
@@ -69,9 +70,11 @@ final class SessionSearchModel: ObservableObject {
 
     func mutateLiveCriteriaAndLoadMoreForTesting() {
         guard TraceTestHooks.isUITesting,
-              let query = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_QUERY"] else {
+              let query = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_QUERY"],
+              task == nil, nextCursor != nil, activeRequestCriteria != nil else {
             return
         }
+        ignoredAutomaticQueryValueForTesting = query
         self.query = query
         if let rawSort = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_SORT"],
            let sort = SearchSort(rawValue: rawSort) {
@@ -82,6 +85,10 @@ final class SessionSearchModel: ObservableObject {
             filters.agents = [agent]
         }
         search(reset: false)
+    }
+
+    func shouldSearchAfterQueryChange(to query: String) -> Bool {
+        !TraceTestHooks.isUITesting || ignoredAutomaticQueryValueForTesting != query
     }
 
     func attach(database: IndexDatabase, coordinator: IndexCoordinator, diagnostics: DiagnosticsStore? = nil) {
@@ -208,15 +215,17 @@ final class SessionSearchModel: ObservableObject {
         error = nil
         TraceTestHooks.appendLine(trigger == .automatic ? "automatic" : reset ? "reset" : "more",
                                   pathKey: "TRACE_TEST_SEARCH_REQUEST_AUDIT_PATH")
-        let agents = filters.agents.isEmpty
-            ? "all"
-            : filters.agents.map(\.rawValue).sorted().joined(separator: ",")
         TraceTestHooks.appendLine(
-            "\(reset ? "reset" : "more")|\(query)|\(sort.rawValue)|"
-                + "\(filters.projectCanonicalKey ?? "all")|agents:\(agents)",
+            searchCriteriaAuditLine(
+                reset: reset, query: query, filters: filters, sort: sort,
+                cursor: initialCursor
+            ),
             pathKey: "TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"
         )
         task = Task { [weak self] in
+            defer {
+                if !reset { self?.ignoredAutomaticQueryValueForTesting = nil }
+            }
             do {
                 if reset { try await Task.sleep(for: .milliseconds(100)) }
                 if reset, trigger == .automatic {
@@ -302,7 +311,10 @@ final class SessionSearchModel: ObservableObject {
                     }
                     cursor = effectiveNextCursor
                 }
-                if !reset { self.hasLoadedAdditionalPages = true }
+                if !reset {
+                    self.hasLoadedAdditionalPages = true
+                    TraceTestHooks.touch(pathKey: "TRACE_TEST_PAGINATION_COMPLETED_PATH")
+                }
                 self.task = nil
                 self.loadingAdditionalPage = false
                 self.activeTaskIsReset = false
@@ -332,6 +344,18 @@ final class SessionSearchModel: ObservableObject {
                 self.pendingLoadMore = false
             }
         }
+    }
+
+    private func searchCriteriaAuditLine(
+        reset: Bool, query: String, filters: SearchFilters, sort: SearchSort,
+        cursor: SearchCursor?
+    ) -> String {
+        let agents = filters.agents.isEmpty
+            ? "all"
+            : filters.agents.map(\.rawValue).sorted().joined(separator: ",")
+        return "\(reset ? "reset" : "more")|\(query)|\(sort.rawValue)|"
+            + "\(filters.projectCanonicalKey ?? "all")|agents:\(agents)|"
+            + "cursor:\(cursor == nil ? "none" : "present")"
     }
 
     func resetForIndexReset(awaitsProjectResolution: Bool = false) {
