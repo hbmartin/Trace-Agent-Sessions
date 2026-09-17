@@ -264,7 +264,7 @@ private struct TranscriptRenderer: View {
     @State private var scrollPhase = ScrollPhase.idle
     @State private var restorationDeferred = false
     @State private var deferredRestorationForced = false
-    @State private var userScrollIdleToken = UUID()
+    @State private var userScrollIdleTask: Task<Void, Never>?
     @State private var lastRequest: UUID?
     @FocusState private var transcriptFocused: Bool
 
@@ -309,11 +309,15 @@ private struct TranscriptRenderer: View {
             .focusable()
             .focused($transcriptFocused)
             .onKeyPress(.pageDown) {
-                beginKeyboardScroll(to: contentOffset + max(1, viewportHeight * 0.9))
+                beginKeyboardScroll(
+                    to: contentOffset + max(1, viewportHeight * 0.9), using: proxy
+                )
                 return .handled
             }
             .onKeyPress(.pageUp) {
-                beginKeyboardScroll(to: max(0, contentOffset - max(1, viewportHeight * 0.9)))
+                beginKeyboardScroll(
+                    to: max(0, contentOffset - max(1, viewportHeight * 0.9)), using: proxy
+                )
                 return .handled
             }
             .accessibilityIdentifier("transcriptScroll")
@@ -340,7 +344,8 @@ private struct TranscriptRenderer: View {
             .onScrollPhaseChange { oldPhase, phase in
                 scrollPhase = phase
                 if phase == .tracking || phase == .interacting || phase == .decelerating {
-                    userScrollIdleToken = UUID()
+                    userScrollIdleTask?.cancel()
+                    userScrollIdleTask = nil
                     userScrolling = true
                     cancelRestorationForUser()
                 } else if phase == .idle && oldPhase != .idle {
@@ -373,6 +378,10 @@ private struct TranscriptRenderer: View {
                 }
             }
             .onAppear { restore(using: proxy) }
+            .onDisappear {
+                userScrollIdleTask?.cancel()
+                userScrollIdleTask = nil
+            }
             .onChange(of: model.scrollRequest) { _, _ in restore(using: proxy) }
             .onChange(of: visibleMessages.map(\.id)) { _, ids in
                 if let bookmark = model.scrollPositions[sessionID], !ids.contains(bookmark.messageID) {
@@ -473,21 +482,24 @@ private struct TranscriptRenderer: View {
     ) {
         guard userScrolling, scrollPhase == .idle else { return }
         let delay = testScrollIdleDelay ?? (afterPhaseTransition ? 0 : 200)
+        userScrollIdleTask?.cancel()
+        userScrollIdleTask = nil
         if delay == 0 {
             finishUserScrolling(using: proxy)
             return
         }
-        let token = UUID()
-        userScrollIdleToken = token
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(delay))
-            guard userScrollIdleToken == token, scrollPhase == .idle else { return }
+        userScrollIdleTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(delay)) }
+            catch { return }
+            guard !Task.isCancelled, scrollPhase == .idle else { return }
+            userScrollIdleTask = nil
             finishUserScrolling(using: proxy)
         }
     }
 
     private func finishUserScrolling(using proxy: ScrollViewProxy) {
         guard userScrolling, scrollPhase == .idle else { return }
+        userScrollIdleTask = nil
         savePosition()
         userScrolling = false
         position.isPositionedByUser = false
@@ -499,11 +511,13 @@ private struct TranscriptRenderer: View {
         }
     }
 
-    private func beginKeyboardScroll(to offset: CGFloat) {
-        userScrollIdleToken = UUID()
+    private func beginKeyboardScroll(to offset: CGFloat, using proxy: ScrollViewProxy) {
+        userScrollIdleTask?.cancel()
+        userScrollIdleTask = nil
         userScrolling = true
         cancelRestorationForUser()
         position.scrollTo(y: offset)
+        scheduleUserScrollingFinish(using: proxy)
     }
 
     private var testRestorationDelay: Int? {
