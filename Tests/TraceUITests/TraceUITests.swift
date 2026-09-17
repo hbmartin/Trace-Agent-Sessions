@@ -1943,10 +1943,14 @@ final class TraceUITests: XCTestCase {
         requested.click()
         XCTAssertTrue(waitForFile(restorationDeferred),
                       "navigation requested while user scrolling is held must be deferred")
-        let target = scroll.staticTexts.matching(NSPredicate(
+        let targetPredicate = NSPredicate(
             format: "value BEGINSWITH %@", "Alpha session message 60"
-        )).firstMatch
-        let targetVisible = NSPredicate { _, _ in target.exists && target.isHittable }
+        )
+        let targetVisible = NSPredicate { _, _ in
+            scroll.staticTexts.matching(targetPredicate).allElementsBoundByIndex.contains {
+                $0.isHittable
+            }
+        }
         expectation(for: targetVisible, evaluatedWith: nil)
         waitForExpectations(timeout: 30)
     }
