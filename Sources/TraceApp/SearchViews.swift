@@ -57,7 +57,7 @@ struct RecentPopoverView: View {
                                 ContentUnavailableView("No sessions indexed", systemImage: "clock.arrow.circlepath")
                             } else {
                                 ForEach(model.recentSessions.prefix(10)) { session in
-                                    Button { model.selectSession(session.id, showWindow: true) } label: {
+                                    Button { model.openSession(session) } label: {
                                         SessionRow(session: session) { await model.sessionErrorText(session) }
                                     }
                                     .buttonStyle(.plain)

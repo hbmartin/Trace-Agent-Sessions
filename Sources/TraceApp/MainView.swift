@@ -67,11 +67,18 @@ struct MainView: View {
     private enum MainSection { case transcript, costs }
 }
 
+private struct SidebarRevealTaskID: Equatable {
+    let token: UUID?
+    let rowAvailable: Bool
+}
+
 private struct SessionSidebar: View {
     @ObservedObject var model: TraceModel
     @ObservedObject private var settings: AppSettings
     @State private var dragStart: CGFloat?
     @State private var transientPaneFraction: Double?
+    @State private var handledProjectRevealToken: UUID?
+    @State private var handledSessionRevealToken: UUID?
 
     init(model: TraceModel) {
         self.model = model
@@ -95,12 +102,33 @@ private struct SessionSidebar: View {
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("projectFilter")
                         .padding(.horizontal, 12).padding(.bottom, 8)
-                    List(selection: Binding(get: { model.selectedProjectID }, set: { model.selectProject($0) })) {
-                        ForEach(model.filteredProjects) { project in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(project.displayName).lineLimit(1)
-                                Text("\(project.sessionCount.formatted()) sessions").font(.caption2).foregroundStyle(.secondary)
-                            }.tag(Optional(project.id))
+                    ScrollViewReader { proxy in
+                        List(selection: Binding(get: { model.selectedProjectID }, set: { model.selectProject($0) })) {
+                            ForEach(model.filteredProjects) { project in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(project.displayName).lineLimit(1)
+                                    Text("\(project.sessionCount.formatted()) sessions").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier("projectSidebarRow-\(project.id)")
+                                .accessibilityAddTraits(
+                                    model.selectedProjectID == project.id ? .isSelected : []
+                                )
+                                .id(project.id)
+                                .tag(Optional(project.id))
+                            }
+                        }
+                        .task(id: projectRevealTaskID) {
+                            guard let reveal = model.sidebarRevealRequest,
+                                  handledProjectRevealToken != reveal.token,
+                                  model.filteredProjects.contains(where: { $0.id == reveal.projectID }) else {
+                                return
+                            }
+                            try? await Task.sleep(for: .milliseconds(50))
+                            guard !Task.isCancelled,
+                                  model.sidebarRevealRequest?.token == reveal.token else { return }
+                            proxy.scrollTo(reveal.projectID, anchor: .center)
+                            handledProjectRevealToken = reveal.token
                         }
                     }
                 }.frame(height: height)
@@ -141,20 +169,60 @@ private struct SessionSidebar: View {
                         Spacer()
                         Text("\(model.sessions.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }.padding(12)
-                    List(selection: Binding(get: { model.selectedSessionID }, set: { id in
-                        if let id { model.selectSession(id) }
-                    })) {
-                        ForEach(model.sessions) { session in
-                            SessionRow(session: session) { await model.sessionErrorText(session) }
-                                .tag(Optional(session.id))
+                    ScrollViewReader { proxy in
+                        List(selection: Binding(get: { model.selectedSessionID }, set: { id in
+                            if let id { model.selectSession(id) }
+                        })) {
+                            ForEach(model.sessions) { session in
+                                SessionRow(session: session) { await model.sessionErrorText(session) }
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityIdentifier("sessionSidebarRow-\(session.id)")
+                                    .accessibilityAddTraits(
+                                        model.selectedSessionID == session.id ? .isSelected : []
+                                    )
+                                    .id(session.id)
+                                    .tag(Optional(session.id))
+                            }
+                        }
+                        .accessibilityIdentifier("sessionSidebarList")
+                        .task(id: sessionRevealTaskID) {
+                            guard let reveal = model.sidebarRevealRequest,
+                                  handledSessionRevealToken != reveal.token,
+                                  model.sessions.contains(where: { $0.id == reveal.sessionID }) else {
+                                return
+                            }
+                            try? await Task.sleep(for: .milliseconds(50))
+                            guard !Task.isCancelled,
+                                  model.sidebarRevealRequest?.token == reveal.token else { return }
+                            proxy.scrollTo(reveal.sessionID, anchor: .center)
+                            handledSessionRevealToken = reveal.token
                         }
                     }
-                    .accessibilityIdentifier("sessionSidebarList")
                 }.frame(maxHeight: .infinity)
             }
         }
         .coordinateSpace(name: "sessionSidebar")
         .background(.background.secondary)
+    }
+
+    private var projectRevealTaskID: SidebarRevealTaskID {
+        let reveal = model.sidebarRevealRequest
+        return .init(
+            token: reveal?.token,
+            rowAvailable: reveal.map { request in
+                model.filteredProjects.contains(where: { $0.id == request.projectID })
+            } ?? false
+        )
+    }
+
+    private var sessionRevealTaskID: SidebarRevealTaskID {
+        let reveal = model.sidebarRevealRequest
+        return .init(
+            token: reveal?.token,
+            rowAvailable: reveal.map { request in
+                model.sessions.contains(where: { $0.id == request.sessionID })
+            } ?? false
+        )
     }
 }
 

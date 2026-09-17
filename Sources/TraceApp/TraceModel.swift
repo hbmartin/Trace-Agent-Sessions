@@ -3,6 +3,12 @@ import Darwin
 import Foundation
 import TraceCore
 
+struct SidebarRevealRequest: Equatable {
+    let token = UUID()
+    let projectID: Int64
+    let sessionID: Int64
+}
+
 @MainActor
 final class TraceModel: ObservableObject {
     enum GlobalSearchSurface: Hashable { case popover, launcher }
@@ -31,6 +37,7 @@ final class TraceModel: ObservableObject {
     @Published private(set) var selectedProjectID: Int64?
     @Published private(set) var selectedProjectCanonicalKey: String?
     @Published private(set) var selectedProjectDisplayName: String?
+    @Published private(set) var sidebarRevealRequest: SidebarRevealRequest?
     @Published var selectedSessionID: Int64?
     @Published var customCostStart = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @Published var customCostEnd = Date()
@@ -507,6 +514,7 @@ final class TraceModel: ObservableObject {
         selectedProjectID = nil
         selectedSessionID = nil
         selectedSession = nil
+        sidebarRevealRequest = nil
         settings.lastSessionID = nil
         projects = []
         sessions = []
@@ -546,7 +554,7 @@ final class TraceModel: ObservableObject {
         loadProjectSessions()
     }
 
-    private func loadProjectSessions() {
+    private func loadProjectSessions(ensuring ensuringSessionID: Int64? = nil) {
         let request = UUID()
         projectRequestID = request
         let projectCanonicalKey = selectedProjectCanonicalKey
@@ -554,13 +562,35 @@ final class TraceModel: ObservableObject {
         searchMain()
         guard let database else { return }
         Task {
-            let rows = (try? await database.sessions(
-                projectCanonicalKey: projectCanonicalKey
-            )) ?? []
+            let rows = await projectSessions(
+                canonicalKey: projectCanonicalKey,
+                ensuring: ensuringSessionID,
+                database: database
+            )
             guard projectRequestID == request,
                   selectedProjectCanonicalKey == projectCanonicalKey else { return }
             sessions = rows
         }
+    }
+
+    private func projectSessions(
+        canonicalKey: String?,
+        ensuring sessionID: Int64? = nil,
+        database: IndexDatabase
+    ) async -> [SessionSummary] {
+        var rows = (try? await database.sessions(projectCanonicalKey: canonicalKey)) ?? []
+        if let sessionID, !rows.contains(where: { $0.id == sessionID }),
+           let session = try? await database.session(id: sessionID),
+           session.projectCanonicalKey == canonicalKey {
+            rows.append(session)
+            rows.sort {
+                if $0.lastActivityMilliseconds != $1.lastActivityMilliseconds {
+                    return $0.lastActivityMilliseconds > $1.lastActivityMilliseconds
+                }
+                return $0.id > $1.id
+            }
+        }
+        return rows
     }
 
     func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil) {
@@ -603,11 +633,46 @@ final class TraceModel: ObservableObject {
         }
     }
 
+    func openSession(_ session: SessionSummary) {
+        prepareExternalSessionSelection(
+            projectID: session.projectID,
+            projectCanonicalKey: session.projectCanonicalKey,
+            projectDisplayName: nil,
+            sessionID: session.id
+        )
+        selectSession(session.id, showWindow: true)
+    }
+
     func openSearchResult(_ result: SearchResult) {
-        selectedProjectID = result.projectID
-        selectedProjectCanonicalKey = result.projectCanonicalKey
-        selectedProjectDisplayName = result.projectName
+        prepareExternalSessionSelection(
+            projectID: result.projectID,
+            projectCanonicalKey: result.projectCanonicalKey,
+            projectDisplayName: result.projectName,
+            sessionID: result.sessionID
+        )
         selectSession(result.sessionID, showWindow: true, messageID: result.id)
+    }
+
+    private func prepareExternalSessionSelection(
+        projectID: Int64,
+        projectCanonicalKey: String,
+        projectDisplayName: String?,
+        sessionID: Int64
+    ) {
+        let project = projects.first { $0.canonicalKey == projectCanonicalKey }
+        let resolvedProjectID = project?.id ?? projectID
+        let resolvedDisplayName = project?.displayName ?? projectDisplayName
+        selectedProjectID = resolvedProjectID
+        selectedProjectCanonicalKey = projectCanonicalKey
+        selectedProjectDisplayName = resolvedDisplayName
+
+        let filter = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !filter.isEmpty,
+           resolvedDisplayName?.localizedCaseInsensitiveContains(filter) != true {
+            projectFilter = ""
+        }
+        sidebarRevealRequest = .init(projectID: resolvedProjectID, sessionID: sessionID)
+        loadProjectSessions(ensuring: sessionID)
     }
 
     private func adoptProjectIdentity(from session: SessionSummary) {
@@ -890,9 +955,16 @@ final class TraceModel: ObservableObject {
         let loadedRecent = (try? await database.sessions(limit: 10)) ?? []
         let projectCanonicalKey = selectedProjectCanonicalKey
         let projectRequest = projectRequestID
-        let loadedSessions = (try? await database.sessions(
-            projectCanonicalKey: projectCanonicalKey
-        )) ?? []
+        let ensuredSessionID = sidebarRevealRequest.flatMap { request in
+            request.projectID == selectedProjectID && request.sessionID == selectedSessionID
+                ? request.sessionID
+                : nil
+        }
+        let loadedSessions = await projectSessions(
+            canonicalKey: projectCanonicalKey,
+            ensuring: ensuredSessionID,
+            database: database
+        )
         if finalProjectReconciliation,
            let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_PROJECT_RECONCILIATION_DELAY_MS",
