@@ -201,6 +201,7 @@ struct TranscriptView: View {
                     Button("Reveal", systemImage: "folder") { model.revealSelectedSession() }
                     Button("Copy", systemImage: "doc.on.doc") { model.copyTranscript() }
                 }
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("transcriptMetadataHeader")
                 .padding(16)
                 HStack(spacing: 14) {
@@ -263,8 +264,9 @@ private struct TranscriptRenderer: View {
     @State private var scrollPhase = ScrollPhase.idle
     @State private var restorationDeferred = false
     @State private var deferredRestorationForced = false
-    @State private var testScrollIdleDelayPending = false
+    @State private var userScrollIdleToken = UUID()
     @State private var lastRequest: UUID?
+    @FocusState private var transcriptFocused: Bool
 
     private var visibleMessages: [MessageSummary] {
         model.messages.filter(visibility.includes)
@@ -304,6 +306,16 @@ private struct TranscriptRenderer: View {
                 .frame(maxWidth: .infinity)
                 .coordinateSpace(name: "transcriptContent")
             }
+            .focusable()
+            .focused($transcriptFocused)
+            .onKeyPress(.pageDown) {
+                beginKeyboardScroll(to: contentOffset + max(1, viewportHeight * 0.9))
+                return .handled
+            }
+            .onKeyPress(.pageUp) {
+                beginKeyboardScroll(to: max(0, contentOffset - max(1, viewportHeight * 0.9)))
+                return .handled
+            }
             .accessibilityIdentifier("transcriptScroll")
             .scrollPosition($position)
             .onScrollGeometryChange(for: TranscriptScrollGeometry.self) {
@@ -311,32 +323,38 @@ private struct TranscriptRenderer: View {
             } action: { _, geometry in
                 contentOffset = geometry.offset
                 viewportHeight = geometry.height
-                if restoring && position.isPositionedByUser {
+                if position.isPositionedByUser && !userScrolling {
+                    userScrolling = true
                     cancelRestorationForUser()
-                    if scrollPhase == .idle { savePosition() }
+                }
+                if userScrolling {
+                    savePosition()
+                    if scrollPhase == .idle { scheduleUserScrollingFinish(using: proxy) }
                     return
                 }
                 if !restorationDelayPending, let pending, let frame = frames[pending.messageID],
                    abs(contentOffset - max(0, frame.minY - pending.offset)) <= 2 {
                     finishRestoration()
                 }
-                if userScrolling { savePosition() }
             }
             .onScrollPhaseChange { oldPhase, phase in
                 scrollPhase = phase
                 if phase == .tracking || phase == .interacting || phase == .decelerating {
+                    userScrollIdleToken = UUID()
                     userScrolling = true
                     cancelRestorationForUser()
                 } else if phase == .idle && oldPhase != .idle {
-                    finishUserScrolling(using: proxy)
+                    scheduleUserScrollingFinish(using: proxy, afterPhaseTransition: true)
                 }
             }
             .onChange(of: position.isPositionedByUser) { wasPositionedByUser, positionedByUser in
-                guard !wasPositionedByUser && positionedByUser,
-                      restoring || pending != nil else { return }
-                if scrollPhase != .idle { userScrolling = true }
+                guard !wasPositionedByUser && positionedByUser else { return }
+                userScrolling = true
                 cancelRestorationForUser()
-                if scrollPhase == .idle { savePosition() }
+                if scrollPhase == .idle {
+                    savePosition()
+                    scheduleUserScrollingFinish(using: proxy)
+                }
             }
             .onPreferenceChange(RowFramesPreference.self) { newFrames in
                 let previousFrames = frames
@@ -414,7 +432,7 @@ private struct TranscriptRenderer: View {
         guard !ids.isEmpty else { restoring = false; return }
         position.isPositionedByUser = false
         var bookmark = model.scrollPositions[sessionID]
-        if let target = model.requestedMessageID, ids.contains(target) {
+        if let target = model.requestedMessageID, ids.contains(target), !force {
             bookmark = .init(messageID: target, offset: 0, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)
             model.consumeRequestedMessageID(target)
         }
@@ -450,27 +468,42 @@ private struct TranscriptRenderer: View {
         restorationDelayPending = false
     }
 
-    private func finishUserScrolling(using proxy: ScrollViewProxy) {
-        let finish = {
-            guard scrollPhase == .idle else { return }
-            userScrolling = false
-            if restorationDeferred || lastRequest != model.scrollRequest {
-                let force = deferredRestorationForced
-                restorationDeferred = false
-                deferredRestorationForced = false
-                restore(force: force, using: proxy)
-            }
-            savePosition()
-        }
-        guard testScrollIdleDelayPending, let delay = testScrollIdleDelay else {
-            finish()
+    private func scheduleUserScrollingFinish(
+        using proxy: ScrollViewProxy, afterPhaseTransition: Bool = false
+    ) {
+        guard userScrolling, scrollPhase == .idle else { return }
+        let delay = testScrollIdleDelay ?? (afterPhaseTransition ? 0 : 200)
+        if delay == 0 {
+            finishUserScrolling(using: proxy)
             return
         }
-        testScrollIdleDelayPending = false
+        let token = UUID()
+        userScrollIdleToken = token
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(delay))
-            finish()
+            guard userScrollIdleToken == token, scrollPhase == .idle else { return }
+            finishUserScrolling(using: proxy)
         }
+    }
+
+    private func finishUserScrolling(using proxy: ScrollViewProxy) {
+        guard userScrolling, scrollPhase == .idle else { return }
+        savePosition()
+        userScrolling = false
+        position.isPositionedByUser = false
+        if restorationDeferred || lastRequest != model.scrollRequest {
+            let force = lastRequest == model.scrollRequest && deferredRestorationForced
+            restorationDeferred = false
+            deferredRestorationForced = false
+            restore(force: force, using: proxy)
+        }
+    }
+
+    private func beginKeyboardScroll(to offset: CGFloat) {
+        userScrollIdleToken = UUID()
+        userScrolling = true
+        cancelRestorationForUser()
+        position.scrollTo(y: offset)
     }
 
     private var testRestorationDelay: Int? {
@@ -483,7 +516,6 @@ private struct TranscriptRenderer: View {
 
     private func cancelRestorationForUser() {
         guard restoring || pending != nil else { return }
-        if testScrollIdleDelay != nil { testScrollIdleDelayPending = true }
         TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH")
         pending = nil
         restoring = false

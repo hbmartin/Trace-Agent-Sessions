@@ -978,27 +978,37 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 1)
     }
 
-    func testCaseSensitivityCacheUsesDeviceIdentity() {
+    func testCaseSensitivityCacheUsesVolumeUUIDAndSkipsUnknownVolumes() {
         TraceFileIO.resetVolumeCaseSensitivityCacheForTesting()
         defer { TraceFileIO.resetVolumeCaseSensitivityCacheForTesting() }
         var firstVolumeProbes = 0
         var secondVolumeProbes = 0
+        var unknownVolumeProbes = 0
 
-        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(deviceID: 1) {
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-a") {
             firstVolumeProbes += 1
             return true
         })
-        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(deviceID: 1) {
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-a") {
             firstVolumeProbes += 1
             return false
         })
-        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(deviceID: 2) {
+        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: "volume-b") {
             secondVolumeProbes += 1
+            return false
+        })
+        XCTAssertTrue(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: nil) {
+            unknownVolumeProbes += 1
+            return true
+        })
+        XCTAssertFalse(TraceFileIO.cachedVolumeCaseSensitivity(volumeID: nil) {
+            unknownVolumeProbes += 1
             return false
         })
 
         XCTAssertEqual(firstVolumeProbes, 1)
         XCTAssertEqual(secondVolumeProbes, 1)
+        XCTAssertEqual(unknownVolumeProbes, 2)
         XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 2)
     }
 
@@ -1015,11 +1025,11 @@ final class IndexingRegressionTests: XCTestCase {
             XCTAssertTrue(failures.allSatisfy { !$0.detail.isEmpty })
         }
         for project in try await database.projects() {
-            let page = try await database.search(
-                query: "the", filters: .init(projectCanonicalKey: project.canonicalKey)
-            )
+            let page = try await database.search(query: "the", filters: .init(projectID: project.id))
             XCTAssertTrue(page.results.allSatisfy { $0.projectID == project.id })
         }
+        let missing = try await database.search(query: "the", filters: .init(projectID: .max))
+        XCTAssertTrue(missing.results.isEmpty)
     }
 
     func testCanonicalProjectFilterSurvivesNumericIDReuse() async throws {
@@ -1048,7 +1058,7 @@ final class IndexingRegressionTests: XCTestCase {
         for sort in [SearchSort.recency, .relevance] {
             let page = try await database.search(
                 query: "searchable",
-                filters: .init(projectCanonicalKey: original.canonicalKey),
+                filters: .init(projectID: rebuilt.id),
                 sort: sort
             )
             XCTAssertFalse(page.results.isEmpty)

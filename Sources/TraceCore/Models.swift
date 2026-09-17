@@ -318,20 +318,20 @@ public enum SearchSort: String, Codable, CaseIterable, Sendable {
 
 public struct SearchFilters: Equatable, Sendable {
     public var agents: Set<AgentKind>
-    public var projectCanonicalKey: String?
+    public var projectID: Int64?
     public var fromMilliseconds: Int64?
     public var toMilliseconds: Int64?
     public var errorsOnly: Bool
 
     public init(
         agents: Set<AgentKind> = [],
-        projectCanonicalKey: String? = nil,
+        projectID: Int64? = nil,
         fromMilliseconds: Int64? = nil,
         toMilliseconds: Int64? = nil,
         errorsOnly: Bool = false
     ) {
         self.agents = agents
-        self.projectCanonicalKey = projectCanonicalKey
+        self.projectID = projectID
         self.fromMilliseconds = fromMilliseconds
         self.toMilliseconds = toMilliseconds
         self.errorsOnly = errorsOnly

@@ -79,6 +79,10 @@ final class TraceUITests: XCTestCase {
         let metadataHeader = app.descendants(matching: .any)
             .matching(identifier: "transcriptMetadataHeader").firstMatch
         XCTAssertTrue(metadataHeader.waitForExistence(timeout: 5))
+        XCTAssertTrue(metadataHeader.staticTexts["Source: Claude Code"].exists)
+        XCTAssertTrue(metadataHeader.staticTexts["6 messages"].exists)
+        XCTAssertTrue(metadataHeader.buttons["Reveal"].exists)
+        XCTAssertTrue(metadataHeader.buttons["Copy"].exists)
         XCTAssertEqual(metadataHeader.staticTexts.matching(NSPredicate(
             format: "value == %@", "Find the sample answer"
         )).count, 0, "the session title should remain in the window chrome, not the transcript content")
@@ -491,17 +495,24 @@ final class TraceUITests: XCTestCase {
         try? FileManager.default.removeItem(at: offsets)
         let refreshedScroller = app.scrollBars["searchResultsScroller"]
         XCTAssertTrue(refreshedScroller.waitForExistence(timeout: 10))
-        app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -500)
+        refreshedScroller.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).click()
         XCTAssertTrue(waitForFile(offsets, timeout: 3))
         let manualOffset = try XCTUnwrap(lastNumericLine(in: offsets))
         XCTAssertGreaterThan(manualOffset, 0, "the real scrollbar drag must move results")
+        let manuallyPositioned = try XCTUnwrap(app.buttons.allElementsBoundByIndex.first {
+            $0.isHittable && $0.label.contains("NativeAnchorNeedle row")
+        })
+        let manualY = manuallyPositioned.frame.minY
         XCTAssertTrue(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "NativeAnchorNeedle newest row"
         )).firstMatch.waitForExistence(timeout: 15))
         Thread.sleep(forTimeInterval: 1)
-        let finalOffset = lastNumericLine(in: offsets) ?? manualOffset
-        XCTAssertLessThanOrEqual(abs(finalOffset - manualOffset), 35,
-                                 "anchor restoration must not undo scrollbar interaction")
+        XCTAssertTrue(manuallyPositioned.isHittable)
+        XCTAssertEqual(manuallyPositioned.frame.minY, manualY, accuracy: 35,
+                       "anchor restoration must not undo scrollbar interaction")
+        query.typeText("X")
+        XCTAssertEqual(query.value as? String, "NativeAnchorNeedleX",
+                       "using the scrollbar must leave keyboard focus in the search field")
     }
 
     func testSnippetHydrationSurvivesAutomaticRefreshForSameRow() throws {
@@ -627,6 +638,43 @@ final class TraceUITests: XCTestCase {
         )).firstMatch
         XCTAssertTrue(oldest.waitForExistence(timeout: 15),
                       "the queued request must load the next page with the refreshed cursor")
+    }
+
+    func testLoadMoreKeepsImmutableCriteriaWhenLiveControlsChange() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/immutable-page.jsonl")
+        let audit = directory.appendingPathComponent("search-criteria-audit")
+        app.launchEnvironment["TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_QUERY"] = "OtherLiveNeedle"
+        app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_SORT"] = "relevance"
+        var data = Data()
+        for index in 0..<220 {
+            let row: [String: Any] = [
+                "type": "assistant", "uuid": "immutable-page-\(index)",
+                "sessionId": "immutable-page-session", "cwd": "/tmp/TraceUIExample",
+                "timestamp": 1_700_000_000_000 + index * 1_000,
+                "message": ["content": "StablePageNeedle row \(index)"],
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: row))
+            data.append(10)
+        }
+        try data.write(to: file)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 15))
+        query.click()
+        query.typeText("StablePageNeedle")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "StablePageNeedle row 219"
+        )).firstMatch.waitForExistence(timeout: 10))
+        let action = app.buttons["testPaginationCriteria"]
+        XCTAssertTrue(action.waitForExistence(timeout: 5))
+        action.click()
+        XCTAssertTrue(waitForLineCount(
+            audit, line: "more|StablePageNeedle|recency|all", count: 1, timeout: 10
+        ), "load-more must keep the query, filters, sort, and cursor from its active request")
     }
 
     func testDuplicateOnlyAdditionalPageAutomaticallyAdvances() throws {
@@ -839,6 +887,20 @@ final class TraceUITests: XCTestCase {
         return content?.split(whereSeparator: \.isNewline).last.flatMap { Double($0) }
     }
 
+    private func waitForBookmarkIndex(
+        _ url: URL, greaterThan minimum: Int, timeout: TimeInterval = 10
+    ) -> Int? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let content = try? String(contentsOf: url, encoding: .utf8),
+               let index = Int(content), index > minimum {
+                return index
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
     func testGlobalSearchClearsAfterLauncherCloseButSurvivesHandoff() throws {
         let (app, _) = try makeApp(extra: ["--ui-show-popover"])
         app.launch()
@@ -858,7 +920,7 @@ final class TraceUITests: XCTestCase {
                        "handoff must retain the shared query while launcher is visible")
         launcherSearch.typeKey(.escape, modifierFlags: [])
         XCTAssertFalse(launcherSearch.exists)
-        reopenPopover(app)
+        ensurePopoverOpen(app)
         XCTAssertTrue(popoverSearch.waitForExistence(timeout: 10))
         XCTAssertEqual(popoverSearch.value as? String, "",
                        "default clear-on-close must clear the shared global query")
@@ -874,7 +936,7 @@ final class TraceUITests: XCTestCase {
             configureGlobalCloseSettings(
                 app, clearQuery: clearQuery, clearFilters: clearFilters
             )
-            reopenPopover(app)
+            ensurePopoverOpen(app)
             let popoverSearch = app.textFields["Search all sessions"]
             XCTAssertTrue(popoverSearch.waitForExistence(timeout: 15))
             popoverSearch.click()
@@ -886,7 +948,7 @@ final class TraceUITests: XCTestCase {
             XCTAssertTrue(errorsChip.exists)
             errorsChip.click()
             launcherSearch.typeKey(.escape, modifierFlags: [])
-            reopenPopover(app)
+            ensurePopoverOpen(app)
             XCTAssertTrue(popoverSearch.waitForExistence(timeout: 10))
             XCTAssertEqual(popoverSearch.value as? String, clearQuery ? "" : "Find")
             let filterIndicator = app.staticTexts["Search filters active"]
@@ -906,6 +968,8 @@ final class TraceUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
+        configureGlobalCloseSettings(app, clearQuery: false, clearFilters: false)
+        ensurePopoverOpen(app)
         let popoverSearch = app.textFields["Search all sessions"]
         XCTAssertTrue(popoverSearch.waitForExistence(timeout: 15))
         popoverSearch.click()
@@ -932,6 +996,12 @@ final class TraceUITests: XCTestCase {
         let handle = try FileHandle(forWritingTo: source)
         try handle.seekToEnd()
         try handle.write(contentsOf: JSONSerialization.data(withJSONObject: dynamic) + Data([10]))
+        let ancient: [String: Any] = [
+            "type": "assistant", "uuid": "ancient-date-boundary", "sessionId": "test-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": 1_500_000_000_000,
+            "message": ["content": "Find ancient date boundary"],
+        ]
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: ancient) + Data([10]))
         try handle.close()
 
         let decoy: [String: Any] = [
@@ -964,16 +1034,148 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "Find other project decoy"
         )).firstMatch.exists, "the reused numeric ID must not select a different project")
+        XCTAssertFalse(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Find ancient date boundary"
+        )).firstMatch.exists, "7 days must exclude the old result")
 
         app.buttons["Claude Code"].click()
         app.popUpButtons["7 days"].click()
         app.menuItems["Any time"].click()
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Find ancient date boundary"
+        )).firstMatch.waitForExistence(timeout: 10),
+        "Any time must remove both date bounds before the launcher closes")
         app.popUpButtons["TraceUIExample"].click()
         app.menuItems["All projects"].click()
+        XCTAssertFalse(app.staticTexts["Search filters active"].exists)
         launcherSearch.typeKey(.escape, modifierFlags: [])
-        reopenPopover(app)
+        ensurePopoverOpen(app)
         XCTAssertFalse(app.staticTexts["Search filters active"].exists,
                        "Any time must clear both date bounds")
+    }
+
+    func testMissingSelectedMainProjectNeverSearchesEveryProject() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let completed = directory.appendingPathComponent("main-project-pass-completed")
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        let otherSource = directory.appendingPathComponent("Sources/Claude/other-project.jsonl")
+        let other: [String: Any] = [
+            "type": "assistant", "uuid": "other-project-match", "sessionId": "other-project",
+            "cwd": "/tmp/OtherProject", "timestamp": "2026-09-14T10:00:00Z",
+            "message": ["content": "RestrictedProjectNeedle from other project"],
+        ]
+        try (JSONSerialization.data(withJSONObject: other) + Data([10])).write(to: otherSource)
+        let selectedSource = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        let selected: [String: Any] = [
+            "type": "assistant", "uuid": "selected-project-match", "sessionId": "test-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "message": ["content": "RestrictedProjectNeedle from selected project"],
+        ]
+        let handle = try FileHandle(forWritingTo: selectedSource)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: selected) + Data([10]))
+        try handle.close()
+
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].waitForExistence(timeout: 15))
+        app.staticTexts["TraceUIExample"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10))
+        query.click()
+        query.typeText("RestrictedProjectNeedle")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from selected project"
+        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from other project"
+        )).firstMatch.exists)
+
+        try? FileManager.default.removeItem(at: completed)
+        try FileManager.default.removeItem(at: selectedSource)
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from other project"
+        )).firstMatch.exists,
+        "a stale selected project ID must remain restrictive instead of becoming all projects")
+    }
+
+    func testLauncherProjectFilterRenamesThenClearsWhenProjectDisappears() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let completed = directory.appendingPathComponent("launcher-project-pass-completed")
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        let otherSource = directory.appendingPathComponent("Sources/Claude/other-filter-project.jsonl")
+        let other: [String: Any] = [
+            "type": "assistant", "uuid": "other-filter-match", "sessionId": "other-filter",
+            "cwd": "/tmp/OtherProject", "timestamp": "2026-09-14T10:00:00Z",
+            "message": ["content": "LauncherProjectNeedle from other project"],
+        ]
+        try (JSONSerialization.data(withJSONObject: other) + Data([10])).write(to: otherSource)
+        let selectedSource = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        let selected: [String: Any] = [
+            "type": "assistant", "uuid": "selected-filter-match", "sessionId": "test-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "message": ["content": "LauncherProjectNeedle from selected project"],
+        ]
+        let selectedHandle = try FileHandle(forWritingTo: selectedSource)
+        try selectedHandle.seekToEnd()
+        try selectedHandle.write(
+            contentsOf: JSONSerialization.data(withJSONObject: selected) + Data([10])
+        )
+        try selectedHandle.close()
+
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let popoverSearch = app.textFields["Search all sessions"]
+        XCTAssertTrue(popoverSearch.waitForExistence(timeout: 15))
+        popoverSearch.click()
+        popoverSearch.typeText("LauncherProjectNeedle")
+        popoverSearch.typeKey(.return, modifierFlags: [])
+        let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
+        app.popUpButtons["All projects"].click()
+        app.menuItems["TraceUIExample"].click()
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from selected project"
+        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from other project"
+        )).firstMatch.exists)
+
+        let rename = Process()
+        rename.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        rename.arguments = [directory.appendingPathComponent("index.sqlite").path,
+                            "UPDATE project SET display_name='Renamed Trace Project' WHERE display_name='TraceUIExample';"]
+        try rename.run()
+        rename.waitUntilExit()
+        XCTAssertEqual(rename.terminationStatus, 0)
+        try? FileManager.default.removeItem(at: completed)
+        let unrelated: [String: Any] = [
+            "type": "user", "uuid": "unrelated-refresh", "sessionId": "other-filter",
+            "cwd": "/tmp/OtherProject", "timestamp": "2026-09-14T10:02:00Z",
+            "message": ["content": "Unrelated project refresh"],
+        ]
+        let otherHandle = try FileHandle(forWritingTo: otherSource)
+        try otherHandle.seekToEnd()
+        try otherHandle.write(
+            contentsOf: JSONSerialization.data(withJSONObject: unrelated) + Data([10])
+        )
+        try otherHandle.close()
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        XCTAssertTrue(app.popUpButtons["Renamed Trace Project"].waitForExistence(timeout: 10),
+                      "final reconciliation must refresh the filter's displayed project name")
+
+        try? FileManager.default.removeItem(at: completed)
+        try FileManager.default.removeItem(at: selectedSource)
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        XCTAssertTrue(app.popUpButtons["All projects"].waitForExistence(timeout: 15),
+                      "a vanished launcher project filter must clear to All projects")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "from other project"
+        )).firstMatch.waitForExistence(timeout: 15))
     }
 
     func testRetainedHiddenGlobalSearchRefreshesOnlyOnReopening() throws {
@@ -986,7 +1188,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
         configureGlobalCloseSettings(app, clearQuery: false, clearFilters: true)
-        reopenPopover(app)
+        ensurePopoverOpen(app)
         let popoverSearch = app.textFields["Search all sessions"]
         XCTAssertTrue(popoverSearch.waitForExistence(timeout: 15))
         popoverSearch.click()
@@ -1016,7 +1218,7 @@ final class TraceUITests: XCTestCase {
         let whileHidden = try String(contentsOf: requests, encoding: .utf8)
             .components(separatedBy: "automatic\n").count - 1
         XCTAssertEqual(whileHidden, before, "hidden retained searches must make no automatic requests")
-        reopenPopover(app)
+        ensurePopoverOpen(app)
         XCTAssertTrue(popoverSearch.waitForExistence(timeout: 10))
         XCTAssertEqual(popoverSearch.value as? String, "Find")
         XCTAssertTrue(app.buttons.containing(NSPredicate(
@@ -1111,8 +1313,9 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["14"].exists,
                       "a rollup failure must retain the last completed Costs snapshot")
-        XCTAssertFalse(app.staticTexts["Updating token totals…"].exists,
-                       "a failed pass must clear the active-indexing banner")
+        let failedRepairBanner = app.staticTexts["Updating token totals…"]
+        expectation(for: NSPredicate { _, _ in !failedRepairBanner.exists }, evaluatedWith: nil)
+        waitForExpectations(timeout: 10)
     }
 
     func testFailedPassDefersDirtyUsageRepairAndKeepsCompletedSnapshot() throws {
@@ -1166,19 +1369,21 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Updating token totals…"].exists)
     }
 
-    func testRollupErrorReplacesInvalidatedUsageSnapshotAndPreservesError() throws {
+    func testRollupErrorKeepsCompletedSnapshotUntilDeferredRepairSucceeds() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        let file = directory.appendingPathComponent("Sources/Claude/superseded-costs.jsonl")
-        let snapshotStarted = directory.appendingPathComponent("usage-snapshot-started")
+        let file = directory.appendingPathComponent("Sources/Claude/repair-costs.jsonl")
+        let repairStarted = directory.appendingPathComponent("rollup-repair-started")
+        let repairAudit = directory.appendingPathComponent("rollup-repair-audit")
         let passCompleted = directory.appendingPathComponent("index-pass-completed")
-        app.launchEnvironment["TRACE_TEST_USAGE_SNAPSHOT_DELAY_MS"] = "3000"
-        app.launchEnvironment["TRACE_TEST_USAGE_SNAPSHOT_STARTED_PATH"] = snapshotStarted.path
+        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"] = "3000"
+        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH"] = repairStarted.path
+        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH"] = repairAudit.path
         app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = passCompleted.path
         let initial: [String: Any] = [
-            "type": "assistant", "uuid": "superseded-initial", "sessionId": "superseded",
+            "type": "assistant", "uuid": "repair-initial", "sessionId": "repair",
             "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
-            "message": ["id": "superseded-initial-response", "model": "claude-sonnet-5",
-                        "content": "Superseded snapshot baseline",
+            "message": ["id": "repair-initial-response", "model": "claude-sonnet-5",
+                        "content": "Repair snapshot baseline",
                         "usage": ["input_tokens": 10, "output_tokens": 2]],
         ]
         try (JSONSerialization.data(withJSONObject: initial) + Data([10])).write(to: file)
@@ -1187,24 +1392,9 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         app.radioButtons["Costs"].click()
         XCTAssertTrue(app.staticTexts["10"].waitForExistence(timeout: 15))
-        try? FileManager.default.removeItem(at: snapshotStarted)
+        try? FileManager.default.removeItem(at: repairStarted)
+        try? FileManager.default.removeItem(at: repairAudit)
         try? FileManager.default.removeItem(at: passCompleted)
-
-        let committed: [String: Any] = [
-            "type": "assistant", "uuid": "superseded-committed", "sessionId": "superseded",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
-            "message": ["id": "superseded-committed-response", "model": "claude-sonnet-5",
-                        "content": "Superseded snapshot committed record",
-                        "usage": ["input_tokens": 4, "output_tokens": 1]],
-        ]
-        let committedHandle = try FileHandle(forWritingTo: file)
-        try committedHandle.seekToEnd()
-        try committedHandle.write(
-            contentsOf: JSONSerialization.data(withJSONObject: committed) + Data([10])
-        )
-        try committedHandle.close()
-        XCTAssertTrue(waitForLineCount(snapshotStarted, line: "started", count: 1, timeout: 15),
-                      "the committed pass must start a delayed usage snapshot")
 
         let sqlite = Process()
         sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
@@ -1213,39 +1403,58 @@ final class TraceUITests: XCTestCase {
         try sqlite.run()
         sqlite.waitUntilExit()
         XCTAssertEqual(sqlite.terminationStatus, 0)
-        try? FileManager.default.removeItem(at: passCompleted)
-        let rejected: [String: Any] = [
-            "type": "assistant", "uuid": "superseded-rejected", "sessionId": "superseded",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:02:00Z",
-            "message": ["id": "superseded-rejected-response", "model": "claude-sonnet-5",
-                        "content": "Superseded snapshot rejected record",
+        let added: [String: Any] = [
+            "type": "assistant", "uuid": "repair-added", "sessionId": "repair",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "message": ["id": "repair-added-response", "model": "claude-sonnet-5",
+                        "content": "Repair snapshot added record",
                         "usage": ["input_tokens": 6, "output_tokens": 1]],
         ]
-        let rejectedHandle = try FileHandle(forWritingTo: file)
-        try rejectedHandle.seekToEnd()
-        try rejectedHandle.write(
-            contentsOf: JSONSerialization.data(withJSONObject: rejected) + Data([10])
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(
+            contentsOf: JSONSerialization.data(withJSONObject: added) + Data([10])
         )
-        try rejectedHandle.close()
+        try handle.close()
 
         XCTAssertTrue(waitForFile(passCompleted, timeout: 15))
-        XCTAssertTrue(waitForLineCount(snapshotStarted, line: "started", count: 2, timeout: 15),
-                      "a terminal rollup error must replace the invalidated snapshot")
-        XCTAssertTrue(app.staticTexts["14"].waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForLineCount(repairStarted, line: "started", count: 2, timeout: 15),
+                      "a terminal rollup error must schedule one deferred dirty-rollup repair")
+        XCTAssertTrue(app.staticTexts["10"].exists,
+                      "the last completed totals must remain visible during repair")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "rollup unavailable"
         )).firstMatch.waitForExistence(timeout: 10),
-        "a replacement snapshot must not hide the unresolved rollup error")
+        "the rollup error must remain visible while repair is pending")
+        XCTAssertTrue(app.staticTexts["Updating token totals…"].exists,
+                      "the updating banner must remain visible while repair is pending")
+
+        let dropTrigger = Process()
+        dropTrigger.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        dropTrigger.arguments = [directory.appendingPathComponent("index.sqlite").path,
+                                 "DROP TRIGGER fail_next_rollup_refresh;"]
+        try dropTrigger.run()
+        dropTrigger.waitUntilExit()
+        XCTAssertEqual(dropTrigger.terminationStatus, 0)
+
+        XCTAssertTrue(waitForLineCount(repairAudit, line: "rebuilt", count: 1, timeout: 15))
+        XCTAssertTrue(app.staticTexts["16"].waitForExistence(timeout: 15))
+        let error = app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "rollup unavailable"
+        )).firstMatch
+        expectation(for: NSPredicate { _, _ in !error.exists }, evaluatedWith: nil)
         let banner = app.staticTexts["Updating token totals…"]
-        let bannerCleared = NSPredicate { _, _ in !banner.exists }
-        expectation(for: bannerCleared, evaluatedWith: nil)
+        expectation(for: NSPredicate { _, _ in !banner.exists }, evaluatedWith: nil)
         waitForExpectations(timeout: 10)
     }
 
-    private func reopenPopover(_ app: XCUIApplication) {
+    private func ensurePopoverOpen(_ app: XCUIApplication) {
+        let search = app.textFields["Search all sessions"]
+        if search.exists { return }
         let status = app.statusItems["Trace"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         status.click()
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
     }
 
     private func configureGlobalCloseSettings(
@@ -1560,6 +1769,35 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "session-navigation")
     }
 
+    func testPageDownContinuouslyUpdatesTranscriptBookmark() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession("Keyboard scroll", project: "KeyboardProject", directory: directory)
+        let bookmarkSaved = directory.appendingPathComponent("keyboard-bookmark-saved")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let project = app.staticTexts["KeyboardProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 15))
+        project.click()
+        let session = app.staticTexts["Keyboard scroll"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 10))
+        session.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        try? FileManager.default.removeItem(at: bookmarkSaved)
+        scroll.click()
+        try? FileManager.default.removeItem(at: bookmarkSaved)
+        app.typeKey(.pageDown, modifierFlags: [])
+        let firstIndex = try XCTUnwrap(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
+        app.typeKey(.pageDown, modifierFlags: [])
+        let secondIndex = try XCTUnwrap(waitForBookmarkIndex(
+            bookmarkSaved, greaterThan: firstIndex
+        ))
+        XCTAssertGreaterThan(secondIndex, firstIndex,
+                             "each keyboard movement must update the saved transcript position")
+    }
+
     func testUserScrollDuringTranscriptRestorationCancelsBookmarkRetry() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         try addLongSession("Alpha session", project: "ProjectAlpha", directory: directory)
@@ -1602,9 +1840,17 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         XCTAssertTrue(waitForFile(restorationStarted), "bookmark restoration must be pending")
         try? FileManager.default.removeItem(at: bookmarkSaved)
-        scroll.scroll(byDeltaX: 0, deltaY: -400)
+        let transcriptScroller = scroll.scrollBars.firstMatch
+        XCTAssertTrue(transcriptScroller.waitForExistence(timeout: 5))
+        transcriptScroller.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).click()
         XCTAssertTrue(waitForFile(restorationCancelled), "user scrolling must cancel the pending bookmark")
         XCTAssertTrue(waitForFile(bookmarkSaved), "the cancelling user scroll must save its position")
+        let firstScrollerIndex = Int(
+            (try? String(contentsOf: bookmarkSaved, encoding: .utf8)) ?? ""
+        ) ?? 0
+        transcriptScroller.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).click()
+        XCTAssertNotNil(waitForBookmarkIndex(bookmarkSaved, greaterThan: firstScrollerIndex),
+                        "continued scrollbar movement must keep updating the bookmark")
         app.buttons["testOpenLauncher"].click()
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
@@ -1672,6 +1918,65 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(scroll.staticTexts.matching(NSPredicate(
             format: "value BEGINSWITH %@", "Forced restore message 69"
         )).firstMatch.waitForExistence(timeout: 12))
+    }
+
+    func testForcedVisibilityRestoreIgnoresHiddenSearchTarget() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession(
+            "Saved restore", project: "SavedRestoreProject", directory: directory,
+            mostlySystem: true
+        )
+        let bookmarkSaved = directory.appendingPathComponent("saved-restore-bookmark")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let project = app.staticTexts["SavedRestoreProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 15))
+        project.click()
+        let session = app.staticTexts["Saved restore"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 10))
+        session.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        let first = scroll.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", "Saved restore message 0"
+        )).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(first.isHittable)
+        try? FileManager.default.removeItem(at: bookmarkSaved)
+        scroll.scroll(byDeltaX: 0, deltaY: -40)
+        XCTAssertTrue(waitForFile(bookmarkSaved))
+        app.checkBoxes["System"].click()
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(first.isHittable)
+
+        app.buttons["testOpenLauncher"].click()
+        let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
+        launcherSearch.click()
+        launcherSearch.typeText("Saved restore message 60")
+        let result = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Saved restore message 60"
+        )).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        result.click()
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(first.isHittable,
+                      "the hidden search target must not replace the saved bookmark")
+
+        app.checkBoxes["System"].click()
+        let target = scroll.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", "Saved restore message 60"
+        )).firstMatch
+        for _ in 0..<5 {
+            XCTAssertTrue(first.isHittable,
+                          "forced visibility restoration must keep the saved position")
+            XCTAssertTrue(!target.exists || !target.isHittable,
+                           "forced restoration must not jump to an unconsumed old search target")
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     }
 
     func testCopyMessageIncludesCollapsedContentAndDividerPersists() throws {

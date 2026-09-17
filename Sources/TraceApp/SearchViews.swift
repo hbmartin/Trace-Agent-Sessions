@@ -215,7 +215,7 @@ struct LauncherView: View {
 
     private var selectedProjectName: String {
         if let name = search.projectFilterDisplayName { return name }
-        guard let key = search.filters.projectCanonicalKey else { return "All projects" }
+        guard let key = search.projectFilterCanonicalKey else { return "All projects" }
         return model.projects.first(where: { $0.canonicalKey == key })?.displayName
             ?? "Selected project"
     }
@@ -338,6 +338,13 @@ struct SearchResultList: View {
             ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try another word or project."))
         } else {
             VStack(spacing: 0) {
+                if TraceTestHooks.isUITesting,
+                   TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_QUERY"] != nil {
+                    Button("Test pagination criteria") {
+                        search.mutateLiveCriteriaAndLoadMoreForTesting()
+                    }
+                    .accessibilityIdentifier("testPaginationCriteria")
+                }
                 if search.resultsMayBeStale {
                     HStack {
                         Text("Results may be out of date.")
