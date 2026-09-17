@@ -404,6 +404,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(passCompleted, timeout: 15))
         let query = app.textFields["mainSearch"]
         XCTAssertTrue(query.waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForInteractable(query, timeout: 10),
+                      "main search must be enabled after onboarding finishes dismissing")
+        app.activate()
         query.click()
         query.typeText("ManualAnchorNeedle")
         let scroll = app.scrollViews["searchResultsScroll"]
@@ -641,12 +644,13 @@ final class TraceUITests: XCTestCase {
     }
 
     func testLoadMoreKeepsImmutableCriteriaWhenLiveControlsChange() throws {
-        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let file = directory.appendingPathComponent("Sources/Claude/immutable-page.jsonl")
         let audit = directory.appendingPathComponent("search-criteria-audit")
         app.launchEnvironment["TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"] = audit.path
         app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_QUERY"] = "OtherLiveNeedle"
         app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_SORT"] = "relevance"
+        app.launchEnvironment["TRACE_TEST_PAGINATION_LIVE_AGENT"] = "codex"
         var data = Data()
         for index in 0..<220 {
             let row: [String: Any] = [
@@ -662,10 +666,14 @@ final class TraceUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
-        let query = app.textFields["mainSearch"]
-        XCTAssertTrue(query.waitForExistence(timeout: 15))
-        query.click()
-        query.typeText("StablePageNeedle")
+        let popoverSearch = app.textFields["Search all sessions"]
+        XCTAssertTrue(popoverSearch.waitForExistence(timeout: 15))
+        popoverSearch.click()
+        popoverSearch.typeText("StablePageNeedle")
+        popoverSearch.typeKey(.return, modifierFlags: [])
+        let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
+        app.buttons["Claude Code"].click()
         XCTAssertTrue(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "StablePageNeedle row 219"
         )).firstMatch.waitForExistence(timeout: 10))
@@ -673,7 +681,10 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(action.waitForExistence(timeout: 5))
         action.click()
         XCTAssertTrue(waitForLineCount(
-            audit, line: "more|StablePageNeedle|recency|all", count: 1, timeout: 10
+            audit,
+            line: "more|StablePageNeedle|recency|all|agents:claude_code",
+            count: 1,
+            timeout: 10
         ), "load-more must keep the query, filters, sort, and cursor from its active request")
     }
 
@@ -866,6 +877,15 @@ final class TraceUITests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if FileManager.default.fileExists(atPath: url.path) { return true }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
+    }
+
+    private func waitForInteractable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists, element.isEnabled, element.isHittable { return true }
             Thread.sleep(forTimeInterval: 0.1)
         }
         return false
@@ -1796,6 +1816,17 @@ final class TraceUITests: XCTestCase {
         ))
         XCTAssertGreaterThan(secondIndex, firstIndex,
                              "each keyboard movement must update the saved transcript position")
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        let last = scroll.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", "Keyboard scroll message 69"
+        )).firstMatch
+        XCTAssertTrue(last.waitForExistence(timeout: 10))
+        XCTAssertTrue(last.isHittable)
+        Thread.sleep(forTimeInterval: 0.5)
+        try? FileManager.default.removeItem(at: bookmarkSaved)
+        app.typeKey(.pageDown, modifierFlags: [])
+        XCTAssertTrue(waitForFile(bookmarkSaved, timeout: 3),
+                      "a boundary Page Down must still finish user scrolling and save its bookmark")
     }
 
     func testUserScrollDuringTranscriptRestorationCancelsBookmarkRetry() throws {

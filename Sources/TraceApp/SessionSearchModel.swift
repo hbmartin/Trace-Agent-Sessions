@@ -68,6 +68,10 @@ final class SessionSearchModel: ObservableObject {
            let sort = SearchSort(rawValue: rawSort) {
             self.sort = sort
         }
+        if let rawAgent = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_AGENT"],
+           let agent = AgentKind(rawValue: rawAgent) {
+            filters.agents = [agent]
+        }
         search(reset: false)
     }
 
@@ -179,8 +183,12 @@ final class SessionSearchModel: ObservableObject {
         error = nil
         TraceTestHooks.appendLine(trigger == .automatic ? "automatic" : reset ? "reset" : "more",
                                   pathKey: "TRACE_TEST_SEARCH_REQUEST_AUDIT_PATH")
+        let agents = filters.agents.isEmpty
+            ? "all"
+            : filters.agents.map(\.rawValue).sorted().joined(separator: ",")
         TraceTestHooks.appendLine(
-            "\(reset ? "reset" : "more")|\(query)|\(sort.rawValue)|\(filters.projectID.map(String.init) ?? "all")",
+            "\(reset ? "reset" : "more")|\(query)|\(sort.rawValue)|"
+                + "\(filters.projectID.map(String.init) ?? "all")|agents:\(agents)",
             pathKey: "TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"
         )
         task = Task { [weak self] in
@@ -189,6 +197,7 @@ final class SessionSearchModel: ObservableObject {
                 if reset, trigger == .automatic {
                     if let delay = TraceTestHooks.delayMilliseconds(
                         for: "TRACE_TEST_AUTOMATIC_SEARCH_DELAY_MS",
+                        cappedAt: 5_000,
                         marker: .touch(pathKey: "TRACE_TEST_AUTOMATIC_SEARCH_STARTED_PATH")
                     ) {
                         try await Task.sleep(for: .milliseconds(delay))
@@ -325,7 +334,8 @@ final class SessionSearchModel: ObservableObject {
         let setID = resultSetID
         if let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_SNIPPET_HYDRATION_DELAY_MS",
-                marker: .line("started", pathKey: "TRACE_TEST_SNIPPET_HYDRATION_STARTED_PATH")
+            cappedAt: 5_000,
+            marker: .line("started", pathKey: "TRACE_TEST_SNIPPET_HYDRATION_STARTED_PATH")
         ) {
             do { try await Task.sleep(for: .milliseconds(delay)) }
             catch { return }
