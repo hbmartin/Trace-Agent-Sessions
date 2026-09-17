@@ -1750,6 +1750,11 @@ final class TraceUITests: XCTestCase {
         expectation(for: compactAnchorSettled, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
         app.radioButtons["Comfortable"].click()
+        let comfortableAnchorSettled = NSPredicate { _, _ in
+            compactAnchor.isHittable && abs(compactAnchor.frame.minY - anchorY) <= 35
+        }
+        expectation(for: comfortableAnchorSettled, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
         app.staticTexts["ProjectBeta"].firstMatch.click()
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertFalse(scroll.exists)
