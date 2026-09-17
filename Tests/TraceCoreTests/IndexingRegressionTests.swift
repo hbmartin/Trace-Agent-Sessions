@@ -1012,6 +1012,28 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(TraceFileIO.volumeCaseSensitivityProbeCountForTesting, 2)
     }
 
+    func testReportedVolumeCaseSensitivityAvoidsPathConfigurationProbe() {
+        var pathConfigurationProbes = 0
+        let detected = TraceFileIO.probeVolumeCaseSensitivity(resourceValue: false) {
+            pathConfigurationProbes += 1
+            return 1
+        }
+
+        XCTAssertFalse(detected)
+        XCTAssertEqual(pathConfigurationProbes, 0)
+    }
+
+    func testVolumeCaseSensitivityFallsBackConservativelyWhenMetadataIsMissing() {
+        var pathConfigurationProbes = 0
+        let detected = TraceFileIO.probeVolumeCaseSensitivity(resourceValue: nil) {
+            pathConfigurationProbes += 1
+            return -1
+        }
+
+        XCTAssertTrue(detected)
+        XCTAssertEqual(pathConfigurationProbes, 1)
+    }
+
     func testFailureDetailsAndProjectSearchAcrossProviders() async throws {
         let root = try directory()
         let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures")
@@ -1025,10 +1047,16 @@ final class IndexingRegressionTests: XCTestCase {
             XCTAssertTrue(failures.allSatisfy { !$0.detail.isEmpty })
         }
         for project in try await database.projects() {
-            let page = try await database.search(query: "the", filters: .init(projectID: project.id))
+            let page = try await database.search(
+                query: "the",
+                filters: .init(projectCanonicalKey: project.canonicalKey)
+            )
             XCTAssertTrue(page.results.allSatisfy { $0.projectID == project.id })
         }
-        let missing = try await database.search(query: "the", filters: .init(projectID: .max))
+        let missing = try await database.search(
+            query: "the",
+            filters: .init(projectCanonicalKey: "missing-project")
+        )
         XCTAssertTrue(missing.results.isEmpty)
     }
 
@@ -1053,17 +1081,30 @@ final class IndexingRegressionTests: XCTestCase {
         let rebuilt = try XCTUnwrap(
             rebuiltProjects.first { $0.canonicalKey == original.canonicalKey }
         )
+        let replacement = try XCTUnwrap(
+            rebuiltProjects.first { $0.displayName == "DecoyProject" }
+        )
+        XCTAssertEqual(replacement.id, original.id)
         XCTAssertNotEqual(rebuilt.id, original.id)
 
         for sort in [SearchSort.recency, .relevance] {
             let page = try await database.search(
                 query: "searchable",
-                filters: .init(projectID: rebuilt.id),
+                filters: .init(projectCanonicalKey: original.canonicalKey),
                 sort: sort
             )
             XCTAssertFalse(page.results.isEmpty)
             XCTAssertTrue(page.results.allSatisfy { $0.projectName == "WantedProject" })
+            XCTAssertTrue(page.results.allSatisfy {
+                $0.projectCanonicalKey == original.canonicalKey
+            })
         }
+
+        let missing = try await database.search(
+            query: "searchable",
+            filters: .init(projectCanonicalKey: "missing-project")
+        )
+        XCTAssertTrue(missing.results.isEmpty)
     }
 }
 

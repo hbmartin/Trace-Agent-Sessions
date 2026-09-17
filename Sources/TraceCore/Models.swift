@@ -318,20 +318,20 @@ public enum SearchSort: String, Codable, CaseIterable, Sendable {
 
 public struct SearchFilters: Equatable, Sendable {
     public var agents: Set<AgentKind>
-    public var projectID: Int64?
+    public var projectCanonicalKey: String?
     public var fromMilliseconds: Int64?
     public var toMilliseconds: Int64?
     public var errorsOnly: Bool
 
     public init(
         agents: Set<AgentKind> = [],
-        projectID: Int64? = nil,
+        projectCanonicalKey: String? = nil,
         fromMilliseconds: Int64? = nil,
         toMilliseconds: Int64? = nil,
         errorsOnly: Bool = false
     ) {
         self.agents = agents
-        self.projectID = projectID
+        self.projectCanonicalKey = projectCanonicalKey
         self.fromMilliseconds = fromMilliseconds
         self.toMilliseconds = toMilliseconds
         self.errorsOnly = errorsOnly
@@ -347,6 +347,7 @@ public struct SearchResult: Identifiable, Sendable {
     public let id: Int64
     public let sessionID: Int64
     public let projectID: Int64
+    public let projectCanonicalKey: String
     public let projectName: String
     public let sessionTitle: String
     public var sessionHasPlan: Bool = false
@@ -380,6 +381,7 @@ public struct ProjectSummary: Identifiable, Sendable {
 public struct SessionSummary: Identifiable, Sendable {
     public let id: Int64
     public let projectID: Int64
+    public let projectCanonicalKey: String
     public let agent: AgentKind
     public let title: String
     public var hasPlan: Bool = false

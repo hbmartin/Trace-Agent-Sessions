@@ -96,11 +96,18 @@ public enum TraceFileIO {
     private static func probeVolumeCaseSensitivity(
         at existingURL: URL, resourceValue: Bool?
     ) -> Bool {
-        let pathConfiguration = pathconf(existingURL.path, _PC_CASE_SENSITIVE)
+        probeVolumeCaseSensitivity(resourceValue: resourceValue) {
+            pathconf(existingURL.path, _PC_CASE_SENSITIVE)
+        }
+    }
+
+    static func probeVolumeCaseSensitivity(
+        resourceValue: Bool?, pathConfiguration: () -> Int
+    ) -> Bool {
+        if let resourceValue { return resourceValue }
+        let pathConfiguration = pathConfiguration()
         if pathConfiguration == 0 || pathConfiguration == 1 {
             return pathConfiguration == 1
-        } else if let resourceValue {
-            return resourceValue
         }
         // Avoid merging distinct paths when the volume cannot report its behavior.
         return true

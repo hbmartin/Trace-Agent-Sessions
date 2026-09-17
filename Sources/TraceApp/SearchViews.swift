@@ -20,7 +20,9 @@ struct RecentPopoverView: View {
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit { NotificationCenter.default.post(name: .traceShowLauncher, object: nil) }
-                    .onChange(of: search.query) { _, _ in model.search() }
+                    .onChange(of: search.query) { _, query in
+                        if search.shouldSearchAfterQueryChange(to: query) { model.search() }
+                    }
             }
             .padding(12)
             .background(.quaternary.opacity(0.45))
@@ -55,7 +57,7 @@ struct RecentPopoverView: View {
                                 ContentUnavailableView("No sessions indexed", systemImage: "clock.arrow.circlepath")
                             } else {
                                 ForEach(model.recentSessions.prefix(10)) { session in
-                                    Button { model.selectSession(session.id, showWindow: true) } label: {
+                                    Button { model.openSession(session) } label: {
                                         SessionRow(session: session) { await model.sessionErrorText(session) }
                                     }
                                     .buttonStyle(.plain)
@@ -108,7 +110,9 @@ struct LauncherView: View {
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .focused($searchFocused)
-                    .onChange(of: search.query) { _, _ in model.search() }
+                    .onChange(of: search.query) { _, query in
+                        if search.shouldSearchAfterQueryChange(to: query) { model.search() }
+                    }
                     .onSubmit { openSelectedResult() }
                     .onKeyPress(.downArrow) {
                         moveSelection(by: 1)
@@ -330,7 +334,11 @@ struct SearchResultList: View {
     @State private var nativeScrollCommand: NativeScrollCommand?
 
     var body: some View {
-        if search.isSearching && search.results.isEmpty {
+        if search.isResolvingProjectFilter && search.results.isEmpty {
+            ProgressView("Updating project…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("projectFilterResolving")
+        } else if search.isSearching && search.results.isEmpty {
             ProgressView("Searching…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = search.error {
             ContentUnavailableView("Search failed", systemImage: "exclamationmark.triangle", description: Text(error))
@@ -345,7 +353,19 @@ struct SearchResultList: View {
                     }
                     .accessibilityIdentifier("testPaginationCriteria")
                 }
-                if search.resultsMayBeStale {
+                if search.isResolvingProjectFilter {
+                    HStack {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Updating project…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .accessibilityIdentifier("projectFilterResolving")
+                } else if search.resultsMayBeStale {
                     HStack {
                         Text("Results may be out of date.")
                             .font(.callout)
@@ -539,7 +559,8 @@ struct SearchResultList: View {
                     })
                     .task(id: SnippetHydrationKey(result)) { await search.hydrate(result) }
                     .onAppear {
-                        if result.id == search.results.last?.id {
+                        if !search.isResolvingProjectFilter,
+                           result.id == search.results.last?.id {
                             search.search(reset: false)
                         }
                     }
@@ -551,7 +572,9 @@ struct SearchResultList: View {
     private var groups: [SearchProjectGroup] {
         var projects: [SearchProjectGroup] = []
         for result in search.results.prefix(maximum) {
-            if let projectIndex = projects.firstIndex(where: { $0.id == result.projectID }) {
+            if let projectIndex = projects.firstIndex(where: {
+                $0.id == result.projectCanonicalKey
+            }) {
                 projects[projectIndex].append(result)
             } else {
                 projects.append(.init(result: result))
@@ -562,12 +585,12 @@ struct SearchResultList: View {
 }
 
 private struct SearchProjectGroup: Identifiable {
-    let id: Int64
+    let id: String
     let name: String
     var sessions: [SearchSessionGroup]
 
     init(result: SearchResult) {
-        id = result.projectID
+        id = result.projectCanonicalKey
         name = result.projectName
         sessions = [.init(result: result)]
     }

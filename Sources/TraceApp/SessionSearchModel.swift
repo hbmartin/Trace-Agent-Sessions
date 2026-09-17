@@ -8,11 +8,23 @@ final class SessionSearchModel: ObservableObject {
         case user
         case automatic
     }
+    enum ProjectFilterReconciliation {
+        case unchanged
+        case resolved
+        case cleared
+
+        var requiresSearchRefresh: Bool {
+            switch self {
+            case .unchanged: false
+            case .resolved, .cleared: true
+            }
+        }
+    }
     @Published var query = ""
     @Published var filters = SearchFilters()
     @Published var datePreset = SearchDatePreset.anyTime
-    @Published private(set) var projectFilterCanonicalKey: String?
     @Published private(set) var projectFilterDisplayName: String?
+    @Published private(set) var isResolvingProjectFilter = false
     @Published private(set) var results: [SearchResult] = []
     @Published private(set) var snippets: [Int64: String] = [:]
     @Published private(set) var isSearching = false
@@ -38,14 +50,12 @@ final class SessionSearchModel: ObservableObject {
     private var activeTaskIsReset = false
     private var pendingLoadMore = false
     private var injectedDuplicateAdditionalPage = false
+    private var ignoredAutomaticQueryValueForTesting: String?
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
-    var isWaitingForProjectFilterResolution: Bool {
-        projectFilterCanonicalKey != nil && filters.projectID == nil
-    }
+    var projectFilterCanonicalKey: String? { filters.projectCanonicalKey }
     var hasActiveFilters: Bool {
         filters != SearchFilters() || datePreset != .anyTime
-            || projectFilterCanonicalKey != nil
     }
 
     private struct SearchRequestCriteria: Sendable {
@@ -55,14 +65,16 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func markResultsStale() {
-        if !query.isEmpty { resultsMayBeStale = true }
+        if !query.isEmpty, !resultsMayBeStale { resultsMayBeStale = true }
     }
 
     func mutateLiveCriteriaAndLoadMoreForTesting() {
         guard TraceTestHooks.isUITesting,
-              let query = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_QUERY"] else {
+              let query = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_QUERY"],
+              task == nil, nextCursor != nil, activeRequestCriteria != nil else {
             return
         }
+        ignoredAutomaticQueryValueForTesting = query
         self.query = query
         if let rawSort = TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_SORT"],
            let sort = SearchSort(rawValue: rawSort) {
@@ -75,6 +87,10 @@ final class SessionSearchModel: ObservableObject {
         search(reset: false)
     }
 
+    func shouldSearchAfterQueryChange(to query: String) -> Bool {
+        !TraceTestHooks.isUITesting || ignoredAutomaticQueryValueForTesting != query
+    }
+
     func attach(database: IndexDatabase, coordinator: IndexCoordinator, diagnostics: DiagnosticsStore? = nil) {
         self.database = database
         self.coordinator = coordinator
@@ -82,33 +98,50 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func selectProject(_ project: ProjectSummary?) {
-        filters.projectID = project?.id
-        projectFilterCanonicalKey = project?.canonicalKey
-        projectFilterDisplayName = project?.displayName
+        let canonicalKey = project?.canonicalKey
+        if filters.projectCanonicalKey != canonicalKey {
+            filters.projectCanonicalKey = canonicalKey
+        }
+        if projectFilterDisplayName != project?.displayName {
+            projectFilterDisplayName = project?.displayName
+        }
+        if isResolvingProjectFilter { isResolvingProjectFilter = false }
     }
 
-    @discardableResult
-    func resolveProjectFilter(in projects: [ProjectSummary], final: Bool) -> Bool {
-        guard let projectFilterCanonicalKey else { return false }
-        if let project = projects.first(where: { $0.canonicalKey == projectFilterCanonicalKey }) {
-            let changed = filters.projectID != project.id
-                || projectFilterDisplayName != project.displayName
-            filters.projectID = project.id
-            projectFilterDisplayName = project.displayName
-            return changed
+    func resolveProjectFilter(
+        in projects: [ProjectSummary], final: Bool
+    ) -> ProjectFilterReconciliation {
+        guard let projectFilterCanonicalKey else {
+            if isResolvingProjectFilter { isResolvingProjectFilter = false }
+            return .unchanged
         }
-        guard final else { return false }
-        filters.projectID = nil
-        self.projectFilterCanonicalKey = nil
-        projectFilterDisplayName = nil
-        return true
+        if let project = projects.first(where: { $0.canonicalKey == projectFilterCanonicalKey }) {
+            let wasResolving = isResolvingProjectFilter
+            if projectFilterDisplayName != project.displayName {
+                projectFilterDisplayName = project.displayName
+            }
+            if isResolvingProjectFilter { isResolvingProjectFilter = false }
+            return wasResolving ? .resolved : .unchanged
+        }
+        guard final else {
+            if !isResolvingProjectFilter {
+                isResolvingProjectFilter = true
+                invalidateActiveRequest(markStale: true)
+            }
+            return .unchanged
+        }
+        filters.projectCanonicalKey = nil
+        if projectFilterDisplayName != nil { projectFilterDisplayName = nil }
+        if isResolvingProjectFilter { isResolvingProjectFilter = false }
+        invalidateActiveRequest(markStale: true)
+        return .cleared
     }
 
     func clearFilters() {
         filters = SearchFilters()
         datePreset = .anyTime
-        projectFilterCanonicalKey = nil
         projectFilterDisplayName = nil
+        isResolvingProjectFilter = false
     }
 
     func search(sort: SearchSort? = nil, reset: Bool = true,
@@ -165,8 +198,7 @@ final class SessionSearchModel: ObservableObject {
             error = nil
             return
         }
-        guard !isWaitingForProjectFilterResolution else {
-            results = []
+        guard !isResolvingProjectFilter else {
             isSearching = false
             error = nil
             return
@@ -183,15 +215,17 @@ final class SessionSearchModel: ObservableObject {
         error = nil
         TraceTestHooks.appendLine(trigger == .automatic ? "automatic" : reset ? "reset" : "more",
                                   pathKey: "TRACE_TEST_SEARCH_REQUEST_AUDIT_PATH")
-        let agents = filters.agents.isEmpty
-            ? "all"
-            : filters.agents.map(\.rawValue).sorted().joined(separator: ",")
         TraceTestHooks.appendLine(
-            "\(reset ? "reset" : "more")|\(query)|\(sort.rawValue)|"
-                + "\(filters.projectID.map(String.init) ?? "all")|agents:\(agents)",
+            searchCriteriaAuditLine(
+                reset: reset, query: query, filters: filters, sort: sort,
+                cursor: initialCursor
+            ),
             pathKey: "TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"
         )
         task = Task { [weak self] in
+            defer {
+                if !reset { self?.ignoredAutomaticQueryValueForTesting = nil }
+            }
             do {
                 if reset { try await Task.sleep(for: .milliseconds(100)) }
                 if reset, trigger == .automatic {
@@ -277,7 +311,10 @@ final class SessionSearchModel: ObservableObject {
                     }
                     cursor = effectiveNextCursor
                 }
-                if !reset { self.hasLoadedAdditionalPages = true }
+                if !reset {
+                    self.hasLoadedAdditionalPages = true
+                    TraceTestHooks.touch(pathKey: "TRACE_TEST_PAGINATION_COMPLETED_PATH")
+                }
                 self.task = nil
                 self.loadingAdditionalPage = false
                 self.activeTaskIsReset = false
@@ -309,12 +346,25 @@ final class SessionSearchModel: ObservableObject {
         }
     }
 
-    func resetForIndexReset() {
+    private func searchCriteriaAuditLine(
+        reset: Bool, query: String, filters: SearchFilters, sort: SearchSort,
+        cursor: SearchCursor?
+    ) -> String {
+        let agents = filters.agents.isEmpty
+            ? "all"
+            : filters.agents.map(\.rawValue).sorted().joined(separator: ",")
+        return "\(reset ? "reset" : "more")|\(query)|\(sort.rawValue)|"
+            + "\(filters.projectCanonicalKey ?? "all")|agents:\(agents)|"
+            + "cursor:\(cursor == nil ? "none" : "present")"
+    }
+
+    func resetForIndexReset(awaitsProjectResolution: Bool = false) {
         task?.cancel()
         task = nil
         requestID = UUID()
         resultSetID = UUID()
-        if projectFilterCanonicalKey != nil { filters.projectID = nil }
+        isResolvingProjectFilter = awaitsProjectResolution
+            && filters.projectCanonicalKey != nil
         nextCursor = nil
         results = []
         snippets = [:]
@@ -327,6 +377,20 @@ final class SessionSearchModel: ObservableObject {
         resultsMayBeStale = false
         automaticRefreshToken = nil
         activeRequestCriteria = nil
+    }
+
+    private func invalidateActiveRequest(markStale: Bool) {
+        task?.cancel()
+        task = nil
+        requestID = UUID()
+        nextCursor = nil
+        activeRequestCriteria = nil
+        loadingAdditionalPage = false
+        activeTaskIsReset = false
+        pendingLoadMore = false
+        hasLoadedAdditionalPages = false
+        isSearching = false
+        if markStale { markResultsStale() }
     }
 
     func hydrate(_ result: SearchResult) async {

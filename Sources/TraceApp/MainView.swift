@@ -67,11 +67,18 @@ struct MainView: View {
     private enum MainSection { case transcript, costs }
 }
 
+private struct SidebarRevealTaskID: Equatable {
+    let token: UUID?
+    let rowAvailable: Bool
+}
+
 private struct SessionSidebar: View {
     @ObservedObject var model: TraceModel
     @ObservedObject private var settings: AppSettings
     @State private var dragStart: CGFloat?
     @State private var transientPaneFraction: Double?
+    @State private var handledProjectRevealToken: UUID?
+    @State private var handledSessionRevealToken: UUID?
 
     init(model: TraceModel) {
         self.model = model
@@ -95,12 +102,33 @@ private struct SessionSidebar: View {
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("projectFilter")
                         .padding(.horizontal, 12).padding(.bottom, 8)
-                    List(selection: Binding(get: { model.selectedProjectID }, set: { model.selectProject($0) })) {
-                        ForEach(model.filteredProjects) { project in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(project.displayName).lineLimit(1)
-                                Text("\(project.sessionCount.formatted()) sessions").font(.caption2).foregroundStyle(.secondary)
-                            }.tag(Optional(project.id))
+                    ScrollViewReader { proxy in
+                        List(selection: Binding(get: { model.selectedProjectID }, set: { model.selectProject($0) })) {
+                            ForEach(model.filteredProjects) { project in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(project.displayName).lineLimit(1)
+                                    Text("\(project.sessionCount.formatted()) sessions").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier("projectSidebarRow-\(project.id)")
+                                .accessibilityAddTraits(
+                                    model.selectedProjectID == project.id ? .isSelected : []
+                                )
+                                .id(project.id)
+                                .tag(Optional(project.id))
+                            }
+                        }
+                        .task(id: projectRevealTaskID) {
+                            guard let reveal = model.sidebarRevealRequest,
+                                  handledProjectRevealToken != reveal.token,
+                                  model.filteredProjects.contains(where: { $0.id == reveal.projectID }) else {
+                                return
+                            }
+                            try? await Task.sleep(for: .milliseconds(50))
+                            guard !Task.isCancelled,
+                                  model.sidebarRevealRequest?.token == reveal.token else { return }
+                            proxy.scrollTo(reveal.projectID, anchor: .center)
+                            handledProjectRevealToken = reveal.token
                         }
                     }
                 }.frame(height: height)
@@ -141,20 +169,60 @@ private struct SessionSidebar: View {
                         Spacer()
                         Text("\(model.sessions.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }.padding(12)
-                    List(selection: Binding(get: { model.selectedSessionID }, set: { id in
-                        if let id { model.selectSession(id) }
-                    })) {
-                        ForEach(model.sessions) { session in
-                            SessionRow(session: session) { await model.sessionErrorText(session) }
-                                .tag(Optional(session.id))
+                    ScrollViewReader { proxy in
+                        List(selection: Binding(get: { model.selectedSessionID }, set: { id in
+                            if let id { model.selectSession(id) }
+                        })) {
+                            ForEach(model.sessions) { session in
+                                SessionRow(session: session) { await model.sessionErrorText(session) }
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityIdentifier("sessionSidebarRow-\(session.id)")
+                                    .accessibilityAddTraits(
+                                        model.selectedSessionID == session.id ? .isSelected : []
+                                    )
+                                    .id(session.id)
+                                    .tag(Optional(session.id))
+                            }
+                        }
+                        .accessibilityIdentifier("sessionSidebarList")
+                        .task(id: sessionRevealTaskID) {
+                            guard let reveal = model.sidebarRevealRequest,
+                                  handledSessionRevealToken != reveal.token,
+                                  model.sessions.contains(where: { $0.id == reveal.sessionID }) else {
+                                return
+                            }
+                            try? await Task.sleep(for: .milliseconds(50))
+                            guard !Task.isCancelled,
+                                  model.sidebarRevealRequest?.token == reveal.token else { return }
+                            proxy.scrollTo(reveal.sessionID, anchor: .center)
+                            handledSessionRevealToken = reveal.token
                         }
                     }
-                    .accessibilityIdentifier("sessionSidebarList")
                 }.frame(maxHeight: .infinity)
             }
         }
         .coordinateSpace(name: "sessionSidebar")
         .background(.background.secondary)
+    }
+
+    private var projectRevealTaskID: SidebarRevealTaskID {
+        let reveal = model.sidebarRevealRequest
+        return .init(
+            token: reveal?.token,
+            rowAvailable: reveal.map { request in
+                model.filteredProjects.contains(where: { $0.id == request.projectID })
+            } ?? false
+        )
+    }
+
+    private var sessionRevealTaskID: SidebarRevealTaskID {
+        let reveal = model.sidebarRevealRequest
+        return .init(
+            token: reveal?.token,
+            rowAvailable: reveal.map { request in
+                model.sessions.contains(where: { $0.id == request.sessionID })
+            } ?? false
+        )
     }
 }
 
@@ -174,10 +242,19 @@ struct TranscriptView: View {
             if model.selectedSessionID == nil {
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(model.selectedProjectID == nil ? "Search all sessions" : "Search this project", text: $search.query)
+                    TextField(
+                        model.selectedProjectCanonicalKey == nil
+                            ? "Search all sessions"
+                            : "Search this project",
+                        text: $search.query
+                    )
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("mainSearch")
-                        .onChange(of: search.query) { _, _ in model.searchMain() }
+                        .onChange(of: search.query) { _, query in
+                            if search.shouldSearchAfterQueryChange(to: query) {
+                                model.searchMain()
+                            }
+                        }
                     if !search.query.isEmpty {
                         Button("Clear search", systemImage: "xmark.circle.fill") { search.query = "" }
                             .labelStyle(.iconOnly).buttonStyle(.plain)
@@ -247,6 +324,11 @@ private struct TranscriptScrollGeometry: Equatable {
     let height: CGFloat
 }
 
+private struct UserScrollIdleRequest: Equatable {
+    let token = UUID()
+    let delayMilliseconds: Int
+}
+
 private struct TranscriptRenderer: View {
     @ObservedObject var model: TraceModel
     let sessionID: Int64
@@ -264,7 +346,7 @@ private struct TranscriptRenderer: View {
     @State private var scrollPhase = ScrollPhase.idle
     @State private var restorationDeferred = false
     @State private var deferredRestorationForced = false
-    @State private var userScrollIdleTask: Task<Void, Never>?
+    @State private var userScrollIdleRequest: UserScrollIdleRequest?
     @State private var lastRequest: UUID?
     @FocusState private var transcriptFocused: Bool
 
@@ -273,10 +355,11 @@ private struct TranscriptRenderer: View {
     }
 
     var body: some View {
+        let displayedMessages = visibleMessages
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: density == .compact ? 6 : 14) {
-                    ForEach(visibleMessages) { message in
+                    ForEach(displayedMessages) { message in
                         MessageRow(
                             summary: message,
                             hydrated: model.hydratedMessages[message.id],
@@ -344,8 +427,7 @@ private struct TranscriptRenderer: View {
             .onScrollPhaseChange { oldPhase, phase in
                 scrollPhase = phase
                 if phase == .tracking || phase == .interacting || phase == .decelerating {
-                    userScrollIdleTask?.cancel()
-                    userScrollIdleTask = nil
+                    userScrollIdleRequest = nil
                     userScrolling = true
                     cancelRestorationForUser()
                 } else if phase == .idle && oldPhase != .idle {
@@ -378,12 +460,8 @@ private struct TranscriptRenderer: View {
                 }
             }
             .onAppear { restore(using: proxy) }
-            .onDisappear {
-                userScrollIdleTask?.cancel()
-                userScrollIdleTask = nil
-            }
             .onChange(of: model.scrollRequest) { _, _ in restore(using: proxy) }
-            .onChange(of: visibleMessages.map(\.id)) { _, ids in
+            .onChange(of: displayedMessages.map(\.id)) { _, ids in
                 if let bookmark = model.scrollPositions[sessionID], !ids.contains(bookmark.messageID) {
                     restore(force: true, using: proxy)
                 }
@@ -422,11 +500,27 @@ private struct TranscriptRenderer: View {
                 }
                 finishRestoration()
             }
+            .task(id: userScrollIdleRequest) {
+                guard let request = userScrollIdleRequest,
+                      userScrolling, scrollPhase == .idle else { return }
+                TraceTestHooks.appendLine(
+                    "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
+                )
+                do {
+                    try await Task.sleep(for: .milliseconds(request.delayMilliseconds))
+                } catch { return }
+                guard !Task.isCancelled,
+                      userScrollIdleRequest == request,
+                      userScrolling,
+                      scrollPhase == .idle else { return }
+                finishUserScrolling(using: proxy)
+            }
         }
     }
 
     private func restore(force: Bool = false, using proxy: ScrollViewProxy) {
-        guard force || lastRequest != model.scrollRequest else { return }
+        let hasNewRequest = lastRequest != model.scrollRequest
+        guard force || hasNewRequest else { return }
         guard !userScrolling else {
             restorationDeferred = true
             deferredRestorationForced = deferredRestorationForced || force
@@ -434,14 +528,14 @@ private struct TranscriptRenderer: View {
             cancelRestorationForUser()
             return
         }
-        restorationDeferred = false
-        deferredRestorationForced = false
-        lastRequest = model.scrollRequest
         let ids = visibleMessages.map(\.id)
         guard !ids.isEmpty else { restoring = false; return }
+        restorationDeferred = false
+        deferredRestorationForced = false
+        if hasNewRequest { lastRequest = model.scrollRequest }
         position.isPositionedByUser = false
         var bookmark = model.scrollPositions[sessionID]
-        if let target = model.requestedMessageID, ids.contains(target), !force {
+        if hasNewRequest, let target = model.requestedMessageID, ids.contains(target) {
             bookmark = .init(messageID: target, offset: 0, index: model.messages.firstIndex(where: { $0.id == target }) ?? 0)
             model.consumeRequestedMessageID(target)
         }
@@ -482,27 +576,22 @@ private struct TranscriptRenderer: View {
     ) {
         guard userScrolling, scrollPhase == .idle else { return }
         let delay = testScrollIdleDelay ?? (afterPhaseTransition ? 0 : 200)
-        userScrollIdleTask?.cancel()
-        userScrollIdleTask = nil
         if delay == 0 {
+            userScrollIdleRequest = nil
             finishUserScrolling(using: proxy)
             return
         }
-        userScrollIdleTask = Task { @MainActor in
-            do { try await Task.sleep(for: .milliseconds(delay)) }
-            catch { return }
-            guard !Task.isCancelled, scrollPhase == .idle else { return }
-            userScrollIdleTask = nil
-            finishUserScrolling(using: proxy)
-        }
+        userScrollIdleRequest = .init(delayMilliseconds: delay)
     }
 
     private func finishUserScrolling(using proxy: ScrollViewProxy) {
         guard userScrolling, scrollPhase == .idle else { return }
-        userScrollIdleTask = nil
         savePosition()
         userScrolling = false
         position.isPositionedByUser = false
+        TraceTestHooks.appendLine(
+            "finished", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
+        )
         if restorationDeferred || lastRequest != model.scrollRequest {
             let force = lastRequest == model.scrollRequest && deferredRestorationForced
             restorationDeferred = false
@@ -512,8 +601,6 @@ private struct TranscriptRenderer: View {
     }
 
     private func beginKeyboardScroll(to offset: CGFloat, using proxy: ScrollViewProxy) {
-        userScrollIdleTask?.cancel()
-        userScrollIdleTask = nil
         userScrolling = true
         cancelRestorationForUser()
         position.scrollTo(y: offset)
