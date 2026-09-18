@@ -17,6 +17,15 @@ public struct GeminiSource: SessionSource {
         }
     }
 
+    public func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] {
+        try discoverFiles(extensions: ["json", "jsonl"], scopedTo: paths) { url in
+            guard url.deletingLastPathComponent().lastPathComponent == "chats",
+                  url.lastPathComponent.hasPrefix("session-")
+            else { return nil }
+            return url.pathExtension.lowercased() == "jsonl" ? .geminiJSONL : .geminiJSON
+        }
+    }
+
     public func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {

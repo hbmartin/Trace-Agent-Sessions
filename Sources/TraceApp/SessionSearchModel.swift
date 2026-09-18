@@ -94,10 +94,7 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func shouldSearchAfterQueryChange(to query: String) -> Bool {
-        guard TraceTestHooks.isUITesting,
-              ignoredAutomaticQueryValueForTesting == query else { return true }
-        ignoredAutomaticQueryValueForTesting = nil
-        return false
+        !TraceTestHooks.isUITesting || ignoredAutomaticQueryValueForTesting != query
     }
 
     func attach(database: IndexDatabase, coordinator: IndexCoordinator, diagnostics: DiagnosticsStore? = nil) {
@@ -107,12 +104,18 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func selectProject(_ project: ProjectSummary?) {
-        let canonicalKey = project?.canonicalKey
+        setProjectFilter(
+            canonicalKey: project?.canonicalKey,
+            displayName: project?.displayName
+        )
+    }
+
+    func setProjectFilter(canonicalKey: String?, displayName: String?) {
         if filters.projectCanonicalKey != canonicalKey {
             filters.projectCanonicalKey = canonicalKey
         }
-        if projectFilterDisplayName != project?.displayName {
-            projectFilterDisplayName = project?.displayName
+        if projectFilterDisplayName != displayName {
+            projectFilterDisplayName = displayName
         }
         if isResolvingProjectFilter { isResolvingProjectFilter = false }
     }
@@ -239,6 +242,7 @@ final class SessionSearchModel: ObservableObject {
             pathKey: "TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"
         )
         task = Task { [weak self] in
+            defer { if !reset { self?.ignoredAutomaticQueryValueForTesting = nil } }
             do {
                 if reset { try await Task.sleep(for: .milliseconds(100)) }
                 if reset, trigger == .automatic {

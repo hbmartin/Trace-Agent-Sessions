@@ -1,10 +1,25 @@
 import Foundation
 
+public enum IndexActivity: String, Equatable, Sendable {
+    case initialBuild
+    case launchCatchUp
+    case launchReconciliation
+    case cachedLaunch
+    case fileChanges
+    case subtreeRecovery
+    case rootRecovery
+    case eventStreamRecovery
+    case safetyVerification
+    case rebuild
+    case scopeChange
+}
+
 public struct IndexProgress: Sendable {
     public enum Phase: String, Sendable {
         case waiting, discovering, indexing, reconciling, aggregating, complete, cancelled, failed
     }
     public var phase: Phase
+    public var activity: IndexActivity = .initialBuild
     public var incremental: Bool = false
     public var agent: AgentKind?
     public var completedFiles: Int
@@ -85,23 +100,64 @@ public actor IndexCoordinator {
     }
 
     public func indexAll(scope: IndexScope, rebuild: Bool = false,
+                         activity: IndexActivity? = nil,
                          progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async {
+        _ = await indexAllResult(
+            scope: scope, rebuild: rebuild, activity: activity, progress: progress
+        )
+    }
+
+    func indexAllResult(scope: IndexScope, rebuild: Bool = false,
+                        activity: IndexActivity? = nil,
+                        progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
         await gate.acquire()
-        await run(scope: scope, paths: nil, rebuild: rebuild, progress: progress)
+        let result = await run(
+            scope: scope, paths: nil, reconciliationPaths: [], rebuild: rebuild,
+            activity: activity ?? (rebuild ? .rebuild : .initialBuild), progress: progress
+        )
         await gate.release()
+        return result
     }
 
     public func refresh(paths: Set<String>, scope: IndexScope,
+                        activity: IndexActivity = .fileChanges,
                         progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async {
-        await gate.acquire()
-        await run(scope: scope, paths: paths, rebuild: false, progress: progress)
-        await gate.release()
+        _ = await refreshResult(
+            paths: paths, scope: scope, activity: activity, progress: progress
+        )
     }
 
-    private func run(scope: IndexScope, paths: Set<String>?, rebuild: Bool,
-                     progress: @escaping @Sendable (IndexProgress) async -> Void) async {
+    func refreshResult(paths: Set<String>, scope: IndexScope,
+                       activity: IndexActivity = .fileChanges,
+                       progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
+        await gate.acquire()
+        let result = await run(
+            scope: scope, paths: paths, reconciliationPaths: [], rebuild: false,
+            activity: activity, progress: progress
+        )
+        await gate.release()
+        return result
+    }
+
+    @discardableResult
+    public func reconcile(paths: Set<String>, changedPaths: Set<String> = [], scope: IndexScope,
+                          activity: IndexActivity,
+                          progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
+        await gate.acquire()
+        let result = await run(
+            scope: scope, paths: changedPaths, reconciliationPaths: paths,
+            rebuild: false, activity: activity, progress: progress
+        )
+        await gate.release()
+        return result
+    }
+
+    private func run(scope: IndexScope, paths: Set<String>?, reconciliationPaths: Set<String>,
+                     rebuild: Bool, activity: IndexActivity,
+                     progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         var status = IndexProgress(phase: .discovering)
-        status.incremental = paths != nil
+        status.activity = activity
+        status.incremental = paths != nil || !reconciliationPaths.isEmpty
         let mutations = PassMutationTracker()
         status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount()) ?? 0
         do {
@@ -119,7 +175,8 @@ public actor IndexCoordinator {
                 for root in source.roots { rootIDs[root.id] = try await database.register(root: root) }
             }
             var allFiles: [DiscoveredSourceFile] = []
-            let fullScan = paths == nil || oldScope != scope || rebuild
+            let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
+            if oldScope != scope && !rebuild { status.activity = .scopeChange }
             let refreshCodexNames = fullScan || (paths ?? []).contains {
                 TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: $0))
             }
@@ -131,6 +188,12 @@ public actor IndexCoordinator {
                     allFiles += try source.discover()
                 }
             } else {
+                if !reconciliationPaths.isEmpty {
+                    for source in sources {
+                        try Task.checkCancellation()
+                        allFiles += try source.discover(scopedTo: reconciliationPaths)
+                    }
+                }
                 for path in (paths ?? []).sorted() {
                     try Task.checkCancellation()
                     let url = URL(fileURLWithPath: TraceFileIO.canonicalPath(path).path)
@@ -246,6 +309,29 @@ public actor IndexCoordinator {
                 }
                 status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
                     ?? status.unresolvedFailedFiles
+            } else if !reconciliationPaths.isEmpty {
+                status.phase = .reconciling
+                await progress(status)
+                let scopes = reconciliationPaths.map(TraceFileIO.canonicalPath)
+                let live = Set(allFiles.map { TraceFileIO.canonicalPath($0.url.path).comparisonKey })
+                for source in sources {
+                    for stored in try await database.paths(agent: source.agent) {
+                        try Task.checkCancellation()
+                        let storedPath = TraceFileIO.canonicalPath(stored.path)
+                        guard scopes.contains(where: { $0.contains(storedPath) }),
+                              !live.contains(storedPath.comparisonKey) else { continue }
+                        try await database.deleteSource(id: stored.id)
+                        await mutations.markChanged()
+                    }
+                    for root in source.roots {
+                        let canonicalRoot = TraceFileIO.canonicalPath(root.url.path)
+                        guard scopes.contains(where: { $0.intersects(canonicalRoot) }),
+                              let rootID = rootIDs[root.id] else { continue }
+                        try await database.recordRootScan(rootID: rootID, error: rootErrors[root.id])
+                    }
+                }
+                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
+                    ?? status.unresolvedFailedFiles
             }
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots {
@@ -279,6 +365,7 @@ public actor IndexCoordinator {
         status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
             ?? status.unresolvedFailedFiles
         await progress(status)
+        return status
     }
 
     public func hydrate(_ summary: MessageSummary) async throws -> HydratedMessage {
@@ -467,6 +554,23 @@ public actor IndexCoordinator {
            state.scannedBytes == state.size,
            state.headLength == initialFingerprint.headLength,
            state.headHash == initialFingerprint.headHash {
+            return (false, 0, hadRecordedError)
+        }
+
+        // For small files the existing head digest covers the entire payload. This is a
+        // trusted content hash, so an atomic save that only changed inode/mtime can update
+        // its fingerprint without deleting and recreating otherwise identical messages.
+        // Larger files deliberately stay on the cheap 4 KiB fingerprint path unless an
+        // actual change requires parsing; hashing every large session would negate the cache.
+        if let state, !promotedPlaceholder,
+           state.size == initialFingerprint.size,
+           state.scannedBytes == state.size,
+           Int64(state.headLength) == state.size,
+           Int64(initialFingerprint.headLength) == initialFingerprint.size,
+           state.headHash == initialFingerprint.headHash {
+            try await database.finishSource(
+                id: state.id, fingerprint: initialFingerprint, scannedBytes: state.scannedBytes
+            )
             return (false, 0, hadRecordedError)
         }
 

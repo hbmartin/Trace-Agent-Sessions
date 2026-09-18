@@ -2,6 +2,37 @@ import XCTest
 @testable import TraceCore
 
 final class FSEventsWatcherTests: XCTestCase {
+    func testEventCheckpointPersistsAcrossDatabaseOpen() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TraceCheckpoint-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        try await database.saveEventCheckpoints(["volume-a": 123])
+
+        let reopened = try IndexDatabase(url: url)
+        let checkpoint = try await reopened.eventCheckpoint(volumeID: "volume-a")
+
+        XCTAssertEqual(checkpoint, 123)
+    }
+
+    func testDroppedEventsRecoverOnlyWatcherRootsAndCarryCheckpoint() {
+        let root = "/tmp/TraceWatcherRoot"
+        var changes = SourceChanges()
+        changes.include(
+            path: root,
+            flags: UInt32(kFSEventStreamEventFlagKernelDropped),
+            eventID: 42,
+            streamIdentifier: "volume-a",
+            streamRoots: [root]
+        )
+
+        XCTAssertEqual(changes.reconciliationPaths, [root])
+        XCTAssertEqual(changes.recoveryReasons, [.eventsDropped])
+        XCTAssertEqual(changes.watermarks["volume-a"], 42)
+    }
+
     func testAppendIsReportedAtFileGranularity() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceFSEvents-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
