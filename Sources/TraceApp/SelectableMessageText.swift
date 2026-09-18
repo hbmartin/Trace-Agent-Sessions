@@ -1,12 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// Native text keeps selection, links, and a message-level copy command in one menu.
+/// Native text owns selection and its standard editing menu. Keeping the menu entirely in
+/// NSTextView prevents SwiftUI row gestures from cancelling a drag selection.
 struct SelectableMessageText: NSViewRepresentable {
     let text: AttributedString
     var monospaced = false
     var secondary = false
-    var copyMessage: (() -> Void)?
 
     final class Coordinator {
         let measurementStorage = NSTextStorage()
@@ -42,7 +42,6 @@ struct SelectableMessageText: NSViewRepresentable {
     }
 
     func updateNSView(_ view: MessageTextView, context: Context) {
-        view.copyMessage = copyMessage
         guard context.coordinator.lastText != text
                 || context.coordinator.lastMonospaced != monospaced
                 || context.coordinator.lastSecondary != secondary else { return }
@@ -85,21 +84,6 @@ struct SelectableMessageText: NSViewRepresentable {
 }
 
 final class MessageTextView: NSTextView {
-    var copyMessage: (() -> Void)?
-
     override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
     override func accessibilityValue() -> String? { string }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = super.menu(for: event) ?? NSMenu()
-        if copyMessage != nil {
-            let item = NSMenuItem(title: "Copy Message", action: #selector(copyWholeMessage), keyEquivalent: "")
-            item.target = self
-            menu.insertItem(.separator(), at: 0)
-            menu.insertItem(item, at: 0)
-        }
-        return menu
-    }
-
-    @objc private func copyWholeMessage() { copyMessage?() }
 }

@@ -15,6 +15,84 @@ final class IndexingRegressionTests: XCTestCase {
         "{\"type\":\"user\",\"uuid\":\"\(id)\",\"sessionId\":\"session\",\"cwd\":\"\(project)\",\"timestamp\":\"2026-09-14T10:00:00Z\",\"message\":{\"content\":\"searchable message \(id)\"}}\n"
     }
 
+    func testScopedReconciliationDeletesOnlyFilesBelowAffectedDirectory() async throws {
+        let root = try directory()
+        let firstDirectory = root.appendingPathComponent("first")
+        let secondDirectory = root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: firstDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
+        let first = firstDirectory.appendingPathComponent("first.jsonl")
+        let second = secondDirectory.appendingPathComponent("second.jsonl")
+        try Data(line(1).utf8).write(to: first)
+        try Data(line(2).utf8).write(to: second)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [root])]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+        try FileManager.default.removeItem(at: first)
+
+        let terminal = await coordinator.reconcile(
+            paths: [firstDirectory.path], scope: .proseOnly, activity: .subtreeRecovery
+        )
+
+        XCTAssertEqual(terminal.activity, .subtreeRecovery)
+        let statistics = try await database.statistics()
+        let secondState = try await database.sourceState(path: second.path)
+        XCTAssertEqual(statistics.sourceFileCount, 1)
+        XCTAssertNotNil(secondState)
+    }
+
+    func testTrustedWholeFileDigestSkipsParsingIdenticalAtomicReplacement() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let content = Data(line(1).utf8)
+        try content.write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let counter = ReadCounter()
+        let coordinator = IndexCoordinator(
+            database: database,
+            sources: [CountingSource(base: ClaudeCodeSource(roots: [root]), counter: counter)]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+        try content.write(to: file, options: .atomic)
+
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+
+        XCTAssertEqual(counter.value, 1)
+        let statistics = try await database.statistics()
+        XCTAssertEqual(statistics.messageCount, 1)
+    }
+
+    func testRootReconciliationRemovesFilesFromDetachedRoot() async throws {
+        let directory = try directory()
+        let removedRoot = directory.appendingPathComponent("removed")
+        let retainedRoot = directory.appendingPathComponent("retained")
+        try FileManager.default.createDirectory(at: removedRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: retainedRoot, withIntermediateDirectories: true)
+        let removedFile = removedRoot.appendingPathComponent("removed.jsonl")
+        let retainedFile = retainedRoot.appendingPathComponent("retained.jsonl")
+        try Data(line(1).utf8).write(to: removedFile)
+        try Data(line(2).utf8).write(to: retainedFile)
+        let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(
+            database: database,
+            sources: [ClaudeCodeSource(roots: [removedRoot, retainedRoot])]
+        ).indexAll(scope: .proseOnly)
+
+        await IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [retainedRoot])]
+        ).reconcile(
+            paths: [removedRoot.path, retainedRoot.path], scope: .proseOnly,
+            activity: .rootRecovery
+        )
+
+        let removedState = try await database.sourceState(path: removedFile.path)
+        let retainedState = try await database.sourceState(path: retainedFile.path)
+        XCTAssertNil(removedState)
+        XCTAssertNotNil(retainedState)
+    }
+
     func testConcurrentPassesSerializeAndUnchangedFilesAreNotParsed() async throws {
         let root = try directory()
         try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
@@ -658,6 +736,8 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v5-usage-project'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v6-checkpoint-context'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v7-source-placeholders'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v8-fsevents-checkpoints'")
+            try db.execute(sql: "DROP TABLE fsevents_checkpoint")
             try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
         }
 
@@ -670,7 +750,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "7")
+        XCTAssertEqual(schema, "8")
     }
 
     func testV7MigrationBackfillsPlaceholdersWithoutChangingIndexedIDs() async throws {
@@ -694,6 +774,8 @@ final class IndexingRegressionTests: XCTestCase {
         try await raw.write { db in
             try db.execute(sql: "ALTER TABLE source_file DROP COLUMN is_placeholder")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v7-source-placeholders'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v8-fsevents-checkpoints'")
+            try db.execute(sql: "DROP TABLE fsevents_checkpoint")
             try db.execute(sql: "UPDATE trace_meta SET value='6' WHERE key='schema_version'")
         }
         let migrated = try IndexDatabase(url: url)

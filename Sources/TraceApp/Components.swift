@@ -82,7 +82,8 @@ struct IndexProgressLabel: View {
     }
 
     private var details: String {
-        var lines = ["\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
+        var lines = [activityDescription,
+            "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
         if progress.unresolvedFailedFiles > 0 {
             lines.append("\(progress.unresolvedFailedFiles) files still failing")
@@ -102,10 +103,26 @@ struct IndexProgressLabel: View {
     private var label: String {
         switch progress.phase {
         case .waiting: "Ready to build index"
-        case .discovering: "Finding sessions…"
+        case .discovering:
+            switch progress.activity {
+            case .initialBuild: "Building index…"
+            case .launchCatchUp: "Catching up on changes…"
+            case .launchReconciliation: "Reconciling cached index…"
+            case .cachedLaunch: "Opening cached index…"
+            case .fileChanges: "Checking changed files…"
+            case .subtreeRecovery: "Checking changed folder…"
+            case .rootRecovery: "Checking changed source root…"
+            case .eventStreamRecovery: "Recovering file-event history…"
+            case .safetyVerification: "Running daily index check…"
+            case .rebuild: "Rebuilding index…"
+            case .scopeChange: "Updating indexed content…"
+            }
         case .indexing:
-            "\(progress.incremental ? "Updating" : "Indexing") \(progress.agent?.displayName ?? "sessions") · \(progress.completedFiles.formatted())/\(progress.totalFiles.formatted()) files"
-        case .reconciling: "Checking moved and deleted sessions…"
+            "\(progress.activity == .initialBuild || progress.activity == .rebuild ? "Indexing" : "Updating") \(progress.agent?.displayName ?? "sessions") · \(progress.completedFiles.formatted())/\(progress.totalFiles.formatted()) files"
+        case .reconciling:
+            progress.activity == .safetyVerification
+                ? "Verifying cached index…"
+                : "Checking moved and deleted sessions…"
         case .aggregating: "Updating token totals…"
         case .complete:
             if progress.unresolvedFailedFiles > 0 {
@@ -122,23 +139,59 @@ struct IndexProgressLabel: View {
         case .failed: progress.error ?? "Indexing failed"
         }
     }
+
+    private var activityDescription: String {
+        switch progress.activity {
+        case .initialBuild: "Initial index build"
+        case .launchCatchUp: "Launch catch-up from saved file-event checkpoint"
+        case .launchReconciliation: "Launch reconciliation after establishing a new file-event checkpoint"
+        case .cachedLaunch: "Loaded the persisted index without a full scan"
+        case .fileChanges: "Incremental file-system update"
+        case .subtreeRecovery: "Scoped folder reconciliation"
+        case .rootRecovery: "Scoped source-root reconciliation"
+        case .eventStreamRecovery: "Recovery after dropped or wrapped file events"
+        case .safetyVerification: "Daily safety reconciliation"
+        case .rebuild: "User-requested full rebuild"
+        case .scopeChange: "Rebuild required by index-scope change"
+        }
+    }
 }
 
 struct MarkdownText: View {
     let source: String
-    var copyMessage: (() -> Void)? = nil
     @State private var rendered = AttributedString()
 
     var body: some View {
-        SelectableMessageText(text: rendered, copyMessage: copyMessage)
+        SelectableMessageText(text: rendered)
             .task(id: source) {
-                rendered = await Task.detached(priority: .userInitiated) {
-                    let prose = source.replacingOccurrences(of: "<proposed_plan>", with: "")
-                        .replacingOccurrences(of: "</proposed_plan>", with: "")
-                    let parsed = try? AttributedString(markdown: prose, options: .init(interpretedSyntax: .full))
-                    return parsed?.characters.isEmpty == false ? parsed! : AttributedString(prose)
-                }.value
+                rendered = await MarkdownRenderCache.shared.render(source)
             }
+    }
+}
+
+private actor MarkdownRenderCache {
+    static let shared = MarkdownRenderCache()
+    private var values: [String: AttributedString] = [:]
+    private var order: [String] = []
+    private let limit = 1_024
+
+    func render(_ source: String) -> AttributedString {
+        if let cached = values[source] { return cached }
+        let prose = source.replacingOccurrences(of: "<proposed_plan>", with: "")
+            .replacingOccurrences(of: "</proposed_plan>", with: "")
+        let parsed = try? AttributedString(
+            markdown: prose, options: .init(interpretedSyntax: .full)
+        )
+        let rendered = parsed?.characters.isEmpty == false ? parsed! : AttributedString(prose)
+        values[source] = rendered
+        order.append(source)
+        if order.count > limit {
+            let overflow = order.count - limit
+            let evicted = Array(order.prefix(overflow))
+            order.removeFirst(overflow)
+            for key in evicted { values.removeValue(forKey: key) }
+        }
+        return rendered
     }
 }
 

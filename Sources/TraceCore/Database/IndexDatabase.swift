@@ -33,7 +33,7 @@ struct IndexedSourceState: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 7
+    public static let schemaVersion = 8
     public static let indexFormatVersion = 3
     private static let sourceStateSelection = """
         sf.*,
@@ -267,6 +267,16 @@ public actor IndexDatabase {
                 """)
             try db.execute(sql: "UPDATE trace_meta SET value='7' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v8-fsevents-checkpoints") { db in
+            try db.execute(sql: """
+                CREATE TABLE fsevents_checkpoint (
+                    volume_id TEXT PRIMARY KEY,
+                    event_id TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                )
+                """)
+            try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
+        }
         try migrator.migrate(pool)
     }
 
@@ -306,6 +316,49 @@ public actor IndexDatabase {
                 sql: "INSERT INTO trace_meta(key, value) VALUES ('index_scope', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 arguments: [String(scope.rawValue)]
             )
+        }
+    }
+
+    public func eventCheckpoint(volumeID: String) throws -> UInt64? {
+        try pool.read { db in
+            let value = try String.fetchOne(
+                db, sql: "SELECT event_id FROM fsevents_checkpoint WHERE volume_id=?",
+                arguments: [volumeID]
+            )
+            return value.flatMap(UInt64.init)
+        }
+    }
+
+    public func saveEventCheckpoints(_ checkpoints: [String: UInt64]) throws {
+        guard !checkpoints.isEmpty else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1_000)
+        try pool.write { db in
+            for (volumeID, eventID) in checkpoints {
+                try db.execute(sql: """
+                    INSERT INTO fsevents_checkpoint(volume_id, event_id, updated_at_ms)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(volume_id) DO UPDATE SET
+                        event_id=excluded.event_id, updated_at_ms=excluded.updated_at_ms
+                    """, arguments: [volumeID, String(eventID), now])
+            }
+        }
+    }
+
+    public func lastSafetyReconciliationMilliseconds() throws -> Int64? {
+        try pool.read { db in
+            try String.fetchOne(
+                db, sql: "SELECT value FROM trace_meta WHERE key='last_safety_reconciliation_ms'"
+            ).flatMap(Int64.init)
+        }
+    }
+
+    public func markSafetyReconciliationComplete() throws {
+        let now = Int64(Date().timeIntervalSince1970 * 1_000)
+        try pool.write { db in
+            try db.execute(sql: """
+                INSERT INTO trace_meta(key, value) VALUES ('last_safety_reconciliation_ms', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """, arguments: [String(now)])
         }
     }
 

@@ -14,6 +14,12 @@ public struct CodexSource: SessionSource {
         }
     }
 
+    public func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] {
+        try discoverFiles(extensions: ["jsonl"], scopedTo: paths) { url in
+            url.lastPathComponent.hasPrefix("rollout-") ? .codexJSONL : nil
+        }
+    }
+
     public func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {

@@ -41,9 +41,15 @@ final class TraceModel: ObservableObject {
     @Published private(set) var projects: [ProjectSummary] = []
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var recentSessions: [SessionSummary] = []
-    @Published private(set) var messages: [MessageSummary] = []
-    @Published private(set) var hydratedMessages: [Int64: HydratedMessage] = [:]
-    @Published private(set) var hydrationFailures: Set<Int64> = []
+    @Published private(set) var messages: [MessageSummary] = [] {
+        didSet { transcriptMessageRevision &+= 1 }
+    }
+    @Published private(set) var hydratedMessages: [Int64: HydratedMessage] = [:] {
+        didSet { transcriptContentRevision &+= 1 }
+    }
+    @Published private(set) var hydrationFailures: Set<Int64> = [] {
+        didSet { transcriptContentRevision &+= 1 }
+    }
     @Published var projectFilter = ""
     @Published private(set) var selectedSession: SessionSummary?
     @Published private(set) var sourceHealth: [SourceHealth] = []
@@ -61,13 +67,27 @@ final class TraceModel: ObservableObject {
     @Published var selectedSessionID: Int64?
     @Published var customCostStart = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @Published var customCostEnd = Date()
-    @Published var expandedReasoningIDs: Set<Int64> = []
+    @Published var expandedReasoningIDs: Set<Int64> = [] {
+        didSet { transcriptContentRevision &+= 1 }
+    }
     @Published var startupError: String?
+    private(set) var transcriptMessageRevision = 0
+    private(set) var transcriptContentRevision = 0
 
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
-    private var watcher: FSEventsWatcher?
+    private var watchers: [FSEventsWatcher] = []
     private var scheduler: IndexScheduler?
+    private var bufferedSourceChanges = SourceChanges()
+    private var watcherStartupPending = true
+    private var startupReconciliationPaths: Set<String> = []
+    private var startupActivity = IndexActivity.cachedLaunch
+    private var startupSafetyDue = false
+    private var watchedSourceRoots: [URL] = []
+    private var safetyVerificationTask: Task<Void, Never>?
+    private var hydrationOrder: [Int64] = []
+    private var hydratingMessageIDs: Set<Int64> = []
+    private let hydrationCacheLimit = 512
     private var sourceChangeTask: Task<Void, Never>?
     private var lastSummaryRefresh = ContinuousClock.now
     private var incrementalProgressTask: Task<Void, Never>?
@@ -156,7 +176,7 @@ final class TraceModel: ObservableObject {
                 loadPricing()
                 await reloadSummaries(loadCosts: false)
                 if settings.onboardingComplete {
-                    startWatching(sources.flatMap(\.roots).map(\.url))
+                    await startWatching(sources.flatMap(\.roots).map(\.url))
                     if ProcessInfo.processInfo.arguments.contains("--index-smoke"), TraceRuntime.testDirectory != nil {
                         await scheduler?.request(reconcile: true, scope: settings.indexScope)
                         await scheduler?.waitUntilIdle()
@@ -199,14 +219,32 @@ final class TraceModel: ObservableObject {
         }
         settings.onboardingComplete = true
         if coordinator != nil {
-            startWatching(makeSources().flatMap(\.roots).map(\.url))
-            startIndexing()
+            Task { [weak self] in
+                guard let self else { return }
+                await self.startWatching(self.makeSources().flatMap(\.roots).map(\.url))
+                self.startIndexing()
+            }
         }
     }
 
     private func makeScheduler(_ coordinator: IndexCoordinator) -> IndexScheduler {
         IndexScheduler(coordinator: coordinator, scope: settings.indexScope) { [weak self] update in
             await self?.receiveProgress(update)
+        } didComplete: { [weak self] activity, watermarks in
+            await self?.completeIndexActivity(activity, watermarks: watermarks)
+        }
+    }
+
+    private func completeIndexActivity(_ activity: IndexActivity, watermarks: [String: UInt64]) async {
+        try? await database?.saveEventCheckpoints(watermarks)
+        if activity == .safetyVerification || activity == .initialBuild
+            || activity == .launchReconciliation {
+            try? await database?.markSafetyReconciliationComplete()
+            startupSafetyDue = false
+            if activity == .initialBuild || activity == .launchReconciliation {
+                safetyVerificationTask?.cancel()
+                safetyVerificationTask = nil
+            }
         }
     }
 
@@ -440,7 +478,30 @@ final class TraceModel: ObservableObject {
     func startIndexing() {
         guard settings.onboardingComplete, !initialIndexRequested, let scheduler else { return }
         initialIndexRequested = true
-        Task { await scheduler.request(reconcile: true, scope: settings.indexScope) }
+        Task { [weak self] in
+            guard let self else { return }
+            let buffered = self.bufferedSourceChanges
+            self.bufferedSourceChanges = SourceChanges()
+            await scheduler.request(
+                paths: buffered.paths,
+                reconciliationPaths: self.startupReconciliationPaths.union(buffered.reconciliationPaths),
+                scope: self.settings.indexScope,
+                activity: self.startupReconciliationPaths.isEmpty
+                    ? (buffered.paths.isEmpty && buffered.reconciliationPaths.isEmpty
+                        ? self.startupActivity : self.activity(for: buffered))
+                    : self.startupActivity,
+                watermarks: buffered.watermarks
+            )
+            self.watcherStartupPending = false
+            let arrivedDuringSubmission = self.bufferedSourceChanges
+            self.bufferedSourceChanges = SourceChanges()
+            if !arrivedDuringSubmission.paths.isEmpty
+                || arrivedDuringSubmission.requiresReconciliation
+                || !arrivedDuringSubmission.watermarks.isEmpty {
+                await self.submitSourceChanges(arrivedDuringSubmission)
+            }
+            if self.startupSafetyDue { self.scheduleSafetyVerification() }
+        }
     }
 
     func rebuildIndex() {
@@ -451,8 +512,10 @@ final class TraceModel: ObservableObject {
 
     func reloadSourcesAndRebuild() {
         sourceChangeTask?.cancel()
-        watcher?.stop()
-        watcher = nil
+        let previousRoots = watchedSourceRoots
+        watchers.forEach { $0.stop() }
+        watchers = []
+        safetyVerificationTask?.cancel()
         replacementIndexPassExpected = true
         sourceChangeTask = Task {
             await scheduler?.stop()
@@ -464,7 +527,10 @@ final class TraceModel: ObservableObject {
             mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
             scheduler = makeScheduler(coordinator)
             initialIndexRequested = false
-            startWatching(sources.flatMap(\.roots).map(\.url))
+            await startWatching(
+                sources.flatMap(\.roots).map(\.url), forceRootReconciliation: true,
+                additionalRecoveryRoots: previousRoots
+            )
             // Root changes reconcile existing files; unchanged sources retain their index.
             startIndexing()
         }
@@ -528,6 +594,8 @@ final class TraceModel: ObservableObject {
         messages = []
         hydratedMessages.removeAll()
         hydrationFailures.removeAll()
+        hydrationOrder.removeAll()
+        hydratingMessageIDs.removeAll()
         expandedReasoningIDs.removeAll()
         requestedMessageID = nil
     }
@@ -567,6 +635,8 @@ final class TraceModel: ObservableObject {
         messages = []
         hydratedMessages = [:]
         hydrationFailures = []
+        hydrationOrder = []
+        hydratingMessageIDs = []
         expandedReasoningIDs = []
         scrollPositions = [:]
         requestedMessageID = nil
@@ -661,6 +731,8 @@ final class TraceModel: ObservableObject {
         messages = []
         hydratedMessages.removeAll(keepingCapacity: true)
         hydrationFailures.removeAll(keepingCapacity: true)
+        hydrationOrder.removeAll(keepingCapacity: true)
+        hydratingMessageIDs.removeAll(keepingCapacity: true)
         expandedReasoningIDs.removeAll()
         mainSearch.query = ""
         mainSearch.search()
@@ -785,16 +857,31 @@ final class TraceModel: ObservableObject {
     }
 
     func hydrate(_ message: MessageSummary) {
-        guard hydratedMessages[message.id] == nil, let coordinator else { return }
+        if hydratedMessages[message.id] != nil {
+            hydrationOrder.removeAll { $0 == message.id }
+            hydrationOrder.append(message.id)
+            return
+        }
+        guard !hydratingMessageIDs.contains(message.id), let coordinator else { return }
+        hydratingMessageIDs.insert(message.id)
         let request = sessionRequestID
         let generation = selectedSession?.sourceGeneration
         hydrationFailures.remove(message.id)
         Task {
+            defer { hydratingMessageIDs.remove(message.id) }
             let start = ContinuousClock.now
             do {
                 let hydrated = try await coordinator.hydrate(message)
                 guard sessionRequestID == request, selectedSession?.sourceGeneration == generation else { return }
-                hydratedMessages[message.id] = hydrated
+                var cache = hydratedMessages
+                cache[message.id] = hydrated
+                hydrationOrder.removeAll { $0 == message.id }
+                hydrationOrder.append(message.id)
+                if hydrationOrder.count > hydrationCacheLimit {
+                    let evicted = hydrationOrder.removeFirst()
+                    cache.removeValue(forKey: evicted)
+                }
+                hydratedMessages = cache
                 let elapsed = start.duration(to: .now)
                 let milliseconds = Double(elapsed.components.seconds) * 1_000
                     + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
@@ -965,7 +1052,9 @@ final class TraceModel: ObservableObject {
     }
 
     func prepareToTerminate() async {
-        watcher?.stop()
+        watchers.forEach { $0.stop() }
+        watchers = []
+        safetyVerificationTask?.cancel()
         sourceChangeTask?.cancel()
         cancelAutomaticSearch()
         if let timeZoneObserver {
@@ -988,36 +1077,133 @@ final class TraceModel: ObservableObject {
         return [ClaudeCodeSource(roots: [defaultClaude] + custom), CodexSource(), GeminiSource()]
     }
 
-    private func startWatching(_ roots: [URL]) {
-        guard watcher == nil, settings.onboardingComplete else { return }
+    private func startWatching(
+        _ roots: [URL], forceRootReconciliation: Bool = false,
+        additionalRecoveryRoots: [URL] = []
+    ) async {
+        guard watchers.isEmpty, settings.onboardingComplete, let database else { return }
         let metadataRoots = makeSources().filter { $0.agent == .codex }.flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
         let canonicalRoots = roots.map { TraceFileIO.canonicalPath($0.path) }
         let canonicalMetadataRoots = metadataRoots.map { TraceFileIO.canonicalPath($0.path) }
-        let watcher = FSEventsWatcher(roots: roots + metadataRoots, onChange: { [weak self] changes in
-            Task { @MainActor [weak self] in
-                guard let self, self.settings.onboardingComplete else { return }
-                let paths = changes.paths.compactMap { path -> String? in
-                    let canonical = TraceFileIO.canonicalPath(path)
-                    if canonicalRoots.contains(where: { $0.contains(canonical) }) { return canonical.path }
-                    let url = URL(fileURLWithPath: canonical.path)
-                    let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
-                    if canonicalMetadataRoots.contains(where: { $0.comparisonKey == parent.comparisonKey }),
-                       TraceFileIO.isCodexMetadataSidecar(url) {
-                        return canonical.path
-                    }
-                    return nil
-                }
-                let reconcile = changes.reconciliationPaths.contains { path in
-                    let changed = TraceFileIO.canonicalPath(path)
-                    return canonicalRoots.contains { $0.intersects(changed) }
-                }
-                guard !paths.isEmpty || reconcile else { return }
-                await self.scheduler?.request(paths: Set(paths), reconcile: reconcile,
-                                              scope: self.settings.indexScope)
+        watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
+        watcherStartupPending = true
+        bufferedSourceChanges = SourceChanges()
+        startupReconciliationPaths = forceRootReconciliation
+            ? Set((canonicalRoots + additionalRecoveryRoots.map { TraceFileIO.canonicalPath($0.path) }).map(\.path))
+            : []
+
+        let statistics = try? await database.statistics()
+        let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
+        var grouped: [String: [URL]] = [:]
+        for root in roots + metadataRoots {
+            grouped[Self.volumeIdentifier(for: root), default: []].append(root)
+        }
+        for (volumeID, volumeRoots) in grouped {
+            let checkpoint = try? await database.eventCheckpoint(volumeID: volumeID)
+            if checkpoint == nil {
+                let sourcePaths = volumeRoots.map { TraceFileIO.canonicalPath($0.path) }
+                    .filter { candidate in canonicalRoots.contains { $0.comparisonKey == candidate.comparisonKey } }
+                    .map(\.path)
+                startupReconciliationPaths.formUnion(sourcePaths)
             }
-        })
-        watcher.start()
-        self.watcher = watcher
+            let watcher = FSEventsWatcher(
+                roots: volumeRoots, identifier: volumeID, sinceWhen: checkpoint
+            ) { [weak self] changes in
+                Task { @MainActor [weak self] in
+                    guard let self, self.settings.onboardingComplete else { return }
+                    var relevant = SourceChanges()
+                    relevant.paths = Set(changes.paths.compactMap { path -> String? in
+                        let canonical = TraceFileIO.canonicalPath(path)
+                        if canonicalRoots.contains(where: { $0.contains(canonical) }) { return canonical.path }
+                        let url = URL(fileURLWithPath: canonical.path)
+                        let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
+                        if canonicalMetadataRoots.contains(where: { $0.comparisonKey == parent.comparisonKey }),
+                           TraceFileIO.isCodexMetadataSidecar(url) { return canonical.path }
+                        return nil
+                    })
+                    for path in changes.reconciliationPaths {
+                        let changed = TraceFileIO.canonicalPath(path)
+                        for root in canonicalRoots where root.intersects(changed) {
+                            relevant.reconciliationPaths.insert(
+                                changed.contains(root) ? root.path : changed.path
+                            )
+                        }
+                    }
+                    relevant.recoveryReasons = changes.recoveryReasons
+                    relevant.watermarks = changes.watermarks
+                    relevant.historyDone = changes.historyDone
+                    guard !relevant.paths.isEmpty || relevant.requiresReconciliation
+                        || !relevant.watermarks.isEmpty else { return }
+                    if self.watcherStartupPending { self.bufferedSourceChanges.merge(relevant) }
+                    else { await self.submitSourceChanges(relevant) }
+                }
+            }
+            watcher.start()
+            watchers.append(watcher)
+        }
+
+        let lastSafety = try? await database.lastSafetyReconciliationMilliseconds()
+        let day: Int64 = 24 * 60 * 60 * 1_000
+        startupSafetyDue = lastSafety == nil
+            || Int64(Date().timeIntervalSince1970 * 1_000) - (lastSafety ?? 0) >= day
+        if forceRootReconciliation {
+            startupActivity = .rootRecovery
+        } else if !startupReconciliationPaths.isEmpty {
+            startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
+        } else {
+            startupActivity = .cachedLaunch
+        }
+    }
+
+    private func submitSourceChanges(_ changes: SourceChanges) async {
+        guard let scheduler else { return }
+        await scheduler.request(
+            paths: changes.paths,
+            reconciliationPaths: changes.reconciliationPaths,
+            scope: settings.indexScope,
+            activity: activity(for: changes),
+            watermarks: changes.watermarks
+        )
+    }
+
+    private func activity(for changes: SourceChanges) -> IndexActivity {
+        if changes.recoveryReasons.contains(.eventsDropped)
+            || changes.recoveryReasons.contains(.eventIDsWrapped) { return .eventStreamRecovery }
+        if changes.recoveryReasons.contains(.rootChanged) { return .rootRecovery }
+        if changes.requiresReconciliation { return .subtreeRecovery }
+        return changes.historyDone ? .launchCatchUp : .fileChanges
+    }
+
+    private func scheduleSafetyVerification() {
+        guard safetyVerificationTask == nil else { return }
+        safetyVerificationTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            guard let self, let scheduler = self.scheduler else { return }
+            await scheduler.waitUntilIdle()
+            guard !Task.isCancelled else { return }
+            await scheduler.request(
+                reconciliationPaths: Set(self.watchedSourceRoots.map { TraceFileIO.canonicalPath($0.path).path }),
+                scope: self.settings.indexScope,
+                activity: .safetyVerification
+            )
+            self.startupSafetyDue = false
+            self.safetyVerificationTask = nil
+        }
+    }
+
+    private static func volumeIdentifier(for url: URL) -> String {
+        var candidate = url.standardizedFileURL
+        while !FileManager.default.fileExists(atPath: candidate.path) {
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path { break }
+            candidate = parent
+        }
+        if let identifier = try? candidate.resourceValues(
+            forKeys: [.volumeUUIDStringKey]
+        ).volumeUUIDString { return identifier }
+        var info = stat()
+        if stat(candidate.path, &info) == 0 { return "device-\(UInt64(info.st_dev))" }
+        return "volume-unknown"
     }
 
     private func reloadSummaries(
@@ -1105,6 +1291,8 @@ final class TraceModel: ObservableObject {
                             if changed {
                                 hydratedMessages.removeAll(keepingCapacity: true)
                                 hydrationFailures.removeAll(keepingCapacity: true)
+                                hydrationOrder.removeAll(keepingCapacity: true)
+                                hydratingMessageIDs.removeAll(keepingCapacity: true)
                             }
                             messages = rows
                         }
