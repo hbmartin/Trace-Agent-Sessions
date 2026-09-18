@@ -126,6 +126,10 @@ final class IndexingRegressionTests: XCTestCase {
 
         let sessions = try await database.sessions(projectCanonicalKey: "/tmp/traceexample")
         XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(
+            Set(sessions.map(\.lastActivityMilliseconds)).count, 1,
+            "the fixture must exercise the session-ID tie-break"
+        )
         XCTAssertEqual(sessions.map(\.id), sessions.map(\.id).sorted(by: >))
     }
 

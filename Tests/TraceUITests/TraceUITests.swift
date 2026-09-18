@@ -2051,6 +2051,141 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testSidebarRevealRequestFallsBackWhenAnAcknowledgementNeverArrives() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let fallback = directory.appendingPathComponent("sidebar-reveal-fallback")
+        app.launchEnvironment["TRACE_TEST_SKIP_SIDEBAR_PROJECT_REVEAL_ACK"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_DELAY_MS"] = "300"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_PATH"] = fallback.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15))
+        search.click()
+        search.typeText("Find the sample answer")
+        let result = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Find the sample answer"
+        )).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        result.click()
+
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForFile(fallback, timeout: 5),
+                      "a missing sidebar acknowledgement must release the reveal request")
+    }
+
+    func testGlobalSearchKeepsSelectedSessionBeyondProjectListLimit() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let file = directory.appendingPathComponent("Sources/Claude/many-sessions.jsonl")
+        var data = Data()
+        for index in 0..<505 {
+            let row: [String: Any] = [
+                "type": "user", "uuid": "large-session-message-\(index)",
+                "sessionId": "large-session-\(index)", "cwd": "/tmp/TraceUIExample",
+                "timestamp": 1_700_000_000_000 + index * 1_000,
+                "message": ["content": index == 0
+                    ? "OldestSessionSurvivalNeedle"
+                    : "Large project session \(index)"],
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: row))
+            data.append(10)
+        }
+        try data.write(to: file)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 20))
+        search.click()
+        search.typeText("OldestSessionSurvivalNeedle")
+        let result = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "OldestSessionSurvivalNeedle"
+        )).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        let sessionID = try sqliteInteger(
+            directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT id FROM session WHERE external_id='large-session-0';"
+        )
+        result.click()
+
+        let session = app.descendants(matching: .any)[
+            "sessionSidebarRow-\(sessionID)"
+        ].firstMatch
+        XCTAssertTrue(session.wait(for: \.isHittable, toEqual: true, timeout: 15),
+                      "the selected session must be merged beyond the 500-row project page")
+        XCTAssertTrue(session.isSelected)
+    }
+
+    func testDeselectingSelectedProjectClosesAnOpenTranscript() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].waitForExistence(timeout: 15))
+        let projectID = try sqliteInteger(
+            directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT id FROM project WHERE canonical_key='/tmp/traceuiexample';"
+        )
+        let project = app.descendants(matching: .any)[
+            "projectSidebarRow-\(projectID)"
+        ].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 10))
+        project.click()
+        let session = app.staticTexts["Find the sample answer"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 10))
+        session.click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+
+        XCUIElement.perform(withKeyModifiers: [.command]) { project.click() }
+
+        XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+        XCTAssertFalse(project.isSelected,
+                       "deselecting the project row must clear both selections")
+    }
+
+    func testCrossProjectSearchResultDoesNotRunAnIntermediateMainSearch() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addSession(
+            id: "cross-project-target", title: "Cross project target",
+            project: "CrossProject", timestamp: 1_800_000_000_000,
+            content: "CrossProjectNeedle", directory: directory
+        )
+        let audit = directory.appendingPathComponent("cross-project-search-requests")
+        app.launchEnvironment["TRACE_TEST_SEARCH_REQUEST_AUDIT_PATH"] = audit.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].waitForExistence(timeout: 15))
+        app.staticTexts["TraceUIExample"].click()
+        let mainSearch = app.textFields["mainSearch"]
+        XCTAssertTrue(mainSearch.waitForExistence(timeout: 10))
+        mainSearch.click()
+        mainSearch.typeText("Find")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Find the sample answer"
+        )).firstMatch.waitForExistence(timeout: 10))
+
+        app.typeKey("w", modifierFlags: .command)
+        ensurePopoverOpen(app)
+        let globalSearch = app.textFields["Search all sessions"]
+        XCTAssertTrue(globalSearch.waitForExistence(timeout: 10))
+        globalSearch.click()
+        globalSearch.typeText("CrossProjectNeedle")
+        let result = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "CrossProjectNeedle"
+        )).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        try? FileManager.default.removeItem(at: audit)
+        result.click()
+
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(fileLines(in: audit), [],
+                       "cross-project navigation must not search stale main criteria")
+    }
+
     private func addSession(
         id: String, title: String, project: String, timestamp: Int64,
         content: String, directory: URL

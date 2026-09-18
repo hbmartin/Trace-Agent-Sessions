@@ -93,6 +93,7 @@ private struct SessionSidebar: View {
             let height = min(available - minimum, max(minimum, available * paneFraction))
             let filteredProjects = model.filteredProjects
             let sessions = model.sessions
+            let selectedProjectID = model.sidebarSelectedProjectID
             let reveal = model.sidebarRevealRequest
             let projectRevealTaskID = SidebarRevealTaskID(
                 token: reveal?.token,
@@ -122,7 +123,7 @@ private struct SessionSidebar: View {
                         .accessibilityIdentifier("projectFilter")
                         .padding(.horizontal, 12).padding(.bottom, 8)
                     ScrollViewReader { proxy in
-                        List(selection: Binding(get: { model.selectedProjectID }, set: { model.selectProject($0) })) {
+                        List(selection: Binding(get: { selectedProjectID }, set: { model.selectProject($0) })) {
                             ForEach(filteredProjects) { project in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(project.displayName).lineLimit(1)
@@ -131,7 +132,7 @@ private struct SessionSidebar: View {
                                 .accessibilityElement(children: .contain)
                                 .accessibilityIdentifier("projectSidebarRow-\(project.id)")
                                 .accessibilityAddTraits(
-                                    model.selectedProjectID == project.id ? .isSelected : []
+                                    selectedProjectID == project.id ? .isSelected : []
                                 )
                                 .id(project.id)
                                 .tag(Optional(project.id))
@@ -148,6 +149,10 @@ private struct SessionSidebar: View {
                                   model.sidebarRevealRequest?.token == reveal.token else { return }
                             proxy.scrollTo(projectID, anchor: .center)
                             handledProjectRevealToken = reveal.token
+                            if TraceTestHooks.isUITesting,
+                               TraceTestHooks.environment["TRACE_TEST_SKIP_SIDEBAR_PROJECT_REVEAL_ACK"] != nil {
+                                return
+                            }
                             model.acknowledgeSidebarProjectReveal(token: reveal.token)
                         }
                     }
@@ -208,13 +213,13 @@ private struct SessionSidebar: View {
                         .task(id: sessionRevealTaskID) {
                             guard let reveal = model.sidebarRevealRequest,
                                   handledSessionRevealToken != reveal.token,
-                                  model.sessions.contains(where: { $0.id == reveal.sessionID }) else {
+                                  let sessionID = sessionRevealTaskID.rowID else {
                                 return
                             }
                             try? await Task.sleep(for: .milliseconds(50))
                             guard !Task.isCancelled,
                                   model.sidebarRevealRequest?.token == reveal.token else { return }
-                            proxy.scrollTo(reveal.sessionID, anchor: .center)
+                            proxy.scrollTo(sessionID, anchor: .center)
                             handledSessionRevealToken = reveal.token
                             model.acknowledgeSidebarSessionReveal(token: reveal.token)
                         }

@@ -32,6 +32,78 @@ final class TraceModel: ObservableObject {
             }
         }
     }
+
+    private struct IndexProgressDisposition {
+        let passTerminal: Bool
+        let workflowTerminal: Bool
+        let supersededTerminal: Bool
+        let projectReconciliation: ProjectReconciliationMode
+    }
+
+    private struct SessionLookupResult {
+        let succeeded: Bool
+        let session: SessionSummary?
+    }
+
+    private struct IndexWorkflowState {
+        private struct Replacement {
+            var displacedPassIDs: Set<UUID>
+        }
+
+        private(set) var activePassID: UUID?
+        private var replacement: Replacement?
+
+        var isActive: Bool { activePassID != nil || replacement != nil }
+
+        mutating func beginReplacement() {
+            if replacement == nil {
+                replacement = .init(displacedPassIDs: [])
+            }
+            if let activePassID { replacement?.displacedPassIDs.insert(activePassID) }
+        }
+
+        mutating func receive(_ update: IndexProgress) -> IndexProgressDisposition {
+            let passTerminal = [.complete, .failed, .cancelled].contains(update.phase)
+            let supersededTerminal: Bool
+            if passTerminal, let replacement {
+                supersededTerminal = replacement.displacedPassIDs.contains(update.passID)
+                    || (update.phase == .cancelled
+                        && activePassID == nil)
+            } else {
+                supersededTerminal = false
+            }
+
+            if passTerminal {
+                if activePassID == update.passID { activePassID = nil }
+                if supersededTerminal {
+                    replacement?.displacedPassIDs.remove(update.passID)
+                } else {
+                    replacement = nil
+                }
+            } else {
+                activePassID = update.passID
+                if replacement?.displacedPassIDs.contains(update.passID) != true {
+                    replacement = nil
+                }
+            }
+
+            let workflowTerminal = passTerminal && !supersededTerminal
+            let projectReconciliation: ProjectReconciliationMode
+            if !workflowTerminal {
+                projectReconciliation = .ongoing
+            } else if update.phase == .complete {
+                projectReconciliation = .completed
+            } else {
+                projectReconciliation = .terminalRetaining
+            }
+            return .init(
+                passTerminal: passTerminal,
+                workflowTerminal: workflowTerminal,
+                supersededTerminal: supersededTerminal,
+                projectReconciliation: projectReconciliation
+            )
+        }
+    }
     let settings: AppSettings
     let globalSearch = SessionSearchModel()
     var mainSearch = SessionSearchModel()
@@ -106,7 +178,8 @@ final class TraceModel: ObservableObject {
     private var usageRefreshPending = false
     private var usageRepairPending = false
     private var deferredUsageRepairTask: Task<Void, Never>?
-    private var indexingPassActive = false
+    private var indexWorkflow = IndexWorkflowState()
+    private var indexingPassActive: Bool { indexWorkflow.isActive }
     private var lastAutomaticSearchRefresh: ContinuousClock.Instant?
     private var lastObservedPassID: UUID?
     private var lastObservedMutationRevision = 0
@@ -122,9 +195,9 @@ final class TraceModel: ObservableObject {
     private var mayRestoreSession = true
     private var started = false
     private var initialIndexRequested = false
-    private var replacementIndexPassExpected = false
     private var sidebarProjectRevealAcknowledged = false
     private var sidebarSessionRevealAcknowledged = false
+    private var sidebarRevealFallbackTask: Task<Void, Never>?
 
     init(settings: AppSettings = AppSettings()) {
         self.settings = settings
@@ -249,35 +322,18 @@ final class TraceModel: ObservableObject {
     }
 
     private func receiveProgress(_ update: IndexProgress) async {
-        let terminal = [.complete, .failed, .cancelled].contains(update.phase)
-        let reconciliationMode: ProjectReconciliationMode
-        switch update.phase {
-        case .complete:
-            reconciliationMode = .completed
-            replacementIndexPassExpected = false
-        case .failed:
-            reconciliationMode = .terminalRetaining
-            replacementIndexPassExpected = false
-        case .cancelled where replacementIndexPassExpected:
-            reconciliationMode = .ongoing
-        case .cancelled:
-            reconciliationMode = .terminalRetaining
-        default:
-            reconciliationMode = .ongoing
-            replacementIndexPassExpected = false
-        }
-        indexingPassActive = !terminal
-            || (update.phase == .cancelled && replacementIndexPassExpected)
-        if !terminal { usageSnapshotRequestID = UUID() }
-        if terminal {
+        let disposition = indexWorkflow.receive(update)
+        if !disposition.passTerminal { usageSnapshotRequestID = UUID() }
+        if disposition.passTerminal {
             TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
         }
         if update.incremental {
-            if terminal {
+            if disposition.passTerminal {
                 incrementalProgressTask?.cancel()
                 incrementalProgressTask = nil
                 pendingIncrementalProgress = nil
-                if incrementalProgressVisible || update.phase == .failed || update.failedFiles > 0
+                if !disposition.supersededTerminal,
+                   incrementalProgressVisible || update.phase == .failed || update.failedFiles > 0
                     || progress.phase == .failed || progress.failedFiles > 0
                     || update.unresolvedFailedFiles > 0 || progress.unresolvedFailedFiles > 0
                     || update.metadataWarning != nil || update.rollupError != nil {
@@ -297,11 +353,13 @@ final class TraceModel: ObservableObject {
                     }
                 }
             }
-        } else {
+        } else if !disposition.supersededTerminal {
             progress = update
         }
 
-        if terminal { handleTerminalUsageProgress(update) }
+        if disposition.passTerminal {
+            handleTerminalUsageProgress(update, finalize: disposition.workflowTerminal)
+        }
         else {
             if usageRepairPending, deferredUsageRepairTask != nil {
                 deferredUsageRepairTask?.cancel()
@@ -309,21 +367,21 @@ final class TraceModel: ObservableObject {
             }
             updateCostsTotalsUpdating()
         }
-        observeSearchMutation(update, terminal: terminal)
+        observeSearchMutation(update, terminal: disposition.workflowTerminal)
 
-        let shouldRefresh = terminal
+        let shouldRefresh = disposition.passTerminal
             || ((!update.incremental || incrementalProgressVisible)
                 && lastSummaryRefresh.duration(to: .now) >= .milliseconds(250))
         if shouldRefresh {
             lastSummaryRefresh = .now
             await reloadSummaries(
-                lightweight: !terminal,
-                projectReconciliation: reconciliationMode
+                lightweight: !disposition.workflowTerminal,
+                projectReconciliation: disposition.projectReconciliation
             )
         }
     }
 
-    private func handleTerminalUsageProgress(_ update: IndexProgress) {
+    private func handleTerminalUsageProgress(_ update: IndexProgress, finalize: Bool) {
         if let rollupError = update.rollupError {
             costsError = rollupError
             usageRepairPending = true
@@ -332,6 +390,10 @@ final class TraceModel: ObservableObject {
         if update.phase != .complete && (update.indexChanged || update.rollupsChanged) {
             usageRepairPending = true
             usageRefreshPending = true
+        }
+        guard finalize else {
+            updateCostsTotalsUpdating()
+            return
         }
         if usageRepairPending {
             scheduleDeferredUsageRepair()
@@ -470,7 +532,7 @@ final class TraceModel: ObservableObject {
            !mainSearch.query.isEmpty, !mainSearch.protectsPagination,
            !mainSearch.isResolvingProjectFilter {
             mainSearchNeedsRefresh = false
-            mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
+            syncMainSearchProjectFilter()
             mainSearch.search(sort: settings.searchSort, trigger: .automatic)
         }
     }
@@ -506,20 +568,22 @@ final class TraceModel: ObservableObject {
 
     func rebuildIndex() {
         guard settings.onboardingComplete, let scheduler else { return }
+        beginIndexReplacement()
         prepareForIndexReset()
         Task { await scheduler.request(rebuild: true, scope: settings.indexScope) }
     }
 
     func reloadSourcesAndRebuild() {
+        guard let database, let previousScheduler = scheduler else { return }
         sourceChangeTask?.cancel()
         let previousRoots = watchedSourceRoots
         watchers.forEach { $0.stop() }
         watchers = []
         safetyVerificationTask?.cancel()
-        replacementIndexPassExpected = true
+        beginIndexReplacement()
         sourceChangeTask = Task {
-            await scheduler?.stop()
-            guard !Task.isCancelled, let database else { return }
+            await previousScheduler.stop()
+            guard !Task.isCancelled else { return }
             let sources = makeSources()
             let coordinator = IndexCoordinator(database: database, sources: sources)
             self.coordinator = coordinator
@@ -542,12 +606,26 @@ final class TraceModel: ObservableObject {
     }
     func searchMain() {
         mainSearchNeedsRefresh = false
-        mainSearch.filters.projectCanonicalKey = selectedProjectCanonicalKey
+        syncMainSearchProjectFilter()
         mainSearch.search(sort: settings.searchSort)
+    }
+
+    private func syncMainSearchProjectFilter() {
+        mainSearch.setProjectFilter(
+            canonicalKey: selectedProjectCanonicalKey,
+            displayName: selectedProjectDisplayName
+        )
     }
     var filteredProjects: [ProjectSummary] {
         let query = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty ? projects : projects.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
+    }
+    var sidebarSelectedProjectID: Int64? {
+        guard let selectedProjectID, let selectedProjectCanonicalKey,
+              projects.contains(where: {
+                  $0.id == selectedProjectID && $0.canonicalKey == selectedProjectCanonicalKey
+              }) else { return nil }
+        return selectedProjectID
     }
 
     func sessionErrorText(_ session: SessionSummary) async -> String {
@@ -605,7 +683,6 @@ final class TraceModel: ObservableObject {
     }
 
     private func prepareForIndexReset() {
-        replacementIndexPassExpected = true
         cancelAutomaticSearch()
         deferredUsageRepairTask?.cancel()
         deferredUsageRepairTask = nil
@@ -646,6 +723,14 @@ final class TraceModel: ObservableObject {
         mainSearch.resetForIndexReset(awaitsProjectResolution: true)
     }
 
+    private func beginIndexReplacement() {
+        indexWorkflow.beginReplacement()
+        usageSnapshotRequestID = UUID()
+        deferredUsageRepairTask?.cancel()
+        deferredUsageRepairTask = nil
+        updateCostsTotalsUpdating()
+    }
+
     func selectProject(_ projectID: Int64?) {
         if let projectID {
             guard let project = projects.first(where: { $0.id == projectID }) else { return }
@@ -655,18 +740,22 @@ final class TraceModel: ObservableObject {
             selectedProjectID = project.id
             selectedProjectCanonicalKey = project.canonicalKey
             selectedProjectDisplayName = project.displayName
+            searchMain()
             loadProjectSessions()
             return
         }
         // SwiftUI writes nil when a selected row temporarily disappears. Treat nil as
-        // deliberate only while the selected row is still visible and no session is open.
-        guard let selectedProjectID,
-              selectedSessionID == nil,
-              filteredProjects.contains(where: { $0.id == selectedProjectID }) else { return }
+        // deliberate only while the selected row is still visible.
+        guard let selectedProjectID, let selectedCanonicalKey = selectedProjectCanonicalKey,
+              filteredProjects.contains(where: {
+                  $0.id == selectedProjectID
+                      && $0.canonicalKey == selectedCanonicalKey
+              }) else { return }
         clearSession()
         self.selectedProjectID = nil
         selectedProjectCanonicalKey = nil
         selectedProjectDisplayName = nil
+        searchMain()
         loadProjectSessions()
     }
 
@@ -675,7 +764,6 @@ final class TraceModel: ObservableObject {
         projectRequestID = request
         let projectCanonicalKey = selectedProjectCanonicalKey
         sessions = []
-        searchMain()
         guard let database else { return }
         Task {
             let rows = await projectSessions(
@@ -694,9 +782,19 @@ final class TraceModel: ObservableObject {
         ensuring sessionID: Int64? = nil,
         database: IndexDatabase
     ) async -> [SessionSummary] {
+        let lookup = await lookupSession(id: sessionID, database: database)
+        return await projectSessions(
+            canonicalKey: canonicalKey, ensuring: lookup.session, database: database
+        )
+    }
+
+    private func projectSessions(
+        canonicalKey: String?,
+        ensuring session: SessionSummary?,
+        database: IndexDatabase
+    ) async -> [SessionSummary] {
         var rows = (try? await database.sessions(projectCanonicalKey: canonicalKey)) ?? []
-        if let sessionID, !rows.contains(where: { $0.id == sessionID }),
-           let session = try? await database.session(id: sessionID),
+        if let session, !rows.contains(where: { $0.id == session.id }),
            session.projectCanonicalKey == canonicalKey {
             rows.append(session)
             rows.sort {
@@ -707,6 +805,17 @@ final class TraceModel: ObservableObject {
             }
         }
         return rows
+    }
+
+    private func lookupSession(
+        id: Int64?, database: IndexDatabase
+    ) async -> SessionLookupResult {
+        guard let id else { return .init(succeeded: true, session: nil) }
+        do {
+            return .init(succeeded: true, session: try await database.session(id: id))
+        } catch {
+            return .init(succeeded: false, session: nil)
+        }
     }
 
     func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil) {
@@ -735,7 +844,9 @@ final class TraceModel: ObservableObject {
         hydratingMessageIDs.removeAll(keepingCapacity: true)
         expandedReasoningIDs.removeAll()
         mainSearch.query = ""
-        mainSearch.search()
+        mainSearchNeedsRefresh = false
+        syncMainSearchProjectFilter()
+        mainSearch.search(sort: settings.searchSort)
         guard let database else { return }
         Task {
             let session = try? await database.session(id: sessionID)
@@ -744,6 +855,7 @@ final class TraceModel: ObservableObject {
             selectedSession = session
             if let session,
                adoptProjectIdentity(from: session) {
+                syncMainSearchProjectFilter()
                 loadProjectSessions(ensuring: sessionID)
             }
             messages = rows
@@ -757,6 +869,7 @@ final class TraceModel: ObservableObject {
 
     func openSession(_ session: SessionSummary) {
         prepareExternalSessionSelection(
+            projectID: session.projectID,
             projectCanonicalKey: session.projectCanonicalKey,
             projectDisplayName: nil,
             sessionID: session.id
@@ -766,6 +879,7 @@ final class TraceModel: ObservableObject {
 
     func openSearchResult(_ result: SearchResult) {
         prepareExternalSessionSelection(
+            projectID: result.projectID,
             projectCanonicalKey: result.projectCanonicalKey,
             projectDisplayName: result.projectName,
             sessionID: result.sessionID
@@ -774,13 +888,14 @@ final class TraceModel: ObservableObject {
     }
 
     private func prepareExternalSessionSelection(
+        projectID: Int64,
         projectCanonicalKey: String,
         projectDisplayName: String?,
         sessionID: Int64
     ) {
         let project = projects.first { $0.canonicalKey == projectCanonicalKey }
         let resolvedDisplayName = project?.displayName ?? projectDisplayName
-        selectedProjectID = project?.id
+        selectedProjectID = project?.id ?? projectID
         selectedProjectCanonicalKey = projectCanonicalKey
         selectedProjectDisplayName = resolvedDisplayName
 
@@ -801,7 +916,7 @@ final class TraceModel: ObservableObject {
         let previousDisplayName = selectedProjectDisplayName
         let project = projects.first { $0.canonicalKey == session.projectCanonicalKey }
         selectedProjectCanonicalKey = session.projectCanonicalKey
-        selectedProjectID = project?.id
+        selectedProjectID = project?.id ?? session.projectID
         selectedProjectDisplayName = project?.displayName ?? (
             previousCanonicalKey == session.projectCanonicalKey
                 ? previousDisplayName
@@ -811,12 +926,26 @@ final class TraceModel: ObservableObject {
     }
 
     private func setSidebarRevealRequest(_ request: SidebarRevealRequest) {
+        sidebarRevealFallbackTask?.cancel()
         sidebarProjectRevealAcknowledged = false
         sidebarSessionRevealAcknowledged = false
         sidebarRevealRequest = request
+        let delay = TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_DELAY_MS", cappedAt: 5_000
+        ) ?? 5_000
+        sidebarRevealFallbackTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(delay)) }
+            catch { return }
+            guard let self, self.sidebarRevealRequest?.token == request.token else { return }
+            TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_PATH")
+            self.invalidateSidebarRevealRequest(token: request.token)
+        }
     }
 
-    private func invalidateSidebarRevealRequest() {
+    private func invalidateSidebarRevealRequest(token: UUID? = nil) {
+        if let token, sidebarRevealRequest?.token != token { return }
+        sidebarRevealFallbackTask?.cancel()
+        sidebarRevealFallbackTask = nil
         sidebarRevealRequest = nil
         sidebarProjectRevealAcknowledged = false
         sidebarSessionRevealAcknowledged = false
@@ -956,23 +1085,26 @@ final class TraceModel: ObservableObject {
         guard deferredUsageRepairTask == nil else { return }
         deferredUsageRepairTask = Task { [weak self] in
             guard let self else { return }
-            while self.usageRepairPending {
-                await self.scheduler?.waitUntilIdle()
-                guard !Task.isCancelled else { return }
-                if self.indexingPassActive { continue }
-                TraceTestHooks.touch(
-                    pathKey: "TRACE_TEST_USAGE_REPAIR_QUIET_PERIOD_STARTED_PATH"
-                )
-                let delay = TraceTestHooks.delayMilliseconds(
-                    for: "TRACE_TEST_USAGE_REPAIR_QUIET_DELAY_MS", cappedAt: 5_000
-                ) ?? 1_000
-                do { try await Task.sleep(for: .milliseconds(delay)) }
-                catch { return }
-                guard !Task.isCancelled else { return }
-                await self.scheduler?.waitUntilIdle()
-                guard !Task.isCancelled else { return }
-                if self.indexingPassActive { continue }
-                break
+            await self.scheduler?.waitUntilIdle()
+            guard !Task.isCancelled else { return }
+            if self.indexingPassActive {
+                self.deferredUsageRepairTask = nil
+                return
+            }
+            TraceTestHooks.touch(
+                pathKey: "TRACE_TEST_USAGE_REPAIR_QUIET_PERIOD_STARTED_PATH"
+            )
+            let delay = TraceTestHooks.delayMilliseconds(
+                for: "TRACE_TEST_USAGE_REPAIR_QUIET_DELAY_MS", cappedAt: 5_000
+            ) ?? 1_000
+            do { try await Task.sleep(for: .milliseconds(delay)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            await self.scheduler?.waitUntilIdle()
+            guard !Task.isCancelled else { return }
+            if self.indexingPassActive {
+                self.deferredUsageRepairTask = nil
+                return
             }
             self.deferredUsageRepairTask = nil
             if self.usageRepairPending {
@@ -1022,6 +1154,11 @@ final class TraceModel: ObservableObject {
             costsError = nil
             updateCostsTotalsUpdating()
             reloadCosts()
+        } catch is CancellationError {
+            guard usageSnapshotRequestID == request else { return }
+            usageRepairPending = usageRepairPending || repairIfDirty
+            usageRefreshPending = usageRepairPending
+            updateCostsTotalsUpdating()
         } catch {
             guard usageSnapshotRequestID == request else { return }
             costsError = "Could not update token totals: \(error.localizedDescription)"
@@ -1057,6 +1194,7 @@ final class TraceModel: ObservableObject {
         safetyVerificationTask?.cancel()
         sourceChangeTask?.cancel()
         cancelAutomaticSearch()
+        invalidateSidebarRevealRequest()
         if let timeZoneObserver {
             NotificationCenter.default.removeObserver(timeZoneObserver)
             self.timeZoneObserver = nil
@@ -1219,9 +1357,13 @@ final class TraceModel: ObservableObject {
         let projectCanonicalKey = selectedProjectCanonicalKey
         let projectRequest = projectRequestID
         let ensuredSessionID = selectedSessionID
+        let selectedSessionRequest = sessionRequestID
+        let loadedSelectedSession = await lookupSession(
+            id: ensuredSessionID, database: database
+        )
         let loadedSessions = await projectSessions(
             canonicalKey: projectCanonicalKey,
-            ensuring: ensuredSessionID,
+            ensuring: loadedSelectedSession.session,
             database: database
         )
         if projectReconciliation != .ongoing,
@@ -1277,29 +1419,45 @@ final class TraceModel: ObservableObject {
            projectRequestID == projectRequest {
             sessions = loadedSessions
         }
-        if let sessionID = selectedSessionID {
-            let request = sessionRequestID
-            let loadedSession = try? await database.session(id: sessionID)
-            if selectedSessionID == sessionID, sessionRequestID == request, summaryRequestID == refresh {
-                if let loadedSession {
-                    let changed = selectedSession?.sourceGeneration != loadedSession.sourceGeneration
-                    selectedSession = loadedSession
-                    if changed || loadedSession.messageCount != messages.count {
-                        let rows = (try? await database.messages(sessionID: sessionID)) ?? []
-                        if selectedSessionID == sessionID, sessionRequestID == request,
-                           summaryRequestID == refresh {
-                            if changed {
-                                hydratedMessages.removeAll(keepingCapacity: true)
-                                hydrationFailures.removeAll(keepingCapacity: true)
-                                hydrationOrder.removeAll(keepingCapacity: true)
-                                hydratingMessageIDs.removeAll(keepingCapacity: true)
-                            }
-                            messages = rows
+        if projectReconciliation != .ongoing,
+           let reveal = sidebarRevealRequest {
+            let projectUnavailable = loadedProjects.map { projects in
+                !projects.contains(where: { $0.canonicalKey == reveal.projectCanonicalKey })
+            } ?? false
+            let sessionUnavailable = ensuredSessionID == reveal.sessionID
+                && loadedSelectedSession.succeeded
+                && (loadedSelectedSession.session == nil
+                    || loadedSelectedSession.session?.projectCanonicalKey
+                        != reveal.projectCanonicalKey)
+            if projectUnavailable || sessionUnavailable {
+                invalidateSidebarRevealRequest(token: reveal.token)
+            }
+        }
+        if let sessionID = ensuredSessionID,
+           selectedSessionID == sessionID,
+           sessionRequestID == selectedSessionRequest,
+           summaryRequestID == refresh,
+           loadedSelectedSession.succeeded {
+            let loadedSession = loadedSelectedSession.session
+            if let loadedSession {
+                let changed = selectedSession?.sourceGeneration != loadedSession.sourceGeneration
+                selectedSession = loadedSession
+                if changed || loadedSession.messageCount != messages.count {
+                    let rows = (try? await database.messages(sessionID: sessionID)) ?? []
+                    if selectedSessionID == sessionID,
+                       sessionRequestID == selectedSessionRequest,
+                       summaryRequestID == refresh {
+                        if changed {
+                            hydratedMessages.removeAll(keepingCapacity: true)
+                            hydrationFailures.removeAll(keepingCapacity: true)
+                            hydrationOrder.removeAll(keepingCapacity: true)
+                            hydratingMessageIDs.removeAll(keepingCapacity: true)
                         }
+                        messages = rows
                     }
-                } else {
-                    clearSession()
                 }
+            } else {
+                clearSession()
             }
         }
         if lightweight || summaryRequestID != refresh { return }
@@ -1336,7 +1494,6 @@ final class TraceModel: ObservableObject {
         guard let project = loadedProjects.first(where: {
             $0.canonicalKey == selectedProjectCanonicalKey
         }) else {
-            if selectedProjectID != nil { selectedProjectID = nil }
             return
         }
         if selectedProjectID != project.id { selectedProjectID = project.id }

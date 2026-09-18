@@ -562,8 +562,7 @@ struct SearchResultList: View {
                         resultID: result.id,
                         resultSetID: search.resultSetID,
                         automaticResultRevision: search.automaticResultRevision,
-                        isResolvingProjectFilter: search.isResolvingProjectFilter,
-                        isLastResult: result.id == search.results.last?.id
+                        isResolvingProjectFilter: search.isResolvingProjectFilter
                     )) {
                         guard !search.isResolvingProjectFilter,
                               result.id == search.results.last?.id else { return }
@@ -594,7 +593,6 @@ private struct SearchLoadMoreTaskID: Hashable {
     let resultSetID: UUID
     let automaticResultRevision: Int
     let isResolvingProjectFilter: Bool
-    let isLastResult: Bool
 }
 
 private struct SearchProjectGroup: Identifiable {
