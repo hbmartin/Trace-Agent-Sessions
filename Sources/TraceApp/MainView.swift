@@ -495,7 +495,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 self.bookmark = bookmark
                 self.reportsHooks = reportsHooks
                 self.refreshesRowHeights = refreshesRowHeights
-                attemptsRemaining = refreshesRowHeights ? 10 : 3
+                attemptsRemaining = 12
             }
         }
 
@@ -589,6 +589,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             self.model = model
             let sessionChanged = self.sessionID != sessionID
             var refreshesRowHeights = false
+            var visibilityChanged = false
             if sessionChanged {
                 cancelPendingRestore(reportCancellation: false)
                 deferredRestore = nil
@@ -599,6 +600,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var preservedBookmark: TranscriptBookmark?
             if self.messageRevision != messageRevision || self.visibility != visibility {
                 if self.messageRevision >= 0 { preservedBookmark = currentBookmark() }
+                visibilityChanged = self.visibility != visibility
                 self.visibility = visibility
                 let replacement = model.messages.enumerated().compactMap { index, summary in
                     visibility.includes(summary) ? Item(summary: summary, sourceIndex: index) : nil
@@ -637,6 +639,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             if needsRequestedRestore {
                 restoreRequestedPosition()
+            } else if visibilityChanged, let preservedBookmark {
+                requestRestore(
+                    preservedBookmark, reportsHooks: true,
+                    refreshesRowHeights: false
+                )
             } else if let preservedBookmark, !userScrolling {
                 requestRestore(
                     preservedBookmark, reportsHooks: false,
@@ -899,7 +906,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 pendingRestore = request
                 scheduleRestore(
                     token: token,
-                    delayMilliseconds: request.refreshesRowHeights ? 40 : 16
+                    delayMilliseconds: request.refreshesRowHeights ? 40 : 50
                 )
             } else {
                 pendingRestore = nil
@@ -952,7 +959,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             pendingHeightMessageIDs.removeAll()
             let rows = IndexSet(items.indices.filter { changed.contains(items[$0].summary.id) })
             guard !rows.isEmpty else { return }
-            let bookmark = pendingRestore?.bookmark ?? (userScrolling ? nil : currentBookmark())
+            let bookmark = pendingRestore == nil && !userScrolling ? currentBookmark() : nil
             applyingProgrammaticScroll = true
             table.noteHeightOfRows(withIndexesChanged: rows)
             table.layoutSubtreeIfNeeded()
@@ -962,7 +969,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private var shouldIgnoreBoundsChange: Bool {
-            if applyingProgrammaticScroll || pendingRestore != nil { return true }
+            if applyingProgrammaticScroll { return true }
             guard let deadline = suppressBoundsChangesUntil else { return false }
             return ContinuousClock.now < deadline
         }

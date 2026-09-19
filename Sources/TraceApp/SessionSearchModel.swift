@@ -128,6 +128,17 @@ final class SessionSearchModel: ObservableObject {
             return .unchanged
         }
         if let project = projects.first(where: { $0.canonicalKey == projectFilterCanonicalKey }) {
+            if isResolvingProjectFilter {
+                switch policy {
+                case .keepResolving:
+                    if projectFilterDisplayName != project.displayName {
+                        projectFilterDisplayName = project.displayName
+                    }
+                    return .unchanged
+                case .retain, .clear:
+                    break
+                }
+            }
             let wasResolving = isResolvingProjectFilter
             if projectFilterDisplayName != project.displayName {
                 projectFilterDisplayName = project.displayName
