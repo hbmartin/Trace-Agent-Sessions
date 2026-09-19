@@ -107,9 +107,9 @@ public actor IndexCoordinator {
         )
     }
 
-    func indexAllResult(scope: IndexScope, rebuild: Bool = false,
-                        activity: IndexActivity? = nil,
-                        progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
+    public func indexAllResult(scope: IndexScope, rebuild: Bool = false,
+                               activity: IndexActivity? = nil,
+                               progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
         await gate.acquire()
         let result = await run(
             scope: scope, paths: nil, reconciliationPaths: [], rebuild: rebuild,

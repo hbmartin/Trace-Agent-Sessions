@@ -141,6 +141,10 @@ schemes:
         Trace: all
         TraceCoreTests: [test]
         TraceUITests: [test]
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: Trace
     run:
       config: Debug
     test:
@@ -158,34 +162,29 @@ schemes:
       config: Debug
     archive:
       config: Release
-    preActions:
-      - name: Configure GRDB custom SQLite
-        script: Scripts/configure-grdb.sh
-        settingsTarget: Trace
-
   TraceBench:
     build:
       targets:
         TraceBench: all
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: TraceBench
     run:
       config: Release
-    preActions:
-      - name: Configure GRDB custom SQLite
-        script: Scripts/configure-grdb.sh
-        settingsTarget: TraceBench
 
   TracePerformance:
     build:
       targets:
         Trace: all
         TracePerformanceTests: [test]
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: Trace
     test:
       config: Release
       gatherCoverageData: false
       targets:
         - name: TracePerformanceTests
           parallelizable: false
-    preActions:
-      - name: Configure GRDB custom SQLite
-        script: Scripts/configure-grdb.sh
-        settingsTarget: Trace

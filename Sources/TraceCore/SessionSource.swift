@@ -55,7 +55,23 @@ public extension SessionSource {
         let manager = FileManager.default
         var files: [DiscoveredSourceFile] = []
 
-        for root in roots where manager.fileExists(atPath: root.url.path) {
+        func resourceValuesIfPresent(for url: URL) throws -> URLResourceValues? {
+            do {
+                return try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            } catch {
+                let fileError = error as NSError
+                let isMissing = (fileError.domain == NSCocoaErrorDomain
+                    && fileError.code == CocoaError.Code.fileReadNoSuchFile.rawValue)
+                    || (fileError.domain == NSPOSIXErrorDomain && fileError.code == Int(ENOENT))
+                if isMissing { return nil }
+                throw SessionSourceError.unreadableDirectory(
+                    url.path, fileError.localizedDescription
+                )
+            }
+        }
+
+        for root in roots {
+            guard try resourceValuesIfPresent(for: root.url) != nil else { continue }
             let rootPath = TraceFileIO.canonicalPath(root.url.path)
             let starts: [URL]
             if let paths {
@@ -71,9 +87,8 @@ public extension SessionSource {
 
             var seenStarts: Set<String> = []
             for start in starts where seenStarts.insert(TraceFileIO.canonicalPath(start.path).comparisonKey).inserted {
-                var isDirectory: ObjCBool = false
-                guard manager.fileExists(atPath: start.path, isDirectory: &isDirectory) else { continue }
-                if !isDirectory.boolValue {
+                guard let values = try resourceValuesIfPresent(for: start) else { continue }
+                if values.isDirectory != true {
                     if allowedExtensions.contains(start.pathExtension.lowercased()), let format = classify(start) {
                         files.append(.init(agent: agent, root: root.url, url: start, format: format))
                     }

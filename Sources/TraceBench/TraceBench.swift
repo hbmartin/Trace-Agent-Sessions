@@ -61,12 +61,20 @@ struct TraceBench {
         let coordinator = IndexCoordinator(database: database, sources: sources)
         let clock = ContinuousClock()
         let start = clock.now
-        await coordinator.indexAll(scope: scope) { progress in
+        let result = await coordinator.indexAllResult(scope: scope) { progress in
             if progress.phase == .indexing,
                progress.currentFileBytes == 0,
                progress.completedFiles.isMultiple(of: 100) {
                 FileHandle.standardError.write(Data("Indexed \(progress.completedFiles)/\(progress.totalFiles)\n".utf8))
             }
+        }
+        guard result.phase == .complete, result.failedFiles == 0,
+              result.unresolvedFailedFiles == 0 else {
+            throw BenchError.incompleteIndex(
+                phase: result.phase.rawValue,
+                failedFiles: result.failedFiles,
+                unresolvedFailedFiles: result.unresolvedFailedFiles
+            )
         }
         let elapsed = milliseconds(start.duration(to: clock.now))
         let stats = try await database.statistics()
@@ -242,6 +250,7 @@ private struct Options {
 private enum BenchError: LocalizedError {
     case usage
     case destinationExists(String)
+    case incompleteIndex(phase: String, failedFiles: Int, unresolvedFailedFiles: Int)
     var errorDescription: String? {
         switch self {
         case .usage:
@@ -255,6 +264,8 @@ private enum BenchError: LocalizedError {
             ].joined(separator: " ")
         case .destinationExists(let path):
             "Refusing to replace existing benchmark corpus at \(path)"
+        case .incompleteIndex(let phase, let failedFiles, let unresolvedFailedFiles):
+            "Indexing did not complete cleanly (phase: \(phase), failed files: \(failedFiles), unresolved failures: \(unresolvedFailedFiles))"
         }
     }
 }

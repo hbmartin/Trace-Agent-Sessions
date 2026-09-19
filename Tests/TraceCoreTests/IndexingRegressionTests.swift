@@ -832,7 +832,9 @@ final class IndexingRegressionTests: XCTestCase {
         await coordinator.indexAll(scope: .proseOnly)
         let progress = RunRecorder()
         let completions = CompletionRecorder()
-        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly) {
+        let scheduler = IndexScheduler(
+            coordinator: coordinator, scope: .proseOnly, retryDelay: .milliseconds(25)
+        ) {
             await progress.receive($0)
         } didComplete: { activity, watermarks in
             await completions.receive(activity: activity, watermarks: watermarks)
@@ -864,14 +866,21 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(failedCompletions.last?.watermarks["volume"], 1)
 
         try await raw.write { try $0.execute(sql: "DROP TRIGGER fail_incremental_root") }
+        try await Task.sleep(for: .milliseconds(100))
+        await scheduler.waitUntilIdle()
+        let automaticallyRetriedPhases = await progress.terminalPhases
+        let automaticallyRetriedCompletions = await completions.values
+        XCTAssertEqual(Array(automaticallyRetriedPhases.suffix(2)), [.failed, .complete])
+        XCTAssertEqual(automaticallyRetriedCompletions.last?.watermarks["volume"], 2)
+        let automaticallyRetriedSearch = try await database.search(query: "message 2")
+        XCTAssertFalse(automaticallyRetriedSearch.results.isEmpty)
+
         await scheduler.request(activity: .fileChanges, watermarks: ["volume": 3])
         await scheduler.waitUntilIdle()
         let retriedPhases = await progress.terminalPhases
         let retriedCompletions = await completions.values
         XCTAssertEqual(Array(retriedPhases.suffix(2)), [.failed, .complete])
         XCTAssertEqual(retriedCompletions.last?.watermarks["volume"], 3)
-        let retriedSearch = try await database.search(query: "message 2")
-        XCTAssertFalse(retriedSearch.results.isEmpty)
     }
 
     func testSchedulerDoesNotCompleteCheckpointForPassWithFileFailures() async throws {
@@ -1235,6 +1244,21 @@ final class IndexingRegressionTests: XCTestCase {
             _ = try await coordinator.failures(for: session)
             XCTFail("A missing source must report an explicit read error")
         } catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
+    }
+
+    func testDiscoveryDistinguishesMissingAndUnreadableRoots() throws {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TraceMissing-\(UUID().uuidString)")
+        XCTAssertTrue(try ClaudeCodeSource(roots: [missing]).discover().isEmpty)
+
+        let invalid = URL(fileURLWithPath: "/dev/null/session-root")
+        XCTAssertThrowsError(try ClaudeCodeSource(roots: [invalid]).discover()) { error in
+            guard let sourceError = error as? SessionSourceError,
+                  case .unreadableDirectory(let path, _) = sourceError else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(path, invalid.path)
+        }
     }
 
     func testWatcherFlagsDistinguishFileChangesFromRecovery() {

@@ -1302,7 +1302,15 @@ final class TraceModel: ObservableObject {
         }
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
         watchers = replacements
-        replacements.forEach { $0.start() }
+        for watcher in replacements where !watcher.start() {
+            _ = beginWatcherConfiguration()
+            watchedSourceRoots = []
+            watcherStartupPending = true
+            bufferedSourceChanges = SourceChanges()
+            startupReconciliationPaths = []
+            startupError = "Could not start file-system monitoring."
+            return false
+        }
         return true
     }
 

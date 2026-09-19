@@ -10,11 +10,13 @@ public actor IndexScheduler {
         let watermarks: [String: UInt64]
         let scope: IndexScope
         let activity: IndexActivity
+        let retryAttempt: Int
     }
 
     private let coordinator: IndexCoordinator
     private let progress: @Sendable (IndexProgress) async -> Void
     private let didComplete: @Sendable (IndexActivity, [String: UInt64]) async -> Void
+    private let retryDelay: Duration
     private var scope: IndexScope
     private var pendingPaths: Set<String> = []
     private var pendingReconciliationPaths: Set<String> = []
@@ -25,13 +27,16 @@ public actor IndexScheduler {
     private var worker: Task<Void, Never>?
     private var operation: Task<IndexProgress, Never>?
     private var retryBatch: Batch?
+    private var retryTask: Task<Void, Never>?
     private var stopping = false
 
     public init(coordinator: IndexCoordinator, scope: IndexScope,
+                retryDelay: Duration = .seconds(5),
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
                 didComplete: @escaping @Sendable (IndexActivity, [String: UInt64]) async -> Void = { _, _ in }) {
         self.coordinator = coordinator
         self.scope = scope
+        self.retryDelay = retryDelay
         self.progress = progress
         self.didComplete = didComplete
     }
@@ -56,7 +61,10 @@ public actor IndexScheduler {
         self.rebuild = self.rebuild || rebuild
         if requestsPass { pendingActivity = Self.moreSignificant(pendingActivity, inferred) }
         if rebuild { operation?.cancel() }
-        if worker == nil { worker = Task { await drain() } }
+        if worker == nil {
+            cancelScheduledRetry()
+            worker = Task { await drain() }
+        }
     }
 
     private func drain() async {
@@ -80,7 +88,8 @@ public actor IndexScheduler {
                     reconciliationPaths: pendingReconciliationPaths,
                     watermarks: pendingWatermarks,
                     scope: scope,
-                    activity: pendingActivity ?? .fileChanges
+                    activity: pendingActivity ?? .fileChanges,
+                    retryAttempt: 0
                 )
                 fullScan = false
                 rebuild = false
@@ -111,22 +120,25 @@ public actor IndexScheduler {
             let result = await operation.value
             self.operation = nil
             if result.phase == .complete {
-                if retrying { retryBatch = nil }
+                if retrying {
+                    retryBatch = nil
+                    cancelScheduledRetry()
+                }
                 if result.failedFiles == 0, result.unresolvedFailedFiles == 0 {
                     await didComplete(batch.activity, batch.watermarks)
                 } else if result.failedFiles > 0 {
                     if absorbFailedBatchIntoPendingFullScan(batch) { continue }
-                    retryBatch = batch
+                    retainForRetry(batch)
                     break
                 }
             } else if result.phase == .failed {
                 if absorbFailedBatchIntoPendingFullScan(batch) { continue }
-                retryBatch = batch
+                retainForRetry(batch)
                 break
             } else if result.phase == .cancelled, !stopping {
                 mergeWatermarks(batch.watermarks)
                 if !fullScan {
-                    retryBatch = batch
+                    retainForRetry(batch)
                     break
                 } else if retrying {
                     retryBatch = nil
@@ -147,6 +159,41 @@ public actor IndexScheduler {
         }
     }
 
+    private func retainForRetry(_ batch: Batch) {
+        retryBatch = Batch(
+            fullScan: batch.fullScan,
+            rebuild: batch.rebuild,
+            paths: batch.paths,
+            reconciliationPaths: batch.reconciliationPaths,
+            watermarks: batch.watermarks,
+            scope: batch.scope,
+            activity: batch.activity,
+            retryAttempt: batch.retryAttempt + 1
+        )
+        if batch.retryAttempt == 0 { scheduleRetry() }
+    }
+
+    private func scheduleRetry() {
+        guard retryTask == nil, !stopping else { return }
+        let delay = retryDelay
+        retryTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) }
+            catch { return }
+            await self?.startScheduledRetry()
+        }
+    }
+
+    private func startScheduledRetry() {
+        retryTask = nil
+        guard !stopping, retryBatch != nil, worker == nil else { return }
+        worker = Task { await drain() }
+    }
+
+    private func cancelScheduledRetry() {
+        retryTask?.cancel()
+        retryTask = nil
+    }
+
     /// A queued full scan is an authoritative replacement for older failed work.
     /// Carry the older event watermark into it so work queued during the failed
     /// operation cannot be stranded waiting for another scheduler request.
@@ -154,6 +201,7 @@ public actor IndexScheduler {
         guard fullScan else { return false }
         mergeWatermarks(batch.watermarks)
         retryBatch = nil
+        cancelScheduledRetry()
         return true
     }
 
@@ -190,6 +238,7 @@ public actor IndexScheduler {
         pendingWatermarks.removeAll()
         pendingActivity = nil
         retryBatch = nil
+        cancelScheduledRetry()
         operation?.cancel()
         await worker?.value
     }
