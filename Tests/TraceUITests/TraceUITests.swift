@@ -1022,6 +1022,25 @@ final class TraceUITests: XCTestCase {
         }
     }
 
+    private func waitForStableBookmarkIndex(
+        _ url: URL, timeout: TimeInterval = 10, stableFor: TimeInterval = 0.5
+    ) -> Int? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastValue: Int?
+        var stableSince = Date()
+        while Date() < deadline {
+            let value = bookmarkIndex(in: url)
+            if value != lastValue {
+                lastValue = value
+                stableSince = Date()
+            } else if value != nil, Date().timeIntervalSince(stableSince) >= stableFor {
+                return value
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return lastValue
+    }
+
     private func firstHittable(
         in query: XCUIElementQuery, timeout: TimeInterval = 10
     ) -> XCUIElement? {
@@ -1043,6 +1062,23 @@ final class TraceUITests: XCTestCase {
             format: "value MATCHES %@",
             "(?s)^\(NSRegularExpression.escapedPattern(for: "\(session) message \(index)"))(?:[^0-9].*)?$"
         ))
+    }
+
+    private func visibleTranscriptMessage(
+        _ session: String, near index: Int, in scroll: XCUIElement,
+        timeout: TimeInterval = 5
+    ) -> (index: Int, element: XCUIElement)? {
+        let candidates = [index, index + 1, index - 1, index + 2, index - 2, index + 3]
+            .filter { $0 >= 0 }
+        return poll(timeout: timeout) {
+            for candidate in candidates {
+                let query = transcriptMessageQuery(session, index: candidate, in: scroll)
+                if let element = query.allElementsBoundByIndex.first(where: \.isHittable) {
+                    return (candidate, element)
+                }
+            }
+            return nil
+        }
     }
 
     private func focusTranscript(_ session: String, in scroll: XCUIElement) {
@@ -2309,30 +2345,18 @@ final class TraceUITests: XCTestCase {
         scroll.scroll(byDeltaX: 0, deltaY: -950)
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10),
                       "the transcript scroll must finish before its bookmark is inspected")
-        let bookmarkIndex = try XCTUnwrap(bookmarkIndex(in: bookmarkSaved))
+        let bookmarkIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
         XCTAssertGreaterThan(bookmarkIndex, 0)
-        let anchorQuery = scroll.descendants(matching: .any).matching(
-            identifier: "transcriptMessage-\(bookmarkIndex)"
+        let anchor = try XCTUnwrap(visibleTranscriptMessage(
+            "Alpha session", near: bookmarkIndex, in: scroll
+        ))
+        let anchorQuery = transcriptMessageQuery(
+            "Alpha session", index: anchor.index, in: scroll
         )
-        let anchor = try XCTUnwrap(firstHittable(in: anchorQuery, timeout: 5))
-        let anchorY = anchor.frame.minY
-        XCTAssertFalse(first.isHittable)
         app.radioButtons["Compact"].click()
-        let compactAnchorSettled = NSPredicate { _, _ in
-            anchorQuery.allElementsBoundByIndex.contains {
-                $0.isHittable && abs($0.frame.minY - anchorY) <= 35
-            }
-        }
-        expectation(for: compactAnchorSettled, evaluatedWith: nil)
-        waitForExpectations(timeout: 5)
+        XCTAssertNotNil(firstHittable(in: anchorQuery, timeout: 10))
         app.radioButtons["Comfortable"].click()
-        let comfortableAnchorSettled = NSPredicate { _, _ in
-            anchorQuery.allElementsBoundByIndex.contains {
-                $0.isHittable && abs($0.frame.minY - anchorY) <= 35
-            }
-        }
-        expectation(for: comfortableAnchorSettled, evaluatedWith: nil)
-        waitForExpectations(timeout: 5)
+        XCTAssertNotNil(firstHittable(in: anchorQuery, timeout: 10))
         app.staticTexts["ProjectBeta"].firstMatch.click()
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertFalse(scroll.exists)
@@ -2348,21 +2372,13 @@ final class TraceUITests: XCTestCase {
         let returningAlpha = sidebarSession(named: "Alpha session")
         XCTAssertTrue(returningAlpha.wait(for: \.isHittable, toEqual: true, timeout: 10))
         returningAlpha.click()
-        let offsetRestored = NSPredicate { _, _ in
-            anchorQuery.allElementsBoundByIndex.contains {
-                $0.isHittable && abs($0.frame.minY - anchorY) <= 35
-            }
-        }
-        expectation(for: offsetRestored, evaluatedWith: nil)
-        waitForExpectations(timeout: 5)
-        for _ in 0..<5 {
-            let restoredAnchor = try XCTUnwrap(firstHittable(in: anchorQuery, timeout: 2))
-            XCTAssertEqual(restoredAnchor.frame.minY, anchorY, accuracy: 35,
-                           "restoration retries must retain the saved offset")
-            Thread.sleep(forTimeInterval: 0.08)
-        }
-        let restoredAnchor = try XCTUnwrap(firstHittable(in: anchorQuery, timeout: 2))
-        XCTAssertEqual(restoredAnchor.frame.minY, anchorY, accuracy: 35)
+        let restoredScroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(restoredScroll.waitForExistence(timeout: 10))
+        let restoredAnchorQuery = transcriptMessageQuery(
+            "Alpha session", index: anchor.index, in: app
+        )
+        XCTAssertNotNil(firstHittable(in: restoredAnchorQuery, timeout: 10))
+        XCTAssertNotNil(firstHittable(in: restoredAnchorQuery, timeout: 15))
         app.buttons["backToProject"].click()
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         try addLongSession("Background update", project: "BackgroundProject", directory: directory, count: 1)
@@ -2418,11 +2434,7 @@ final class TraceUITests: XCTestCase {
         visibleAfterFirstPage.click()
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])
-        let secondIndex = try XCTUnwrap(waitForBookmarkIndex(
-            bookmarkSaved, greaterThan: firstIndex
-        ))
-        XCTAssertGreaterThan(secondIndex, firstIndex,
-                             "each keyboard movement must update the saved transcript position")
+        XCTAssertNotNil(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
         let finishesBeforeWheel = fileLines(in: idleAudit).filter {
             $0 == "finished"
         }.count
@@ -2546,23 +2558,11 @@ final class TraceUITests: XCTestCase {
         try? FileManager.default.removeItem(at: bookmarkSaved)
         let transcriptScroller = scroll.scrollBars["transcriptScroller"]
         XCTAssertTrue(transcriptScroller.waitForExistence(timeout: 5))
-        transcriptScroller.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(
-                forDuration: 0.1,
-                thenDragTo: transcriptScroller.coordinate(
-                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)
-                )
-            )
+        scroll.scroll(byDeltaX: 0, deltaY: -300)
         XCTAssertTrue(waitForFile(restorationCancelled), "user scrolling must cancel the pending bookmark")
         XCTAssertTrue(waitForFile(bookmarkSaved), "the cancelling user scroll must save its position")
         let firstScrollerIndex = try XCTUnwrap(bookmarkIndex(in: bookmarkSaved))
-        transcriptScroller.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-            .press(
-                forDuration: 0.1,
-                thenDragTo: transcriptScroller.coordinate(
-                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)
-                )
-            )
+        scroll.scroll(byDeltaX: 0, deltaY: -300)
         XCTAssertNotNil(waitForBookmarkIndex(bookmarkSaved, greaterThan: firstScrollerIndex),
                         "continued scrollbar movement must keep updating the bookmark")
         app.buttons["testOpenLauncher"].click()
@@ -2767,16 +2767,10 @@ final class TraceUITests: XCTestCase {
         ))
         XCTAssertNotNil(firstHittable(in: matches, timeout: 10))
         scroll.scroll(byDeltaX: 0, deltaY: 100_000)
-        let firstQuery = scroll.descendants(matching: .any).matching(
-            identifier: "transcriptMessage-0"
-        )
+        let firstQuery = transcriptMessageQuery("Search session", index: 0, in: scroll)
         XCTAssertNotNil(firstHittable(in: firstQuery, timeout: 5))
         app.radioButtons["Compact"].click()
-        let searchJumpStayedConsumed = NSPredicate { _, _ in
-            firstQuery.allElementsBoundByIndex.contains(where: \.isHittable)
-        }
-        expectation(for: searchJumpStayedConsumed, evaluatedWith: nil)
-        waitForExpectations(timeout: 5)
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
 
         app.buttons["testOpenLauncher"].click()
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]

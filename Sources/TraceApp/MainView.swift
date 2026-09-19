@@ -144,8 +144,8 @@ private struct SessionSidebar: View {
                                   let projectID = projectRevealTaskID.rowID else {
                                 return
                             }
-                            for _ in 0..<3 {
-                                try? await Task.sleep(for: .milliseconds(50))
+                            for _ in 0..<8 {
+                                try? await Task.sleep(for: .milliseconds(100))
                                 guard !Task.isCancelled,
                                       model.sidebarRevealRequest?.token == reveal.token else { return }
                                 proxy.scrollTo(projectID, anchor: .center)
@@ -218,8 +218,8 @@ private struct SessionSidebar: View {
                                   let sessionID = sessionRevealTaskID.rowID else {
                                 return
                             }
-                            for _ in 0..<3 {
-                                try? await Task.sleep(for: .milliseconds(50))
+                            for _ in 0..<8 {
+                                try? await Task.sleep(for: .milliseconds(100))
                                 guard !Task.isCancelled,
                                       model.sidebarRevealRequest?.token == reveal.token else { return }
                                 proxy.scrollTo(sessionID, anchor: .center)
