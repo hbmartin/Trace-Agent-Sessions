@@ -790,6 +790,16 @@ private struct TranscriptRenderer: NSViewRepresentable {
 
         func numberOfRows(in tableView: NSTableView) -> Int { items.count }
 
+        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            let rowView = NSTableRowView()
+            if items.indices.contains(row) {
+                rowView.setAccessibilityIdentifier(
+                    "transcriptMessage-\(items[row].sourceIndex)"
+                )
+            }
+            return rowView
+        }
+
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard items.indices.contains(row), let model else { return nil }
             let item = items[row]
@@ -821,8 +831,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
             .frame(maxWidth: 920)
             .frame(maxWidth: .infinity)
             .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("transcriptMessage-\(item.sourceIndex)")
             cell.setDensity(density)
-            cell.setAccessibilityIdentifier("transcriptMessage-\(item.sourceIndex)")
             cell.set(
                 rootView: AnyView(rowView.id(message.id)), messageID: message.id,
                 configuration: TranscriptRowConfiguration(
@@ -962,6 +973,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
             _ bookmark: TranscriptBookmark, reason: RestoreRequest.Reason,
             refreshesRowHeights: Bool = false
         ) {
+            if case .passive = reason,
+               !userScrolling,
+               beginPostRestoreCorrectionIfAvailable() {
+                return
+            }
             let request = RestoreRequest(
                 bookmark: bookmark, reason: reason,
                 refreshesRowHeights: refreshesRowHeights
@@ -1198,22 +1214,22 @@ private struct TranscriptRenderer: NSViewRepresentable {
 
         private func boundsDidChange() {
             guard !shouldIgnoreBoundsChange else { return }
-            if pendingRestore?.isPostRestoreCorrection == true, !userScrolling {
-                return
-            }
-            if var correction = postRestoreCorrection,
-               correction.postRestoreCorrectionsRemaining > 0,
-               !userScrolling {
-                postRestoreCorrection = nil
-                correction.postRestoreCorrectionsRemaining -= 1
-                correction.attemptsRemaining = 12
-                correction.stableChecks = 0
-                correction.lastDocumentHeight = nil
-                correction.isPostRestoreCorrection = true
-                beginRestore(correction)
-                return
-            }
+            if pendingRestore != nil, !userScrolling { return }
+            if !userScrolling, beginPostRestoreCorrectionIfAvailable() { return }
             beginUserScrolling()
+        }
+
+        private func beginPostRestoreCorrectionIfAvailable() -> Bool {
+            guard var correction = postRestoreCorrection,
+                  correction.postRestoreCorrectionsRemaining > 0 else { return false }
+            postRestoreCorrection = nil
+            correction.postRestoreCorrectionsRemaining -= 1
+            correction.attemptsRemaining = 12
+            correction.stableChecks = 0
+            correction.lastDocumentHeight = nil
+            correction.isPostRestoreCorrection = true
+            beginRestore(correction)
+            return true
         }
 
         private func rememberProgrammaticOrigin() {

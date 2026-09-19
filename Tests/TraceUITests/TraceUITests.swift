@@ -211,14 +211,28 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         let list = app.descendants(matching: .any).matching(identifier: "sessionSidebarList").firstMatch
         XCTAssertTrue(list.exists)
-        let errorIcons = app.images.matching(identifier: "sessionError")
-        let icon = try XCTUnwrap(firstHittable(in: errorIcons, timeout: 20))
+        let errorIcons = app.descendants(matching: .any).matching(identifier: "sessionError")
+        var visibleIcon = firstHittable(in: errorIcons, timeout: 5)
+        if visibleIcon == nil {
+            list.scroll(byDeltaX: 0, deltaY: -5_000)
+            visibleIcon = firstHittable(in: errorIcons, timeout: 5)
+        }
+        if visibleIcon == nil {
+            list.scroll(byDeltaX: 0, deltaY: 10_000)
+            visibleIcon = firstHittable(in: errorIcons, timeout: 5)
+        }
+        let icon = try XCTUnwrap(visibleIcon)
         icon.hover()
         XCTAssertTrue(app.staticTexts["Loading error details…"].waitForExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])
-        list.scroll(byDeltaX: 0, deltaY: -5_000)
+        var offscreenDelta: CGFloat = -5_000
+        list.scroll(byDeltaX: 0, deltaY: offscreenDelta)
+        if icon.isHittable {
+            offscreenDelta = 5_000
+            list.scroll(byDeltaX: 0, deltaY: offscreenDelta)
+        }
         XCTAssertFalse(icon.isHittable)
-        list.scroll(byDeltaX: 0, deltaY: 5_000)
+        list.scroll(byDeltaX: 0, deltaY: -offscreenDelta)
         let returnedIcon = try XCTUnwrap(firstHittable(in: errorIcons, timeout: 10))
         returnedIcon.hover()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
@@ -2258,6 +2272,11 @@ final class TraceUITests: XCTestCase {
 
     func testSessionNavigationScrollRestorationAndRestart() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        func sidebarSession(named title: String) -> XCUIElement {
+            app.descendants(matching: .any)
+                .matching(identifier: "sessionSidebarList").firstMatch
+                .staticTexts[title].firstMatch
+        }
         try addLongSession("Alpha session", project: "ProjectAlpha", directory: directory)
         try addLongSession("Beta session", project: "ProjectBeta", directory: directory)
         let bookmarkSaved = directory.appendingPathComponent("navigation-bookmark-saved")
@@ -2271,10 +2290,10 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(alphaProject.waitForExistence(timeout: 20))
         XCTAssertFalse(app.staticTexts["All Projects"].exists)
         alphaProject.click()
-        let alpha = app.staticTexts["Alpha session"].firstMatch
+        let alpha = sidebarSession(named: "Alpha session")
         XCTAssertTrue(alpha.waitForExistence(timeout: 10))
         app.radioButtons["Costs"].click()
-        let alphaAfterSectionChange = app.staticTexts["Alpha session"].firstMatch
+        let alphaAfterSectionChange = sidebarSession(named: "Alpha session")
         XCTAssertTrue(alphaAfterSectionChange.wait(for: \.isHittable, toEqual: true, timeout: 10))
         alphaAfterSectionChange.click()
         let scroll = app.scrollViews["transcriptScroll"]
@@ -2292,7 +2311,7 @@ final class TraceUITests: XCTestCase {
                       "the transcript scroll must finish before its bookmark is inspected")
         let bookmarkIndex = try XCTUnwrap(bookmarkIndex(in: bookmarkSaved))
         XCTAssertGreaterThan(bookmarkIndex, 0)
-        let anchorQuery = scroll.cells.matching(
+        let anchorQuery = scroll.descendants(matching: .any).matching(
             identifier: "transcriptMessage-\(bookmarkIndex)"
         )
         let anchor = try XCTUnwrap(firstHittable(in: anchorQuery, timeout: 5))
@@ -2318,13 +2337,17 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertFalse(scroll.exists)
         XCTAssertTrue(app.windows["ProjectBeta"].exists)
-        app.staticTexts["Beta session"].firstMatch.click()
+        let beta = sidebarSession(named: "Beta session")
+        XCTAssertTrue(beta.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        beta.click()
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let betaFirst = transcriptMessage("Beta session", index: 0, in: scroll)
         XCTAssertTrue(betaFirst.waitForExistence(timeout: 10))
         XCTAssertTrue(betaFirst.isHittable)
         app.staticTexts["ProjectAlpha"].firstMatch.click()
-        alpha.click()
+        let returningAlpha = sidebarSession(named: "Alpha session")
+        XCTAssertTrue(returningAlpha.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        returningAlpha.click()
         let offsetRestored = NSPredicate { _, _ in
             anchorQuery.allElementsBoundByIndex.contains {
                 $0.isHittable && abs($0.frame.minY - anchorY) <= 35
@@ -2345,12 +2368,16 @@ final class TraceUITests: XCTestCase {
         try addLongSession("Background update", project: "BackgroundProject", directory: directory, count: 1)
         XCTAssertTrue(app.staticTexts["BackgroundProject"].firstMatch.waitForExistence(timeout: 15))
         XCTAssertFalse(scroll.exists, "an index refresh must not reopen the last session")
-        alpha.click()
+        let alphaAfterRefresh = sidebarSession(named: "Alpha session")
+        XCTAssertTrue(alphaAfterRefresh.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        alphaAfterRefresh.click()
         app.terminate()
         app.launch()
-        XCTAssertTrue(scroll.waitForExistence(timeout: 15))
-        XCTAssertTrue(first.waitForExistence(timeout: 10))
-        XCTAssertTrue(first.isHittable, "scroll bookmarks must not survive process restart")
+        let relaunchedScroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(relaunchedScroll.waitForExistence(timeout: 15))
+        let relaunchedFirst = transcriptMessage("Alpha session", index: 0, in: relaunchedScroll)
+        XCTAssertTrue(relaunchedFirst.waitForExistence(timeout: 10))
+        XCTAssertTrue(relaunchedFirst.isHittable, "scroll bookmarks must not survive process restart")
         app.buttons["backToProject"].click()
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Alpha session"].firstMatch.waitForExistence(timeout: 10))
