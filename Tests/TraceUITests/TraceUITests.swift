@@ -2419,14 +2419,14 @@ final class TraceUITests: XCTestCase {
             $0 == "finished"
         }.count
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
-        let lastMessages = scroll.descendants(matching: .any).matching(
-            identifier: "transcriptMessage-69"
-        )
-        let last = try XCTUnwrap(firstHittable(in: lastMessages, timeout: 10))
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: finishesBeforeWheel + 1, timeout: 10
         ), "the preceding wheel scroll must be fully idle before testing the boundary")
-        last.click()
+        let visibleMessages = scroll.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", "Keyboard scroll message "
+        ))
+        let visibleMessage = try XCTUnwrap(firstHittable(in: visibleMessages, timeout: 10))
+        visibleMessage.click()
         try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])
