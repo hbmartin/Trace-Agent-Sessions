@@ -211,8 +211,8 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         let list = app.descendants(matching: .any).matching(identifier: "sessionSidebarList").firstMatch
         XCTAssertTrue(list.exists)
-        list.scroll(byDeltaX: 0, deltaY: 5_000)
-        let icon = app.images["Session error"].firstMatch
+        let errorIdentifier = "sessionError:\(source.appendingPathComponent("session.jsonl").path)"
+        let icon = app.images[errorIdentifier].firstMatch
         XCTAssertTrue(icon.waitForExistence(timeout: 20))
         XCTAssertTrue(icon.wait(for: \.isHittable, toEqual: true, timeout: 10))
         icon.hover()
@@ -221,7 +221,7 @@ final class TraceUITests: XCTestCase {
         list.scroll(byDeltaX: 0, deltaY: -5_000)
         XCTAssertFalse(icon.isHittable)
         list.scroll(byDeltaX: 0, deltaY: 5_000)
-        let returnedIcon = app.images["Session error"].firstMatch
+        let returnedIcon = app.images[errorIdentifier].firstMatch
         XCTAssertTrue(returnedIcon.wait(for: \.isHittable, toEqual: true, timeout: 10))
         returnedIcon.hover()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
@@ -1028,6 +1028,13 @@ final class TraceUITests: XCTestCase {
         )).firstMatch
     }
 
+    private func focusTranscript(_ session: String, in scroll: XCUIElement) {
+        let first = transcriptMessage(session, index: 0, in: scroll)
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(first.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        first.click()
+    }
+
     func testGlobalSearchClearsAfterLauncherCloseButSurvivesHandoff() throws {
         let (app, _) = try makeApp(extra: ["--ui-show-popover"])
         app.launch()
@@ -1234,8 +1241,12 @@ final class TraceUITests: XCTestCase {
         app.buttons["testRebuildIndex"].click()
         let resolving = app.descendants(matching: .any)["projectFilterResolving"].firstMatch
         XCTAssertTrue(resolving.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["indexProgress"].firstMatch
-            .wait(for: \.label, toEqual: "forced rebuild failure", timeout: 15))
+        let indexProgress = app.descendants(matching: .any)["indexProgress"].firstMatch
+        let failureLabel = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "forced rebuild failure"),
+            object: indexProgress
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [failureLabel], timeout: 15), .completed)
         XCTAssertTrue(resolving.waitForNonExistence(timeout: 10),
                       "a failed rebuild must finish project-filter resolution")
         XCTAssertTrue(app.popUpButtons["TraceUIExample"].exists,
@@ -2353,7 +2364,7 @@ final class TraceUITests: XCTestCase {
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         try? FileManager.default.removeItem(at: bookmarkSaved)
-        scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).click()
+        focusTranscript("Keyboard scroll", in: scroll)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])
         let firstIndex = try XCTUnwrap(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
@@ -2405,7 +2416,7 @@ final class TraceUITests: XCTestCase {
         session.click()
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
-        scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).click()
+        focusTranscript("Window lifecycle", in: scroll)
         try? FileManager.default.removeItem(at: idleAudit)
         app.typeKey(.pageDown, modifierFlags: [])
         XCTAssertTrue(waitForLineCount(idleAudit, line: "started", count: 1, timeout: 3),
@@ -2476,7 +2487,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         XCTAssertTrue(waitForFile(restorationStarted), "bookmark restoration must be pending")
         try? FileManager.default.removeItem(at: bookmarkSaved)
-        let transcriptScroller = scroll.scrollBars.firstMatch
+        let transcriptScroller = scroll.scrollBars["transcriptScroller"]
         XCTAssertTrue(transcriptScroller.waitForExistence(timeout: 5))
         transcriptScroller.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).click()
         XCTAssertTrue(waitForFile(restorationCancelled), "user scrolling must cancel the pending bookmark")

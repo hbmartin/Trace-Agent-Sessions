@@ -373,12 +373,20 @@ private struct TranscriptRowConfiguration: Equatable {
 private final class TranscriptTableView: NSTableView {
     var onUserScrollInput: (() -> Void)?
 
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        onUserScrollInput?()
+        super.scrollWheel(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
-        let scrolling = scrollingKeys.contains(event.keyCode)
-        if scrolling { onUserScrollInput?() }
+        if scrollingKeys.contains(event.keyCode) { onUserScrollInput?() }
         super.keyDown(with: event)
-        if scrolling { onUserScrollInput?() }
     }
 }
 
@@ -391,6 +399,16 @@ private final class TranscriptScrollView: NSScrollView {
         defer { TracePerformance.end(performanceInterval) }
         onUserScrollInput?()
         super.scrollWheel(with: event)
+    }
+}
+
+@MainActor
+private final class TranscriptScroller: NSScroller {
+    var onUserScrollInput: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onUserScrollInput?()
+        super.mouseDown(with: event)
     }
 }
 
@@ -449,12 +467,16 @@ private struct TranscriptRenderer: NSViewRepresentable {
         table.backgroundColor = .clear
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
+        table.setAccessibilityIdentifier("transcriptTable")
 
         let scrollView = TranscriptScrollView()
         scrollView.documentView = table
         scrollView.hasVerticalScroller = true
+        let scroller = TranscriptScroller()
+        scroller.setAccessibilityIdentifier("transcriptScroller")
+        scrollView.verticalScroller = scroller
         scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
+        scrollView.autohidesScrollers = !TraceTestHooks.isUITesting
         scrollView.drawsBackground = false
         scrollView.setAccessibilityIdentifier("transcriptScroll")
         context.coordinator.attach(table: table, scrollView: scrollView)
@@ -482,18 +504,41 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private struct RestoreRequest {
+            enum Reason {
+                case passive
+                case navigation
+                case visibility
+                case search(messageID: Int64)
+
+                var priority: Int {
+                    switch self {
+                    case .passive: 0
+                    case .navigation: 1
+                    case .visibility: 2
+                    case .search: 3
+                    }
+                }
+
+                var reportsHooks: Bool {
+                    if case .passive = self { return false }
+                    return true
+                }
+            }
+
             let token = UUID()
             let bookmark: TranscriptBookmark
-            let reportsHooks: Bool
+            let reason: Reason
             let refreshesRowHeights: Bool
             var attemptsRemaining: Int
+            var stableChecks = 0
+            var refreshedRowHeights = false
 
             init(
-                bookmark: TranscriptBookmark, reportsHooks: Bool,
+                bookmark: TranscriptBookmark, reason: Reason,
                 refreshesRowHeights: Bool
             ) {
                 self.bookmark = bookmark
-                self.reportsHooks = reportsHooks
+                self.reason = reason
                 self.refreshesRowHeights = refreshesRowHeights
                 attemptsRemaining = 12
             }
@@ -521,7 +566,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var pendingRestore: RestoreRequest?
         private var deferredRestore: RestoreRequest?
         private var applyingProgrammaticScroll = false
-        private var suppressBoundsChangesUntil: ContinuousClock.Instant?
+        private var expectedProgrammaticOrigin: NSPoint?
         private var userScrolling = false
 
         deinit {
@@ -536,6 +581,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             (scrollView as? TranscriptScrollView)?.onUserScrollInput = { [weak self] in
                 self?.beginUserScrolling()
+            }
+            (scrollView.verticalScroller as? TranscriptScroller)?.onUserScrollInput = {
+                [weak self] in self?.beginUserScrolling()
             }
             scrollView.contentView.postsBoundsChangedNotifications = true
             observers.replace(with: [
@@ -576,6 +624,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
             heightWorkItem = nil
             (table as? TranscriptTableView)?.onUserScrollInput = nil
             (scrollView as? TranscriptScrollView)?.onUserScrollInput = nil
+            (scrollView?.verticalScroller as? TranscriptScroller)?.onUserScrollInput = nil
+            pendingRestore = nil
+            deferredRestore = nil
+            expectedProgrammaticOrigin = nil
+            userScrolling = false
             observers.removeAll()
         }
 
@@ -614,7 +667,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 applyingProgrammaticScroll = true
                 table?.intercellSpacing.height = density == .compact ? 6 : 14
                 updateCellInsets(for: density)
-                suppressProgrammaticBoundsChanges()
+                if let table, !items.isEmpty {
+                    table.noteHeightOfRows(withIndexesChanged: IndexSet(items.indices))
+                    table.layoutSubtreeIfNeeded()
+                }
+                rememberProgrammaticOrigin()
                 applyingProgrammaticScroll = false
                 refreshesRowHeights = true
             }
@@ -641,17 +698,17 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 restoreRequestedPosition()
             } else if visibilityChanged, let preservedBookmark {
                 requestRestore(
-                    preservedBookmark, reportsHooks: true,
+                    preservedBookmark, reason: .visibility,
                     refreshesRowHeights: false
                 )
             } else if let preservedBookmark, !userScrolling {
                 requestRestore(
-                    preservedBookmark, reportsHooks: false,
+                    preservedBookmark, reason: .passive,
                     refreshesRowHeights: refreshesRowHeights
                 )
             } else if let preservedBookmark, refreshesRowHeights {
                 requestRestore(
-                    preservedBookmark, reportsHooks: false,
+                    preservedBookmark, reason: .passive,
                     refreshesRowHeights: true
                 )
             }
@@ -678,7 +735,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             } else {
                 table.reloadData()
             }
-            suppressProgrammaticBoundsChanges()
+            rememberProgrammaticOrigin()
             applyingProgrammaticScroll = false
         }
 
@@ -686,7 +743,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             guard let table, !rows.isEmpty else { return }
             applyingProgrammaticScroll = true
             table.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
-            suppressProgrammaticBoundsChanges()
+            rememberProgrammaticOrigin()
             applyingProgrammaticScroll = false
         }
 
@@ -769,12 +826,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
         }
 
-        private func scheduleBookmarkSave() {
+        private func scheduleBookmarkSave(reportStart: Bool) {
             guard !applyingProgrammaticScroll else { return }
             bookmarkWorkItem?.cancel()
-            TraceTestHooks.appendLine(
-                "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
-            )
+            if reportStart {
+                TraceTestHooks.appendLine(
+                    "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
+                )
+            }
             let item = DispatchWorkItem { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
@@ -811,11 +870,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
 
         private func restoreRequestedPosition() {
             guard let model else { return }
-            var bookmark = model.scrollPositions[sessionID]
             if let target = model.requestedMessageID {
                 if let item = items.first(where: { $0.summary.id == target }) {
-                    bookmark = .init(messageID: target, offset: 0, index: item.sourceIndex)
-                    model.consumeRequestedMessageID(target)
+                    requestRestore(
+                        .init(messageID: target, offset: 0, index: item.sourceIndex),
+                        reason: .search(messageID: target)
+                    )
+                    return
                 } else if !model.messages.isEmpty {
                     // The session is loaded and the target is hidden by visibility or stale.
                     // Consume it so a later filter change or append cannot cause a surprise jump.
@@ -826,37 +887,44 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             guard !items.isEmpty else { return }
             requestRestore(
-                bookmark ?? .init(messageID: items[0].summary.id, offset: 0, index: 0),
-                reportsHooks: true, refreshesRowHeights: false
+                model.scrollPositions[sessionID]
+                    ?? .init(messageID: items[0].summary.id, offset: 0, index: 0),
+                reason: .navigation
             )
         }
 
         private func requestRestore(
-            _ bookmark: TranscriptBookmark, reportsHooks: Bool,
+            _ bookmark: TranscriptBookmark, reason: RestoreRequest.Reason,
             refreshesRowHeights: Bool = false
         ) {
             let request = RestoreRequest(
-                bookmark: bookmark, reportsHooks: reportsHooks,
+                bookmark: bookmark, reason: reason,
                 refreshesRowHeights: refreshesRowHeights
             )
             if userScrolling {
-                guard reportsHooks || refreshesRowHeights else { return }
-                deferredRestore = request
-                if reportsHooks {
-                    TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_DEFERRED_PATH")
+                switch reason {
+                case .visibility, .search:
+                    retainDeferredRestore(request)
+                    TraceTestHooks.touch(
+                        pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_DEFERRED_PATH"
+                    )
+                case .passive, .navigation:
+                    break
                 }
                 return
             }
+            if let pendingRestore,
+               pendingRestore.reason.priority > request.reason.priority { return }
             beginRestore(request)
         }
 
         private func beginRestore(_ request: RestoreRequest) {
             cancelPendingRestore(reportCancellation: false)
             pendingRestore = request
-            if request.reportsHooks {
+            if request.reason.reportsHooks {
                 TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH")
             }
-            let delay = request.reportsHooks
+            let delay = request.reason.reportsHooks
                 ? TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS") ?? 0
                 : 0
             scheduleRestore(token: request.token, delayMilliseconds: delay)
@@ -884,25 +952,32 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 abs(items[$0].sourceIndex - bookmark.index) < abs(items[$1].sourceIndex - bookmark.index)
             } ?? 0
             applyingProgrammaticScroll = true
-            if request.refreshesRowHeights {
-                var affectedRows = IndexSet(integer: row)
-                let visibleRows = table.rows(in: table.visibleRect)
-                if visibleRows.location != NSNotFound {
-                    affectedRows.insert(integersIn: visibleRows.location..<NSMaxRange(visibleRows))
-                }
-                table.noteHeightOfRows(withIndexesChanged: affectedRows)
+            if request.refreshesRowHeights, !request.refreshedRowHeights {
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(items.indices))
+                request.refreshedRowHeights = true
             }
             table.layoutSubtreeIfNeeded()
             table.scrollRowToVisible(row)
             table.layoutSubtreeIfNeeded()
+            let rowRect = table.rect(ofRow: row)
+            let maximumY = max(0, table.bounds.height - scrollView.contentView.bounds.height)
+            let desiredY = rowRect.minY - bookmark.offset
             var origin = scrollView.contentView.bounds.origin
-            origin.y = max(0, table.rect(ofRow: row).minY - bookmark.offset)
+            origin.y = min(max(0, desiredY), maximumY)
+            expectedProgrammaticOrigin = origin
             scrollView.contentView.setBoundsOrigin(origin)
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            suppressProgrammaticBoundsChanges()
+            rememberProgrammaticOrigin()
             applyingProgrammaticScroll = false
+
+            let visible = scrollView.documentVisibleRect
+            let achievedOffset = rowRect.minY - visible.minY
+            let offsetMatches = abs(achievedOffset - bookmark.offset) <= 1
+            let constrainedAtEdge = abs(origin.y - desiredY) > 1 && visible.intersects(rowRect)
+            if offsetMatches || constrainedAtEdge { request.stableChecks += 1 }
+            else { request.stableChecks = 0 }
             request.attemptsRemaining -= 1
-            if request.attemptsRemaining > 0 {
+            if request.stableChecks < 2, request.attemptsRemaining > 0 {
                 pendingRestore = request
                 scheduleRestore(
                     token: token,
@@ -911,11 +986,15 @@ private struct TranscriptRenderer: NSViewRepresentable {
             } else {
                 pendingRestore = nil
                 restoreWorkItem = nil
+                if case .search(let messageID) = request.reason,
+                   visible.intersects(rowRect) {
+                    model?.consumeRequestedMessageID(messageID)
+                }
             }
         }
 
         private func cancelPendingRestore(reportCancellation: Bool) {
-            let reportsHooks = pendingRestore?.reportsHooks == true
+            let reportsHooks = pendingRestore?.reason.reportsHooks == true
             restoreWorkItem?.cancel()
             restoreWorkItem = nil
             pendingRestore = nil
@@ -926,9 +1005,19 @@ private struct TranscriptRenderer: NSViewRepresentable {
 
         private func beginUserScrolling() {
             guard !applyingProgrammaticScroll else { return }
+            expectedProgrammaticOrigin = nil
+            if let pendingRestore {
+                switch pendingRestore.reason {
+                case .visibility, .search:
+                    retainDeferredRestore(pendingRestore)
+                case .passive, .navigation:
+                    break
+                }
+            }
             cancelPendingRestore(reportCancellation: true)
+            let alreadyScrolling = userScrolling
             userScrolling = true
-            scheduleBookmarkSave()
+            scheduleBookmarkSave(reportStart: !alreadyScrolling)
         }
 
         private func finishUserScrolling() {
@@ -940,6 +1029,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 self.deferredRestore = nil
                 beginRestore(deferredRestore)
             }
+        }
+
+        private func retainDeferredRestore(_ request: RestoreRequest) {
+            guard deferredRestore?.reason.priority ?? -1 <= request.reason.priority else {
+                return
+            }
+            deferredRestore = request
         }
 
         private func invalidateHeight(messageID: Int64) {
@@ -963,19 +1059,21 @@ private struct TranscriptRenderer: NSViewRepresentable {
             applyingProgrammaticScroll = true
             table.noteHeightOfRows(withIndexesChanged: rows)
             table.layoutSubtreeIfNeeded()
-            suppressProgrammaticBoundsChanges()
+            rememberProgrammaticOrigin()
             applyingProgrammaticScroll = false
-            if let bookmark { requestRestore(bookmark, reportsHooks: false) }
+            if let bookmark { requestRestore(bookmark, reason: .passive) }
         }
 
         private var shouldIgnoreBoundsChange: Bool {
             if applyingProgrammaticScroll { return true }
-            guard let deadline = suppressBoundsChangesUntil else { return false }
-            return ContinuousClock.now < deadline
+            guard let expected = expectedProgrammaticOrigin,
+                  let actual = scrollView?.contentView.bounds.origin else { return false }
+            expectedProgrammaticOrigin = nil
+            return abs(expected.x - actual.x) <= 0.5 && abs(expected.y - actual.y) <= 0.5
         }
 
-        private func suppressProgrammaticBoundsChanges() {
-            suppressBoundsChangesUntil = ContinuousClock.now.advanced(by: .milliseconds(250))
+        private func rememberProgrammaticOrigin() {
+            expectedProgrammaticOrigin = scrollView?.contentView.bounds.origin
         }
     }
 }
