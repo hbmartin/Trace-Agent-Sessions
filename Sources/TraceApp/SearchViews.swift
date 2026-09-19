@@ -639,7 +639,6 @@ struct SessionRow: View {
         HStack(spacing: 9) {
             if session.hadError {
                 SessionErrorIcon(
-                    sourcePath: session.sourcePath,
                     errorRevision: session.errorRevision,
                     sourceGeneration: session.sourceGeneration,
                     loadError: loadError
@@ -672,7 +671,6 @@ struct SessionRow: View {
 }
 
 private struct SessionErrorIcon: View {
-    let sourcePath: String
     let errorRevision: Int64
     let sourceGeneration: Int64
     let loadError: @MainActor () async -> String
@@ -685,7 +683,7 @@ private struct SessionErrorIcon: View {
         Image(systemName: "exclamationmark.circle.fill")
             .foregroundStyle(.red)
             .accessibilityLabel("Session error")
-            .accessibilityIdentifier("sessionError:\(sourcePath)")
+            .accessibilityIdentifier("sessionError")
             .accessibilityValue(detail ?? "Hover for error details")
             .onHover { hovering in
                 if hovering { showing = true; beginLoading() }

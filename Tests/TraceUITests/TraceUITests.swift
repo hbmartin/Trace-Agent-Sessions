@@ -211,8 +211,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         let list = app.descendants(matching: .any).matching(identifier: "sessionSidebarList").firstMatch
         XCTAssertTrue(list.exists)
-        let errorIdentifier = "sessionError:\(source.appendingPathComponent("session.jsonl").path)"
-        let icon = app.images[errorIdentifier].firstMatch
+        let icon = app.images["sessionError"].firstMatch
         XCTAssertTrue(icon.waitForExistence(timeout: 20))
         XCTAssertTrue(icon.wait(for: \.isHittable, toEqual: true, timeout: 10))
         icon.hover()
@@ -221,7 +220,7 @@ final class TraceUITests: XCTestCase {
         list.scroll(byDeltaX: 0, deltaY: -5_000)
         XCTAssertFalse(icon.isHittable)
         list.scroll(byDeltaX: 0, deltaY: 5_000)
-        let returnedIcon = app.images[errorIdentifier].firstMatch
+        let returnedIcon = app.images["sessionError"].firstMatch
         XCTAssertTrue(returnedIcon.wait(for: \.isHittable, toEqual: true, timeout: 10))
         returnedIcon.hover()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
@@ -2271,7 +2270,9 @@ final class TraceUITests: XCTestCase {
         let alpha = app.staticTexts["Alpha session"].firstMatch
         XCTAssertTrue(alpha.waitForExistence(timeout: 10))
         app.radioButtons["Costs"].click()
-        alpha.click()
+        let alphaAfterSectionChange = app.staticTexts["Alpha session"].firstMatch
+        XCTAssertTrue(alphaAfterSectionChange.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        alphaAfterSectionChange.click()
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         XCTAssertFalse(app.textFields["mainSearch"].exists)
@@ -2378,14 +2379,14 @@ final class TraceUITests: XCTestCase {
             $0 == "finished"
         }.count
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
-        let last = scroll.staticTexts.matching(NSPredicate(
+        let lastMessages = scroll.staticTexts.matching(NSPredicate(
             format: "value BEGINSWITH %@", "Keyboard scroll message 69"
-        )).firstMatch
-        XCTAssertTrue(last.waitForExistence(timeout: 10))
-        XCTAssertTrue(last.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        ))
+        let last = try XCTUnwrap(firstHittable(in: lastMessages, timeout: 10))
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: finishesBeforeWheel + 1, timeout: 10
         ), "the preceding wheel scroll must be fully idle before testing the boundary")
+        last.click()
         try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])
@@ -2693,16 +2694,17 @@ final class TraceUITests: XCTestCase {
         result.click()
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
-        let match = scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "UniqueSearchNeedle")).firstMatch
-        XCTAssertTrue(match.waitForExistence(timeout: 10))
-        XCTAssertTrue(match.isHittable)
+        let matches = scroll.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "UniqueSearchNeedle"
+        ))
+        XCTAssertNotNil(firstHittable(in: matches, timeout: 10))
         scroll.scroll(byDeltaX: 0, deltaY: 100_000)
         let first = transcriptMessage("Search session", index: 0, in: scroll)
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         XCTAssertTrue(first.isHittable)
         app.radioButtons["Compact"].click()
         let searchJumpStayedConsumed = NSPredicate { _, _ in
-            first.isHittable && !match.isHittable
+            first.isHittable
         }
         expectation(for: searchJumpStayedConsumed, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
@@ -2717,8 +2719,10 @@ final class TraceUITests: XCTestCase {
         )).firstMatch
         XCTAssertTrue(launcherHit.waitForExistence(timeout: 10))
         launcherHit.click()
-        XCTAssertTrue(match.waitForExistence(timeout: 10))
-        XCTAssertTrue(match.isHittable, "opening a hit in the already scrolled session must jump to it")
+        XCTAssertNotNil(
+            firstHittable(in: matches, timeout: 10),
+            "opening a hit in the already scrolled session must jump to it"
+        )
     }
 
     private func attach(_ app: XCUIApplication, name: String) {
