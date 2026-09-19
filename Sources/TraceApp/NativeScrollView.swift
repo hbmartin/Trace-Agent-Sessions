@@ -102,6 +102,8 @@ private final class UserObservedScrollView: NSScrollView {
     override var acceptsFirstResponder: Bool { true }
 
     override func scrollWheel(with event: NSEvent) {
+        let performanceInterval = TracePerformance.begin("Search Results Scroll Event")
+        defer { TracePerformance.end(performanceInterval) }
         onUserScroll?()
         super.scrollWheel(with: event)
     }

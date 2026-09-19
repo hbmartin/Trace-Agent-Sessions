@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0000B4D5FF04AAB7322446CD /* TraceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC42B0C4F9E369A965AADF1F /* TraceUITests.swift */; };
 		009812D1B67957D25CB4037F /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 737F75DCECABCFDDD5766F09 /* Models.swift */; };
+		1D965EF68C1C17289E545565 /* TracePerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02A9764F959F37F58FA2A43 /* TracePerformanceTests.swift */; };
 		22B2D780973FC46EB8E62E64 /* IndexingRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1872877A13B62D78BB3AB3F6 /* IndexingRegressionTests.swift */; };
 		2497C0F4E1D96CE7A439B915 /* ClaudeCodeSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B66D9553398A2F8F9EFC838 /* ClaudeCodeSource.swift */; };
 		270ECAD0ACCD2F7FA2CDC433 /* TraceCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F763FD1CC357584A864B27A3 /* TraceCore.framework */; };
@@ -44,6 +45,7 @@
 		B1642B3CC22086D802DA1768 /* NativeScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 292C891DC2C4684794440700 /* NativeScrollView.swift */; };
 		B501F2CE908B22C2822131F0 /* TraceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E12A1596445B962ADE86EBF9 /* TraceModel.swift */; };
 		CCAA206F2B4313BB5CFDF706 /* CostsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D304B0178CF2311F8B051E /* CostsView.swift */; };
+		CD8FD943230A3B0762DF054D /* TracePerformance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88B9861E8BE50A11BE398D4D /* TracePerformance.swift */; };
 		D35B07F95DF62167E60225F1 /* GRDBCustomSQLite.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3B509482FA384389F0B03FB2 /* GRDBCustomSQLite.framework */; };
 		DC7859CED9C426C30D31E81D /* WindowControllers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 682A3E6D1C5E51E152225149 /* WindowControllers.swift */; };
 		DCA8B57C2452EA01447661F8 /* HotkeyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88B40F01667E66C1CE0D5275 /* HotkeyController.swift */; };
@@ -98,6 +100,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = F3BA80591CFB2BB2003DC1BA;
 			remoteInfo = GRDBCustom;
+		};
+		9355BE91F742534BCFB30B5B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 692765E5DFC6545F1E173706 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F18F3A38FB256F6B823CA3EF;
+			remoteInfo = Trace;
 		};
 		A95B99847132636FC902D5BE /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -159,6 +168,7 @@
 /* Begin PBXFileReference section */
 		013780A1BA1BFB64087FA374 /* session-fixture.jsonl */ = {isa = PBXFileReference; path = "session-fixture.jsonl"; sourceTree = "<group>"; };
 		0C6430785963F888B6AD12AD /* SessionSearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSearchModel.swift; sourceTree = "<group>"; };
+		169CBE04FDE93C4ACDB06B8B /* TracePerformanceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TracePerformanceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1872877A13B62D78BB3AB3F6 /* IndexingRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexingRegressionTests.swift; sourceTree = "<group>"; };
 		20CD15A2E48FB03ACAE4F643 /* FSEventsWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FSEventsWatcherTests.swift; sourceTree = "<group>"; };
 		20D408B159A0DA04279DBAAE /* TraceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TraceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -186,6 +196,7 @@
 		81B6EDA8F8C1DF1FAB8C599C /* ProjectCanonicalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectCanonicalizer.swift; sourceTree = "<group>"; };
 		87EC2B12F9B2F53048E1FEAD /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		88B40F01667E66C1CE0D5275 /* HotkeyController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyController.swift; sourceTree = "<group>"; };
+		88B9861E8BE50A11BE398D4D /* TracePerformance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TracePerformance.swift; sourceTree = "<group>"; };
 		89EE09F4D7E94650AFF2D10C /* TraceBench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceBench.swift; sourceTree = "<group>"; };
 		8B66D9553398A2F8F9EFC838 /* ClaudeCodeSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeSource.swift; sourceTree = "<group>"; };
 		8F6AEF2B84E5973986385FE5 /* IndexScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexScheduler.swift; sourceTree = "<group>"; };
@@ -196,6 +207,7 @@
 		B4E8314EB78D6DA0131A23B2 /* PricingCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalog.swift; sourceTree = "<group>"; };
 		B5EF0A43A8C8CEE7A8A96200 /* FTSQueryParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FTSQueryParser.swift; sourceTree = "<group>"; };
 		B92C91471C7A95DD19D79709 /* GeminiSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiSource.swift; sourceTree = "<group>"; };
+		D02A9764F959F37F58FA2A43 /* TracePerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TracePerformanceTests.swift; sourceTree = "<group>"; };
 		D30918454AD8BA24928D61F1 /* TraceTestHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceTestHooks.swift; sourceTree = "<group>"; };
 		D573E8A868ABCA6616A39280 /* DiagnosticsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsStore.swift; sourceTree = "<group>"; };
 		D5FA01C38D33239057F9F7E3 /* JSONHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONHelpers.swift; sourceTree = "<group>"; };
@@ -264,6 +276,14 @@
 			path = chats;
 			sourceTree = "<group>";
 		};
+		0C4FD7CF9C083A857DDD6689 /* TracePerformanceTests */ = {
+			isa = PBXGroup;
+			children = (
+				D02A9764F959F37F58FA2A43 /* TracePerformanceTests.swift */,
+			);
+			path = TracePerformanceTests;
+			sourceTree = "<group>";
+		};
 		0C78F7C11B042872EC93D1C0 /* Fixtures */ = {
 			isa = PBXGroup;
 			children = (
@@ -315,6 +335,7 @@
 			isa = PBXGroup;
 			children = (
 				10ABF5FD7A33F15A84063D4A /* TraceCoreTests */,
+				0C4FD7CF9C083A857DDD6689 /* TracePerformanceTests */,
 				D4E5CFAEE190EE93F5D7FECF /* TraceUITests */,
 			);
 			path = Tests;
@@ -487,6 +508,7 @@
 			isa = PBXGroup;
 			children = (
 				D573E8A868ABCA6616A39280 /* DiagnosticsStore.swift */,
+				88B9861E8BE50A11BE398D4D /* TracePerformance.swift */,
 			);
 			path = Diagnostics;
 			sourceTree = "<group>";
@@ -515,6 +537,7 @@
 				59781BC7BE49F1BD4EFF58DE /* TraceBench */,
 				F763FD1CC357584A864B27A3 /* TraceCore.framework */,
 				2A3E5B7F6A631E1C0CA8517C /* TraceCoreTests.xctest */,
+				169CBE04FDE93C4ACDB06B8B /* TracePerformanceTests.xctest */,
 				20D408B159A0DA04279DBAAE /* TraceUITests.xctest */,
 			);
 			name = Products;
@@ -549,6 +572,24 @@
 			productName = TraceCore;
 			productReference = F763FD1CC357584A864B27A3 /* TraceCore.framework */;
 			productType = "com.apple.product-type.framework";
+		};
+		2D489703531079D6002FE3D3 /* TracePerformanceTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E3C30892E3DB7FEDADFB7266 /* Build configuration list for PBXNativeTarget "TracePerformanceTests" */;
+			buildPhases = (
+				7D0BB6473E804CCD30476CAD /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8CD4AFDA3EA90ECFBC8A416A /* PBXTargetDependency */,
+			);
+			name = TracePerformanceTests;
+			packageProductDependencies = (
+			);
+			productName = TracePerformanceTests;
+			productReference = 169CBE04FDE93C4ACDB06B8B /* TracePerformanceTests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 		446A174D0475DCE21DD964C4 /* TraceBench */ = {
 			isa = PBXNativeTarget;
@@ -645,6 +686,11 @@
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
+					2D489703531079D6002FE3D3 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = F18F3A38FB256F6B823CA3EF;
+					};
 					446A174D0475DCE21DD964C4 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -689,6 +735,7 @@
 				446A174D0475DCE21DD964C4 /* TraceBench */,
 				73D79764B2E675471C86DD9A /* TraceCoreTests */,
 				B18F9DC35F50099154E66D93 /* TraceUITests */,
+				2D489703531079D6002FE3D3 /* TracePerformanceTests */,
 			);
 		};
 /* End PBXProject section */
@@ -747,6 +794,7 @@
 				FDBC421F1BDB28486AA7F434 /* ProjectCanonicalizer.swift in Sources */,
 				2C34136414E1C856B97A3652 /* SessionMetadata.swift in Sources */,
 				86C34898D759E2A93689BA86 /* SessionSource.swift in Sources */,
+				CD8FD943230A3B0762DF054D /* TracePerformance.swift in Sources */,
 				E28CC1CD1AA43661CE5FDEDB /* TraceTestHooks.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -777,6 +825,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				0000B4D5FF04AAB7322446CD /* TraceUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D0BB6473E804CCD30476CAD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D965EF68C1C17289E545565 /* TracePerformanceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -826,6 +882,11 @@
 			isa = PBXTargetDependency;
 			name = GRDBCustom;
 			targetProxy = 6A355B223FE76BF0CE1CB9A8 /* PBXContainerItemProxy */;
+		};
+		8CD4AFDA3EA90ECFBC8A416A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F18F3A38FB256F6B823CA3EF /* Trace */;
+			targetProxy = 9355BE91F742534BCFB30B5B /* PBXContainerItemProxy */;
 		};
 		9A9A5B65AD7BDE970BEBCF5E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -956,6 +1017,26 @@
 			};
 			name = Release;
 		};
+		53F146A66CE49591A09C94ED /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_ENTITLEMENTS = Config/TraceUITests.entitlements;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = YES;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = me.haroldmartin.Trace.PerformanceTests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = Trace;
+			};
+			name = Release;
+		};
 		6AF9953C14A2C19662EC29E2 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1002,6 +1083,26 @@
 				SDKROOT = macosx;
 			};
 			name = Release;
+		};
+		B07EFB776B8C7D776217D7CC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_ENTITLEMENTS = Config/TraceUITests.entitlements;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = YES;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = me.haroldmartin.Trace.PerformanceTests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = Trace;
+			};
+			name = Debug;
 		};
 		B57298602E318BCF797DBA85 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1206,6 +1307,15 @@
 			buildConfigurations = (
 				6AF9953C14A2C19662EC29E2 /* Debug */,
 				3E396A610628A297A558EFFD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E3C30892E3DB7FEDADFB7266 /* Build configuration list for PBXNativeTarget "TracePerformanceTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B07EFB776B8C7D776217D7CC /* Debug */,
+				53F146A66CE49591A09C94ED /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

@@ -32,6 +32,8 @@ public struct IndexProgress: Sendable {
     public var unchangedFiles: Int = 0
     public var failedFiles: Int = 0
     public var unresolvedFailedFiles: Int = 0
+    public var failedPaths: Set<String> = []
+    public var failedReconciliationPaths: Set<String> = []
     public var committedBytes: Int64 = 0
     public var currentFileBytes: Int64 = 0
     public var currentFileTotalBytes: Int64 = 0
@@ -107,9 +109,9 @@ public actor IndexCoordinator {
         )
     }
 
-    func indexAllResult(scope: IndexScope, rebuild: Bool = false,
-                        activity: IndexActivity? = nil,
-                        progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
+    public func indexAllResult(scope: IndexScope, rebuild: Bool = false,
+                               activity: IndexActivity? = nil,
+                               progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
         await gate.acquire()
         let result = await run(
             scope: scope, paths: nil, reconciliationPaths: [], rebuild: rebuild,
@@ -157,7 +159,7 @@ public actor IndexCoordinator {
                      progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         var status = IndexProgress(phase: .discovering)
         status.activity = activity
-        status.incremental = paths != nil || !reconciliationPaths.isEmpty
+        status.incremental = activity == .fileChanges
         let mutations = PassMutationTracker()
         status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount()) ?? 0
         do {
@@ -177,21 +179,75 @@ public actor IndexCoordinator {
             var allFiles: [DiscoveredSourceFile] = []
             let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
             if oldScope != scope && !rebuild { status.activity = .scopeChange }
-            let refreshCodexNames = fullScan || (paths ?? []).contains {
+            let refreshCodexNames = fullScan || activity == .safetyVerification || (paths ?? []).contains {
                 TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: $0))
             }
             if refreshCodexNames { codexNameCache.removeAll() }
             var missingPaths: [String] = []
+            var rootErrors: [String: String] = [:]
+            var failedDiscoveryScopes: [AgentKind: Set<TraceFileIO.CanonicalPath>] = [:]
+
+            func recordDiscoveryFailure(
+                source: any SessionSource, scope: TraceFileIO.CanonicalPath, error: Error
+            ) {
+                let message = error.localizedDescription
+                failedDiscoveryScopes[source.agent, default: []].insert(scope)
+                status.failedFiles += 1
+                status.failedReconciliationPaths.insert(scope.path)
+                status.error = message
+                for root in source.roots
+                where scope.intersects(TraceFileIO.canonicalPath(root.scanURL.path)) {
+                    rootErrors[root.id] = message
+                }
+            }
+
+            func absorbDiscoveryResult(_ result: DiscoveryResult, source: any SessionSource) {
+                allFiles += result.files
+                for failure in result.failures {
+                    let failedScope = TraceFileIO.canonicalPath(failure.path)
+                    failedDiscoveryScopes[source.agent, default: []].insert(failedScope)
+                    status.failedFiles += 1
+                    status.failedReconciliationPaths.insert(failedScope.path)
+                    status.error = failure.message
+                    rootErrors["\(source.agent.rawValue):\(failure.root.path)"] = failure.message
+                }
+            }
+
             if fullScan {
                 for source in sources {
-                    try Task.checkCancellation()
-                    allFiles += try source.discover()
+                    for root in source.roots {
+                        try Task.checkCancellation()
+                        let scope = TraceFileIO.canonicalPath(root.scanURL.path)
+                        do {
+                            absorbDiscoveryResult(
+                                try source.discoverResult(scopedTo: [scope.path]), source: source
+                            )
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            recordDiscoveryFailure(source: source, scope: scope, error: error)
+                        }
+                    }
                 }
             } else {
                 if !reconciliationPaths.isEmpty {
                     for source in sources {
-                        try Task.checkCancellation()
-                        allFiles += try source.discover(scopedTo: reconciliationPaths)
+                        for path in reconciliationPaths.sorted() {
+                            try Task.checkCancellation()
+                            let scope = TraceFileIO.canonicalPath(path)
+                            guard source.roots.contains(where: {
+                                scope.intersects(TraceFileIO.canonicalPath($0.scanURL.path))
+                            }) else { continue }
+                            do {
+                                absorbDiscoveryResult(
+                                    try source.discoverResult(scopedTo: [scope.path]), source: source
+                                )
+                            } catch is CancellationError {
+                                throw CancellationError()
+                            } catch {
+                                recordDiscoveryFailure(source: source, scope: scope, error: error)
+                            }
+                        }
                     }
                 }
                 for path in (paths ?? []).sorted() {
@@ -207,7 +263,6 @@ public actor IndexCoordinator {
             var seen: Set<String> = []
             allFiles = allFiles.filter { seen.insert(TraceFileIO.canonicalPath($0.url.path).comparisonKey).inserted }
             status.totalFiles = allFiles.count
-            var rootErrors: [String: String] = [:]
             for file in allFiles {
                 try Task.checkCancellation()
                 guard let source = source(for: file.agent),
@@ -250,10 +305,10 @@ public actor IndexCoordinator {
                     status.failedFiles += 1
                     needsFailureRecount = true
                     status.error = error.localizedDescription
-                    try? await database.recordSourceError(
+                    status.failedPaths.insert(file.url.path)
+                    try await database.recordSourceError(
                         file: file, rootID: rootID, error: error.localizedDescription
                     )
-                    rootErrors["\(file.agent.rawValue):\(file.root.standardizedFileURL.path)"] = error.localizedDescription
                 }
                 if shouldRefreshMissingCodexTitle {
                     do {
@@ -297,9 +352,14 @@ public actor IndexCoordinator {
                 for source in sources {
                     let live = Set(allFiles.filter { $0.agent == source.agent }
                         .map { TraceFileIO.canonicalPath($0.url.path).comparisonKey })
+                    let failedScopes = failedDiscoveryScopes[source.agent] ?? []
                     for stored in try await database.paths(agent: source.agent)
                     where !live.contains(TraceFileIO.canonicalPath(stored.path).comparisonKey) {
                         try Task.checkCancellation()
+                        let storedPath = TraceFileIO.canonicalPath(stored.path)
+                        guard !failedScopes.contains(where: { $0.contains(storedPath) }) else {
+                            continue
+                        }
                         try await database.deleteSource(id: stored.id)
                         await mutations.markChanged()
                     }
@@ -315,16 +375,18 @@ public actor IndexCoordinator {
                 let scopes = reconciliationPaths.map(TraceFileIO.canonicalPath)
                 let live = Set(allFiles.map { TraceFileIO.canonicalPath($0.url.path).comparisonKey })
                 for source in sources {
+                    let failedScopes = failedDiscoveryScopes[source.agent] ?? []
                     for stored in try await database.paths(agent: source.agent) {
                         try Task.checkCancellation()
                         let storedPath = TraceFileIO.canonicalPath(stored.path)
                         guard scopes.contains(where: { $0.contains(storedPath) }),
+                              !failedScopes.contains(where: { $0.contains(storedPath) }),
                               !live.contains(storedPath.comparisonKey) else { continue }
                         try await database.deleteSource(id: stored.id)
                         await mutations.markChanged()
                     }
                     for root in source.roots {
-                        let canonicalRoot = TraceFileIO.canonicalPath(root.url.path)
+                        let canonicalRoot = TraceFileIO.canonicalPath(root.scanURL.path)
                         guard scopes.contains(where: { $0.intersects(canonicalRoot) }),
                               let rootID = rootIDs[root.id] else { continue }
                         try await database.recordRootScan(rootID: rootID, error: rootErrors[root.id])
@@ -336,7 +398,10 @@ public actor IndexCoordinator {
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots {
                     do {
-                        let names = await codexNames(directory: root.url.deletingLastPathComponent(), force: fullScan)
+                        let names = await codexNames(
+                            directory: root.url.deletingLastPathComponent(),
+                            force: fullScan || activity == .safetyVerification
+                        )
                         if try await database.updateCodexNames(names, root: root.url) {
                             await mutations.markChanged()
                         }
@@ -811,7 +876,9 @@ public actor IndexCoordinator {
 
     private func classify(url: URL) -> (any SessionSource, DiscoveredSourceFile, SourceRoot)? {
         for source in sources {
-            for root in source.roots where url.path.hasPrefix(root.url.path + "/") {
+            for root in source.roots {
+                let scanRoot = root.scanURL.path
+                guard url.path == scanRoot || url.path.hasPrefix(scanRoot + "/") else { continue }
                 let format: SourceFormat?
                 switch source.agent {
                 case .claudeCode:

@@ -144,10 +144,12 @@ private struct SessionSidebar: View {
                                   let projectID = projectRevealTaskID.rowID else {
                                 return
                             }
-                            try? await Task.sleep(for: .milliseconds(50))
-                            guard !Task.isCancelled,
-                                  model.sidebarRevealRequest?.token == reveal.token else { return }
-                            proxy.scrollTo(projectID, anchor: .center)
+                            for _ in 0..<8 {
+                                try? await Task.sleep(for: .milliseconds(100))
+                                guard !Task.isCancelled,
+                                      model.sidebarRevealRequest?.token == reveal.token else { return }
+                                proxy.scrollTo(projectID, anchor: .center)
+                            }
                             handledProjectRevealToken = reveal.token
                             if TraceTestHooks.isUITesting,
                                TraceTestHooks.environment["TRACE_TEST_SKIP_SIDEBAR_PROJECT_REVEAL_ACK"] != nil {
@@ -216,10 +218,12 @@ private struct SessionSidebar: View {
                                   let sessionID = sessionRevealTaskID.rowID else {
                                 return
                             }
-                            try? await Task.sleep(for: .milliseconds(50))
-                            guard !Task.isCancelled,
-                                  model.sidebarRevealRequest?.token == reveal.token else { return }
-                            proxy.scrollTo(sessionID, anchor: .center)
+                            for _ in 0..<8 {
+                                try? await Task.sleep(for: .milliseconds(100))
+                                guard !Task.isCancelled,
+                                      model.sidebarRevealRequest?.token == reveal.token else { return }
+                                proxy.scrollTo(sessionID, anchor: .center)
+                            }
                             handledSessionRevealToken = reveal.token
                             model.acknowledgeSidebarSessionReveal(token: reveal.token)
                         }
@@ -326,6 +330,118 @@ struct TranscriptBookmark {
     let index: Int
 }
 
+private struct TranscriptRowConfiguration: Equatable {
+    let messageID: Int64
+    let role: MessageRole
+    let timestampMilliseconds: Int64
+    let prefix: String
+    let toolSummary: String?
+    let characterCount: Int
+    let hasError: Bool
+    let sourcePath: String
+    let sourceFormat: SourceFormat
+    let locator: RecordLocator
+    let sectionFlags: Int?
+    let hydratedRole: MessageRole?
+    let hydratedSections: MessageSections?
+    let hydratedToolName: String?
+    let hydratedHasError: Bool?
+    let hydrationFailed: Bool
+    let visibility: TranscriptVisibility
+    let reasoningExpanded: Bool
+
+    init(
+        message: MessageSummary, hydrated: HydratedMessage?, hydrationFailed: Bool,
+        visibility: TranscriptVisibility, reasoningExpanded: Bool
+    ) {
+        messageID = message.id
+        role = message.role
+        timestampMilliseconds = message.timestampMilliseconds
+        prefix = message.prefix
+        toolSummary = message.toolSummary
+        characterCount = message.characterCount
+        hasError = message.hasError
+        sourcePath = message.sourcePath
+        sourceFormat = message.sourceFormat
+        locator = message.locator
+        sectionFlags = message.sectionFlags
+        hydratedRole = hydrated?.role
+        hydratedSections = hydrated?.sections
+        hydratedToolName = hydrated?.toolName
+        hydratedHasError = hydrated?.hasError
+        self.hydrationFailed = hydrationFailed
+        self.visibility = visibility
+        self.reasoningExpanded = reasoningExpanded
+    }
+}
+
+@MainActor
+private final class TranscriptTableView: NSTableView {
+    var onUserScrollInput: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
+        if scrollingKeys.contains(event.keyCode) { onUserScrollInput?() }
+        super.keyDown(with: event)
+    }
+}
+
+@MainActor
+private final class TranscriptScrollView: NSScrollView {
+    var onUserScrollInput: (() -> Void)?
+}
+
+@MainActor
+private final class TranscriptScroller: NSScroller {
+    var onUserScrollInput: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onUserScrollInput?()
+        super.mouseDown(with: event)
+    }
+}
+
+@MainActor
+private final class TranscriptHostingView: NSHostingView<AnyView> {
+}
+
+@MainActor
+private final class TranscriptExpansionState: ObservableObject {
+    @Published var auxiliary = false { didSet { changed(from: oldValue, to: auxiliary) } }
+    @Published var toolInvocation = false { didSet { changed(from: oldValue, to: toolInvocation) } }
+    @Published var toolOutput = false { didSet { changed(from: oldValue, to: toolOutput) } }
+    private let heightChanged: () -> Void
+
+    init(heightChanged: @escaping () -> Void) {
+        self.heightChanged = heightChanged
+    }
+
+    private func changed(from oldValue: Bool, to newValue: Bool) {
+        if oldValue != newValue { heightChanged() }
+    }
+}
+
+private final class NotificationObserverBag: @unchecked Sendable {
+    private var values: [NSObjectProtocol] = []
+
+    func replace(with values: [NSObjectProtocol]) {
+        removeAll()
+        self.values = values
+    }
+
+    func removeAll() {
+        values.forEach(NotificationCenter.default.removeObserver)
+        values.removeAll()
+    }
+
+    deinit { removeAll() }
+}
+
 private struct TranscriptRenderer: NSViewRepresentable {
     @ObservedObject var model: TraceModel
     let sessionID: Int64
@@ -335,7 +451,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
+        let table = TranscriptTableView()
         let column = NSTableColumn(identifier: .init("message"))
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
@@ -349,12 +465,16 @@ private struct TranscriptRenderer: NSViewRepresentable {
         table.backgroundColor = .clear
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
+        table.setAccessibilityIdentifier("transcriptTable")
 
-        let scrollView = NSScrollView()
+        let scrollView = TranscriptScrollView()
         scrollView.documentView = table
         scrollView.hasVerticalScroller = true
+        let scroller = TranscriptScroller()
+        scroller.setAccessibilityIdentifier("transcriptScroller")
+        scrollView.verticalScroller = scroller
         scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
+        scrollView.autohidesScrollers = !TraceTestHooks.isUITesting
         scrollView.drawsBackground = false
         scrollView.setAccessibilityIdentifier("transcriptScroll")
         context.coordinator.attach(table: table, scrollView: scrollView)
@@ -381,6 +501,50 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let sourceIndex: Int
         }
 
+        private struct RestoreRequest {
+            enum Reason {
+                case passive
+                case navigation
+                case visibility
+                case search(messageID: Int64)
+
+                var priority: Int {
+                    switch self {
+                    case .passive: 0
+                    case .navigation: 1
+                    case .visibility: 2
+                    case .search: 3
+                    }
+                }
+
+                var reportsHooks: Bool {
+                    if case .passive = self { return false }
+                    return true
+                }
+            }
+
+            let token = UUID()
+            let bookmark: TranscriptBookmark
+            let reason: Reason
+            let refreshesRowHeights: Bool
+            var attemptsRemaining: Int
+            var stableChecks = 0
+            var refreshedRowHeights = false
+            var refreshedTargetRowHeight = false
+            var revealedTargetRow = false
+            var lastDocumentHeight: CGFloat?
+
+            init(
+                bookmark: TranscriptBookmark, reason: Reason,
+                refreshesRowHeights: Bool
+            ) {
+                self.bookmark = bookmark
+                self.reason = reason
+                self.refreshesRowHeights = refreshesRowHeights
+                attemptsRemaining = 12
+            }
+        }
+
         private weak var table: NSTableView?
         private weak var scrollView: NSScrollView?
         private weak var model: TraceModel?
@@ -394,23 +558,65 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var hydratedIDs: Set<Int64> = []
         private var failedIDs: Set<Int64> = []
         private var expandedIDs: Set<Int64> = []
-        private var observers: [NSObjectProtocol] = []
+        private var expansionStates: [Int64: TranscriptExpansionState] = [:]
+        private let observers = NotificationObserverBag()
         private var bookmarkWorkItem: DispatchWorkItem?
-        private var restoring = false
+        private var bookmarkSnapshotWorkItem: DispatchWorkItem?
+        private var restoreWorkItem: DispatchWorkItem?
+        private var heightWorkItem: DispatchWorkItem?
+        private var pendingHeightMessageIDs: Set<Int64> = []
+        private var pendingRestore: RestoreRequest?
+        private var inputMonitor: Any?
+        private var applyingProgrammaticScroll = false
+        private var expectedProgrammaticOrigin: NSPoint?
+        private var lastObservedOrigin: NSPoint?
+        private var userScrolling = false
+
+        deinit {
+            observers.removeAll()
+        }
 
         func attach(table: NSTableView, scrollView: NSScrollView) {
             self.table = table
             self.scrollView = scrollView
+            (table as? TranscriptTableView)?.onUserScrollInput = { [weak self] in
+                self?.beginUserScrolling()
+            }
+            (scrollView as? TranscriptScrollView)?.onUserScrollInput = { [weak self] in
+                self?.beginUserScrolling()
+            }
+            (scrollView.verticalScroller as? TranscriptScroller)?.onUserScrollInput = {
+                [weak self] in self?.beginUserScrolling()
+            }
+            inputMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.scrollWheel, .keyDown]
+            ) { [weak self, weak scrollView] event in
+                let type = event.type
+                let window = event.window
+                let location = event.locationInWindow
+                let keyCode = event.keyCode
+                MainActor.assumeIsolated {
+                    guard let self, let scrollView, window === scrollView.window else { return }
+                    let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
+                    let isScroll = type == .scrollWheel
+                        && scrollView.frame.contains(scrollView.superview?.convert(
+                            location, from: nil
+                        ) ?? .zero)
+                    if isScroll || (type == .keyDown && scrollingKeys.contains(keyCode)) {
+                        self.beginUserScrolling()
+                    }
+                }
+                return event
+            }
             scrollView.contentView.postsBoundsChangedNotifications = true
-            observers = [
+            lastObservedOrigin = scrollView.contentView.bounds.origin
+            observers.replace(with: [
                 NotificationCenter.default.addObserver(
                     forName: NSScrollView.willStartLiveScrollNotification,
                     object: scrollView, queue: .main
                 ) { [weak self] _ in
                     MainActor.assumeIsolated {
-                        guard let self, self.restoring else { return }
-                        self.restoring = false
-                        TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH")
+                        self?.beginUserScrolling()
                     }
                 },
                 NotificationCenter.default.addObserver(
@@ -418,24 +624,40 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     object: scrollView, queue: .main
                 ) { [weak self] _ in
                     MainActor.assumeIsolated {
-                        self?.bookmarkWorkItem?.cancel()
-                        self?.bookmarkWorkItem = nil
-                        self?.savePosition()
+                        self?.scheduleBookmarkSave(reportStart: false)
                     }
                 },
                 NotificationCenter.default.addObserver(
                     forName: NSView.boundsDidChangeNotification,
                     object: scrollView.contentView, queue: .main
                 ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.scheduleBookmarkSave() }
+                    MainActor.assumeIsolated {
+                        self?.boundsDidChange()
+                    }
                 },
-            ]
+            ])
         }
 
         func detach() {
             bookmarkWorkItem?.cancel()
             bookmarkWorkItem = nil
-            observers.forEach(NotificationCenter.default.removeObserver)
+            bookmarkSnapshotWorkItem?.cancel()
+            bookmarkSnapshotWorkItem = nil
+            restoreWorkItem?.cancel()
+            restoreWorkItem = nil
+            heightWorkItem?.cancel()
+            heightWorkItem = nil
+            (table as? TranscriptTableView)?.onUserScrollInput = nil
+            (scrollView as? TranscriptScrollView)?.onUserScrollInput = nil
+            (scrollView?.verticalScroller as? TranscriptScroller)?.onUserScrollInput = nil
+            pendingRestore = nil
+            if let inputMonitor {
+                NSEvent.removeMonitor(inputMonitor)
+                self.inputMonitor = nil
+            }
+            expectedProgrammaticOrigin = nil
+            lastObservedOrigin = nil
+            userScrolling = false
             observers.removeAll()
         }
 
@@ -444,27 +666,47 @@ private struct TranscriptRenderer: NSViewRepresentable {
             density: TranscriptDensity, messageRevision: Int, contentRevision: Int,
             scrollRequest: UUID
         ) {
+            let performanceInterval = TracePerformance.begin("Transcript Update")
+            defer { TracePerformance.end(performanceInterval) }
             self.model = model
             let sessionChanged = self.sessionID != sessionID
+            var refreshesRowHeights = false
+            var visibilityChanged = false
+            if sessionChanged {
+                cancelPendingRestore(reportCancellation: false)
+                expansionStates.removeAll()
+            }
             self.sessionID = sessionID
-            var needsRestore = sessionChanged || self.scrollRequest != scrollRequest
+            var needsRequestedRestore = sessionChanged || self.scrollRequest != scrollRequest
+            var preservedBookmark: TranscriptBookmark?
             if self.messageRevision != messageRevision || self.visibility != visibility {
-                if self.messageRevision >= 0 { savePosition() }
+                if self.messageRevision >= 0 { preservedBookmark = currentBookmark() }
+                visibilityChanged = self.visibility != visibility
                 self.visibility = visibility
-                items = model.messages.enumerated().compactMap { index, summary in
+                let replacement = model.messages.enumerated().compactMap { index, summary in
                     visibility.includes(summary) ? Item(summary: summary, sourceIndex: index) : nil
                 }
+                updateRows(with: replacement, sessionChanged: sessionChanged)
                 self.messageRevision = messageRevision
-                table?.reloadData()
-                needsRestore = true
             }
             if self.density != density {
+                preservedBookmark = preservedBookmark ?? currentBookmark()
                 self.density = density
+                applyingProgrammaticScroll = true
                 table?.intercellSpacing.height = density == .compact ? 6 : 14
-                table?.reloadData()
-                needsRestore = true
+                updateCellInsets(for: density)
+                if let table, !items.isEmpty {
+                    table.noteHeightOfRows(withIndexesChanged: IndexSet(items.indices))
+                    table.layoutSubtreeIfNeeded()
+                }
+                rememberProgrammaticOrigin()
+                applyingProgrammaticScroll = false
+                refreshesRowHeights = true
             }
             if self.contentRevision != contentRevision {
+                pendingRestore?.stableChecks = 0
+                pendingRestore?.lastDocumentHeight = nil
+                preservedBookmark = preservedBookmark ?? currentBookmark()
                 let newHydrated = Set(model.hydratedMessages.keys)
                 let changed = hydratedIDs.symmetricDifference(newHydrated)
                     .union(failedIDs.symmetricDifference(model.hydrationFailures))
@@ -475,19 +717,85 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 self.contentRevision = contentRevision
                 let rows = IndexSet(items.indices.filter { changed.contains(items[$0].summary.id) })
                 if !rows.isEmpty {
-                    let bookmark = currentBookmark()
-                    table?.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
-                    if let bookmark { restore(bookmark) }
+                    reloadRows(rows)
                 }
             }
             if self.scrollRequest != scrollRequest {
                 self.scrollRequest = scrollRequest
-                needsRestore = true
+                needsRequestedRestore = true
             }
-            if needsRestore { restoreRequestedPosition() }
+            if needsRequestedRestore {
+                restoreRequestedPosition()
+            } else if visibilityChanged, let preservedBookmark {
+                requestRestore(
+                    preservedBookmark, reason: .visibility,
+                    refreshesRowHeights: false
+                )
+            } else if let preservedBookmark, !userScrolling {
+                requestRestore(
+                    preservedBookmark, reason: .passive,
+                    refreshesRowHeights: refreshesRowHeights
+                )
+            } else if let preservedBookmark, refreshesRowHeights {
+                requestRestore(
+                    preservedBookmark, reason: .passive,
+                    refreshesRowHeights: true
+                )
+            }
+        }
+
+        private func updateRows(with replacement: [Item], sessionChanged: Bool) {
+            guard let table else { items = replacement; return }
+            let preservesUserBottom = userScrolling && isAtBottom
+            let oldIDs = items.map { $0.summary.id }
+            let newIDs = replacement.map { $0.summary.id }
+            items = replacement
+            let liveIDs = Set(newIDs)
+            expansionStates = expansionStates.filter { liveIDs.contains($0.key) }
+
+            applyingProgrammaticScroll = true
+            if !sessionChanged, newIDs.count > oldIDs.count,
+               Array(newIDs.prefix(oldIDs.count)) == oldIDs {
+                table.beginUpdates()
+                table.insertRows(
+                    at: IndexSet(integersIn: oldIDs.count..<newIDs.count), withAnimation: []
+                )
+                table.endUpdates()
+            } else if !sessionChanged, oldIDs == newIDs {
+                reloadRows(IndexSet(integersIn: replacement.indices))
+            } else {
+                table.reloadData()
+            }
+            if preservesUserBottom {
+                table.layoutSubtreeIfNeeded()
+                scrollToBottom()
+            }
+            rememberProgrammaticOrigin()
+            applyingProgrammaticScroll = false
+        }
+
+        private func reloadRows(_ rows: IndexSet) {
+            guard let table, !rows.isEmpty else { return }
+            let preservesUserBottom = userScrolling && isAtBottom
+            applyingProgrammaticScroll = true
+            table.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
+            table.layoutSubtreeIfNeeded()
+            if preservesUserBottom { scrollToBottom() }
+            rememberProgrammaticOrigin()
+            applyingProgrammaticScroll = false
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int { items.count }
+
+        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            let rowView = NSTableRowView()
+            if items.indices.contains(row) {
+                rowView.setAccessibilityIdentifier(
+                    "transcriptMessage-\(items[row].sourceIndex)"
+                )
+            }
+            return rowView
+        }
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard items.indices.contains(row), let model else { return nil }
@@ -496,10 +804,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let cell = (tableView.makeView(withIdentifier: identifier, owner: nil) as? TranscriptHostingCell)
                 ?? TranscriptHostingCell(identifier: identifier)
             let message = item.summary
+            let expansion = expansionState(for: message.id)
+            let hydrated = model.hydratedMessages[message.id]
+            let hydrationFailed = model.hydrationFailures.contains(message.id)
             let rowView = MessageRow(
                 summary: message,
-                hydrated: model.hydratedMessages[message.id],
-                hydrationFailed: model.hydrationFailures.contains(message.id),
+                hydrated: hydrated,
+                hydrationFailed: hydrationFailed,
                 reasoningExpanded: Binding(
                     get: { [weak model] in model?.expandedReasoningIDs.contains(message.id) == true },
                     set: { [weak model] expanded in
@@ -508,21 +819,54 @@ private struct TranscriptRenderer: NSViewRepresentable {
                         else { model.expandedReasoningIDs.remove(message.id) }
                     }
                 ),
+                expansion: expansion,
                 visibility: visibility,
-                compact: density == .compact,
-                hydrate: { [weak model] in model?.hydrate(message) }
+                hydrate: { [weak model] in model?.hydrate(message) },
+                copyMessage: { [weak model] in model?.copyMessage(id: message.id) },
+                heightChanged: { [weak self] in self?.invalidateHeight(messageID: message.id) }
             )
-            .padding(.horizontal, density == .compact ? 12 : 20)
-            .padding(.vertical, (density == .compact ? 6 : 10) / 2)
             .frame(maxWidth: 920)
             .frame(maxWidth: .infinity)
             .fixedSize(horizontal: false, vertical: true)
-            cell.set(rootView: AnyView(rowView.id(message.id)), messageID: message.id)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("transcriptMessage-\(item.sourceIndex)")
+            cell.setDensity(density)
+            cell.set(
+                rootView: AnyView(rowView.id(message.id)), messageID: message.id,
+                configuration: TranscriptRowConfiguration(
+                    message: message,
+                    hydrated: hydrated,
+                    hydrationFailed: hydrationFailed,
+                    visibility: visibility,
+                    reasoningExpanded: model.expandedReasoningIDs.contains(message.id)
+                ),
+                copyMessage: { [weak model] in model?.copyMessage(id: message.id) }
+            )
             return cell
         }
 
+        private func updateCellInsets(for density: TranscriptDensity) {
+            guard let table else { return }
+            let rows = table.rows(in: table.visibleRect)
+            guard rows.location != NSNotFound else { return }
+            for row in rows.location..<NSMaxRange(rows) {
+                (table.view(atColumn: 0, row: row, makeIfNecessary: false)
+                    as? TranscriptHostingCell)?.setDensity(density)
+            }
+        }
+
+        private func expansionState(for messageID: Int64) -> TranscriptExpansionState {
+            if let state = expansionStates[messageID] { return state }
+            let state = TranscriptExpansionState { [weak self] in
+                self?.invalidateHeight(messageID: messageID)
+            }
+            expansionStates[messageID] = state
+            return state
+        }
+
         func savePosition() {
-            guard !restoring, let bookmark = currentBookmark(), let model else { return }
+            guard !applyingProgrammaticScroll, pendingRestore == nil,
+                  let bookmark = currentBookmark(), let model else { return }
             model.scrollPositions[sessionID] = bookmark
             TraceTestHooks.appendLine(
                 "finished", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
@@ -533,17 +877,42 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
         }
 
-        private func scheduleBookmarkSave() {
-            guard !restoring else { return }
+        private func savePositionWhileScrolling() {
+            guard !applyingProgrammaticScroll, pendingRestore == nil,
+                  let bookmark = currentBookmark(), let model else { return }
+            model.scrollPositions[sessionID] = bookmark
+            if TraceTestHooks.isUITesting,
+               let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] {
+                try? Data("\(bookmark.index)".utf8).write(to: URL(fileURLWithPath: path))
+            }
+        }
+
+        private func scheduleBookmarkSnapshot() {
+            bookmarkSnapshotWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.bookmarkSnapshotWorkItem = nil
+                    self.savePositionWhileScrolling()
+                }
+            }
+            bookmarkSnapshotWorkItem = item
+            DispatchQueue.main.async(execute: item)
+        }
+
+        private func scheduleBookmarkSave(reportStart: Bool) {
+            guard !applyingProgrammaticScroll else { return }
             bookmarkWorkItem?.cancel()
-            TraceTestHooks.appendLine(
-                "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
-            )
+            if reportStart {
+                TraceTestHooks.appendLine(
+                    "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
+                )
+            }
             let item = DispatchWorkItem { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.bookmarkWorkItem = nil
-                    self.savePosition()
+                    self.finishUserScrolling()
                 }
             }
             bookmarkWorkItem = item
@@ -556,10 +925,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func currentBookmark() -> TranscriptBookmark? {
-            guard let table, let clip = scrollView?.contentView as NSClipView? else { return nil }
-            let visible = clip.bounds
+            guard let table, let scrollView else { return nil }
+            let visible = scrollView.documentVisibleRect
             var row = table.row(at: NSPoint(x: 1, y: visible.minY + 1))
-            if row < 0 { row = table.rows(in: visible).location }
+            if row < 0 {
+                let rows = table.rows(in: visible)
+                guard rows.location != NSNotFound else { return nil }
+                row = rows.location
+            }
             guard items.indices.contains(row) else { return nil }
             let item = items[row]
             return .init(
@@ -570,60 +943,335 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func restoreRequestedPosition() {
-            guard let model, !items.isEmpty else { return }
-            var bookmark = model.scrollPositions[sessionID]
-            if let target = model.requestedMessageID,
-               let item = items.first(where: { $0.summary.id == target }) {
-                bookmark = .init(messageID: target, offset: 0, index: item.sourceIndex)
-                model.consumeRequestedMessageID(target)
+            guard let model else { return }
+            if let target = model.requestedMessageID {
+                if let item = items.first(where: { $0.summary.id == target }) {
+                    requestRestore(
+                        .init(messageID: target, offset: 0, index: item.sourceIndex),
+                        reason: .search(messageID: target)
+                    )
+                    return
+                } else if !model.messages.isEmpty {
+                    // The session is loaded and the target is hidden by visibility or stale.
+                    // Consume it so a later filter change or append cannot cause a surprise jump.
+                    model.consumeRequestedMessageID(target)
+                } else {
+                    return
+                }
             }
-            restore(bookmark ?? .init(messageID: items[0].summary.id, offset: 0, index: 0))
+            guard !items.isEmpty else { return }
+            requestRestore(
+                model.scrollPositions[sessionID]
+                    ?? .init(messageID: items[0].summary.id, offset: 0, index: 0),
+                reason: .navigation
+            )
         }
 
-        private func restore(_ bookmark: TranscriptBookmark) {
-            guard let table, let scrollView, !items.isEmpty else { return }
+        private func requestRestore(
+            _ bookmark: TranscriptBookmark, reason: RestoreRequest.Reason,
+            refreshesRowHeights: Bool = false
+        ) {
+            let request = RestoreRequest(
+                bookmark: bookmark, reason: reason,
+                refreshesRowHeights: refreshesRowHeights
+            )
+            if userScrolling {
+                switch reason {
+                case .navigation, .search:
+                    userScrolling = false
+                case .visibility, .passive:
+                    return
+                }
+            }
+            if let pendingRestore,
+               pendingRestore.reason.priority > request.reason.priority { return }
+            beginRestore(request)
+        }
+
+        private func beginRestore(_ request: RestoreRequest) {
+            cancelPendingRestore(reportCancellation: false)
+            pendingRestore = request
+            if request.reason.reportsHooks {
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH")
+            }
+            let delay = request.reason.reportsHooks
+                ? TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS") ?? 0
+                : 0
+            scheduleRestore(token: request.token, delayMilliseconds: delay)
+        }
+
+        private func scheduleRestore(token: UUID, delayMilliseconds: Int) {
+            restoreWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated { self?.applyRestore(token: token) }
+            }
+            restoreWorkItem = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(delayMilliseconds), execute: work
+            )
+        }
+
+        private func applyRestore(token: UUID) {
+            guard var request = pendingRestore, request.token == token,
+                  let table, let scrollView, !items.isEmpty, !userScrolling else { return }
+            let performanceInterval = TracePerformance.begin("Transcript Restore")
+            defer { TracePerformance.end(performanceInterval) }
+            let bookmark = request.bookmark
             let exact = items.firstIndex { $0.summary.id == bookmark.messageID }
             let row = exact ?? items.indices.min {
                 abs(items[$0].sourceIndex - bookmark.index) < abs(items[$1].sourceIndex - bookmark.index)
             } ?? 0
-            restoring = true
+            applyingProgrammaticScroll = true
+            if request.refreshesRowHeights, !request.refreshedRowHeights {
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(items.indices))
+                request.refreshedRowHeights = true
+            }
+            if !request.refreshedTargetRowHeight {
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+                request.refreshedTargetRowHeight = true
+            }
             table.layoutSubtreeIfNeeded()
-            table.scrollRowToVisible(row)
-            table.layoutSubtreeIfNeeded()
-            var origin = scrollView.contentView.bounds.origin
-            origin.y = max(0, table.rect(ofRow: row).minY - bookmark.offset)
+            if !request.revealedTargetRow {
+                if case .passive = request.reason {
+                    // The passive anchor is already at or near the viewport; directly
+                    // correcting the clip origin avoids rematerializing the table.
+                } else {
+                    table.scrollRowToVisible(row)
+                    table.layoutSubtreeIfNeeded()
+                }
+                request.revealedTargetRow = true
+            }
+            var rowRect = table.rect(ofRow: row)
+            var origin = constrainedOrigin(
+                for: rowRect.minY - bookmark.offset, table: table, scrollView: scrollView
+            )
             scrollView.contentView.setBoundsOrigin(origin)
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            restoring = false
+            table.layoutSubtreeIfNeeded()
+            rowRect = table.rect(ofRow: row)
+            origin = constrainedOrigin(
+                for: rowRect.minY - bookmark.offset, table: table, scrollView: scrollView
+            )
+            scrollView.contentView.setBoundsOrigin(origin)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            expectedProgrammaticOrigin = scrollView.contentView.bounds.origin
+            applyingProgrammaticScroll = false
+
+            let visible = scrollView.documentVisibleRect
+            let achievedOffset = rowRect.minY - visible.minY
+            let offsetMatches = abs(achievedOffset - bookmark.offset) <= 1
+            let constrainedAtEdge = abs(origin.y - (rowRect.minY - bookmark.offset)) > 1
+                && visible.intersects(rowRect)
+            let documentHeight = table.frame.height
+            let heightIsStable = request.lastDocumentHeight.map {
+                abs($0 - documentHeight) <= 1
+            } ?? false
+            let contentIsReady: Bool
+            if case .search(let messageID) = request.reason {
+                contentIsReady = model?.hydratedMessages[messageID] != nil
+                    || model?.hydrationFailures.contains(messageID) == true
+            } else {
+                contentIsReady = true
+            }
+            request.lastDocumentHeight = documentHeight
+            if (offsetMatches || constrainedAtEdge) && heightIsStable && contentIsReady {
+                request.stableChecks += 1
+            }
+            else { request.stableChecks = 0 }
+            request.attemptsRemaining -= 1
+            if request.stableChecks < 5, request.attemptsRemaining > 0 {
+                pendingRestore = request
+                scheduleRestore(
+                    token: token,
+                    delayMilliseconds: request.refreshesRowHeights ? 50 : 75
+                )
+            } else {
+                pendingRestore = nil
+                restoreWorkItem = nil
+                if case .search(let messageID) = request.reason,
+                   visible.intersects(rowRect) {
+                    model?.consumeRequestedMessageID(messageID)
+                }
+            }
         }
+
+        private func constrainedOrigin(
+            for desiredY: CGFloat, table: NSTableView, scrollView: NSScrollView
+        ) -> NSPoint {
+            let lastRowBottom = items.isEmpty ? 0 : table.rect(ofRow: items.count - 1).maxY
+            let documentHeight = max(table.frame.height, table.bounds.height, lastRowBottom)
+            let maximumY = max(0, documentHeight - scrollView.contentView.bounds.height)
+            var origin = scrollView.contentView.bounds.origin
+            origin.y = min(max(0, desiredY), maximumY)
+            return origin
+        }
+
+        private func cancelPendingRestore(reportCancellation: Bool) {
+            let reportsHooks = pendingRestore?.reason.reportsHooks == true
+            restoreWorkItem?.cancel()
+            restoreWorkItem = nil
+            pendingRestore = nil
+            if reportCancellation, reportsHooks {
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH")
+            }
+        }
+
+        private func beginUserScrolling() {
+            guard !applyingProgrammaticScroll else { return }
+            expectedProgrammaticOrigin = nil
+            cancelPendingRestore(reportCancellation: true)
+            let alreadyScrolling = userScrolling
+            userScrolling = true
+            scheduleBookmarkSnapshot()
+            scheduleBookmarkSave(reportStart: !alreadyScrolling)
+        }
+
+        private func finishUserScrolling() {
+            bookmarkWorkItem?.cancel()
+            bookmarkWorkItem = nil
+            userScrolling = false
+            savePosition()
+        }
+
+        private func invalidateHeight(messageID: Int64) {
+            pendingHeightMessageIDs.insert(messageID)
+            guard heightWorkItem == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated { self?.flushHeightChanges() }
+            }
+            heightWorkItem = work
+            DispatchQueue.main.async(execute: work)
+        }
+
+        private func flushHeightChanges() {
+            heightWorkItem = nil
+            guard let table else { return }
+            let changed = pendingHeightMessageIDs
+            pendingHeightMessageIDs.removeAll()
+            let rows = IndexSet(items.indices.filter { changed.contains(items[$0].summary.id) })
+            guard !rows.isEmpty else { return }
+            let bookmark = pendingRestore == nil && !userScrolling ? currentBookmark() : nil
+            let preservesUserBottom = userScrolling && isAtBottom
+            applyingProgrammaticScroll = true
+            table.noteHeightOfRows(withIndexesChanged: rows)
+            table.layoutSubtreeIfNeeded()
+            if preservesUserBottom { scrollToBottom() }
+            rememberProgrammaticOrigin()
+            applyingProgrammaticScroll = false
+            if let bookmark { requestRestore(bookmark, reason: .passive) }
+        }
+
+        private var shouldIgnoreBoundsChange: Bool {
+            guard let actual = scrollView?.contentView.bounds.origin else { return false }
+            let previous = lastObservedOrigin
+            lastObservedOrigin = actual
+            if applyingProgrammaticScroll {
+                return true
+            }
+            if let expected = expectedProgrammaticOrigin {
+                expectedProgrammaticOrigin = nil
+                let matches = originsMatch(expected, actual)
+                if matches { return true }
+            }
+            return previous.map { originsMatch($0, actual) } ?? false
+        }
+
+        private func boundsDidChange() {
+            guard !shouldIgnoreBoundsChange else { return }
+            beginUserScrolling()
+        }
+
+        private func rememberProgrammaticOrigin() {
+            let origin = scrollView?.contentView.bounds.origin
+            expectedProgrammaticOrigin = origin
+            lastObservedOrigin = origin
+        }
+
+        private func originsMatch(_ lhs: NSPoint, _ rhs: NSPoint) -> Bool {
+            abs(lhs.x - rhs.x) <= 0.5 && abs(lhs.y - rhs.y) <= 0.5
+        }
+
+        private var isAtBottom: Bool {
+            guard let table, let scrollView, !items.isEmpty else { return false }
+            let bottom = max(table.frame.height, table.rect(ofRow: items.count - 1).maxY)
+            return bottom - scrollView.documentVisibleRect.maxY <= 2
+        }
+
+        private func scrollToBottom() {
+            guard let table, let scrollView, !items.isEmpty else { return }
+            let bottom = max(table.frame.height, table.rect(ofRow: items.count - 1).maxY)
+            var origin = scrollView.contentView.bounds.origin
+            origin.y = max(0, bottom - scrollView.contentView.bounds.height)
+            scrollView.contentView.setBoundsOrigin(origin)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+
     }
 }
 
 @MainActor
 private final class TranscriptHostingCell: NSTableCellView {
-    private let host = NSHostingView(rootView: AnyView(EmptyView()))
+    private let host = TranscriptHostingView(rootView: AnyView(EmptyView()))
+    private var leadingConstraint: NSLayoutConstraint!
+    private var trailingConstraint: NSLayoutConstraint!
+    private var topConstraint: NSLayoutConstraint!
+    private var bottomConstraint: NSLayoutConstraint!
     private(set) var messageID: Int64?
+    private var configuration: TranscriptRowConfiguration?
+    private var copyMessage: (() -> Void)?
 
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
         self.identifier = identifier
         host.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host)
+        leadingConstraint = host.leadingAnchor.constraint(equalTo: leadingAnchor)
+        trailingConstraint = host.trailingAnchor.constraint(equalTo: trailingAnchor)
+        topConstraint = host.topAnchor.constraint(equalTo: topAnchor)
+        bottomConstraint = host.bottomAnchor.constraint(equalTo: bottomAnchor)
         NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: leadingAnchor),
-            host.trailingAnchor.constraint(equalTo: trailingAnchor),
-            host.topAnchor.constraint(equalTo: topAnchor),
-            host.bottomAnchor.constraint(equalTo: bottomAnchor),
+            leadingConstraint, trailingConstraint, topConstraint, bottomConstraint,
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    func set(rootView: AnyView, messageID: Int64) {
+    deinit {}
+
+    func setDensity(_ density: TranscriptDensity) {
+        let horizontal: CGFloat = density == .compact ? 12 : 20
+        let vertical: CGFloat = density == .compact ? 3 : 5
+        leadingConstraint.constant = horizontal
+        trailingConstraint.constant = -horizontal
+        topConstraint.constant = vertical
+        bottomConstraint.constant = -vertical
+    }
+
+    func set(
+        rootView: AnyView, messageID: Int64,
+        configuration: TranscriptRowConfiguration,
+        copyMessage: @escaping () -> Void
+    ) {
         self.messageID = messageID
+        self.copyMessage = copyMessage
+        guard self.configuration != configuration else { return }
+        self.configuration = configuration
         host.rootView = rootView
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard copyMessage != nil else { return super.menu(for: event) }
+        let menu = NSMenu()
+        let item = NSMenuItem(
+            title: "Copy Message", action: #selector(copyWholeMessage), keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func copyWholeMessage() { copyMessage?() }
 }
 
 private struct MessageRow: View {
@@ -631,10 +1279,11 @@ private struct MessageRow: View {
     let hydrated: HydratedMessage?
     let hydrationFailed: Bool
     @Binding var reasoningExpanded: Bool
+    @ObservedObject var expansion: TranscriptExpansionState
     let visibility: TranscriptVisibility
-    let compact: Bool
     let hydrate: () -> Void
-    @State private var auxiliaryExpanded = false
+    let copyMessage: () -> Void
+    let heightChanged: () -> Void
 
     var body: some View {
         if hasVisibleContent {
@@ -659,11 +1308,15 @@ private struct MessageRow: View {
                     content
                 }
             }
-            .padding(compact ? 8 : 14)
+            .padding(12)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.58), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45)))
-            .task(id: visibility) {
-                if !isLazyAuxiliary { hydrate() }
+            .task(id: HydrationTaskID(
+                visibility: visibility, sourcePath: summary.sourcePath,
+                needsHydration: hydrated == nil,
+                lazyExpanded: expansion.auxiliary
+            )) {
+                if hydrated == nil && (!isLazyAuxiliary || expansion.auxiliary) { hydrate() }
             }
         }
     }
@@ -678,19 +1331,19 @@ private struct MessageRow: View {
     @ViewBuilder private var content: some View {
         if let hydrated {
             if isLazyAuxiliary {
-                DisclosureGroup(isExpanded: $auxiliaryExpanded) {
+                DisclosureGroup(isExpanded: $expansion.auxiliary) {
                     sectionContents(hydrated)
                 } label: {
                     Text(safePreview ?? neutralPlaceholder)
                         .font(.callout.monospaced())
-                        .lineLimit(auxiliaryExpanded ? nil : 2)
+                        .lineLimit(expansion.auxiliary ? nil : 2)
                 }
-                .onChange(of: auxiliaryExpanded) { _, expanded in if expanded { hydrate() } }
+                .onChange(of: expansion.auxiliary) { _, expanded in if expanded { hydrate() } }
             } else {
                 sectionContents(hydrated)
             }
         } else if isLazyAuxiliary {
-            DisclosureGroup(isExpanded: $auxiliaryExpanded) {
+            DisclosureGroup(isExpanded: $expansion.auxiliary) {
                 if hydrationFailed { Text("Unable to load visible content.").foregroundStyle(.secondary) }
                 else { ProgressView().controlSize(.small) }
             } label: {
@@ -698,7 +1351,7 @@ private struct MessageRow: View {
                     .font(.callout.monospaced())
                     .lineLimit(2)
             }
-            .onChange(of: auxiliaryExpanded) { _, expanded in if expanded { hydrate() } }
+            .onChange(of: expansion.auxiliary) { _, expanded in if expanded { hydrate() } }
         } else if let safePreview, !safePreview.isEmpty {
             Text(safePreview).foregroundStyle(.secondary)
         } else if summary.sectionFlags.map({ $0 & 8 != 0 }) == true {
@@ -714,24 +1367,42 @@ private struct MessageRow: View {
 
     @ViewBuilder private func sectionContents(_ message: HydratedMessage) -> some View {
         if visibility.includes(role: summary.role), !message.sections.prose.isEmpty {
-            MarkdownText(source: message.sections.prose)
+            MarkdownText(
+                source: message.sections.prose,
+                copyMessage: copyMessage,
+                heightChanged: heightChanged
+            )
         }
         if visibility.includes(role: summary.role), visibility.tools && !message.sections.toolInvocation.isEmpty {
-            DisclosureGroup("Tool invocation") {
-                SelectableMessageText(text: AttributedString(message.sections.toolInvocation), monospaced: true)
+            DisclosureGroup(isExpanded: $expansion.toolInvocation) {
+                SelectableMessageText(
+                    text: AttributedString(message.sections.toolInvocation),
+                    monospaced: true, copyMessage: copyMessage
+                )
+            } label: {
+                Text("Tool invocation")
             }
         }
         if visibility.includes(role: summary.role), visibility.tools && !message.sections.toolOutput.isEmpty {
-            DisclosureGroup("Tool output") {
-                SelectableMessageText(text: AttributedString(message.sections.toolOutput), monospaced: true)
+            DisclosureGroup(isExpanded: $expansion.toolOutput) {
+                SelectableMessageText(
+                    text: AttributedString(message.sections.toolOutput),
+                    monospaced: true, copyMessage: copyMessage
+                )
+            } label: {
+                Text("Tool output")
             }
         }
         if visibility.includes(role: summary.role), visibility.reasoning && !message.sections.reasoning.isEmpty {
             DisclosureGroup(isExpanded: $reasoningExpanded) {
-                SelectableMessageText(text: AttributedString(message.sections.reasoning), secondary: true)
+                SelectableMessageText(
+                    text: AttributedString(message.sections.reasoning),
+                    secondary: true, copyMessage: copyMessage
+                )
             } label: {
                 Label("Reasoning", systemImage: "brain")
             }
+            .onChange(of: reasoningExpanded) { _, _ in heightChanged() }
         }
         if visibility.includes(role: summary.role), message.sections.hasNonTextContent {
             Label("Image or attachment", systemImage: "paperclip")
@@ -765,6 +1436,13 @@ private struct MessageRow: View {
     private var isLazyAuxiliary: Bool {
         visibility.includes(role: summary.role)
             && [.toolResult, .toolUse, .system, .reasoning].contains(summary.role)
+    }
+
+    private struct HydrationTaskID: Hashable {
+        let visibility: TranscriptVisibility
+        let sourcePath: String
+        let needsHydration: Bool
+        let lazyExpanded: Bool
     }
 
     private func hasVisibleContent(in sections: MessageSections) -> Bool {

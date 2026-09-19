@@ -2,6 +2,11 @@ import XCTest
 @testable import TraceCore
 
 final class FSEventsWatcherTests: XCTestCase {
+    func testWatcherReportsEmptyRootStartupFailure() {
+        let watcher = FSEventsWatcher(roots: []) { _ in }
+        XCTAssertFalse(watcher.start())
+    }
+
     func testEventCheckpointPersistsAcrossDatabaseOpen() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("TraceCheckpoint-\(UUID().uuidString)")
@@ -42,7 +47,7 @@ final class FSEventsWatcherTests: XCTestCase {
 
         let recorder = EventRecorder(expectedSuffix: "/\(directory.lastPathComponent)/\(file.lastPathComponent)")
         let watcher = FSEventsWatcher(roots: [directory]) { paths in recorder.receive(paths) }
-        watcher.start()
+        XCTAssertTrue(watcher.start())
         defer { watcher.stop() }
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
 

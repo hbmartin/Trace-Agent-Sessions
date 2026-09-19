@@ -683,6 +683,7 @@ private struct SessionErrorIcon: View {
         Image(systemName: "exclamationmark.circle.fill")
             .foregroundStyle(.red)
             .accessibilityLabel("Session error")
+            .accessibilityIdentifier("sessionError")
             .accessibilityValue(detail ?? "Hover for error details")
             .onHover { hovering in
                 if hovering { showing = true; beginLoading() }

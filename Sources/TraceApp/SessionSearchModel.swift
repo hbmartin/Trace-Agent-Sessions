@@ -128,6 +128,17 @@ final class SessionSearchModel: ObservableObject {
             return .unchanged
         }
         if let project = projects.first(where: { $0.canonicalKey == projectFilterCanonicalKey }) {
+            if isResolvingProjectFilter {
+                switch policy {
+                case .keepResolving:
+                    if projectFilterDisplayName != project.displayName {
+                        projectFilterDisplayName = project.displayName
+                    }
+                    return .unchanged
+                case .retain, .clear:
+                    break
+                }
+            }
             let wasResolving = isResolvingProjectFilter
             if projectFilterDisplayName != project.displayName {
                 projectFilterDisplayName = project.displayName
@@ -254,6 +265,8 @@ final class SessionSearchModel: ObservableObject {
                         try await Task.sleep(for: .milliseconds(delay))
                     }
                 }
+                let performanceInterval = TracePerformance.begin("Interactive Search")
+                defer { TracePerformance.end(performanceInterval) }
                 let started = ContinuousClock.now
                 guard let self, self.requestID == id else { return }
                 var cursor = initialCursor

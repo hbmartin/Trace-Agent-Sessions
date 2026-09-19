@@ -15,6 +15,7 @@ public struct SourceChanges: Sendable {
     public var watermarks: [String: UInt64] = [:]
     public var historyDone = false
     public var requiresReconciliation: Bool { !reconciliationPaths.isEmpty }
+    public var hasIndexWork: Bool { !paths.isEmpty || requiresReconciliation }
 
     public init() {}
 
@@ -83,8 +84,10 @@ public final class FSEventsWatcher: @unchecked Sendable {
 
     deinit { stop() }
 
-    public func start() {
-        guard stream == nil, !roots.isEmpty else { return }
+    @discardableResult
+    public func start() -> Bool {
+        if stream != nil { return true }
+        guard !roots.isEmpty else { return false }
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
@@ -119,14 +122,20 @@ public final class FSEventsWatcher: @unchecked Sendable {
                     | kFSEventStreamCreateFlagUseCFTypes
             )
         )
-        guard let stream else { return }
+        guard let stream else { return false }
         FSEventStreamSetDispatchQueue(stream, queue)
-        FSEventStreamStart(stream)
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            self.stream = nil
+            return false
+        }
         if sinceWhen == FSEventStreamEventId(kFSEventStreamEventIdSinceNow) {
             var initial = SourceChanges()
             initial.watermarks[identifier] = FSEventsGetCurrentEventId()
             enqueue(initial)
         }
+        return true
     }
 
     public func stop() {

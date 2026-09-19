@@ -117,6 +117,23 @@ targets:
     dependencies:
       - target: Trace
 
+  TracePerformanceTests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/TracePerformanceTests
+    entitlements:
+      path: Config/TraceUITests.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.PerformanceTests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Trace
+        ENABLE_HARDENED_RUNTIME: false
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: true
+    dependencies:
+      - target: Trace
+
 schemes:
   Trace:
     build:
@@ -124,6 +141,10 @@ schemes:
         Trace: all
         TraceCoreTests: [test]
         TraceUITests: [test]
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: Trace
     run:
       config: Debug
     test:
@@ -141,18 +162,29 @@ schemes:
       config: Debug
     archive:
       config: Release
-    preActions:
-      - name: Configure GRDB custom SQLite
-        script: Scripts/configure-grdb.sh
-        settingsTarget: Trace
-
   TraceBench:
     build:
       targets:
         TraceBench: all
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: TraceBench
     run:
       config: Release
-    preActions:
-      - name: Configure GRDB custom SQLite
-        script: Scripts/configure-grdb.sh
-        settingsTarget: TraceBench
+
+  TracePerformance:
+    build:
+      targets:
+        Trace: all
+        TracePerformanceTests: [test]
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: Trace
+    test:
+      config: Release
+      gatherCoverageData: false
+      targets:
+        - name: TracePerformanceTests
+          parallelizable: false

@@ -56,8 +56,31 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
 
     public init(agent: AgentKind, url: URL, isDefault: Bool = true) {
         self.agent = agent
-        self.url = url.standardizedFileURL.resolvingSymlinksInPath()
+        // The configured path is the durable identity. Resolving it here made the
+        // same symlink alternate identities as its target mounted and unmounted.
+        self.url = url.standardizedFileURL
         self.isDefault = isDefault
+    }
+
+    /// The path used for I/O. Unlike `URL.resolvingSymlinksInPath`, this resolves a
+    /// root symlink even when its destination is temporarily unavailable.
+    public var scanURL: URL {
+        var candidate = url
+        var visited: Set<String> = []
+        for _ in 0..<32 {
+            guard visited.insert(candidate.path).inserted,
+                  let destination = try? FileManager.default.destinationOfSymbolicLink(
+                    atPath: candidate.path
+                  ) else { break }
+            if destination.hasPrefix("/") {
+                candidate = URL(fileURLWithPath: destination)
+            } else {
+                candidate = candidate.deletingLastPathComponent()
+                    .appendingPathComponent(destination)
+            }
+            candidate = candidate.standardizedFileURL
+        }
+        return candidate
     }
 }
 
@@ -69,10 +92,22 @@ public struct DiscoveredSourceFile: Hashable, Sendable {
 
     public init(agent: AgentKind, root: URL, url: URL, format: SourceFormat) {
         self.agent = agent
-        self.root = root.standardizedFileURL.resolvingSymlinksInPath()
-        self.url = url.standardizedFileURL.resolvingSymlinksInPath()
+        self.root = root.standardizedFileURL
+        self.url = URL(fileURLWithPath: TraceFileIO.canonicalPath(url.path).path)
         self.format = format
     }
+}
+
+public struct IndexRecoveryWork: Sendable {
+    public let filePaths: Set<String>
+    public let rootPaths: Set<String>
+
+    public init(filePaths: Set<String> = [], rootPaths: Set<String> = []) {
+        self.filePaths = filePaths
+        self.rootPaths = rootPaths
+    }
+
+    public var isEmpty: Bool { filePaths.isEmpty && rootPaths.isEmpty }
 }
 
 public struct SourceFingerprint: Equatable, Sendable {

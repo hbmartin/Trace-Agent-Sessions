@@ -15,9 +15,9 @@
                <EnvironmentBuildable>
                   <BuildableReference
                      BuildableIdentifier = "primary"
-                     BlueprintIdentifier = "446A174D0475DCE21DD964C4"
-                     BuildableName = "TraceBench"
-                     BlueprintName = "TraceBench"
+                     BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
+                     BuildableName = "Trace.app"
+                     BlueprintName = "Trace"
                      ReferencedContainer = "container:Trace.xcodeproj">
                   </BuildableReference>
                </EnvironmentBuildable>
@@ -33,16 +33,30 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "446A174D0475DCE21DD964C4"
-               BuildableName = "TraceBench"
-               BlueprintName = "TraceBench"
+               BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
+               BuildableName = "Trace.app"
+               BlueprintName = "Trace"
+               ReferencedContainer = "container:Trace.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2D489703531079D6002FE3D3"
+               BuildableName = "TracePerformanceTests.xctest"
+               BlueprintName = "TracePerformanceTests"
                ReferencedContainer = "container:Trace.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
-      buildConfiguration = "Debug"
+      buildConfiguration = "Release"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
@@ -50,17 +64,30 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "446A174D0475DCE21DD964C4"
-            BuildableName = "TraceBench"
-            BlueprintName = "TraceBench"
+            BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
+            BuildableName = "Trace.app"
+            BlueprintName = "Trace"
             ReferencedContainer = "container:Trace.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2D489703531079D6002FE3D3"
+               BuildableName = "TracePerformanceTests.xctest"
+               BlueprintName = "TracePerformanceTests"
+               ReferencedContainer = "container:Trace.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </TestAction>
    <LaunchAction
-      buildConfiguration = "Release"
+      buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       launchStyle = "0"
@@ -73,14 +100,12 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "446A174D0475DCE21DD964C4"
-            BuildableName = "TraceBench"
-            BlueprintName = "TraceBench"
+            BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
+            BuildableName = "Trace.app"
+            BlueprintName = "Trace"
             ReferencedContainer = "container:Trace.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <CommandLineArguments>
-      </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -92,9 +117,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "446A174D0475DCE21DD964C4"
-            BuildableName = "TraceBench"
-            BlueprintName = "TraceBench"
+            BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
+            BuildableName = "Trace.app"
+            BlueprintName = "Trace"
             ReferencedContainer = "container:Trace.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
