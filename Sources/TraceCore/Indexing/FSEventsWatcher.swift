@@ -15,6 +15,7 @@ public struct SourceChanges: Sendable {
     public var watermarks: [String: UInt64] = [:]
     public var historyDone = false
     public var requiresReconciliation: Bool { !reconciliationPaths.isEmpty }
+    public var hasIndexWork: Bool { !paths.isEmpty || requiresReconciliation }
 
     public init() {}
 

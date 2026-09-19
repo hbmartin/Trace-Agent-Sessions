@@ -127,6 +127,40 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(newestUnreadable?.title, "Fallback request")
     }
 
+    func testSafetyVerificationRefreshesMissedCodexTitleChange() async throws {
+        let root = try directory()
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let file = sessions.appendingPathComponent("rollout-safety.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "codex-safety", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Fallback request"]]]],
+        ], to: file)
+        let external = try DatabaseQueue(path: root.appendingPathComponent("state_5.sqlite").path)
+        try await external.write { db in
+            try db.execute(sql: "CREATE TABLE threads (id TEXT, name TEXT, title TEXT)")
+            try db.execute(sql: "INSERT INTO threads VALUES ('codex-safety', 'Initial title', NULL)")
+        }
+        let database = try IndexDatabase(url: root.appendingPathComponent("trace.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let indexedSessions = try await database.sessions()
+        let sessionID = try XCTUnwrap(indexedSessions.first?.id)
+        let initialTitle = try await database.session(id: sessionID)?.title
+        XCTAssertEqual(initialTitle, "Initial title")
+
+        try await external.write {
+            try $0.execute(sql: "UPDATE threads SET name='Recovered safety title'")
+        }
+        _ = await coordinator.reconcile(
+            paths: [sessions.path], scope: .proseOnly, activity: .safetyVerification
+        )
+
+        let refreshedTitle = try await database.session(id: sessionID)?.title
+        XCTAssertEqual(refreshedTitle, "Recovered safety title")
+    }
+
     func testOptionalCodexTitleDatabaseFailureIsMetadataWarning() async throws {
         let root = try directory()
         let rollouts = root.appendingPathComponent("sessions")

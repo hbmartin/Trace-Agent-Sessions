@@ -154,8 +154,8 @@ final class TraceModel: ObservableObject {
     private var watcherStartupPending = true
     private var startupReconciliationPaths: Set<String> = []
     private var startupActivity = IndexActivity.cachedLaunch
-    private var startupSafetyDue = false
     private var watchedSourceRoots: [URL] = []
+    private var watcherGeneration: UInt64 = 0
     private var safetyVerificationTask: Task<Void, Never>?
     private var hydrationOrder: [Int64] = []
     private var hydratingMessageIDs: Set<Int64> = []
@@ -224,6 +224,7 @@ final class TraceModel: ObservableObject {
                 self.database = database
                 if database.contentWasResetOnOpen { prepareForIndexReset() }
                 let sources = makeSources()
+                _ = try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots))
                 let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
                 globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
@@ -249,7 +250,7 @@ final class TraceModel: ObservableObject {
                 loadPricing()
                 await reloadSummaries(loadCosts: false)
                 if settings.onboardingComplete {
-                    await startWatching(sources.flatMap(\.roots).map(\.url))
+                    guard await startWatching(sources) else { return }
                     if ProcessInfo.processInfo.arguments.contains("--index-smoke"), TraceRuntime.testDirectory != nil {
                         await scheduler?.request(reconcile: true, scope: settings.indexScope)
                         await scheduler?.waitUntilIdle()
@@ -294,7 +295,8 @@ final class TraceModel: ObservableObject {
         if coordinator != nil {
             Task { [weak self] in
                 guard let self else { return }
-                await self.startWatching(self.makeSources().flatMap(\.roots).map(\.url))
+                let sources = self.makeSources()
+                guard await self.startWatching(sources) else { return }
                 self.startIndexing()
             }
         }
@@ -309,15 +311,11 @@ final class TraceModel: ObservableObject {
     }
 
     private func completeIndexActivity(_ activity: IndexActivity, watermarks: [String: UInt64]) async {
+        guard (try? await database?.unresolvedSourceFailureCount()) == 0 else { return }
         try? await database?.saveEventCheckpoints(watermarks)
         if activity == .safetyVerification || activity == .initialBuild
             || activity == .launchReconciliation {
             try? await database?.markSafetyReconciliationComplete()
-            startupSafetyDue = false
-            if activity == .initialBuild || activity == .launchReconciliation {
-                safetyVerificationTask?.cancel()
-                safetyVerificationTask = nil
-            }
         }
     }
 
@@ -376,7 +374,8 @@ final class TraceModel: ObservableObject {
             lastSummaryRefresh = .now
             await reloadSummaries(
                 lightweight: !disposition.workflowTerminal,
-                projectReconciliation: disposition.projectReconciliation
+                projectReconciliation: disposition.projectReconciliation,
+                terminalPhase: disposition.workflowTerminal ? update.phase : nil
             )
         }
     }
@@ -562,7 +561,7 @@ final class TraceModel: ObservableObject {
                 || !arrivedDuringSubmission.watermarks.isEmpty {
                 await self.submitSourceChanges(arrivedDuringSubmission)
             }
-            if self.startupSafetyDue { self.scheduleSafetyVerification() }
+            self.startSafetyVerificationLoop()
         }
     }
 
@@ -576,25 +575,30 @@ final class TraceModel: ObservableObject {
     func reloadSourcesAndRebuild() {
         guard let database, let previousScheduler = scheduler else { return }
         sourceChangeTask?.cancel()
-        let previousRoots = watchedSourceRoots
-        watchers.forEach { $0.stop() }
-        watchers = []
-        safetyVerificationTask?.cancel()
+        invalidateWatchers()
         beginIndexReplacement()
         sourceChangeTask = Task {
             await previousScheduler.stop()
             guard !Task.isCancelled else { return }
             let sources = makeSources()
+            do {
+                if try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots)) {
+                    await reloadSummaries(
+                        loadCosts: false, projectReconciliation: .completed
+                    )
+                }
+            } catch {
+                startupError = "Could not update source folders: \(error.localizedDescription)"
+                return
+            }
+            guard !Task.isCancelled else { return }
             let coordinator = IndexCoordinator(database: database, sources: sources)
             self.coordinator = coordinator
             globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
             mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
             scheduler = makeScheduler(coordinator)
             initialIndexRequested = false
-            await startWatching(
-                sources.flatMap(\.roots).map(\.url), forceRootReconciliation: true,
-                additionalRecoveryRoots: previousRoots
-            )
+            guard await startWatching(sources, forceRootReconciliation: true) else { return }
             // Root changes reconcile existing files; unchanged sources retain their index.
             startIndexing()
         }
@@ -1189,9 +1193,7 @@ final class TraceModel: ObservableObject {
     }
 
     func prepareToTerminate() async {
-        watchers.forEach { $0.stop() }
-        watchers = []
-        safetyVerificationTask?.cancel()
+        invalidateWatchers()
         sourceChangeTask?.cancel()
         cancelAutomaticSearch()
         invalidateSidebarRevealRequest()
@@ -1216,39 +1218,60 @@ final class TraceModel: ObservableObject {
     }
 
     private func startWatching(
-        _ roots: [URL], forceRootReconciliation: Bool = false,
-        additionalRecoveryRoots: [URL] = []
-    ) async {
-        guard watchers.isEmpty, settings.onboardingComplete, let database else { return }
-        let metadataRoots = makeSources().filter { $0.agent == .codex }.flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
+        _ sources: [any SessionSource], forceRootReconciliation: Bool = false
+    ) async -> Bool {
+        guard settings.onboardingComplete, let database else { return false }
+        let generation = beginWatcherConfiguration()
+        let roots = sources.flatMap(\.roots).map(\.url)
+        let metadataRoots = sources.filter { $0.agent == .codex }
+            .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
         let canonicalRoots = roots.map { TraceFileIO.canonicalPath($0.path) }
         let canonicalMetadataRoots = metadataRoots.map { TraceFileIO.canonicalPath($0.path) }
-        watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
-        watcherStartupPending = true
-        bufferedSourceChanges = SourceChanges()
-        startupReconciliationPaths = forceRootReconciliation
-            ? Set((canonicalRoots + additionalRecoveryRoots.map { TraceFileIO.canonicalPath($0.path) }).map(\.path))
+        var reconciliationPaths = forceRootReconciliation
+            ? Set(canonicalRoots.map(\.path))
             : []
 
         let statistics = try? await database.statistics()
+        guard generation == watcherGeneration, !Task.isCancelled else { return false }
         let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
         var grouped: [String: [URL]] = [:]
         for root in roots + metadataRoots {
             grouped[Self.volumeIdentifier(for: root), default: []].append(root)
         }
+        var configurations: [(id: String, roots: [URL], checkpoint: UInt64?)] = []
         for (volumeID, volumeRoots) in grouped {
             let checkpoint = try? await database.eventCheckpoint(volumeID: volumeID)
+            guard generation == watcherGeneration, !Task.isCancelled else { return false }
             if checkpoint == nil {
                 let sourcePaths = volumeRoots.map { TraceFileIO.canonicalPath($0.path) }
                     .filter { candidate in canonicalRoots.contains { $0.comparisonKey == candidate.comparisonKey } }
                     .map(\.path)
-                startupReconciliationPaths.formUnion(sourcePaths)
+                reconciliationPaths.formUnion(sourcePaths)
             }
-            let watcher = FSEventsWatcher(
-                roots: volumeRoots, identifier: volumeID, sinceWhen: checkpoint
+            configurations.append((volumeID, volumeRoots, checkpoint))
+        }
+
+        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
+        watcherStartupPending = true
+        bufferedSourceChanges = SourceChanges()
+        startupReconciliationPaths = reconciliationPaths
+        if forceRootReconciliation {
+            startupActivity = .rootRecovery
+        } else if !startupReconciliationPaths.isEmpty {
+            startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
+        } else {
+            startupActivity = .cachedLaunch
+        }
+
+        let replacements = configurations.map { configuration in
+            FSEventsWatcher(
+                roots: configuration.roots, identifier: configuration.id,
+                sinceWhen: configuration.checkpoint
             ) { [weak self] changes in
                 Task { @MainActor [weak self] in
-                    guard let self, self.settings.onboardingComplete else { return }
+                    guard let self, self.settings.onboardingComplete,
+                          self.watcherGeneration == generation else { return }
                     var relevant = SourceChanges()
                     relevant.paths = Set(changes.paths.compactMap { path -> String? in
                         let canonical = TraceFileIO.canonicalPath(path)
@@ -1276,21 +1299,11 @@ final class TraceModel: ObservableObject {
                     else { await self.submitSourceChanges(relevant) }
                 }
             }
-            watcher.start()
-            watchers.append(watcher)
         }
-
-        let lastSafety = try? await database.lastSafetyReconciliationMilliseconds()
-        let day: Int64 = 24 * 60 * 60 * 1_000
-        startupSafetyDue = lastSafety == nil
-            || Int64(Date().timeIntervalSince1970 * 1_000) - (lastSafety ?? 0) >= day
-        if forceRootReconciliation {
-            startupActivity = .rootRecovery
-        } else if !startupReconciliationPaths.isEmpty {
-            startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
-        } else {
-            startupActivity = .cachedLaunch
-        }
+        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        watchers = replacements
+        replacements.forEach { $0.start() }
+        return true
     }
 
     private func submitSourceChanges(_ changes: SourceChanges) async {
@@ -1299,7 +1312,7 @@ final class TraceModel: ObservableObject {
             paths: changes.paths,
             reconciliationPaths: changes.reconciliationPaths,
             scope: settings.indexScope,
-            activity: activity(for: changes),
+            activity: changes.hasIndexWork ? activity(for: changes) : .fileChanges,
             watermarks: changes.watermarks
         )
     }
@@ -1312,20 +1325,89 @@ final class TraceModel: ObservableObject {
         return changes.historyDone ? .launchCatchUp : .fileChanges
     }
 
-    private func scheduleSafetyVerification() {
-        guard safetyVerificationTask == nil else { return }
+    private func beginWatcherConfiguration() -> UInt64 {
+        watcherGeneration &+= 1
+        watchers.forEach { $0.stop() }
+        watchers = []
+        safetyVerificationTask?.cancel()
+        safetyVerificationTask = nil
+        return watcherGeneration
+    }
+
+    private func invalidateWatchers() {
+        _ = beginWatcherConfiguration()
+        watchedSourceRoots = []
+        watcherStartupPending = true
+        bufferedSourceChanges = SourceChanges()
+    }
+
+    private func startSafetyVerificationLoop() {
+        guard safetyVerificationTask == nil, database != nil, scheduler != nil else { return }
+        let generation = watcherGeneration
         safetyVerificationTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(3)) } catch { return }
-            guard let self, let scheduler = self.scheduler else { return }
+            guard let self else { return }
+            await self.runSafetyVerificationLoop(generation: generation)
+            if self.watcherGeneration == generation {
+                self.safetyVerificationTask = nil
+            }
+        }
+    }
+
+    private func runSafetyVerificationLoop(generation: UInt64) async {
+        let day = Int64(TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_SAFETY_INTERVAL_MS"
+        ) ?? 24 * 60 * 60 * 1_000)
+        let startupDelay = Int64(TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_SAFETY_START_DELAY_MS"
+        ) ?? 3_000)
+        let retryDelay = Int64(TraceTestHooks.delayMilliseconds(
+            for: "TRACE_TEST_SAFETY_RETRY_DELAY_MS"
+        ) ?? 15 * 60 * 1_000)
+        var firstDueCheck = true
+        var retryNotBefore: Int64?
+
+        while !Task.isCancelled, generation == watcherGeneration {
+            guard let database, let scheduler else { return }
+            let lastSuccess = try? await database.lastSafetyReconciliationMilliseconds()
+            guard !Task.isCancelled, generation == watcherGeneration else { return }
+            let now = Int64(Date().timeIntervalSince1970 * 1_000)
+            var dueAt = lastSuccess.map { $0 + day } ?? now
+            if let retryNotBefore { dueAt = max(dueAt, retryNotBefore) }
+            var delay = max(0, dueAt - now)
+            if firstDueCheck, delay == 0 { delay = startupDelay }
+            firstDueCheck = false
+            if delay > 0 {
+                do { try await Task.sleep(for: .milliseconds(delay)) }
+                catch { return }
+            }
+            guard !Task.isCancelled, generation == watcherGeneration else { return }
             await scheduler.waitUntilIdle()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, generation == watcherGeneration else { return }
+
+            let refreshedLast = try? await database.lastSafetyReconciliationMilliseconds()
+            guard !Task.isCancelled, generation == watcherGeneration else { return }
+            let refreshedNow = Int64(Date().timeIntervalSince1970 * 1_000)
+            if let refreshedLast, refreshedNow - refreshedLast < day {
+                retryNotBefore = nil
+                continue
+            }
+
+            let before = refreshedLast
             await scheduler.request(
-                reconciliationPaths: Set(self.watchedSourceRoots.map { TraceFileIO.canonicalPath($0.path).path }),
-                scope: self.settings.indexScope,
+                reconciliationPaths: Set(watchedSourceRoots.map {
+                    TraceFileIO.canonicalPath($0.path).path
+                }),
+                scope: settings.indexScope,
                 activity: .safetyVerification
             )
-            self.startupSafetyDue = false
-            self.safetyVerificationTask = nil
+            await scheduler.waitUntilIdle()
+            guard !Task.isCancelled, generation == watcherGeneration else { return }
+            let after = try? await database.lastSafetyReconciliationMilliseconds()
+            if after == before {
+                retryNotBefore = Int64(Date().timeIntervalSince1970 * 1_000) + retryDelay
+            } else {
+                retryNotBefore = nil
+            }
         }
     }
 
@@ -1347,7 +1429,8 @@ final class TraceModel: ObservableObject {
     private func reloadSummaries(
         lightweight: Bool = false,
         loadCosts: Bool = true,
-        projectReconciliation: ProjectReconciliationMode = .ongoing
+        projectReconciliation: ProjectReconciliationMode = .ongoing,
+        terminalPhase: IndexProgress.Phase? = nil
     ) async {
         guard let database else { return }
         let refresh = UUID()
@@ -1465,6 +1548,9 @@ final class TraceModel: ObservableObject {
         statistics = try? await database.statistics()
         if let bytes = statistics?.databaseBytes { try? await diagnostics.recordIndexSize(bytes: bytes) }
         guard summaryRequestID == refresh else { return }
+        let restorationTerminal = terminalPhase.map {
+            [.complete, .failed, .cancelled].contains($0)
+        } ?? [.complete, .failed].contains(progress.phase)
         if mayRestoreSession {
             if let stored = settings.lastSessionID {
                 let restored = try? await database.session(id: stored)
@@ -1474,10 +1560,10 @@ final class TraceModel: ObservableObject {
                       selectedSessionID == nil else { return }
                 if restored != nil {
                     selectSession(stored)
-                } else if [.complete, .failed].contains(progress.phase) {
+                } else if restorationTerminal {
                     mayRestoreSession = false
                 }
-            } else if [.complete, .failed].contains(progress.phase) {
+            } else if restorationTerminal {
                 mayRestoreSession = false
             }
         }

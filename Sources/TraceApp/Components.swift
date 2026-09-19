@@ -159,12 +159,17 @@ struct IndexProgressLabel: View {
 
 struct MarkdownText: View {
     let source: String
+    var copyMessage: (() -> Void)?
+    var heightChanged: (() -> Void)?
     @State private var rendered = AttributedString()
 
     var body: some View {
-        SelectableMessageText(text: rendered)
+        SelectableMessageText(text: rendered, copyMessage: copyMessage)
             .task(id: source) {
-                rendered = await MarkdownRenderCache.shared.render(source)
+                let value = await MarkdownRenderCache.shared.render(source)
+                guard value != rendered else { return }
+                rendered = value
+                heightChanged?()
             }
     }
 }

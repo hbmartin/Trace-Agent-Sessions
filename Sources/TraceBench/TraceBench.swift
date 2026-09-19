@@ -13,13 +13,32 @@ struct TraceBench {
                     .appendingPathComponent("build/bench/index.sqlite")
 
             switch command {
+            case "generate":
+                let directory = try options.requiredURL("--sources-directory")
+                let sessions = max(1, options.integer("--sessions", default: 100))
+                let messages = max(1, options.integer("--messages", default: 100))
+                try generateCorpus(directory: directory, sessions: sessions, messages: messages)
             case "index":
                 if options.has("--cold") { try removeDatabase(at: databaseURL) }
-                try await runIndex(databaseURL: databaseURL, scope: options.scope, sourceDirectory: options.url("--sources-directory"))
+                try await runIndex(
+                    databaseURL: databaseURL, scope: options.scope,
+                    sourceDirectory: options.url("--sources-directory")
+                )
             case "search":
                 let query = options.value("--query") ?? "the"
-                let iterations = max(1, Int(options.value("--iterations") ?? "50") ?? 50)
-                try await runSearch(databaseURL: databaseURL, query: query, iterations: iterations)
+                let iterations = max(1, options.integer("--iterations", default: 50))
+                let warmup = max(0, options.integer("--warmup", default: 5))
+                let sort = SearchSort(rawValue: options.value("--sort") ?? "recency") ?? .recency
+                try await runSearch(
+                    databaseURL: databaseURL, query: query, sort: sort,
+                    iterations: iterations, warmup: warmup
+                )
+            case "search-suite":
+                let iterations = max(1, options.integer("--iterations", default: 50))
+                let warmup = max(0, options.integer("--warmup", default: 5))
+                try await runSearchSuite(
+                    databaseURL: databaseURL, iterations: iterations, warmup: warmup
+                )
             case "corpus":
                 try await runCorpusSummary(databaseURL: databaseURL)
             default:
@@ -43,7 +62,9 @@ struct TraceBench {
         let clock = ContinuousClock()
         let start = clock.now
         await coordinator.indexAll(scope: scope) { progress in
-            if progress.phase == .indexing, progress.currentFileBytes == 0, progress.completedFiles.isMultiple(of: 100) {
+            if progress.phase == .indexing,
+               progress.currentFileBytes == 0,
+               progress.completedFiles.isMultiple(of: 100) {
                 FileHandle.standardError.write(Data("Indexed \(progress.completedFiles)/\(progress.totalFiles)\n".utf8))
             }
         }
@@ -59,25 +80,98 @@ struct TraceBench {
         ))
     }
 
-    private static func runSearch(databaseURL: URL, query: String, iterations: Int) async throws {
+    private static func runSearch(
+        databaseURL: URL, query: String, sort: SearchSort,
+        iterations: Int, warmup: Int
+    ) async throws {
         let database = try IndexDatabase(url: databaseURL)
+        printJSON(try await measureSearch(
+            database: database, query: query, sort: sort,
+            iterations: iterations, warmup: warmup
+        ))
+    }
+
+    private static func runSearchSuite(
+        databaseURL: URL, iterations: Int, warmup: Int
+    ) async throws {
+        let database = try IndexDatabase(url: databaseURL)
+        var reports: [SearchReport] = []
+        for query in ["commonterm", "PerformanceNeedle", "message 42"] {
+            for sort in [SearchSort.recency, .relevance] {
+                reports.append(try await measureSearch(
+                    database: database, query: query, sort: sort,
+                    iterations: iterations, warmup: warmup
+                ))
+            }
+        }
+        printJSON(SearchSuiteReport(cases: reports))
+    }
+
+    private static func measureSearch(
+        database: IndexDatabase, query: String, sort: SearchSort,
+        iterations: Int, warmup: Int
+    ) async throws -> SearchReport {
+        for _ in 0..<warmup {
+            _ = try await database.search(query: query, sort: sort, limit: 200)
+        }
         var ftsMilliseconds: [Double] = []
         var resultCount = 0
         for _ in 0..<iterations {
             let start = ContinuousClock.now
-            let page = try await database.search(query: query, limit: 200)
+            let page = try await database.search(query: query, sort: sort, limit: 200)
             ftsMilliseconds.append(milliseconds(start.duration(to: .now)))
             resultCount = page.results.count
         }
         ftsMilliseconds.sort()
-        printJSON(SearchReport(
+        return SearchReport(
             query: query,
+            sort: sort.rawValue,
+            warmupIterations: warmup,
             iterations: iterations,
             resultCount: resultCount,
             medianMilliseconds: percentile(ftsMilliseconds, 0.50),
             p95Milliseconds: percentile(ftsMilliseconds, 0.95),
             p99Milliseconds: percentile(ftsMilliseconds, 0.99),
             maximumMilliseconds: ftsMilliseconds.last ?? 0
+        )
+    }
+
+    private static func generateCorpus(
+        directory: URL, sessions: Int, messages: Int
+    ) throws {
+        let manager = FileManager.default
+        guard !manager.fileExists(atPath: directory.path) else {
+            throw BenchError.destinationExists(directory.path)
+        }
+        let claude = directory.appendingPathComponent("Claude")
+        try manager.createDirectory(at: claude, withIntermediateDirectories: true)
+        for session in 0..<sessions {
+            var data = Data()
+            let title: [String: Any] = [
+                "type": "custom-title", "customTitle": "Performance session \(session)",
+            ]
+            data.append(try JSONSerialization.data(withJSONObject: title))
+            data.append(10)
+            for message in 0..<messages {
+                let record: [String: Any] = [
+                    "type": message == 0 ? "user" : "assistant",
+                    "uuid": "performance-\(session)-\(message)",
+                    "sessionId": "performance-\(session)",
+                    "cwd": "/tmp/PerformanceProject-\(session % 20)",
+                    "timestamp": "2026-09-18T12:00:00Z",
+                    "message": [
+                        "content": "PerformanceNeedle commonterm session \(session) message \(message). "
+                            + String(repeating: "Representative transcript content. ", count: 4),
+                    ],
+                ]
+                data.append(try JSONSerialization.data(withJSONObject: record))
+                data.append(10)
+            }
+            try data.write(to: claude.appendingPathComponent("performance-\(session).jsonl"))
+        }
+        printJSON(GeneratedCorpusReport(
+            sessions: sessions, messagesPerSession: messages,
+            totalMessages: sessions * messages, sourceDirectory: directory.path
         ))
     }
 
@@ -94,7 +188,8 @@ struct TraceBench {
     }
 
     private static func removeDatabase(at url: URL) throws {
-        for path in [url.path, url.path + "-wal", url.path + "-shm"] where FileManager.default.fileExists(atPath: path) {
+        for path in [url.path, url.path + "-wal", url.path + "-shm"]
+        where FileManager.default.fileExists(atPath: path) {
             try FileManager.default.removeItem(atPath: path)
         }
     }
@@ -127,7 +222,14 @@ private struct Options {
         guard let index = values.firstIndex(of: name), values.indices.contains(index + 1) else { return nil }
         return values[index + 1]
     }
+    func integer(_ name: String, default fallback: Int) -> Int {
+        Int(value(name) ?? "") ?? fallback
+    }
     func url(_ name: String) -> URL? { value(name).map { URL(fileURLWithPath: $0) } }
+    func requiredURL(_ name: String) throws -> URL {
+        guard let url = url(name) else { throw BenchError.usage }
+        return url
+    }
     var scope: IndexScope {
         switch value("--scope") {
         case "tools": .proseAndToolInvocations
@@ -139,8 +241,21 @@ private struct Options {
 
 private enum BenchError: LocalizedError {
     case usage
+    case destinationExists(String)
     var errorDescription: String? {
-        "usage: tracebench index [--cold] [--scope prose|tools|everything] [--sources-directory PATH] [--database PATH] | search [--query TEXT] [--iterations N] [--database PATH] | corpus [--database PATH]"
+        switch self {
+        case .usage:
+            [
+                "usage: tracebench generate --sources-directory PATH",
+                "[--sessions N] [--messages N] | index [--cold]",
+                "[--scope prose|tools|everything] [--sources-directory PATH] [--database PATH] |",
+                "search [--query TEXT] [--sort recency|relevance] [--iterations N]",
+                "[--warmup N] [--database PATH] | search-suite [--iterations N]",
+                "[--warmup N] [--database PATH] | corpus [--database PATH]",
+            ].joined(separator: " ")
+        case .destinationExists(let path):
+            "Refusing to replace existing benchmark corpus at \(path)"
+        }
     }
 }
 
@@ -155,12 +270,25 @@ private struct IndexReport: Codable {
 
 private struct SearchReport: Codable {
     let query: String
+    let sort: String
+    let warmupIterations: Int
     let iterations: Int
     let resultCount: Int
     let medianMilliseconds: Double
     let p95Milliseconds: Double
     let p99Milliseconds: Double
     let maximumMilliseconds: Double
+}
+
+private struct SearchSuiteReport: Codable {
+    let cases: [SearchReport]
+}
+
+private struct GeneratedCorpusReport: Codable {
+    let sessions: Int
+    let messagesPerSession: Int
+    let totalMessages: Int
+    let sourceDirectory: String
 }
 
 private struct CorpusReport: Codable {

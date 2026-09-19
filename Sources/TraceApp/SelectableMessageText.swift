@@ -7,6 +7,7 @@ struct SelectableMessageText: NSViewRepresentable {
     let text: AttributedString
     var monospaced = false
     var secondary = false
+    var copyMessage: (() -> Void)?
 
     final class Coordinator {
         let measurementStorage = NSTextStorage()
@@ -37,11 +38,13 @@ struct SelectableMessageText: NSViewRepresentable {
         view.isVerticallyResizable = true
         view.textContainer?.widthTracksTextView = true
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.copyMessage = copyMessage
         updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ view: MessageTextView, context: Context) {
+        view.copyMessage = copyMessage
         guard context.coordinator.lastText != text
                 || context.coordinator.lastMonospaced != monospaced
                 || context.coordinator.lastSecondary != secondary else { return }
@@ -84,6 +87,26 @@ struct SelectableMessageText: NSViewRepresentable {
 }
 
 final class MessageTextView: NSTextView {
+    var copyMessage: (() -> Void)?
+
     override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
     override func accessibilityValue() -> String? { string }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard copyMessage != nil else { return super.menu(for: event) }
+        // NSTextView may return a shared menu. Copy it so this row's action never
+        // accumulates or retains the callback from a previously opened row.
+        let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let item = NSMenuItem(
+            title: "Copy Message", action: #selector(copyWholeMessage), keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func copyWholeMessage() {
+        copyMessage?()
+    }
 }

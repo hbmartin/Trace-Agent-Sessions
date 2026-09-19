@@ -33,7 +33,7 @@ struct IndexedSourceState: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 8
+    public static let schemaVersion = 9
     public static let indexFormatVersion = 3
     private static let sourceStateSelection = """
         sf.*,
@@ -277,6 +277,12 @@ public actor IndexDatabase {
                 """)
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v9-reset-fsevents-checkpoints") { db in
+            // v8 could retain a watermark after the indexed content was reset. Force one
+            // reconciliation on upgrade so no installation can preserve that stale state.
+            try db.execute(sql: "DELETE FROM fsevents_checkpoint")
+            try db.execute(sql: "UPDATE trace_meta SET value='9' WHERE key='schema_version'")
+        }
         try migrator.migrate(pool)
     }
 
@@ -292,6 +298,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM project")
+                try db.execute(sql: "DELETE FROM fsevents_checkpoint")
                 try markRollupsDirty(db)
                 try db.execute(
                     sql: "INSERT INTO trace_meta(key, value) VALUES ('index_format_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -369,11 +376,53 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM project")
+                try db.execute(sql: "DELETE FROM fsevents_checkpoint")
                 try Self.markRollupsDirty(db)
                 if !keepingRoots { try db.execute(sql: "DELETE FROM source_root") }
                 return .commit
             }
             try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+        }
+    }
+
+    /// Removes indexed content for roots that are no longer configured. This runs before
+    /// summaries or replacement watchers are exposed, so removed sessions cannot survive
+    /// an interrupted source-folder change. A configured root absent from the database
+    /// invalidates event checkpoints so it receives a fresh reconciliation after relaunch.
+    @discardableResult
+    public func synchronizeConfiguredRoots(_ roots: [SourceRoot]) throws -> Bool {
+        let configured = Set(roots.map { $0.url.path })
+        return try pool.writeWithoutTransaction { db in
+            let stored = try Row.fetchAll(db, sql: "SELECT id, path FROM source_root")
+            let storedPaths = Set(stored.map { (row: Row) -> String in row["path"] })
+            let removed = stored.compactMap { row -> Int64? in
+                let path: String = row["path"]
+                return configured.contains(path) ? nil : row["id"]
+            }
+            let hasUnregisteredRoots = !configured.subtracting(storedPaths).isEmpty
+            guard !removed.isEmpty || hasUnregisteredRoots else { return false }
+            try db.inTransaction {
+                for rootID in removed {
+                    try db.execute(sql: """
+                        DELETE FROM message_fts WHERE rowid IN (
+                            SELECT m.id FROM message m
+                            JOIN source_file sf ON sf.id=m.source_file_id
+                            WHERE sf.root_id=?
+                        )
+                        """, arguments: [rootID])
+                    try db.execute(sql: "DELETE FROM source_root WHERE id=?", arguments: [rootID])
+                }
+                if !removed.isEmpty {
+                    try db.execute(sql: "DELETE FROM usage_daily")
+                    try Self.markRollupsDirty(db)
+                    try deleteOrphanedProjects(db: db)
+                }
+                if hasUnregisteredRoots {
+                    try db.execute(sql: "DELETE FROM fsevents_checkpoint")
+                }
+                return .commit
+            }
+            return true
         }
     }
 
@@ -1128,6 +1177,8 @@ public actor IndexDatabase {
         cursor: SearchCursor? = nil,
         limit: Int = 200
     ) throws -> SearchPage {
+        let performanceInterval = TracePerformance.begin("Database Search")
+        defer { TracePerformance.end(performanceInterval) }
         guard let pattern = FTSQueryParser.parse(query) else { return .init(results: [], nextCursor: nil) }
         return try pool.read { db in
             var filterArguments = StatementArguments()

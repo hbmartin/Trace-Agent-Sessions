@@ -2,6 +2,16 @@ import Foundation
 
 /// All app indexing requests enter here. Events arriving during a pass are merged for its successor.
 public actor IndexScheduler {
+    private struct Batch: Sendable {
+        let fullScan: Bool
+        let rebuild: Bool
+        let paths: Set<String>
+        let reconciliationPaths: Set<String>
+        let watermarks: [String: UInt64]
+        let scope: IndexScope
+        let activity: IndexActivity
+    }
+
     private let coordinator: IndexCoordinator
     private let progress: @Sendable (IndexProgress) async -> Void
     private let didComplete: @Sendable (IndexActivity, [String: UInt64]) async -> Void
@@ -14,6 +24,8 @@ public actor IndexScheduler {
     private var rebuild = false
     private var worker: Task<Void, Never>?
     private var operation: Task<IndexProgress, Never>?
+    private var retryBatch: Batch?
+    private var stopping = false
 
     public init(coordinator: IndexCoordinator, scope: IndexScope,
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
@@ -29,59 +41,120 @@ public actor IndexScheduler {
                         rebuild: Bool = false, scope: IndexScope? = nil,
                         activity: IndexActivity? = nil,
                         watermarks: [String: UInt64] = [:]) {
+        guard !stopping else { return }
         if let scope { self.scope = scope }
         pendingPaths.formUnion(paths)
         pendingReconciliationPaths.formUnion(reconciliationPaths)
         for (volume, eventID) in watermarks {
             pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
         }
-        fullScan = fullScan || reconcile || rebuild
-        self.rebuild = self.rebuild || rebuild
         let inferred = activity ?? (rebuild ? .rebuild : (reconcile ? .initialBuild
             : (!reconciliationPaths.isEmpty ? .subtreeRecovery : .fileChanges)))
-        pendingActivity = Self.moreSignificant(pendingActivity, inferred)
+        let requestsPass = reconcile || rebuild || !paths.isEmpty
+            || !reconciliationPaths.isEmpty || inferred != .fileChanges
+        fullScan = fullScan || reconcile || rebuild
+        self.rebuild = self.rebuild || rebuild
+        if requestsPass { pendingActivity = Self.moreSignificant(pendingActivity, inferred) }
         if rebuild { operation?.cancel() }
         if worker == nil { worker = Task { await drain() } }
     }
 
     private func drain() async {
-        while fullScan || !pendingPaths.isEmpty || !pendingReconciliationPaths.isEmpty
-            || pendingActivity != nil || !pendingWatermarks.isEmpty {
-            let all = fullScan
-            let reset = rebuild
-            let paths = pendingPaths
-            let reconciliationPaths = pendingReconciliationPaths
-            let watermarks = pendingWatermarks
-            let scope = scope
-            let activity = pendingActivity ?? .fileChanges
-            fullScan = false
-            rebuild = false
-            pendingPaths.removeAll()
-            pendingReconciliationPaths.removeAll()
-            pendingWatermarks.removeAll()
-            pendingActivity = nil
+        while retryBatch != nil || hasPendingWork {
+            let retrying = retryBatch != nil
+            if !retrying, !fullScan, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
+               pendingActivity == nil {
+                let watermarks = pendingWatermarks
+                pendingWatermarks.removeAll()
+                await didComplete(.fileChanges, watermarks)
+                continue
+            }
+            let batch: Batch
+            if let retryBatch {
+                batch = retryBatch
+            } else {
+                batch = Batch(
+                    fullScan: fullScan,
+                    rebuild: rebuild,
+                    paths: pendingPaths,
+                    reconciliationPaths: pendingReconciliationPaths,
+                    watermarks: pendingWatermarks,
+                    scope: scope,
+                    activity: pendingActivity ?? .fileChanges
+                )
+                fullScan = false
+                rebuild = false
+                pendingPaths.removeAll()
+                pendingReconciliationPaths.removeAll()
+                pendingWatermarks.removeAll()
+                pendingActivity = nil
+            }
             let operation = Task {
-                if all {
+                if batch.fullScan {
                     await coordinator.indexAllResult(
-                        scope: scope, rebuild: reset, activity: activity, progress: progress
+                        scope: batch.scope, rebuild: batch.rebuild,
+                        activity: batch.activity, progress: progress
                     )
-                } else if !reconciliationPaths.isEmpty {
+                } else if !batch.reconciliationPaths.isEmpty {
                     await coordinator.reconcile(
-                        paths: reconciliationPaths, changedPaths: paths, scope: scope,
-                        activity: activity, progress: progress
+                        paths: batch.reconciliationPaths, changedPaths: batch.paths,
+                        scope: batch.scope, activity: batch.activity, progress: progress
                     )
                 } else {
                     await coordinator.refreshResult(
-                        paths: paths, scope: scope, activity: activity, progress: progress
+                        paths: batch.paths, scope: batch.scope,
+                        activity: batch.activity, progress: progress
                     )
                 }
             }
             self.operation = operation
             let result = await operation.value
             self.operation = nil
-            if result.phase == .complete { await didComplete(activity, watermarks) }
+            if result.phase == .complete {
+                if retrying { retryBatch = nil }
+                if result.failedFiles == 0, result.unresolvedFailedFiles == 0 {
+                    await didComplete(batch.activity, batch.watermarks)
+                } else if result.failedFiles > 0 {
+                    if absorbFailedBatchIntoPendingFullScan(batch) { continue }
+                    retryBatch = batch
+                    break
+                }
+            } else if result.phase == .failed {
+                if absorbFailedBatchIntoPendingFullScan(batch) { continue }
+                retryBatch = batch
+                break
+            } else if result.phase == .cancelled, !stopping {
+                mergeWatermarks(batch.watermarks)
+                if !fullScan {
+                    retryBatch = batch
+                    break
+                } else if retrying {
+                    retryBatch = nil
+                }
+            }
         }
         worker = nil
+    }
+
+    private var hasPendingWork: Bool {
+        fullScan || !pendingPaths.isEmpty || !pendingReconciliationPaths.isEmpty
+            || pendingActivity != nil || !pendingWatermarks.isEmpty
+    }
+
+    private func mergeWatermarks(_ watermarks: [String: UInt64]) {
+        for (volume, eventID) in watermarks {
+            pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
+        }
+    }
+
+    /// A queued full scan is an authoritative replacement for older failed work.
+    /// Carry the older event watermark into it so work queued during the failed
+    /// operation cannot be stranded waiting for another scheduler request.
+    private func absorbFailedBatchIntoPendingFullScan(_ batch: Batch) -> Bool {
+        guard fullScan else { return false }
+        mergeWatermarks(batch.watermarks)
+        retryBatch = nil
+        return true
     }
 
     private static func moreSignificant(_ current: IndexActivity?, _ next: IndexActivity) -> IndexActivity {
@@ -109,12 +182,14 @@ public actor IndexScheduler {
     }
 
     public func stop() async {
+        stopping = true
         fullScan = false
         rebuild = false
         pendingPaths.removeAll()
         pendingReconciliationPaths.removeAll()
         pendingWatermarks.removeAll()
         pendingActivity = nil
+        retryBatch = nil
         operation?.cancel()
         await worker?.value
     }

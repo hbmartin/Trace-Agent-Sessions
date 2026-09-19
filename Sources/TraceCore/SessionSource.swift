@@ -16,6 +16,7 @@ public protocol SessionSource: Sendable {
 
 public enum SessionSourceError: LocalizedError, Sendable {
     case unreadableFile(String)
+    case unreadableDirectory(String, String)
     case malformedRecord(String)
     case unsupportedLocator
     case missingRecord(String)
@@ -23,6 +24,8 @@ public enum SessionSourceError: LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .unreadableFile(let path): "Unable to read \(path)"
+        case .unreadableDirectory(let path, let reason):
+            "Unable to enumerate \(path): \(reason)"
         case .malformedRecord(let reason): "Malformed session record: \(reason)"
         case .unsupportedLocator: "The source adapter does not support this message locator"
         case .missingRecord(let key): "The source record \(key) no longer exists"
@@ -76,11 +79,20 @@ public extension SessionSource {
                     }
                     continue
                 }
+                var enumerationFailure: (url: URL, error: Error)?
                 guard let enumerator = manager.enumerator(
                     at: start,
                     includingPropertiesForKeys: [.isRegularFileKey],
-                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
-                ) else { continue }
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                    errorHandler: { url, error in
+                        enumerationFailure = (url, error)
+                        return false
+                    }
+                ) else {
+                    throw SessionSourceError.unreadableDirectory(
+                        start.path, "the file-system enumerator could not be created"
+                    )
+                }
 
                 for case let url as URL in enumerator {
                     try Task.checkCancellation()
@@ -88,6 +100,11 @@ public extension SessionSource {
                           let format = classify(url)
                     else { continue }
                     files.append(.init(agent: agent, root: root.url, url: url, format: format))
+                }
+                if let failure = enumerationFailure {
+                    throw SessionSourceError.unreadableDirectory(
+                        failure.url.path, failure.error.localizedDescription
+                    )
                 }
             }
         }

@@ -254,6 +254,8 @@ final class SessionSearchModel: ObservableObject {
                         try await Task.sleep(for: .milliseconds(delay))
                     }
                 }
+                let performanceInterval = TracePerformance.begin("Interactive Search")
+                defer { TracePerformance.end(performanceInterval) }
                 let started = ContinuousClock.now
                 guard let self, self.requestID == id else { return }
                 var cursor = initialCursor
