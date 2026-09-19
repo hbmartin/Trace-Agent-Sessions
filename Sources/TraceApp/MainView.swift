@@ -348,10 +348,11 @@ private struct TranscriptRowConfiguration: Equatable {
     let hydratedHasError: Bool?
     let hydrationFailed: Bool
     let visibility: TranscriptVisibility
+    let reasoningExpanded: Bool
 
     init(
         message: MessageSummary, hydrated: HydratedMessage?, hydrationFailed: Bool,
-        visibility: TranscriptVisibility
+        visibility: TranscriptVisibility, reasoningExpanded: Bool
     ) {
         messageID = message.id
         role = message.role
@@ -370,6 +371,7 @@ private struct TranscriptRowConfiguration: Equatable {
         hydratedHasError = hydrated?.hasError
         self.hydrationFailed = hydrationFailed
         self.visibility = visibility
+        self.reasoningExpanded = reasoningExpanded
     }
 }
 
@@ -382,11 +384,6 @@ private final class TranscriptTableView: NSTableView {
         super.mouseDown(with: event)
     }
 
-    override func scrollWheel(with event: NSEvent) {
-        onUserScrollInput?()
-        super.scrollWheel(with: event)
-    }
-
     override func keyDown(with event: NSEvent) {
         let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
         if scrollingKeys.contains(event.keyCode) { onUserScrollInput?() }
@@ -397,13 +394,6 @@ private final class TranscriptTableView: NSTableView {
 @MainActor
 private final class TranscriptScrollView: NSScrollView {
     var onUserScrollInput: (() -> Void)?
-
-    override func scrollWheel(with event: NSEvent) {
-        let performanceInterval = TracePerformance.begin("Transcript Scroll Event")
-        defer { TracePerformance.end(performanceInterval) }
-        onUserScrollInput?()
-        super.scrollWheel(with: event)
-    }
 }
 
 @MainActor
@@ -418,12 +408,6 @@ private final class TranscriptScroller: NSScroller {
 
 @MainActor
 private final class TranscriptHostingView: NSHostingView<AnyView> {
-    var onMouseDown: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        onMouseDown?()
-        super.mouseDown(with: event)
-    }
 }
 
 @MainActor
@@ -549,8 +533,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var refreshedTargetRowHeight = false
             var revealedTargetRow = false
             var lastDocumentHeight: CGFloat?
-            var postRestoreCorrectionsRemaining: Int
-            var isPostRestoreCorrection = false
 
             init(
                 bookmark: TranscriptBookmark, reason: Reason,
@@ -560,11 +542,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 self.reason = reason
                 self.refreshesRowHeights = refreshesRowHeights
                 attemptsRemaining = 12
-                switch reason {
-                case .search: postRestoreCorrectionsRemaining = 12
-                case .visibility, .navigation: postRestoreCorrectionsRemaining = 8
-                case .passive: postRestoreCorrectionsRemaining = 4
-                }
             }
         }
 
@@ -589,8 +566,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var heightWorkItem: DispatchWorkItem?
         private var pendingHeightMessageIDs: Set<Int64> = []
         private var pendingRestore: RestoreRequest?
-        private var deferredRestore: RestoreRequest?
-        private var postRestoreCorrection: RestoreRequest?
+        private var inputMonitor: Any?
         private var applyingProgrammaticScroll = false
         private var expectedProgrammaticOrigin: NSPoint?
         private var lastObservedOrigin: NSPoint?
@@ -611,6 +587,26 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             (scrollView.verticalScroller as? TranscriptScroller)?.onUserScrollInput = {
                 [weak self] in self?.beginUserScrolling()
+            }
+            inputMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.scrollWheel, .keyDown]
+            ) { [weak self, weak scrollView] event in
+                let type = event.type
+                let window = event.window
+                let location = event.locationInWindow
+                let keyCode = event.keyCode
+                MainActor.assumeIsolated {
+                    guard let self, let scrollView, window === scrollView.window else { return }
+                    let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
+                    let isScroll = type == .scrollWheel
+                        && scrollView.frame.contains(scrollView.superview?.convert(
+                            location, from: nil
+                        ) ?? .zero)
+                    if isScroll || (type == .keyDown && scrollingKeys.contains(keyCode)) {
+                        self.beginUserScrolling()
+                    }
+                }
+                return event
             }
             scrollView.contentView.postsBoundsChangedNotifications = true
             lastObservedOrigin = scrollView.contentView.bounds.origin
@@ -655,8 +651,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             (scrollView as? TranscriptScrollView)?.onUserScrollInput = nil
             (scrollView?.verticalScroller as? TranscriptScroller)?.onUserScrollInput = nil
             pendingRestore = nil
-            deferredRestore = nil
-            postRestoreCorrection = nil
+            if let inputMonitor {
+                NSEvent.removeMonitor(inputMonitor)
+                self.inputMonitor = nil
+            }
             expectedProgrammaticOrigin = nil
             lastObservedOrigin = nil
             userScrolling = false
@@ -676,7 +674,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var visibilityChanged = false
             if sessionChanged {
                 cancelPendingRestore(reportCancellation: false)
-                deferredRestore = nil
                 expansionStates.removeAll()
             }
             self.sessionID = sessionID
@@ -840,7 +837,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     message: message,
                     hydrated: hydrated,
                     hydrationFailed: hydrationFailed,
-                    visibility: visibility
+                    visibility: visibility,
+                    reasoningExpanded: model.expandedReasoningIDs.contains(message.id)
                 ),
                 copyMessage: { [weak model] in model?.copyMessage(id: message.id) }
             )
@@ -973,26 +971,17 @@ private struct TranscriptRenderer: NSViewRepresentable {
             _ bookmark: TranscriptBookmark, reason: RestoreRequest.Reason,
             refreshesRowHeights: Bool = false
         ) {
-            if case .passive = reason,
-               !userScrolling,
-               beginPostRestoreCorrectionIfAvailable() {
-                return
-            }
             let request = RestoreRequest(
                 bookmark: bookmark, reason: reason,
                 refreshesRowHeights: refreshesRowHeights
             )
             if userScrolling {
                 switch reason {
-                case .navigation, .visibility, .search:
-                    retainDeferredRestore(request)
-                    TraceTestHooks.touch(
-                        pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_DEFERRED_PATH"
-                    )
-                case .passive:
-                    break
+                case .navigation, .search:
+                    userScrolling = false
+                case .visibility, .passive:
+                    return
                 }
-                return
             }
             if let pendingRestore,
                pendingRestore.reason.priority > request.reason.priority { return }
@@ -1000,13 +989,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func beginRestore(_ request: RestoreRequest) {
-            postRestoreCorrection = nil
             cancelPendingRestore(reportCancellation: false)
             pendingRestore = request
-            if request.reason.reportsHooks && !request.isPostRestoreCorrection {
+            if request.reason.reportsHooks {
                 TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH")
             }
-            let delay = request.reason.reportsHooks && !request.isPostRestoreCorrection
+            let delay = request.reason.reportsHooks
                 ? TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS") ?? 0
                 : 0
             scheduleRestore(token: request.token, delayMilliseconds: delay)
@@ -1100,9 +1088,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
             } else {
                 pendingRestore = nil
                 restoreWorkItem = nil
-                postRestoreCorrection = request.postRestoreCorrectionsRemaining > 0
-                    ? request
-                    : nil
                 if case .search(let messageID) = request.reason,
                    visible.intersects(rowRect) {
                     model?.consumeRequestedMessageID(messageID)
@@ -1123,7 +1108,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
 
         private func cancelPendingRestore(reportCancellation: Bool) {
             let reportsHooks = pendingRestore?.reason.reportsHooks == true
-                && pendingRestore?.isPostRestoreCorrection == false
             restoreWorkItem?.cancel()
             restoreWorkItem = nil
             pendingRestore = nil
@@ -1135,15 +1119,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private func beginUserScrolling() {
             guard !applyingProgrammaticScroll else { return }
             expectedProgrammaticOrigin = nil
-            postRestoreCorrection = nil
-            if let pendingRestore {
-                switch pendingRestore.reason {
-                case .navigation, .visibility, .search:
-                    retainDeferredRestore(pendingRestore)
-                case .passive:
-                    break
-                }
-            }
             cancelPendingRestore(reportCancellation: true)
             let alreadyScrolling = userScrolling
             userScrolling = true
@@ -1156,17 +1131,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
             bookmarkWorkItem = nil
             userScrolling = false
             savePosition()
-            if let deferredRestore {
-                self.deferredRestore = nil
-                beginRestore(deferredRestore)
-            }
-        }
-
-        private func retainDeferredRestore(_ request: RestoreRequest) {
-            guard deferredRestore?.reason.priority ?? -1 <= request.reason.priority else {
-                return
-            }
-            deferredRestore = request
         }
 
         private func invalidateHeight(messageID: Int64) {
@@ -1214,22 +1178,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
 
         private func boundsDidChange() {
             guard !shouldIgnoreBoundsChange else { return }
-            if pendingRestore != nil, !userScrolling { return }
-            if !userScrolling, beginPostRestoreCorrectionIfAvailable() { return }
             beginUserScrolling()
-        }
-
-        private func beginPostRestoreCorrectionIfAvailable() -> Bool {
-            guard var correction = postRestoreCorrection,
-                  correction.postRestoreCorrectionsRemaining > 0 else { return false }
-            postRestoreCorrection = nil
-            correction.postRestoreCorrectionsRemaining -= 1
-            correction.attemptsRemaining = 12
-            correction.stableChecks = 0
-            correction.lastDocumentHeight = nil
-            correction.isPostRestoreCorrection = true
-            beginRestore(correction)
-            return true
         }
 
         private func rememberProgrammaticOrigin() {
@@ -1261,7 +1210,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
 }
 
 @MainActor
-private final class TranscriptHostingCell: NSTableCellView, NSGestureRecognizerDelegate {
+private final class TranscriptHostingCell: NSTableCellView {
     private let host = TranscriptHostingView(rootView: AnyView(EmptyView()))
     private var leadingConstraint: NSLayoutConstraint!
     private var trailingConstraint: NSLayoutConstraint!
@@ -1274,15 +1223,6 @@ private final class TranscriptHostingCell: NSTableCellView, NSGestureRecognizerD
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
         self.identifier = identifier
-        host.onMouseDown = { [weak self] in
-            guard let table = self?.enclosingScrollView?.documentView as? NSTableView else { return }
-            table.window?.makeFirstResponder(table)
-        }
-        let focusGesture = NSClickGestureRecognizer(
-            target: self, action: #selector(focusEnclosingTable)
-        )
-        focusGesture.delegate = self
-        host.addGestureRecognizer(focusGesture)
         host.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host)
         leadingConstraint = host.leadingAnchor.constraint(equalTo: leadingAnchor)
@@ -1298,13 +1238,6 @@ private final class TranscriptHostingCell: NSTableCellView, NSGestureRecognizerD
     required init?(coder: NSCoder) { nil }
 
     deinit {}
-
-    func gestureRecognizer(
-        _ gestureRecognizer: NSGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer
-    ) -> Bool {
-        true
-    }
 
     func setDensity(_ density: TranscriptDensity) {
         let horizontal: CGFloat = density == .compact ? 12 : 20
@@ -1336,11 +1269,6 @@ private final class TranscriptHostingCell: NSTableCellView, NSGestureRecognizerD
         item.target = self
         menu.addItem(item)
         return menu
-    }
-
-    @objc private func focusEnclosingTable() {
-        guard let table = enclosingScrollView?.documentView as? NSTableView else { return }
-        table.window?.makeFirstResponder(table)
     }
 
     @objc private func copyWholeMessage() { copyMessage?() }
@@ -1383,8 +1311,12 @@ private struct MessageRow: View {
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.58), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45)))
-            .task(id: visibility) {
-                if !isLazyAuxiliary { hydrate() }
+            .task(id: HydrationTaskID(
+                visibility: visibility, sourcePath: summary.sourcePath,
+                needsHydration: hydrated == nil,
+                lazyExpanded: expansion.auxiliary
+            )) {
+                if hydrated == nil && (!isLazyAuxiliary || expansion.auxiliary) { hydrate() }
             }
         }
     }
@@ -1504,6 +1436,13 @@ private struct MessageRow: View {
     private var isLazyAuxiliary: Bool {
         visibility.includes(role: summary.role)
             && [.toolResult, .toolUse, .system, .reasoning].contains(summary.role)
+    }
+
+    private struct HydrationTaskID: Hashable {
+        let visibility: TranscriptVisibility
+        let sourcePath: String
+        let needsHydration: Bool
+        let lazyExpanded: Bool
     }
 
     private func hasVisibleContent(in sections: MessageSections) -> Bool {

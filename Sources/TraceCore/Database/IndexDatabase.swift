@@ -34,7 +34,7 @@ struct IndexedSourceState: Sendable {
 
 public actor IndexDatabase {
     public static let schemaVersion = 9
-    public static let indexFormatVersion = 3
+    public static let indexFormatVersion = 4
     private static let sourceStateSelection = """
         sf.*,
         (sf.last_error IS NOT NULL OR EXISTS (
@@ -297,6 +297,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM message_fts")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
+                try db.execute(sql: "DELETE FROM source_root")
                 try db.execute(sql: "DELETE FROM project")
                 try db.execute(sql: "DELETE FROM fsevents_checkpoint")
                 try markRollupsDirty(db)
@@ -1042,7 +1043,25 @@ public actor IndexDatabase {
 
     public func unresolvedSourceFailureCount() throws -> Int {
         try pool.read { db in
-            try Int.fetchOne(db, sql: "SELECT count(*) FROM source_file WHERE last_error IS NOT NULL") ?? 0
+            let files = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM source_file WHERE last_error IS NOT NULL"
+            ) ?? 0
+            let roots = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM source_root WHERE last_error IS NOT NULL"
+            ) ?? 0
+            return files + roots
+        }
+    }
+
+    public func unresolvedRecoveryWork() throws -> IndexRecoveryWork {
+        try pool.read { db in
+            let files = try Set(String.fetchAll(
+                db, sql: "SELECT path FROM source_file WHERE last_error IS NOT NULL"
+            ))
+            let roots = try Set(String.fetchAll(
+                db, sql: "SELECT path FROM source_root WHERE last_error IS NOT NULL"
+            ))
+            return .init(filePaths: files, rootPaths: roots)
         }
     }
 

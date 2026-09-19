@@ -231,6 +231,21 @@ final class TraceModel: ObservableObject {
                 mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
                 scheduler = makeScheduler(coordinator)
                 progress.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount()) ?? 0
+                if let recovery = try? await database.unresolvedRecoveryWork(), !recovery.isEmpty {
+                    let scanPathsByConfiguredPath = Dictionary(
+                        uniqueKeysWithValues: sources.flatMap(\.roots).map {
+                            ($0.url.path, $0.scanURL.path)
+                        }
+                    )
+                    await scheduler?.request(
+                        paths: recovery.filePaths,
+                        reconciliationPaths: Set(recovery.rootPaths.map {
+                            scanPathsByConfiguredPath[$0] ?? $0
+                        }),
+                        scope: settings.indexScope,
+                        activity: .subtreeRecovery
+                    )
+                }
                 timeZoneObserver = NotificationCenter.default.addObserver(
                     forName: Notification.Name.NSSystemTimeZoneDidChange,
                     object: nil, queue: .main
@@ -311,7 +326,6 @@ final class TraceModel: ObservableObject {
     }
 
     private func completeIndexActivity(_ activity: IndexActivity, watermarks: [String: UInt64]) async {
-        guard (try? await database?.unresolvedSourceFailureCount()) == 0 else { return }
         try? await database?.saveEventCheckpoints(watermarks)
         if activity == .safetyVerification || activity == .initialBuild
             || activity == .launchReconciliation {
@@ -1221,10 +1235,11 @@ final class TraceModel: ObservableObject {
         _ sources: [any SessionSource], forceRootReconciliation: Bool = false
     ) async -> Bool {
         guard settings.onboardingComplete, let database else { return false }
+        if !forceRootReconciliation, !watchers.isEmpty { return true }
         let generation = beginWatcherConfiguration()
-        let roots = sources.flatMap(\.roots).map(\.url)
+        let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
-            .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
+            .flatMap(\.roots).map { $0.scanURL.deletingLastPathComponent() }
         let canonicalRoots = roots.map { TraceFileIO.canonicalPath($0.path) }
         let canonicalMetadataRoots = metadataRoots.map { TraceFileIO.canonicalPath($0.path) }
         var reconciliationPaths = forceRootReconciliation
