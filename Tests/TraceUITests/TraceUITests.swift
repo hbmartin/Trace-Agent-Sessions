@@ -211,17 +211,15 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         let list = app.descendants(matching: .any).matching(identifier: "sessionSidebarList").firstMatch
         XCTAssertTrue(list.exists)
-        let icon = app.images["sessionError"].firstMatch
-        XCTAssertTrue(icon.waitForExistence(timeout: 20))
-        XCTAssertTrue(icon.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        let errorIcons = app.images.matching(identifier: "sessionError")
+        let icon = try XCTUnwrap(firstHittable(in: errorIcons, timeout: 20))
         icon.hover()
         XCTAssertTrue(app.staticTexts["Loading error details…"].waitForExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])
         list.scroll(byDeltaX: 0, deltaY: -5_000)
         XCTAssertFalse(icon.isHittable)
         list.scroll(byDeltaX: 0, deltaY: 5_000)
-        let returnedIcon = app.images["sessionError"].firstMatch
-        XCTAssertTrue(returnedIcon.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        let returnedIcon = try XCTUnwrap(firstHittable(in: errorIcons, timeout: 10))
         returnedIcon.hover()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "UniqueOutput: file missing"
@@ -1021,10 +1019,16 @@ final class TraceUITests: XCTestCase {
     private func transcriptMessage(
         _ session: String, index: Int, in scroll: XCUIElement
     ) -> XCUIElement {
+        transcriptMessageQuery(session, index: index, in: scroll).firstMatch
+    }
+
+    private func transcriptMessageQuery(
+        _ session: String, index: Int, in scroll: XCUIElement
+    ) -> XCUIElementQuery {
         scroll.staticTexts.matching(NSPredicate(
             format: "value MATCHES %@",
             "(?s)^\(NSRegularExpression.escapedPattern(for: "\(session) message \(index)"))(?:[^0-9].*)?$"
-        )).firstMatch
+        ))
     }
 
     private func focusTranscript(_ session: String, in scroll: XCUIElement) {
@@ -2288,19 +2292,25 @@ final class TraceUITests: XCTestCase {
                       "the transcript scroll must finish before its bookmark is inspected")
         let bookmarkIndex = try XCTUnwrap(bookmarkIndex(in: bookmarkSaved))
         XCTAssertGreaterThan(bookmarkIndex, 0)
-        let anchor = transcriptMessage("Alpha session", index: bookmarkIndex, in: scroll)
-        XCTAssertTrue(anchor.waitForExistence(timeout: 5))
+        let anchorQuery = scroll.cells.matching(
+            identifier: "transcriptMessage-\(bookmarkIndex)"
+        )
+        let anchor = try XCTUnwrap(firstHittable(in: anchorQuery, timeout: 5))
         let anchorY = anchor.frame.minY
         XCTAssertFalse(first.isHittable)
         app.radioButtons["Compact"].click()
         let compactAnchorSettled = NSPredicate { _, _ in
-            anchor.exists && abs(anchor.frame.minY - anchorY) <= 35
+            anchorQuery.allElementsBoundByIndex.contains {
+                $0.isHittable && abs($0.frame.minY - anchorY) <= 35
+            }
         }
         expectation(for: compactAnchorSettled, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
         app.radioButtons["Comfortable"].click()
         let comfortableAnchorSettled = NSPredicate { _, _ in
-            anchor.exists && abs(anchor.frame.minY - anchorY) <= 35
+            anchorQuery.allElementsBoundByIndex.contains {
+                $0.isHittable && abs($0.frame.minY - anchorY) <= 35
+            }
         }
         expectation(for: comfortableAnchorSettled, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
@@ -2315,18 +2325,21 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(betaFirst.isHittable)
         app.staticTexts["ProjectAlpha"].firstMatch.click()
         alpha.click()
-        XCTAssertTrue(anchor.waitForExistence(timeout: 10))
         let offsetRestored = NSPredicate { _, _ in
-            anchor.exists && abs(anchor.frame.minY - anchorY) <= 35
+            anchorQuery.allElementsBoundByIndex.contains {
+                $0.isHittable && abs($0.frame.minY - anchorY) <= 35
+            }
         }
         expectation(for: offsetRestored, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
         for _ in 0..<5 {
-            XCTAssertEqual(anchor.frame.minY, anchorY, accuracy: 35,
+            let restoredAnchor = try XCTUnwrap(firstHittable(in: anchorQuery, timeout: 2))
+            XCTAssertEqual(restoredAnchor.frame.minY, anchorY, accuracy: 35,
                            "restoration retries must retain the saved offset")
             Thread.sleep(forTimeInterval: 0.08)
         }
-        XCTAssertEqual(anchor.frame.minY, anchorY, accuracy: 35)
+        let restoredAnchor = try XCTUnwrap(firstHittable(in: anchorQuery, timeout: 2))
+        XCTAssertEqual(restoredAnchor.frame.minY, anchorY, accuracy: 35)
         app.buttons["backToProject"].click()
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         try addLongSession("Background update", project: "BackgroundProject", directory: directory, count: 1)

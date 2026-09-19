@@ -546,6 +546,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var attemptsRemaining: Int
             var stableChecks = 0
             var refreshedRowHeights = false
+            var refreshedTargetRowHeight = false
+            var revealedTargetRow = false
             var lastDocumentHeight: CGFloat?
             var postRestoreCorrectionsRemaining: Int
             var isPostRestoreCorrection = false
@@ -820,6 +822,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             .frame(maxWidth: .infinity)
             .fixedSize(horizontal: false, vertical: true)
             cell.setDensity(density)
+            cell.setAccessibilityIdentifier("transcriptMessage-\(item.sourceIndex)")
             cell.set(
                 rootView: AnyView(rowView.id(message.id)), messageID: message.id,
                 configuration: TranscriptRowConfiguration(
@@ -965,12 +968,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
             )
             if userScrolling {
                 switch reason {
-                case .visibility, .search:
+                case .navigation, .visibility, .search:
                     retainDeferredRestore(request)
                     TraceTestHooks.touch(
                         pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_DEFERRED_PATH"
                     )
-                case .passive, .navigation:
+                case .passive:
                     break
                 }
                 return
@@ -1019,10 +1022,21 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 table.noteHeightOfRows(withIndexesChanged: IndexSet(items.indices))
                 request.refreshedRowHeights = true
             }
-            table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+            if !request.refreshedTargetRowHeight {
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+                request.refreshedTargetRowHeight = true
+            }
             table.layoutSubtreeIfNeeded()
-            table.scrollRowToVisible(row)
-            table.layoutSubtreeIfNeeded()
+            if !request.revealedTargetRow {
+                if case .passive = request.reason {
+                    // The passive anchor is already at or near the viewport; directly
+                    // correcting the clip origin avoids rematerializing the table.
+                } else {
+                    table.scrollRowToVisible(row)
+                    table.layoutSubtreeIfNeeded()
+                }
+                request.revealedTargetRow = true
+            }
             var rowRect = table.rect(ofRow: row)
             var origin = constrainedOrigin(
                 for: rowRect.minY - bookmark.offset, table: table, scrollView: scrollView
@@ -1108,9 +1122,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
             postRestoreCorrection = nil
             if let pendingRestore {
                 switch pendingRestore.reason {
-                case .visibility, .search:
+                case .navigation, .visibility, .search:
                     retainDeferredRestore(pendingRestore)
-                case .passive, .navigation:
+                case .passive:
                     break
                 }
             }
