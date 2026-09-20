@@ -36,6 +36,7 @@ final class FSEventsWatcherTests: XCTestCase {
         XCTAssertEqual(changes.reconciliationPaths, [root])
         XCTAssertEqual(changes.recoveryReasons, [.eventsDropped])
         XCTAssertEqual(changes.watermarks["volume-a"], 42)
+        XCTAssertEqual(changes.streamRoots["volume-a"], [root])
     }
 
     func testAppendIsReportedAtFileGranularity() throws {

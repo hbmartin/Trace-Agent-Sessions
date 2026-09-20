@@ -33,7 +33,7 @@ struct IndexedSourceState: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 10
+    public static let schemaVersion = 11
     public static let indexFormatVersion = 4
     private static let sourceStateSelection = """
         sf.*,
@@ -300,6 +300,10 @@ public actor IndexDatabase {
                 UPDATE source_root SET last_error=NULL;
                 UPDATE trace_meta SET value='10' WHERE key='schema_version';
                 """)
+        }
+        migrator.registerMigration("trace-v11-remove-redundant-scan-error-index") { db in
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_source_scan_error_root")
+            try db.execute(sql: "UPDATE trace_meta SET value='11' WHERE key='schema_version'")
         }
         try migrator.migrate(pool)
     }
@@ -1069,16 +1073,21 @@ public actor IndexDatabase {
         }
     }
 
-    public func unresolvedSourceFailureCount() throws -> Int {
+    public func unresolvedSourceFailureCounts() throws -> SourceFailureCounts {
         try pool.read { db in
             let files = try Int.fetchOne(
                 db, sql: "SELECT count(*) FROM source_file WHERE last_error IS NOT NULL"
             ) ?? 0
-            let roots = try Int.fetchOne(
+            let discovery = try Int.fetchOne(
                 db, sql: "SELECT count(*) FROM source_scan_error"
             ) ?? 0
-            return files + roots
+            return .init(fileFailures: files, discoveryFailures: discovery)
         }
+    }
+
+    /// Retained for source compatibility; this now counts actual failed files only.
+    public func unresolvedSourceFailureCount() throws -> Int {
+        try unresolvedSourceFailureCounts().fileFailures
     }
 
     public func unresolvedRecoveryWork() throws -> IndexRecoveryWork {
@@ -1096,36 +1105,45 @@ public actor IndexDatabase {
     func replaceDiscoveryErrors(
         rootID: Int64, scannedScope: String, failures: [DiscoveryFailure]
     ) throws {
+        try replaceDiscoveryErrors([(rootID, scannedScope, failures)])
+    }
+
+    func replaceDiscoveryErrors(
+        _ replacements: [(rootID: Int64, scannedScope: String, failures: [DiscoveryFailure])]
+    ) throws {
+        guard !replacements.isEmpty else { return }
         try pool.write { db in
-            let scanned = TraceFileIO.canonicalPath(scannedScope)
-            let existing = try Row.fetchAll(
-                db, sql: "SELECT id, scope_path FROM source_scan_error WHERE root_id=?",
-                arguments: [rootID]
-            )
-            for row in existing {
-                let scopePath: String = row["scope_path"]
-                let errorID: Int64 = row["id"]
-                let errorScope = TraceFileIO.canonicalPath(scopePath)
-                if scanned.contains(errorScope) {
-                    try db.execute(
-                        sql: "DELETE FROM source_scan_error WHERE id=?",
-                        arguments: [errorID]
-                    )
-                }
-            }
             let now = Int64(Date().timeIntervalSince1970 * 1_000)
-            for failure in failures {
-                try db.execute(sql: """
-                    INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(root_id, scope_path) DO UPDATE SET
-                        error=excluded.error, updated_at_ms=excluded.updated_at_ms
-                    """, arguments: [rootID, failure.path, failure.message, now])
+            for replacement in replacements {
+                let scanned = TraceFileIO.canonicalPath(replacement.scannedScope)
+                let existing = try Row.fetchAll(
+                    db, sql: "SELECT id, scope_path FROM source_scan_error WHERE root_id=?",
+                    arguments: [replacement.rootID]
+                )
+                for row in existing {
+                    let scopePath: String = row["scope_path"]
+                    let errorID: Int64 = row["id"]
+                    let errorScope = TraceFileIO.canonicalPath(scopePath)
+                    if scanned.contains(errorScope) {
+                        try db.execute(
+                            sql: "DELETE FROM source_scan_error WHERE id=?",
+                            arguments: [errorID]
+                        )
+                    }
+                }
+                for failure in replacement.failures {
+                    try db.execute(sql: """
+                        INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(root_id, scope_path) DO UPDATE SET
+                            error=excluded.error, updated_at_ms=excluded.updated_at_ms
+                        """, arguments: [replacement.rootID, failure.path, failure.message, now])
+                }
+                try db.execute(
+                    sql: "UPDATE source_root SET last_scan_ms=?, last_error=NULL WHERE id=?",
+                    arguments: [now, replacement.rootID]
+                )
             }
-            try db.execute(
-                sql: "UPDATE source_root SET last_scan_ms=?, last_error=NULL WHERE id=?",
-                arguments: [now, rootID]
-            )
         }
     }
 
@@ -1560,15 +1578,28 @@ public actor IndexDatabase {
     public func sourceHealth() throws -> [SourceHealth] {
         try pool.read { db in
             let rows = try Row.fetchAll(db, sql: """
+                WITH scan_health AS (
+                    SELECT root_id, max(error) AS error
+                    FROM source_scan_error GROUP BY root_id
+                ), file_health AS (
+                    SELECT f.root_id, count(*) AS file_count, max(h.last_error) AS error
+                    FROM source_file f
+                    LEFT JOIN adapter_health h ON h.source_file_id=f.id
+                    GROUP BY f.root_id
+                ), session_health AS (
+                    SELECT f.root_id, min(s.started_at) AS earliest
+                    FROM source_file f
+                    JOIN session s ON s.source_file_id=f.id
+                    GROUP BY f.root_id
+                )
                 SELECT r.id, r.agent, r.path, r.last_scan_ms,
-                       coalesce(max(e.error), max(h.last_error)) AS resolved_error,
-                       count(DISTINCT f.id) AS file_count, min(s.started_at) AS earliest
+                       coalesce(e.error, f.error) AS resolved_error,
+                       coalesce(f.file_count, 0) AS file_count, s.earliest AS earliest
                 FROM source_root r
-                LEFT JOIN source_scan_error e ON e.root_id=r.id
-                LEFT JOIN source_file f ON f.root_id=r.id
-                LEFT JOIN adapter_health h ON h.source_file_id=f.id
-                LEFT JOIN session s ON s.source_file_id=f.id
-                GROUP BY r.id ORDER BY r.agent, r.path
+                LEFT JOIN scan_health e ON e.root_id=r.id
+                LEFT JOIN file_health f ON f.root_id=r.id
+                LEFT JOIN session_health s ON s.root_id=r.id
+                ORDER BY r.agent, r.path
                 """)
             return rows.compactMap(sourceHealth(from:))
         }

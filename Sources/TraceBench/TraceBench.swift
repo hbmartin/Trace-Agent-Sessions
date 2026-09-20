@@ -69,11 +69,13 @@ struct TraceBench {
             }
         }
         guard result.phase == .complete, result.failedFiles == 0,
-              result.unresolvedFailedFiles == 0 else {
+              result.unresolvedFailedFiles == 0,
+              result.unresolvedDiscoveryFailures == 0 else {
             throw BenchError.incompleteIndex(
                 phase: result.phase.rawValue,
                 failedFiles: result.failedFiles,
-                unresolvedFailedFiles: result.unresolvedFailedFiles
+                unresolvedFailedFiles: result.unresolvedFailedFiles,
+                unresolvedDiscoveryFailures: result.unresolvedDiscoveryFailures
             )
         }
         let elapsed = milliseconds(start.duration(to: clock.now))
@@ -250,7 +252,10 @@ private struct Options {
 private enum BenchError: LocalizedError {
     case usage
     case destinationExists(String)
-    case incompleteIndex(phase: String, failedFiles: Int, unresolvedFailedFiles: Int)
+    case incompleteIndex(
+        phase: String, failedFiles: Int, unresolvedFailedFiles: Int,
+        unresolvedDiscoveryFailures: Int
+    )
     var errorDescription: String? {
         switch self {
         case .usage:
@@ -264,8 +269,11 @@ private enum BenchError: LocalizedError {
             ].joined(separator: " ")
         case .destinationExists(let path):
             "Refusing to replace existing benchmark corpus at \(path)"
-        case .incompleteIndex(let phase, let failedFiles, let unresolvedFailedFiles):
-            "Indexing did not complete cleanly (phase: \(phase), failed files: \(failedFiles), unresolved failures: \(unresolvedFailedFiles))"
+        case .incompleteIndex(
+            let phase, let failedFiles, let unresolvedFailedFiles,
+            let unresolvedDiscoveryFailures
+        ):
+            "Indexing did not complete cleanly (phase: \(phase), failed files: \(failedFiles), unresolved file failures: \(unresolvedFailedFiles), unavailable source locations: \(unresolvedDiscoveryFailures))"
         }
     }
 }

@@ -13,6 +13,9 @@ public struct SourceChanges: Sendable {
     public var reconciliationPaths: Set<String> = []
     public var recoveryReasons: Set<FSEventsRecoveryReason> = []
     public var watermarks: [String: UInt64] = [:]
+    /// Canonical roots covered by each event stream watermark. This lets the
+    /// scheduler hold back only streams whose indexed paths failed.
+    public var streamRoots: [String: Set<String>] = [:]
     public var historyDone = false
     public var requiresReconciliation: Bool { !reconciliationPaths.isEmpty }
     public var hasIndexWork: Bool { !paths.isEmpty || requiresReconciliation }
@@ -24,6 +27,7 @@ public struct SourceChanges: Sendable {
         streamIdentifier: String = "host", streamRoots: [String] = []
     ) {
         watermarks[streamIdentifier] = max(watermarks[streamIdentifier] ?? 0, eventID)
+        self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
         if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
         let canonical = TraceFileIO.canonicalPath(path).path
         let directory = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
@@ -50,6 +54,9 @@ public struct SourceChanges: Sendable {
         historyDone = historyDone || other.historyDone
         for (identifier, eventID) in other.watermarks {
             watermarks[identifier] = max(watermarks[identifier] ?? 0, eventID)
+        }
+        for (identifier, roots) in other.streamRoots {
+            streamRoots[identifier, default: []].formUnion(roots)
         }
     }
 }
@@ -88,7 +95,8 @@ public final class FSEventsWatcher: @unchecked Sendable {
     public func start() -> Bool {
         if stream != nil { return true }
         guard !roots.isEmpty else { return false }
-        if let fragment = TraceTestHooks.environment["TRACE_TEST_FAIL_WATCHER_ROOT_CONTAINS"],
+        if TraceTestHooks.isUITesting,
+           let fragment = TraceTestHooks.environment["TRACE_TEST_FAIL_WATCHER_ROOT_CONTAINS"],
            roots.contains(where: { $0.contains(fragment) }) {
             return false
         }
@@ -137,6 +145,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
         if sinceWhen == FSEventStreamEventId(kFSEventStreamEventIdSinceNow) {
             var initial = SourceChanges()
             initial.watermarks[identifier] = FSEventsGetCurrentEventId()
+            initial.streamRoots[identifier] = Set(roots)
             enqueue(initial)
         }
         return true
