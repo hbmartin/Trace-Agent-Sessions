@@ -19,8 +19,23 @@ xcodebuild build \
   CODE_SIGNING_ALLOWED=NO \
   >"$output_dir/tracebench-build.log"
 
-products_dir="$(xcodebuild -project Trace.xcodeproj -scheme TraceBench -configuration Release -showBuildSettings | awk '/TARGET_BUILD_DIR =/{print $3; exit}')"
+if ! products_dir="$(
+  xcodebuild -project Trace.xcodeproj -scheme TraceBench -configuration Release \
+    -showBuildSettings -json \
+    | /usr/bin/plutil -extract '0.buildSettings.TARGET_BUILD_DIR' raw -o - -
+)"; then
+  printf 'Could not determine TraceBench TARGET_BUILD_DIR from Xcode build settings.\n' >&2
+  exit 1
+fi
 bench="$products_dir/TraceBench"
+if [[ -z "$products_dir" ]]; then
+  printf 'TraceBench TARGET_BUILD_DIR was empty.\n' >&2
+  exit 1
+fi
+if [[ ! -x "$bench" ]]; then
+  printf 'TraceBench executable not found at %s\n' "$bench" >&2
+  exit 1
+fi
 
 "$bench" generate --sources-directory "$fixture_dir" --sessions 100 --messages 100 \
   >"$output_dir/corpus.json"

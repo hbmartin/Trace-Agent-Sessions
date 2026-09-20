@@ -379,11 +379,6 @@ private struct TranscriptRowConfiguration: Equatable {
 private final class TranscriptTableView: NSTableView {
     var onUserScrollInput: (() -> Void)?
 
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        super.mouseDown(with: event)
-    }
-
     override func keyDown(with event: NSEvent) {
         let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
         if scrollingKeys.contains(event.keyCode) { onUserScrollInput?() }
@@ -590,19 +585,24 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             inputMonitor = NSEvent.addLocalMonitorForEvents(
                 matching: [.scrollWheel, .keyDown]
-            ) { [weak self, weak scrollView] event in
+            ) { [weak self, weak table, weak scrollView] event in
                 let type = event.type
                 let window = event.window
-                let location = event.locationInWindow
                 let keyCode = event.keyCode
                 MainActor.assumeIsolated {
                     guard let self, let scrollView, window === scrollView.window else { return }
                     let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
+                    // A transcript has its own window, so every wheel event in
+                    // that window belongs to this scroll view. Synthesized and
+                    // momentum events do not always carry a useful location.
                     let isScroll = type == .scrollWheel
-                        && scrollView.frame.contains(scrollView.superview?.convert(
-                            location, from: nil
-                        ) ?? .zero)
-                    if isScroll || (type == .keyDown && scrollingKeys.contains(keyCode)) {
+                    let responder = window?.firstResponder
+                    let transcriptOwnsKeyboard = responder === table
+                        || responder === scrollView
+                        || responder === scrollView.contentView
+                        || responder === scrollView.verticalScroller
+                    if isScroll || (type == .keyDown && transcriptOwnsKeyboard
+                        && scrollingKeys.contains(keyCode)) {
                         self.beginUserScrolling()
                     }
                 }
@@ -686,7 +686,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 let replacement = model.messages.enumerated().compactMap { index, summary in
                     visibility.includes(summary) ? Item(summary: summary, sourceIndex: index) : nil
                 }
-                updateRows(with: replacement, sessionChanged: sessionChanged)
+                updateRows(
+                    with: replacement, sessionChanged: sessionChanged,
+                    reloadExisting: visibilityChanged
+                )
                 self.messageRevision = messageRevision
             }
             if self.density != density {
@@ -744,7 +747,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
         }
 
-        private func updateRows(with replacement: [Item], sessionChanged: Bool) {
+        private func updateRows(
+            with replacement: [Item], sessionChanged: Bool, reloadExisting: Bool
+        ) {
             guard let table else { items = replacement; return }
             let preservesUserBottom = userScrolling && isAtBottom
             let oldIDs = items.map { $0.summary.id }
@@ -761,6 +766,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     at: IndexSet(integersIn: oldIDs.count..<newIDs.count), withAnimation: []
                 )
                 table.endUpdates()
+                if reloadExisting, !oldIDs.isEmpty {
+                    table.reloadData(
+                        forRowIndexes: IndexSet(integersIn: 0..<oldIDs.count),
+                        columnIndexes: IndexSet(integer: 0)
+                    )
+                }
             } else if !sessionChanged, oldIDs == newIDs {
                 reloadRows(IndexSet(integersIn: replacement.indices))
             } else {

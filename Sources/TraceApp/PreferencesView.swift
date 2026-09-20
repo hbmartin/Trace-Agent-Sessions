@@ -154,7 +154,14 @@ private struct SourcesPreferences: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Add Root"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        if !settings.additionalClaudeRoots.contains(url.path) {
+        let defaultURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects")
+        let existing = [defaultURL] + settings.additionalClaudeRoots.map {
+            URL(fileURLWithPath: $0)
+        }
+        let before = ClaudeCodeSource(roots: existing).roots.count
+        let after = ClaudeCodeSource(roots: existing + [url]).roots.count
+        if after > before {
             settings.additionalClaudeRoots.append(url.path)
             model.reloadSourcesAndRebuild()
         }

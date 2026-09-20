@@ -88,6 +88,10 @@ public final class FSEventsWatcher: @unchecked Sendable {
     public func start() -> Bool {
         if stream != nil { return true }
         guard !roots.isEmpty else { return false }
+        if let fragment = TraceTestHooks.environment["TRACE_TEST_FAIL_WATCHER_ROOT_CONTAINS"],
+           roots.contains(where: { $0.contains(fragment) }) {
+            return false
+        }
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),

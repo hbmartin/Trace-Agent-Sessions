@@ -67,6 +67,22 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "settings")
     }
 
+    func testPartialWatcherStartupFailureStillRunsInitialIndexing() throws {
+        let (app, _) = try makeApp(extra: ["--ui-show-main"])
+        app.launchEnvironment["TRACE_TEST_FAIL_WATCHER_ROOT_CONTAINS"] = "/Claude"
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+
+        app.buttons["Build Index"].click()
+
+        XCTAssertTrue(app.staticTexts["Find the sample answer"].firstMatch.waitForExistence(
+            timeout: 15
+        ), "a failed watcher must not prevent initial indexing")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "periodic reconciliation"
+        )).firstMatch.waitForExistence(timeout: 5))
+    }
+
     func testTranscriptVisibilityDensityProjectFilterAndErrorHover() throws {
         let (app, _) = try makeApp(extra: ["--ui-show-main"])
         app.launch()

@@ -16,16 +16,26 @@ public protocol SessionSource: Sendable {
 }
 
 public struct DiscoveryFailure: Hashable, Sendable {
+    public enum Kind: String, Sendable {
+        case missingRoot
+        case unreadable
+    }
+
     public let agent: AgentKind
     public let root: URL
     public let path: String
     public let message: String
+    public let kind: Kind
 
-    public init(agent: AgentKind, root: URL, path: String, message: String) {
+    public init(
+        agent: AgentKind, root: URL, path: String, message: String,
+        kind: Kind = .unreadable
+    ) {
         self.agent = agent
-        self.root = root.standardizedFileURL
+        self.root = root.standardized
         self.path = path
         self.message = message
+        self.kind = kind
     }
 }
 
@@ -67,8 +77,7 @@ public extension SessionSource {
         guard !paths.isEmpty else { return [] }
         let scopes = paths.map(TraceFileIO.canonicalPath)
         return try discover().filter { file in
-            let candidate = TraceFileIO.canonicalPath(file.url.path)
-            return scopes.contains { $0.contains(candidate) }
+            scopes.contains { $0.contains(file.canonicalPath) }
         }
     }
 
@@ -84,7 +93,10 @@ public extension SessionSource {
         let result = try discoverFilesResult(
             extensions: allowedExtensions, scopedTo: paths, classify: classify
         )
-        if let failure = result.failures.first {
+        if let failure = result.failures.first(where: { failure in
+            if failure.kind != .missingRoot { return true }
+            return !roots.contains { $0.url.path == failure.root.path && $0.isDefault }
+        }) {
             throw SessionSourceError.unreadableDirectory(failure.path, failure.message)
         }
         return result.files
@@ -115,7 +127,7 @@ public extension SessionSource {
         }
 
         for root in roots {
-            let rootPath = TraceFileIO.canonicalPath(root.scanURL.path)
+            let rootPath = root.scanPath
             let starts: [URL]
             if let paths {
                 let scopes = paths.map(TraceFileIO.canonicalPath)
@@ -133,6 +145,8 @@ public extension SessionSource {
 
             var seenStarts: Set<String> = []
             for start in starts where seenStarts.insert(TraceFileIO.canonicalPath(start.path).comparisonKey).inserted {
+                let startPath = TraceFileIO.canonicalPath(start.path)
+                let startsAtRoot = startPath.comparisonKey == rootPath.comparisonKey
                 let itemType: FileAttributeType?
                 do { itemType = try itemTypeIfPresent(for: URL(fileURLWithPath: start.path)) }
                 catch is CancellationError { throw CancellationError() }
@@ -144,10 +158,13 @@ public extension SessionSource {
                     continue
                 }
                 guard let itemType else {
-                    if !root.isDefault {
+                    // A missing descendant is a successful empty subtree scan. A
+                    // missing root is classified later using its persisted history.
+                    if startsAtRoot {
                         failures.append(.init(
                             agent: agent, root: root.url, path: start.path,
-                            message: "The configured source root is not currently available"
+                            message: "The configured source root is not currently available",
+                            kind: .missingRoot
                         ))
                     }
                     continue

@@ -33,7 +33,7 @@ struct IndexedSourceState: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 9
+    public static let schemaVersion = 10
     public static let indexFormatVersion = 4
     private static let sourceStateSelection = """
         sf.*,
@@ -283,6 +283,24 @@ public actor IndexDatabase {
             try db.execute(sql: "DELETE FROM fsevents_checkpoint")
             try db.execute(sql: "UPDATE trace_meta SET value='9' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v10-scoped-discovery-errors") { db in
+            try db.execute(sql: """
+                CREATE TABLE source_scan_error (
+                    id INTEGER PRIMARY KEY,
+                    root_id INTEGER NOT NULL REFERENCES source_root(id) ON DELETE CASCADE,
+                    scope_path TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    UNIQUE(root_id, scope_path)
+                );
+                CREATE INDEX idx_source_scan_error_root ON source_scan_error(root_id);
+                INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
+                SELECT id, path, last_error, coalesce(last_scan_ms, 0)
+                FROM source_root WHERE last_error IS NOT NULL;
+                UPDATE source_root SET last_error=NULL;
+                UPDATE trace_meta SET value='10' WHERE key='schema_version';
+                """)
+        }
         try migrator.migrate(pool)
     }
 
@@ -376,6 +394,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM message_fts")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
+                try db.execute(sql: "DELETE FROM source_scan_error")
                 try db.execute(sql: "DELETE FROM project")
                 try db.execute(sql: "DELETE FROM fsevents_checkpoint")
                 try Self.markRollupsDirty(db)
@@ -460,6 +479,15 @@ public actor IndexDatabase {
                 arguments: [root.agent.rawValue, root.url.path, root.isDefault]
             )
             return try Int64.fetchOne(db, sql: "SELECT id FROM source_root WHERE path=?", arguments: [root.url.path])!
+        }
+    }
+
+    func rootHasBeenScanned(rootID: Int64) throws -> Bool {
+        try pool.read { db in
+            try Bool.fetchOne(
+                db, sql: "SELECT last_scan_ms IS NOT NULL FROM source_root WHERE id=?",
+                arguments: [rootID]
+            ) ?? false
         }
     }
 
@@ -1047,7 +1075,7 @@ public actor IndexDatabase {
                 db, sql: "SELECT count(*) FROM source_file WHERE last_error IS NOT NULL"
             ) ?? 0
             let roots = try Int.fetchOne(
-                db, sql: "SELECT count(*) FROM source_root WHERE last_error IS NOT NULL"
+                db, sql: "SELECT count(*) FROM source_scan_error"
             ) ?? 0
             return files + roots
         }
@@ -1059,17 +1087,44 @@ public actor IndexDatabase {
                 db, sql: "SELECT path FROM source_file WHERE last_error IS NOT NULL"
             ))
             let roots = try Set(String.fetchAll(
-                db, sql: "SELECT path FROM source_root WHERE last_error IS NOT NULL"
+                db, sql: "SELECT scope_path FROM source_scan_error"
             ))
-            return .init(filePaths: files, rootPaths: roots)
+            return .init(filePaths: files, reconciliationPaths: roots)
         }
     }
 
-    func recordRootScan(rootID: Int64, error: String?) throws {
+    func replaceDiscoveryErrors(
+        rootID: Int64, scannedScope: String, failures: [DiscoveryFailure]
+    ) throws {
         try pool.write { db in
+            let scanned = TraceFileIO.canonicalPath(scannedScope)
+            let existing = try Row.fetchAll(
+                db, sql: "SELECT id, scope_path FROM source_scan_error WHERE root_id=?",
+                arguments: [rootID]
+            )
+            for row in existing {
+                let scopePath: String = row["scope_path"]
+                let errorID: Int64 = row["id"]
+                let errorScope = TraceFileIO.canonicalPath(scopePath)
+                if scanned.contains(errorScope) {
+                    try db.execute(
+                        sql: "DELETE FROM source_scan_error WHERE id=?",
+                        arguments: [errorID]
+                    )
+                }
+            }
+            let now = Int64(Date().timeIntervalSince1970 * 1_000)
+            for failure in failures {
+                try db.execute(sql: """
+                    INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(root_id, scope_path) DO UPDATE SET
+                        error=excluded.error, updated_at_ms=excluded.updated_at_ms
+                    """, arguments: [rootID, failure.path, failure.message, now])
+            }
             try db.execute(
-                sql: "UPDATE source_root SET last_scan_ms=?, last_error=? WHERE id=?",
-                arguments: [Int64(Date().timeIntervalSince1970 * 1_000), error, rootID]
+                sql: "UPDATE source_root SET last_scan_ms=?, last_error=NULL WHERE id=?",
+                arguments: [now, rootID]
             )
         }
     }
@@ -1506,9 +1561,10 @@ public actor IndexDatabase {
         try pool.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT r.id, r.agent, r.path, r.last_scan_ms,
-                       coalesce(r.last_error, max(h.last_error)) AS resolved_error,
+                       coalesce(max(e.error), max(h.last_error)) AS resolved_error,
                        count(DISTINCT f.id) AS file_count, min(s.started_at) AS earliest
                 FROM source_root r
+                LEFT JOIN source_scan_error e ON e.root_id=r.id
                 LEFT JOIN source_file f ON f.root_id=r.id
                 LEFT JOIN adapter_health h ON h.source_file_id=f.id
                 LEFT JOIN session s ON s.source_file_id=f.id

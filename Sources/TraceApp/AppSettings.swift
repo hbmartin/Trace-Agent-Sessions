@@ -71,7 +71,16 @@ final class AppSettings: ObservableObject {
         searchSort = SearchSort(rawValue: defaults.string(forKey: Key.searchSort) ?? "") ?? .recency
         clearGlobalSearchOnClose = defaults.object(forKey: Key.clearGlobalSearchOnClose) as? Bool ?? true
         clearGlobalFiltersOnClose = defaults.object(forKey: Key.clearGlobalFiltersOnClose) as? Bool ?? true
-        additionalClaudeRoots = defaults.stringArray(forKey: Key.additionalClaudeRoots) ?? []
+        let storedClaudeRoots = defaults.stringArray(forKey: Key.additionalClaudeRoots) ?? []
+        let defaultClaudeRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects")
+        let normalizedClaudeRoots = ClaudeCodeSource(
+            roots: [defaultClaudeRoot] + storedClaudeRoots.map { URL(fileURLWithPath: $0) }
+        ).roots.filter { !$0.isDefault }.map(\.url.path)
+        additionalClaudeRoots = normalizedClaudeRoots
+        if normalizedClaudeRoots != storedClaudeRoots {
+            defaults.set(normalizedClaudeRoots, forKey: Key.additionalClaudeRoots)
+        }
         hotkeyKeyCode = UInt32(defaults.object(forKey: Key.hotkeyKeyCode) as? Int ?? kVK_Space)
         hotkeyModifiers = UInt32(defaults.object(forKey: Key.hotkeyModifiers) as? Int ?? (cmdKey | shiftKey))
         lastSessionID = defaults.object(forKey: Key.lastSessionID) as? Int64

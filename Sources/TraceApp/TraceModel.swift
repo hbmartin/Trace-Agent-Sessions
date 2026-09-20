@@ -232,14 +232,14 @@ final class TraceModel: ObservableObject {
                 scheduler = makeScheduler(coordinator)
                 progress.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount()) ?? 0
                 if let recovery = try? await database.unresolvedRecoveryWork(), !recovery.isEmpty {
-                    let scanPathsByConfiguredPath = Dictionary(
-                        uniqueKeysWithValues: sources.flatMap(\.roots).map {
-                            ($0.url.path, $0.scanURL.path)
+                    let scanPathsByConfiguredPath = sources.flatMap(\.roots).reduce(
+                        into: [String: String](), { result, root in
+                            result[root.url.path] = root.scanURL.path
                         }
                     )
                     await scheduler?.request(
                         paths: recovery.filePaths,
-                        reconciliationPaths: Set(recovery.rootPaths.map {
+                        reconciliationPaths: Set(recovery.reconciliationPaths.map {
                             scanPathsByConfiguredPath[$0] ?? $0
                         }),
                         scope: settings.indexScope,
@@ -1239,7 +1239,7 @@ final class TraceModel: ObservableObject {
         let generation = beginWatcherConfiguration()
         let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
-            .flatMap(\.roots).map { $0.scanURL.deletingLastPathComponent() }
+            .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
         let canonicalRoots = roots.map { TraceFileIO.canonicalPath($0.path) }
         let canonicalMetadataRoots = metadataRoots.map { TraceFileIO.canonicalPath($0.path) }
         var reconciliationPaths = forceRootReconciliation
@@ -1280,7 +1280,7 @@ final class TraceModel: ObservableObject {
         }
 
         let replacements = configurations.map { configuration in
-            FSEventsWatcher(
+            (configuration, FSEventsWatcher(
                 roots: configuration.roots, identifier: configuration.id,
                 sinceWhen: configuration.checkpoint
             ) { [weak self] changes in
@@ -1313,18 +1313,22 @@ final class TraceModel: ObservableObject {
                     if self.watcherStartupPending { self.bufferedSourceChanges.merge(relevant) }
                     else { await self.submitSourceChanges(relevant) }
                 }
-            }
+            })
         }
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
-        watchers = replacements
-        for watcher in replacements where !watcher.start() {
-            _ = beginWatcherConfiguration()
-            watchedSourceRoots = []
-            watcherStartupPending = true
-            bufferedSourceChanges = SourceChanges()
-            startupReconciliationPaths = []
-            startupError = "Could not start file-system monitoring."
-            return false
+        var started: [FSEventsWatcher] = []
+        var failedRoots: [URL] = []
+        for (configuration, watcher) in replacements {
+            if watcher.start() { started.append(watcher) }
+            else { failedRoots += configuration.roots }
+        }
+        watchers = started
+        if !failedRoots.isEmpty {
+            let failedCanonical = failedRoots.map { TraceFileIO.canonicalPath($0.path) }
+            startupReconciliationPaths.formUnion(canonicalRoots.compactMap { root in
+                failedCanonical.contains(where: { $0.intersects(root) }) ? root.path : nil
+            })
+            startupError = "Some source folders could not be monitored; periodic reconciliation remains active."
         }
         return true
     }

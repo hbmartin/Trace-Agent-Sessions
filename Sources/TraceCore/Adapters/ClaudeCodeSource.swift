@@ -5,9 +5,9 @@ public struct ClaudeCodeSource: SessionSource {
     public let roots: [SourceRoot]
 
     public init(roots: [URL] = [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")]) {
-        self.roots = roots.enumerated().map { index, url in
+        self.roots = SourceRoot.deduplicated(roots.enumerated().map { index, url in
             SourceRoot(agent: .claudeCode, url: url, isDefault: index == 0)
-        }
+        })
     }
 
     public func discover() throws -> [DiscoveredSourceFile] {
