@@ -473,7 +473,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertNil(recovered.lastError)
         let missing = try await database.sourceState(path: original.path)
         let recoveredSearch = try await database.search(query: "searchable")
-        let failureCount = try await database.unresolvedSourceFailureCount()
+        let failureCount = try await database.unresolvedSourceFailureCounts().fileFailures
         XCTAssertNil(missing)
         XCTAssertEqual(recoveredSearch.results.first?.id, messageID)
         XCTAssertEqual(failureCount, 0)
@@ -572,7 +572,7 @@ final class IndexingRegressionTests: XCTestCase {
         await run.value
         XCTAssertEqual(cancelled.terminal?.phase, .cancelled)
         XCTAssertEqual(cancelled.terminal?.unresolvedFailedFiles, 1)
-        let unresolved = try await database.unresolvedSourceFailureCount()
+        let unresolved = try await database.unresolvedSourceFailureCounts().fileFailures
         XCTAssertEqual(unresolved, 1)
     }
 
@@ -1055,8 +1055,14 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.close()
         let terminal = ProgressRecorder()
         let completions = CompletionRecorder()
+        let finishes = FinishRecorder()
         let scheduler = IndexScheduler(
-            coordinator: coordinator, scope: .proseOnly, retryDelay: .milliseconds(20)
+            coordinator: coordinator, scope: .proseOnly, retryDelay: .milliseconds(20),
+            didFinish: { activity, completedWithoutFailures in
+                await finishes.receive(
+                    activity: activity, completedWithoutFailures: completedWithoutFailures
+                )
+            }
         ) {
             terminal.receive($0)
         } didComplete: { activity, watermarks in
@@ -1085,6 +1091,9 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(values.first(where: { $0.activity == .safetyVerification })?
             .watermarks["healthy-volume"], 9,
         "a completed safety pass must report completion and checkpoint an unaffected volume")
+        let finishValues = await finishes.values
+        XCTAssertEqual(finishValues.first?.activity, .safetyVerification)
+        XCTAssertEqual(finishValues.first?.completedWithoutFailures, false)
 
         await scheduler.request(activity: .fileChanges, watermarks: ["later-volume": 10])
         await scheduler.waitUntilIdle()
@@ -1101,7 +1110,90 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(completionsAfterStop.count, values.count)
     }
 
-    func testCompletedSafetyPassReportsCompletionWhenItsOnlyWatermarkIsBlocked() async throws {
+    func testCompletedSafetyPassDoesNotCheckpointWhenItsOnlyWatermarkIsBlocked() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = ThrowAfterIncrementalEOFSource(
+            base: ClaudeCodeSource(roots: [root]), invocation: ReadCounter()
+        )
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(line(2).utf8))
+        try handle.close()
+        let completions = CompletionRecorder()
+        let finishes = FinishRecorder()
+        let scheduler = IndexScheduler(
+            coordinator: coordinator, scope: .proseOnly, retryDelay: .seconds(30),
+            didFinish: { activity, completedWithoutFailures in
+                await finishes.receive(
+                    activity: activity, completedWithoutFailures: completedWithoutFailures
+                )
+                guard activity == .safetyVerification, completedWithoutFailures else { return }
+                try? await database.markSafetyReconciliationComplete()
+            },
+            progress: { _ in }
+        ) { activity, watermarks in
+            await completions.receive(activity: activity, watermarks: watermarks)
+        }
+
+        await scheduler.request(
+            paths: [file.path], activity: .safetyVerification,
+            watermarks: ["failed-volume": 12],
+            streamRoots: ["failed-volume": [root.path]]
+        )
+        await scheduler.waitUntilIdle()
+
+        let values = await completions.values
+        XCTAssertTrue(values.isEmpty)
+        let finishValues = await finishes.values
+        XCTAssertEqual(finishValues.count, 1)
+        XCTAssertEqual(finishValues.first?.activity, .safetyVerification)
+        XCTAssertEqual(finishValues.first?.completedWithoutFailures, false)
+        let failedSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()
+        XCTAssertNil(failedSafetyTimestamp)
+        await scheduler.stop()
+
+        let successfulFinishes = FinishRecorder()
+        let successful = IndexScheduler(
+            coordinator: IndexCoordinator(
+                database: database, sources: [ClaudeCodeSource(roots: [root])]
+            ),
+            scope: .proseOnly,
+            didFinish: { activity, completedWithoutFailures in
+                await successfulFinishes.receive(
+                    activity: activity, completedWithoutFailures: completedWithoutFailures
+                )
+                guard activity == .safetyVerification, completedWithoutFailures else { return }
+                try? await database.markSafetyReconciliationComplete()
+            },
+            progress: { _ in }
+        )
+        await successful.request(
+            reconciliationPaths: [root.path], activity: .safetyVerification
+        )
+        await successful.waitUntilIdle()
+        let successfulSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()
+        XCTAssertNotNil(successfulSafetyTimestamp)
+        let successfulFinishValues = await successfulFinishes.values
+        XCTAssertEqual(successfulFinishValues.count, 1)
+        XCTAssertEqual(successfulFinishValues.first?.activity, .safetyVerification)
+        XCTAssertEqual(successfulFinishValues.first?.completedWithoutFailures, true)
+        await successful.stop()
+    }
+
+    func testRebuildPreservesRetryStreamRoots() async throws {
+        try await assertRebuildPreservesRetainedStreamRoots(parkDormant: false)
+    }
+
+    func testRebuildPreservesDormantStreamRoots() async throws {
+        try await assertRebuildPreservesRetainedStreamRoots(parkDormant: true)
+    }
+
+    private func assertRebuildPreservesRetainedStreamRoots(parkDormant: Bool) async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")
         try Data(line(1).utf8).write(to: file)
@@ -1117,23 +1209,34 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.close()
         let completions = CompletionRecorder()
         let scheduler = IndexScheduler(
-            coordinator: coordinator, scope: .proseOnly, retryDelay: .seconds(30),
+            coordinator: coordinator, scope: .proseOnly,
+            retryDelay: parkDormant ? .milliseconds(20) : .seconds(30),
             progress: { _ in }
         ) { activity, watermarks in
             await completions.receive(activity: activity, watermarks: watermarks)
         }
 
         await scheduler.request(
-            paths: [file.path], activity: .safetyVerification,
-            watermarks: ["failed-volume": 12],
-            streamRoots: ["failed-volume": [root.path]]
+            paths: [file.path], watermarks: ["volume": 1],
+            streamRoots: ["volume": [root.path]]
+        )
+        await scheduler.waitUntilIdle()
+        if parkDormant {
+            try await Task.sleep(for: .milliseconds(100))
+            await scheduler.waitUntilIdle()
+        }
+
+        let unrelatedRoot = root.deletingLastPathComponent().appendingPathComponent("healthy")
+        await scheduler.request(
+            rebuild: true, scope: .everything,
+            watermarks: ["volume": 2],
+            streamRoots: ["volume": [unrelatedRoot.path]]
         )
         await scheduler.waitUntilIdle()
 
         let values = await completions.values
-        XCTAssertEqual(values.count, 1)
-        XCTAssertEqual(values.first?.activity, .safetyVerification)
-        XCTAssertTrue(values.first?.watermarks.isEmpty == true)
+        XCTAssertFalse(values.contains { $0.watermarks["volume"] != nil },
+                       "rebuild must retain the failed root's coverage mapping")
         await scheduler.stop()
     }
 
@@ -1198,6 +1301,27 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(health.first?.error?.contains("synthetic unreadable scope") == true)
     }
 
+    func testReconciliationChoosesDeterministicDiscoveryError() async throws {
+        let root = try directory()
+        let alpha = root.appendingPathComponent("alpha")
+        let beta = root.appendingPathComponent("beta")
+        try FileManager.default.createDirectory(at: alpha, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: beta, withIntermediateDirectories: true)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        try await database.setIndexScope(.proseOnly)
+        let coordinator = IndexCoordinator(
+            database: database, sources: [MultiScopeFailureSource(root: root)]
+        )
+
+        for _ in 0..<10 {
+            let result = await coordinator.reconcile(
+                paths: [beta.path, alpha.path], scope: .proseOnly,
+                activity: .subtreeRecovery
+            )
+            XCTAssertEqual(result.error, "alpha failed")
+        }
+    }
+
     func testSuccessfulSiblingScanDoesNotClearAnotherSubtreeError() async throws {
         let root = try directory()
         let first = root.appendingPathComponent("first")
@@ -1213,16 +1337,12 @@ final class IndexingRegressionTests: XCTestCase {
         let secondFailure = DiscoveryFailure(
             agent: .claudeCode, root: root, path: second.path, message: "second failed"
         )
-        try await database.replaceDiscoveryErrors(
-            rootID: rootID, scannedScope: first.path, failures: [firstFailure]
-        )
-        try await database.replaceDiscoveryErrors(
-            rootID: rootID, scannedScope: second.path, failures: [secondFailure]
-        )
+        try await database.replaceDiscoveryErrors([
+            (rootID, first.path, [firstFailure]),
+            (rootID, second.path, [secondFailure]),
+        ])
 
-        try await database.replaceDiscoveryErrors(
-            rootID: rootID, scannedScope: first.path, failures: []
-        )
+        try await database.replaceDiscoveryErrors([(rootID, first.path, [])])
 
         let recovery = try await database.unresolvedRecoveryWork()
         let failureCounts = try await database.unresolvedSourceFailureCounts()
@@ -2052,6 +2172,46 @@ private struct ScopedDiscoveryFailureSource: SessionSource {
     }
 }
 
+private struct MultiScopeFailureSource: SessionSource {
+    let agent = AgentKind.claudeCode
+    let roots: [SourceRoot]
+
+    init(root: URL) {
+        roots = [.init(agent: .claudeCode, url: root)]
+    }
+
+    func discover() throws -> [DiscoveredSourceFile] { [] }
+
+    func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
+        let paths = paths ?? [roots[0].scanURL.path]
+        return .init(failures: paths.map { path in
+            .init(
+                agent: agent, root: roots[0].url, path: path,
+                message: "\(URL(fileURLWithPath: path).lastPathComponent) failed"
+            )
+        })
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
+    }
+
+    func hydrate(
+        fileURL: URL, format: SourceFormat, locator: RecordLocator
+    ) throws -> HydratedMessage {
+        throw SessionSourceError.unsupportedLocator
+    }
+}
+
 private final class SyntheticIncrementalFailureState: @unchecked Sendable {
     private let cursor: JSONLineCursor
     private var pending: ArraySlice<ParsedRecord> = []
@@ -2308,5 +2468,20 @@ private actor CompletionRecorder {
 
     func receive(activity: IndexActivity, watermarks: [String: UInt64]) {
         values.append(.init(activity: activity, watermarks: watermarks))
+    }
+}
+
+private actor FinishRecorder {
+    struct Entry: Sendable {
+        let activity: IndexActivity
+        let completedWithoutFailures: Bool
+    }
+
+    private(set) var values: [Entry] = []
+
+    func receive(activity: IndexActivity, completedWithoutFailures: Bool) {
+        values.append(.init(
+            activity: activity, completedWithoutFailures: completedWithoutFailures
+        ))
     }
 }

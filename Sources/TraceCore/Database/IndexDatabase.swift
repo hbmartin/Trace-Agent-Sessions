@@ -293,7 +293,6 @@ public actor IndexDatabase {
                     updated_at_ms INTEGER NOT NULL,
                     UNIQUE(root_id, scope_path)
                 );
-                CREATE INDEX idx_source_scan_error_root ON source_scan_error(root_id);
                 INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
                 SELECT id, path, last_error, coalesce(last_scan_ms, 0)
                 FROM source_root WHERE last_error IS NOT NULL;
@@ -1086,6 +1085,7 @@ public actor IndexDatabase {
     }
 
     /// Retained for source compatibility; this now counts actual failed files only.
+    @available(*, deprecated, message: "Use unresolvedSourceFailureCounts()")
     public func unresolvedSourceFailureCount() throws -> Int {
         try unresolvedSourceFailureCounts().fileFailures
     }
@@ -1100,12 +1100,6 @@ public actor IndexDatabase {
             ))
             return .init(filePaths: files, reconciliationPaths: roots)
         }
-    }
-
-    func replaceDiscoveryErrors(
-        rootID: Int64, scannedScope: String, failures: [DiscoveryFailure]
-    ) throws {
-        try replaceDiscoveryErrors([(rootID, scannedScope, failures)])
     }
 
     func replaceDiscoveryErrors(

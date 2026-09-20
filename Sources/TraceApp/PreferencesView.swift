@@ -117,14 +117,23 @@ private struct SourcesPreferences: View {
                     if settings.additionalClaudeRoots.isEmpty {
                         Text("No additional roots").foregroundStyle(.secondary)
                     }
-                    ForEach(settings.additionalClaudeRoots, id: \.self) { path in
+                    ForEach(
+                        Array(settings.additionalClaudeRoots.enumerated()), id: \.offset
+                    ) { index, path in
                         HStack {
-                            Text(path).font(.caption.monospaced()).lineLimit(1)
+                            Text(path)
+                                .font(.caption.monospaced())
+                                .lineLimit(1)
+                                .accessibilityIdentifier("additionalClaudeRoot-\(index)")
                             Spacer()
                             Button("Remove", systemImage: "minus.circle") {
-                                settings.additionalClaudeRoots.removeAll { $0 == path }
+                                guard settings.additionalClaudeRoots.indices.contains(index) else {
+                                    return
+                                }
+                                settings.additionalClaudeRoots.remove(at: index)
                                 model.reloadSourcesAndRebuild()
                             }
+                            .accessibilityIdentifier("removeAdditionalClaudeRoot-\(index)")
                             .labelStyle(.iconOnly)
                         }
                     }
@@ -156,18 +165,20 @@ private struct SourcesPreferences: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let defaultURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects")
-        let existing = [defaultURL] + settings.additionalClaudeRoots.map {
-            URL(fileURLWithPath: $0)
-        }
-        Task {
-            let shouldAdd = await Task.detached(priority: .userInitiated) {
-                let before = ClaudeCodeSource(roots: existing).roots.count
-                let after = ClaudeCodeSource(roots: existing + [url]).roots.count
-                return after > before
-            }.value
-            if shouldAdd {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                let snapshot = settings.additionalClaudeRoots
+                let existing = [defaultURL] + snapshot.map { URL(fileURLWithPath: $0) }
+                let shouldAdd = await Task.detached(priority: .userInitiated) {
+                    let before = ClaudeCodeSource(roots: existing).roots.count
+                    let after = ClaudeCodeSource(roots: existing + [url]).roots.count
+                    return after > before
+                }.value
+                guard snapshot == settings.additionalClaudeRoots else { continue }
+                guard shouldAdd else { return }
                 settings.additionalClaudeRoots.append(url.path)
                 model.reloadSourcesAndRebuild()
+                return
             }
         }
     }

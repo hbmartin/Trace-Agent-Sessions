@@ -9,6 +9,20 @@ struct SidebarRevealRequest: Equatable {
     let sessionID: Int64
 }
 
+enum WatcherGroupingPolicy {
+    case byVolume
+    case byRoot
+
+    func groupIdentifier(for root: URL, volumeIdentifier: String) -> String {
+        switch self {
+        case .byVolume:
+            volumeIdentifier
+        case .byRoot:
+            volumeIdentifier + ":" + TraceFileIO.canonicalPath(root.path).comparisonKey
+        }
+    }
+}
+
 @MainActor
 final class TraceModel: ObservableObject {
     enum GlobalSearchSurface: Hashable { case popover, launcher }
@@ -198,9 +212,17 @@ final class TraceModel: ObservableObject {
     private var sidebarProjectRevealAcknowledged = false
     private var sidebarSessionRevealAcknowledged = false
     private var sidebarRevealFallbackTask: Task<Void, Never>?
+    private let watcherGroupingPolicy: WatcherGroupingPolicy
+    private let startupActivityObserver: (IndexActivity) -> Void
 
-    init(settings: AppSettings = AppSettings()) {
+    init(
+        settings: AppSettings = AppSettings(),
+        watcherGroupingPolicy: WatcherGroupingPolicy = .byVolume,
+        startupActivityObserver: @escaping (IndexActivity) -> Void = { _ in }
+    ) {
         self.settings = settings
+        self.watcherGroupingPolicy = watcherGroupingPolicy
+        self.startupActivityObserver = startupActivityObserver
         diagnostics = DiagnosticsStore(url: TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
     }
 
@@ -321,15 +343,24 @@ final class TraceModel: ObservableObject {
     }
 
     private func makeScheduler(_ coordinator: IndexCoordinator) -> IndexScheduler {
-        IndexScheduler(coordinator: coordinator, scope: settings.indexScope) { [weak self] update in
+        IndexScheduler(
+            coordinator: coordinator, scope: settings.indexScope,
+            didFinish: { [weak self] activity, completedWithoutFailures in
+                await self?.finishIndexActivity(
+                    activity, completedWithoutFailures: completedWithoutFailures
+                )
+            }
+        ) { [weak self] update in
             await self?.receiveProgress(update)
-        } didComplete: { [weak self] activity, watermarks in
-            await self?.completeIndexActivity(activity, watermarks: watermarks)
+        } didComplete: { [weak self] _, watermarks in
+            try? await self?.database?.saveEventCheckpoints(watermarks)
         }
     }
 
-    private func completeIndexActivity(_ activity: IndexActivity, watermarks: [String: UInt64]) async {
-        try? await database?.saveEventCheckpoints(watermarks)
+    private func finishIndexActivity(
+        _ activity: IndexActivity, completedWithoutFailures: Bool
+    ) async {
+        guard completedWithoutFailures else { return }
         if activity == .safetyVerification || activity == .initialBuild
             || activity == .launchReconciliation {
             try? await database?.markSafetyReconciliationComplete()
@@ -562,14 +593,16 @@ final class TraceModel: ObservableObject {
             guard let self else { return }
             let buffered = self.bufferedSourceChanges
             self.bufferedSourceChanges = SourceChanges()
+            let activity = self.startupReconciliationPaths.isEmpty
+                ? (buffered.paths.isEmpty && buffered.reconciliationPaths.isEmpty
+                    ? self.startupActivity : self.activity(for: buffered))
+                : self.startupActivity
+            self.startupActivityObserver(activity)
             await scheduler.request(
                 paths: buffered.paths,
                 reconciliationPaths: self.startupReconciliationPaths.union(buffered.reconciliationPaths),
                 scope: self.settings.indexScope,
-                activity: self.startupReconciliationPaths.isEmpty
-                    ? (buffered.paths.isEmpty && buffered.reconciliationPaths.isEmpty
-                        ? self.startupActivity : self.activity(for: buffered))
-                    : self.startupActivity,
+                activity: activity,
                 watermarks: buffered.watermarks,
                 streamRoots: buffered.streamRoots
             )
@@ -1261,29 +1294,29 @@ final class TraceModel: ObservableObject {
         let statistics = try? await database.statistics()
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
         let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
-        var grouped: [String: [URL]] = [:]
+        var grouped: [String: (volumeID: String, roots: [URL])] = [:]
         for root in roots + metadataRoots {
             let volumeID = Self.volumeIdentifier(for: root)
-            let groupingID: String
-            if TraceTestHooks.isUITesting,
-               TraceTestHooks.environment["TRACE_TEST_SPLIT_WATCHERS_BY_ROOT"] == "1" {
-                groupingID = volumeID + ":" + TraceFileIO.canonicalPath(root.path).comparisonKey
-            } else {
-                groupingID = volumeID
+            let groupingID = watcherGroupingPolicy.groupIdentifier(
+                for: root, volumeIdentifier: volumeID
+            )
+            if grouped[groupingID] == nil {
+                grouped[groupingID] = (volumeID, [])
             }
-            grouped[groupingID, default: []].append(root)
+            grouped[groupingID]?.roots.append(root)
         }
         var configurations: [(id: String, roots: [URL], checkpoint: UInt64?)] = []
-        for (volumeID, volumeRoots) in grouped {
-            let checkpoint = try? await database.eventCheckpoint(volumeID: volumeID)
+        for groupingID in grouped.keys.sorted() {
+            guard let group = grouped[groupingID] else { continue }
+            let checkpoint = try? await database.eventCheckpoint(volumeID: group.volumeID)
             guard generation == watcherGeneration, !Task.isCancelled else { return false }
             if checkpoint == nil {
-                let sourcePaths = volumeRoots.map { TraceFileIO.canonicalPath($0.path) }
+                let sourcePaths = group.roots.map { TraceFileIO.canonicalPath($0.path) }
                     .filter { candidate in canonicalRoots.contains { $0.comparisonKey == candidate.comparisonKey } }
                     .map(\.path)
                 reconciliationPaths.formUnion(sourcePaths)
             }
-            configurations.append((volumeID, volumeRoots, checkpoint))
+            configurations.append((group.volumeID, group.roots, checkpoint))
         }
 
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
@@ -1350,7 +1383,9 @@ final class TraceModel: ObservableObject {
                 failedCanonical.contains(where: { $0.intersects(root) }) ? root.path : nil
             })
             startupError = "Some source folders could not be monitored; periodic reconciliation remains active."
-            startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
+            if !forceRootReconciliation {
+                startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
+            }
         }
         return true
     }
@@ -1683,7 +1718,33 @@ final class TraceModel: ObservableObject {
 @MainActor
 final class TraceEnvironment {
     static let shared = TraceEnvironment()
-    let settings = AppSettings()
-    lazy var model = TraceModel(settings: settings)
-    private init() {}
+    let settings: AppSettings
+    lazy var model = TraceModel(
+        settings: settings,
+        watcherGroupingPolicy: TraceTestHooks.isUITesting
+            && TraceTestHooks.environment["TRACE_TEST_SPLIT_WATCHERS_BY_ROOT"] == "1"
+            ? .byRoot
+            : .byVolume,
+        startupActivityObserver: { activity in
+            TraceTestHooks.appendLine(
+                activity.rawValue, pathKey: "TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"
+            )
+        }
+    )
+    private init() {
+        let settings = AppSettings()
+        if TraceTestHooks.isUITesting {
+            let environment = TraceTestHooks.environment
+            if environment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] == "1" {
+                settings.onboardingComplete = true
+            }
+            if settings.additionalClaudeRoots.isEmpty,
+               let encodedRoots = environment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"],
+               let data = encodedRoots.data(using: .utf8),
+               let roots = try? JSONDecoder().decode([String].self, from: data) {
+                settings.additionalClaudeRoots = roots
+            }
+        }
+        self.settings = settings
+    }
 }

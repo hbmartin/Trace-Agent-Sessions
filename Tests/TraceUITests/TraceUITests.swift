@@ -68,26 +68,49 @@ final class TraceUITests: XCTestCase {
     }
 
     func testLaunchPreservesConfiguredClaudeRootStrings() throws {
-        let (app, directory) = try makeApp(extra: ["--ui-onboarding"])
-        let suiteName = "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let (app, _) = try makeApp(extra: ["--ui-show-settings"])
         let configured = ["/tmp/TraceConfiguredRoot", "/tmp/TraceConfiguredRoot"]
-        defaults.set(configured, forKey: "additionalClaudeRoots")
-        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        let encodedRoots = try JSONEncoder().encode(configured)
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(
+            decoding: encodedRoots, as: UTF8.self
+        )
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
 
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Find any agent session."].waitForExistence(timeout: 10))
-        XCTAssertEqual(defaults.stringArray(forKey: "additionalClaudeRoots"), configured,
-                       "launch must not rewrite durable roots using transient filesystem state")
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        let sources = app.descendants(matching: .any)["Sources"].firstMatch
+        XCTAssertTrue(sources.waitForExistence(timeout: 5))
+        sources.click()
+        let first = app.staticTexts["additionalClaudeRoot-0"]
+        let second = app.staticTexts["additionalClaudeRoot-1"]
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(second.exists, "launch must preserve both durable root strings")
+
+        app.buttons["removeAdditionalClaudeRoot-0"].click()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertFalse(second.exists, "one Remove click must delete only one duplicate row")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertFalse(second.exists, "the single remaining duplicate must persist across relaunch")
     }
 
     func testPartialWatcherStartupFailureStillRunsInitialIndexing() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let codex = directory.appendingPathComponent("Sources/Codex")
         try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        let encodedRoots = try JSONEncoder().encode(["/tmp/TraceRootRecoveryTrigger"])
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(
+            decoding: encodedRoots, as: UTF8.self
+        )
+        let activityAudit = directory.appendingPathComponent("startup-activity-audit")
         app.launchEnvironment["TRACE_TEST_SPLIT_WATCHERS_BY_ROOT"] = "1"
         app.launchEnvironment["TRACE_TEST_FAIL_WATCHER_ROOT_CONTAINS"] = "/Claude"
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activityAudit.path
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
 
@@ -106,13 +129,35 @@ final class TraceUITests: XCTestCase {
             #"{"type":"response_item","timestamp":"2026-09-20T18:00:01Z","payload":{"type":"message","id":"watcher-message","role":"user","content":[{"type":"input_text","text":"Successful watcher live marker"}]}}"#,
         ].joined(separator: "\n") + "\n"
         try Data(live.utf8).write(to: rollout)
-        let search = app.textFields["mainSearch"]
-        search.click()
-        search.typeText("Successful watcher live marker")
-        XCTAssertTrue(app.buttons.containing(NSPredicate(
-            format: "label CONTAINS %@", "Successful watcher live marker"
-        )).firstMatch.waitForExistence(timeout: 15),
-        "a successful watcher must remain active after a sibling watcher fails")
+        let checkpointDatabase = directory.appendingPathComponent("index.sqlite")
+        XCTAssertTrue(poll(timeout: 15) {
+            let count = try? sqliteInteger(
+                checkpointDatabase,
+                sql: "SELECT count(*) FROM message WHERE prefix='Successful watcher live marker'"
+            )
+            return count == 1 ? true : nil
+        } ?? false, "a successful watcher must remain active after a sibling watcher fails")
+        XCTAssertGreaterThan(try sqliteInteger(
+            checkpointDatabase, sql: "SELECT count(*) FROM fsevents_checkpoint"
+        ), 0)
+        XCTAssertEqual(try sqliteInteger(
+            checkpointDatabase,
+            sql: "SELECT count(*) FROM fsevents_checkpoint WHERE volume_id LIKE '%\(directory.lastPathComponent)%'"
+        ), 0, "test grouping must not leak root paths into persisted checkpoint identifiers")
+
+        try? FileManager.default.removeItem(at: activityAudit)
+        app.activate()
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForExistence(timeout: 5))
+        let sources = app.descendants(matching: .any)["Sources"].firstMatch
+        XCTAssertTrue(sources.waitForExistence(timeout: 5))
+        sources.click()
+        let remove = app.buttons["removeAdditionalClaudeRoot-0"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.click()
+        XCTAssertTrue(waitForLineCount(
+            activityAudit, line: "rootRecovery", count: 1, timeout: 15
+        ), "a failed sibling watcher must not downgrade forced root recovery")
     }
 
     func testTranscriptVisibilityDensityProjectFilterAndErrorHover() throws {
@@ -139,12 +184,14 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 5), "the original user message must remain visible")
         let visibleAnswer = app.staticTexts["Here is the visible answer"].firstMatch
         XCTAssertTrue(visibleAnswer.waitForExistence(timeout: 10))
+        let pasteboardChangeCount = preparePasteboardForCopy()
         visibleAnswer.click()
         app.typeKey("a", modifierFlags: .command)
         app.typeKey("c", modifierFlags: .command)
-        XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
-            "Here is the visible answer"
-        ) == true, "clicking message text must preserve text selection and copy focus")
+        assertPasteboardChanged(
+            after: pasteboardChangeCount, contains: ["Here is the visible answer"],
+            message: "clicking message text must preserve text selection and copy focus"
+        )
         let toolDisclosure = app.buttons["Tool invocation"].firstMatch
         XCTAssertTrue(toolDisclosure.waitForExistence(timeout: 5))
         toolDisclosure.click()
@@ -2540,12 +2587,14 @@ final class TraceUITests: XCTestCase {
             format: "value BEGINSWITH %@", "Keyboard scroll message "
         ))
         let visibleMessage = try XCTUnwrap(firstHittable(in: visibleMessages, timeout: 10))
+        let pasteboardChangeCount = preparePasteboardForCopy()
         visibleMessage.click()
         app.typeKey("a", modifierFlags: .command)
         app.typeKey("c", modifierFlags: .command)
-        XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
-            "Keyboard scroll message"
-        ) == true, "the boundary case must run with selectable message text as first responder")
+        assertPasteboardChanged(
+            after: pasteboardChangeCount, contains: ["Keyboard scroll message"],
+            message: "the boundary case must run with selectable message text as first responder"
+        )
         try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])
@@ -2801,13 +2850,13 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(answer.waitForExistence(timeout: 10))
         answer.rightClick()
         XCTAssertTrue(app.menuItems["Copy Message"].waitForExistence(timeout: 5))
+        let pasteboardChangeCount = preparePasteboardForCopy()
         app.menuItems["Copy Message"].click()
-        let copied = NSPredicate { _, _ in
-            let text = NSPasteboard.general.string(forType: .string) ?? ""
-            return text.contains("Here is the visible answer") && text.contains("Reasoning explanation") && text.contains("UniqueInvocation")
-        }
-        expectation(for: copied, evaluatedWith: nil)
-        waitForExpectations(timeout: 5)
+        assertPasteboardChanged(
+            after: pasteboardChangeCount,
+            contains: ["Here is the visible answer", "Reasoning explanation", "UniqueInvocation"],
+            message: "Copy Message must replace the sentinel with the complete message"
+        )
         let divider = app.descendants(matching: .any)["projectSessionDivider"].firstMatch
         XCTAssertTrue(divider.exists)
         let oldY = divider.frame.midY
@@ -2890,6 +2939,48 @@ final class TraceUITests: XCTestCase {
         add(attachment)
     }
 
+    private func preparePasteboardForCopy() -> Int {
+        let pasteboard = NSPasteboard.general
+        let originalItems = (pasteboard.pasteboardItems ?? []).map { item in
+            var values: [String: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) { values[type.rawValue] = data }
+            }
+            return values
+        }
+        addTeardownBlock {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            let items = originalItems.map { values in
+                let item = NSPasteboardItem()
+                for (rawType, data) in values {
+                    item.setData(data, forType: .init(rawType))
+                }
+                return item
+            }
+            if !items.isEmpty { pasteboard.writeObjects(items) }
+        }
+        pasteboard.clearContents()
+        pasteboard.setString("Trace pasteboard sentinel \(UUID())", forType: .string)
+        return pasteboard.changeCount
+    }
+
+    private func assertPasteboardChanged(
+        after changeCount: Int, contains expected: [String], timeout: TimeInterval = 5,
+        message: String
+    ) {
+        let copied = NSPredicate { _, _ in
+            let pasteboard = NSPasteboard.general
+            guard pasteboard.changeCount != changeCount,
+                  let text = pasteboard.string(forType: .string) else { return false }
+            return expected.allSatisfy(text.contains)
+        }
+        expectation(for: copied, evaluatedWith: nil)
+        waitForExpectations(timeout: timeout)
+        let text = NSPasteboard.general.string(forType: .string) ?? ""
+        XCTAssertTrue(expected.allSatisfy(text.contains), message)
+    }
+
     private func sqliteInteger(_ database: URL, sql: String) throws -> Int64 {
         let output = Pipe()
         let process = Process()
@@ -2909,4 +3000,5 @@ final class TraceUITests: XCTestCase {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try XCTUnwrap(Int64(value), "Expected integer sqlite3 output for: \(sql)")
     }
+
 }

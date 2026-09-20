@@ -85,12 +85,7 @@ struct IndexProgressLabel: View {
         var lines = [activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
-        if progress.unresolvedFailedFiles > 0 {
-            lines.append("\(progress.unresolvedFailedFiles) files still failing")
-        }
-        if progress.unresolvedDiscoveryFailures > 0 {
-            lines.append("\(progress.unresolvedDiscoveryFailures) source locations still unavailable")
-        }
+        lines.append(contentsOf: unresolvedFailureMessages)
         if let agent = progress.agent { lines.append("Provider: \(agent.displayName)") }
         if let project = progress.projectName { lines.append("Project: \(project)") }
         if let path = progress.currentPath {
@@ -144,18 +139,22 @@ struct IndexProgressLabel: View {
     }
 
     private var hasUnresolvedFailures: Bool {
-        progress.unresolvedFailedFiles > 0 || progress.unresolvedDiscoveryFailures > 0
+        !unresolvedFailureMessages.isEmpty
     }
 
     private var unresolvedSummary: String {
+        unresolvedFailureMessages.joined(separator: " · ")
+    }
+
+    private var unresolvedFailureMessages: [String] {
         var parts: [String] = []
         if progress.unresolvedFailedFiles > 0 {
             parts.append("\(progress.unresolvedFailedFiles) files still failing")
         }
         if progress.unresolvedDiscoveryFailures > 0 {
-            parts.append("\(progress.unresolvedDiscoveryFailures) source locations unavailable")
+            parts.append("\(progress.unresolvedDiscoveryFailures) source locations still unavailable")
         }
-        return parts.joined(separator: " · ")
+        return parts
     }
 
     private var activityDescription: String {
