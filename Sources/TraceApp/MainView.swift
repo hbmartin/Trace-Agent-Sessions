@@ -379,11 +379,6 @@ private struct TranscriptRowConfiguration: Equatable {
 private final class TranscriptTableView: NSTableView {
     var onUserScrollInput: (() -> Void)?
 
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        super.mouseDown(with: event)
-    }
-
     override func keyDown(with event: NSEvent) {
         let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
         if scrollingKeys.contains(event.keyCode) { onUserScrollInput?() }
@@ -593,15 +588,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
             ) { [weak self, weak table, weak scrollView] event in
                 let type = event.type
                 let window = event.window
-                let location = event.locationInWindow
                 let keyCode = event.keyCode
                 MainActor.assumeIsolated {
                     guard let self, let scrollView, window === scrollView.window else { return }
                     let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
+                    // A transcript has its own window, so every wheel event in
+                    // that window belongs to this scroll view. Synthesized and
+                    // momentum events do not always carry a useful location.
                     let isScroll = type == .scrollWheel
-                        && scrollView.frame.contains(scrollView.superview?.convert(
-                            location, from: nil
-                        ) ?? .zero)
                     let responder = window?.firstResponder
                     let transcriptOwnsKeyboard = responder === table
                         || responder === scrollView
