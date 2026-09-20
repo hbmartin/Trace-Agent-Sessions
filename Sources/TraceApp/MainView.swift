@@ -421,6 +421,33 @@ private final class TranscriptExpansionState: ObservableObject {
     }
 }
 
+private struct TranscriptDisclosure<Label: View, Content: View>: View {
+    @Binding var isExpanded: Bool
+    @ViewBuilder let label: () -> Label
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    label()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if isExpanded {
+                content()
+                    .padding(.leading, 16)
+            }
+        }
+    }
+}
+
 private final class NotificationObserverBag: @unchecked Sendable {
     private var values: [NSObjectProtocol] = []
 
@@ -587,16 +614,27 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 matching: [.scrollWheel, .keyDown]
             ) { [weak self, weak table, weak scrollView] event in
                 let type = event.type
-                let window = event.window
                 let keyCode = event.keyCode
                 MainActor.assumeIsolated {
-                    guard let self, let scrollView, window === scrollView.window else { return }
+                    guard let self, let scrollView, let transcriptWindow = scrollView.window else {
+                        return
+                    }
+                    // XCTest-generated wheel and momentum events may not carry a
+                    // window even though AppKit dispatches them to the key window.
+                    // Resolve that case without treating input in another window
+                    // as transcript activity.
                     let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
                     // A transcript has its own window, so every wheel event in
                     // that window belongs to this scroll view. Synthesized and
                     // momentum events do not always carry a useful location.
                     let isScroll = type == .scrollWheel
-                    let responder = window?.firstResponder
+                    if isScroll {
+                        guard transcriptWindow.isKeyWindow else { return }
+                    } else {
+                        let eventWindow = event.window ?? NSApp.keyWindow
+                        guard eventWindow === transcriptWindow else { return }
+                    }
+                    let responder = transcriptWindow.firstResponder
                     let transcriptOwnsKeyboard = responder === table
                         || responder === scrollView
                         || responder === scrollView.contentView
@@ -670,6 +708,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
             defer { TracePerformance.end(performanceInterval) }
             self.model = model
             let sessionChanged = self.sessionID != sessionID
+            let requestedMessageWasAvailable = model.requestedMessageID.map { requested in
+                items.contains { $0.summary.id == requested }
+            } ?? false
             var refreshesRowHeights = false
             var visibilityChanged = false
             if sessionChanged {
@@ -690,6 +731,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     with: replacement, sessionChanged: sessionChanged,
                     reloadExisting: visibilityChanged
                 )
+                if let requested = model.requestedMessageID,
+                   !requestedMessageWasAvailable,
+                   replacement.contains(where: { $0.summary.id == requested }) {
+                    needsRequestedRestore = true
+                }
                 self.messageRevision = messageRevision
             }
             if self.density != density {
@@ -1342,25 +1388,25 @@ private struct MessageRow: View {
     @ViewBuilder private var content: some View {
         if let hydrated {
             if isLazyAuxiliary {
-                DisclosureGroup(isExpanded: $expansion.auxiliary) {
-                    sectionContents(hydrated)
-                } label: {
+                TranscriptDisclosure(isExpanded: $expansion.auxiliary) {
                     Text(safePreview ?? neutralPlaceholder)
                         .font(.callout.monospaced())
                         .lineLimit(expansion.auxiliary ? nil : 2)
+                } content: {
+                    sectionContents(hydrated)
                 }
                 .onChange(of: expansion.auxiliary) { _, expanded in if expanded { hydrate() } }
             } else {
                 sectionContents(hydrated)
             }
         } else if isLazyAuxiliary {
-            DisclosureGroup(isExpanded: $expansion.auxiliary) {
-                if hydrationFailed { Text("Unable to load visible content.").foregroundStyle(.secondary) }
-                else { ProgressView().controlSize(.small) }
-            } label: {
+            TranscriptDisclosure(isExpanded: $expansion.auxiliary) {
                 Text(safePreview ?? neutralPlaceholder)
                     .font(.callout.monospaced())
                     .lineLimit(2)
+            } content: {
+                if hydrationFailed { Text("Unable to load visible content.").foregroundStyle(.secondary) }
+                else { ProgressView().controlSize(.small) }
             }
             .onChange(of: expansion.auxiliary) { _, expanded in if expanded { hydrate() } }
         } else if let safePreview, !safePreview.isEmpty {
@@ -1385,33 +1431,33 @@ private struct MessageRow: View {
             )
         }
         if visibility.includes(role: summary.role), visibility.tools && !message.sections.toolInvocation.isEmpty {
-            DisclosureGroup(isExpanded: $expansion.toolInvocation) {
+            TranscriptDisclosure(isExpanded: $expansion.toolInvocation) {
+                Text("Tool invocation")
+            } content: {
                 SelectableMessageText(
                     text: AttributedString(message.sections.toolInvocation),
                     monospaced: true, copyMessage: copyMessage
                 )
-            } label: {
-                Text("Tool invocation")
             }
         }
         if visibility.includes(role: summary.role), visibility.tools && !message.sections.toolOutput.isEmpty {
-            DisclosureGroup(isExpanded: $expansion.toolOutput) {
+            TranscriptDisclosure(isExpanded: $expansion.toolOutput) {
+                Text("Tool output")
+            } content: {
                 SelectableMessageText(
                     text: AttributedString(message.sections.toolOutput),
                     monospaced: true, copyMessage: copyMessage
                 )
-            } label: {
-                Text("Tool output")
             }
         }
         if visibility.includes(role: summary.role), visibility.reasoning && !message.sections.reasoning.isEmpty {
-            DisclosureGroup(isExpanded: $reasoningExpanded) {
+            TranscriptDisclosure(isExpanded: $reasoningExpanded) {
+                Label("Reasoning", systemImage: "brain")
+            } content: {
                 SelectableMessageText(
                     text: AttributedString(message.sections.reasoning),
                     secondary: true, copyMessage: copyMessage
                 )
-            } label: {
-                Label("Reasoning", systemImage: "brain")
             }
             .onChange(of: reasoningExpanded) { _, _ in heightChanged() }
         }

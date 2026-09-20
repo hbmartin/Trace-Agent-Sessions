@@ -107,18 +107,19 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 5), "the original user message must remain visible")
         let visibleAnswer = app.staticTexts["Here is the visible answer"].firstMatch
         XCTAssertTrue(visibleAnswer.waitForExistence(timeout: 10))
-        visibleAnswer.doubleClick()
+        visibleAnswer.click()
+        app.typeKey("a", modifierFlags: .command)
         app.typeKey("c", modifierFlags: .command)
         XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
             "Here is the visible answer"
         ) == true, "clicking message text must preserve text selection and copy focus")
-        let toolDisclosure = app.staticTexts["Tool invocation"].firstMatch
+        let toolDisclosure = app.buttons["Tool invocation"].firstMatch
         XCTAssertTrue(toolDisclosure.waitForExistence(timeout: 5))
         toolDisclosure.click()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "UniqueInvocation"
         )).firstMatch.waitForExistence(timeout: 5))
-        let reasoningDisclosure = app.staticTexts["Reasoning"].firstMatch
+        let reasoningDisclosure = app.buttons["Reasoning"].firstMatch
         XCTAssertTrue(reasoningDisclosure.waitForExistence(timeout: 5))
         reasoningDisclosure.click()
         XCTAssertTrue(app.staticTexts["Reasoning explanation"].waitForExistence(timeout: 5))
