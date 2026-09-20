@@ -92,6 +92,14 @@ final class MessageTextView: NSTextView {
     override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
     override func accessibilityValue() -> String? { string }
 
+    override func mouseDown(with event: NSEvent) {
+        // NSTableView otherwise has an opportunity to reclaim first responder
+        // from its hosted text during row interaction, which breaks native text
+        // selection and routes Copy to the row instead of the selected text.
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         guard copyMessage != nil else { return super.menu(for: event) }
         // NSTextView may return a shared menu. Copy it so this row's action never
