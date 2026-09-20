@@ -30,7 +30,7 @@ final class IndexingRegressionTests: XCTestCase {
             database: database, sources: [ClaudeCodeSource(roots: [root])]
         )
         await coordinator.indexAll(scope: .proseOnly)
-        try FileManager.default.removeItem(at: first)
+        try FileManager.default.removeItem(at: firstDirectory)
 
         let terminal = await coordinator.reconcile(
             paths: [firstDirectory.path], scope: .proseOnly, activity: .subtreeRecovery
@@ -41,6 +41,53 @@ final class IndexingRegressionTests: XCTestCase {
         let secondState = try await database.sourceState(path: second.path)
         XCTAssertEqual(statistics.sourceFileCount, 1)
         XCTAssertNotNil(secondState)
+    }
+
+    func testAncestorSymlinkRefreshUsesCanonicalContainment() async throws {
+        let parent = try directory()
+        let realParent = parent.appendingPathComponent("real")
+        let realRoot = realParent.appendingPathComponent("sessions")
+        let aliasParent = parent.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: realRoot, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: aliasParent.path, withDestinationPath: realParent.lastPathComponent
+        )
+        let configuredRoot = aliasParent.appendingPathComponent("sessions")
+        let file = realRoot.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [configuredRoot])]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(line(2).utf8))
+        try handle.close()
+        await coordinator.refresh(
+            paths: [configuredRoot.appendingPathComponent("session.jsonl").path],
+            scope: .proseOnly
+        )
+
+        let search = try await database.search(query: "message 2")
+        XCTAssertEqual(search.results.count, 1)
+    }
+
+    func testEquivalentClaudeRootsAreDeduplicatedWithDefaultPreferred() throws {
+        let parent = try directory()
+        let target = parent.appendingPathComponent("target")
+        let alias = parent.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: alias.path, withDestinationPath: target.lastPathComponent
+        )
+
+        let source = ClaudeCodeSource(roots: [target, alias, target])
+
+        XCTAssertEqual(source.roots.count, 1)
+        XCTAssertTrue(source.roots[0].isDefault)
+        XCTAssertEqual(source.roots[0].url.path, target.path)
     }
 
     func testTrustedWholeFileDigestSkipsParsingIdenticalAtomicReplacement() async throws {
@@ -748,6 +795,10 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(
                 sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v9-reset-fsevents-checkpoints'"
             )
+            try db.execute(
+                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v10-scoped-discovery-errors'"
+            )
+            try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
         }
         let migrated = try IndexDatabase(url: url)
@@ -756,7 +807,40 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "9")
+        XCTAssertEqual(schema, "10")
+    }
+
+    func testV10MigrationPreservesIndexCheckpointAndMigratesRootError() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let url = root.appendingPathComponent("index.sqlite")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: url)
+        let source = ClaudeCodeSource(roots: [root])
+        await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .proseOnly)
+        try await database.saveEventCheckpoints(["volume": 303])
+        let originalIDs = try await database.search(query: "searchable").results.map(\.id)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE source_root SET last_error='legacy discovery error'")
+            try db.execute(sql: "DROP TABLE source_scan_error")
+            try db.execute(
+                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v10-scoped-discovery-errors'"
+            )
+            try db.execute(sql: "UPDATE trace_meta SET value='9' WHERE key='schema_version'")
+        }
+
+        let migrated = try IndexDatabase(url: url)
+
+        XCTAssertFalse(migrated.contentWasResetOnOpen)
+        let migratedCheckpoint = try await migrated.eventCheckpoint(volumeID: "volume")
+        let migratedIDs = try await migrated.search(query: "searchable").results.map(\.id)
+        XCTAssertEqual(migratedCheckpoint, 303)
+        XCTAssertEqual(migratedIDs, originalIDs)
+        let recovery = try await migrated.unresolvedRecoveryWork()
+        XCTAssertEqual(recovery.reconciliationPaths, [source.roots[0].url.path])
+        let health = try await migrated.sourceHealth()
+        XCTAssertEqual(health.first?.error, "legacy discovery error")
     }
 
     func testConfiguredRootSynchronizationPurgesRemovedRootImmediately() async throws {
@@ -836,7 +920,9 @@ final class IndexingRegressionTests: XCTestCase {
         await coordinator.indexAll(scope: .proseOnly)
         let progress = RunRecorder()
         let completions = CompletionRecorder()
-        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly) {
+        let scheduler = IndexScheduler(
+            coordinator: coordinator, scope: .proseOnly, retryDelay: .milliseconds(20)
+        ) {
             await progress.receive($0)
         } didComplete: { activity, watermarks in
             await completions.receive(activity: activity, watermarks: watermarks)
@@ -871,15 +957,16 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(failedCompletions.last?.watermarks["volume"], 1)
 
         try await Task.sleep(for: .milliseconds(100))
-        let phasesWithoutRequest = await progress.terminalPhases
-        XCTAssertEqual(phasesWithoutRequest, failedPhases,
-                       "failed work must wait for another accepted request")
+        await scheduler.waitUntilIdle()
+        let automaticallyRetriedPhases = await progress.terminalPhases
+        XCTAssertEqual(Array(automaticallyRetriedPhases.suffix(2)), [.failed, .failed])
 
         await scheduler.request(activity: .fileChanges, watermarks: ["volume": 3])
         await scheduler.waitUntilIdle()
         let secondFailurePhases = await progress.terminalPhases
         let secondFailureCompletions = await completions.values
-        XCTAssertEqual(Array(secondFailurePhases.suffix(2)), [.failed, .failed])
+        XCTAssertEqual(secondFailurePhases, automaticallyRetriedPhases,
+                       "watermark-only work must not reactivate a dormant failure")
         XCTAssertEqual(secondFailureCompletions.last?.watermarks["volume"], 1)
 
         try await Task.sleep(for: .milliseconds(100))
@@ -888,7 +975,10 @@ final class IndexingRegressionTests: XCTestCase {
                        "a retained batch must not hot-loop after a second failure")
 
         try await raw.write { try $0.execute(sql: "DROP TRIGGER fail_incremental_root") }
-        await scheduler.request(activity: .fileChanges, watermarks: ["volume": 4])
+        await scheduler.request(
+            reconcile: true, activity: .safetyVerification,
+            watermarks: ["volume": 4]
+        )
         await scheduler.waitUntilIdle()
         let retriedPhases = await progress.terminalPhases
         let retriedCompletions = await completions.values
@@ -927,7 +1017,9 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.close()
         let terminal = ProgressRecorder()
         let completions = CompletionRecorder()
-        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly) {
+        let scheduler = IndexScheduler(
+            coordinator: coordinator, scope: .proseOnly, retryDelay: .milliseconds(20)
+        ) {
             terminal.receive($0)
         } didComplete: { activity, watermarks in
             await completions.receive(activity: activity, watermarks: watermarks)
@@ -939,9 +1031,17 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(terminal.terminal?.phase, .complete)
         XCTAssertEqual(terminal.terminal?.failedFiles, 1)
         XCTAssertEqual(terminal.terminal?.unresolvedFailedFiles, 1)
-        let values = await completions.values
-        XCTAssertEqual(values.last?.watermarks["volume"], 8,
-                       "isolated durable failures must not block a healthy event checkpoint")
+        try await Task.sleep(for: .milliseconds(100))
+        await scheduler.waitUntilIdle()
+        var values = await completions.values
+        XCTAssertFalse(values.contains { $0.watermarks["volume"] != nil },
+                       "the failed stream watermark must remain blocked")
+
+        await scheduler.request(activity: .fileChanges, watermarks: ["healthy-volume": 9])
+        await scheduler.waitUntilIdle()
+        values = await completions.values
+        XCTAssertEqual(values.last?.watermarks["healthy-volume"], 9,
+                       "an unrelated stream must checkpoint independently")
         let invocationsBeforeStop = invocation.value
         await scheduler.stop()
         await scheduler.request(paths: [file.path], watermarks: ["volume": 9])
@@ -979,7 +1079,8 @@ final class IndexingRegressionTests: XCTestCase {
         let search = try await database.search(query: "message 2")
         let values = await completions.values
         XCTAssertFalse(search.results.isEmpty)
-        XCTAssertEqual(values.compactMap { $0.watermarks["volume"] }, [1, 2])
+        XCTAssertTrue(values.compactMap { $0.watermarks["volume"] }.isEmpty,
+                      "the failed volume must remain blocked while healthy work continues")
         await scheduler.stop()
     }
 
@@ -1012,6 +1113,38 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(health.first?.error?.contains("synthetic unreadable scope") == true)
     }
 
+    func testSuccessfulSiblingScanDoesNotClearAnotherSubtreeError() async throws {
+        let root = try directory()
+        let first = root.appendingPathComponent("first")
+        let second = root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let sourceRoot = SourceRoot(agent: .claudeCode, url: root)
+        let rootID = try await database.register(root: sourceRoot)
+        let firstFailure = DiscoveryFailure(
+            agent: .claudeCode, root: root, path: first.path, message: "first failed"
+        )
+        let secondFailure = DiscoveryFailure(
+            agent: .claudeCode, root: root, path: second.path, message: "second failed"
+        )
+        try await database.replaceDiscoveryErrors(
+            rootID: rootID, scannedScope: first.path, failures: [firstFailure]
+        )
+        try await database.replaceDiscoveryErrors(
+            rootID: rootID, scannedScope: second.path, failures: [secondFailure]
+        )
+
+        try await database.replaceDiscoveryErrors(
+            rootID: rootID, scannedScope: first.path, failures: []
+        )
+
+        let recovery = try await database.unresolvedRecoveryWork()
+        let failureCount = try await database.unresolvedSourceFailureCount()
+        XCTAssertEqual(recovery.reconciliationPaths, [second.path])
+        XCTAssertEqual(failureCount, 1)
+    }
+
     func testV4MigrationAddsSourceGenerationWithoutResettingContent() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")
@@ -1038,6 +1171,8 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v7-source-placeholders'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v8-fsevents-checkpoints'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v9-reset-fsevents-checkpoints'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v10-scoped-discovery-errors'")
+            try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "DROP TABLE fsevents_checkpoint")
             try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
         }
@@ -1051,7 +1186,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "9")
+        XCTAssertEqual(schema, "10")
     }
 
     func testV7MigrationBackfillsPlaceholdersWithoutChangingIndexedIDs() async throws {
@@ -1077,6 +1212,8 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v7-source-placeholders'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v8-fsevents-checkpoints'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v9-reset-fsevents-checkpoints'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v10-scoped-discovery-errors'")
+            try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "DROP TABLE fsevents_checkpoint")
             try db.execute(sql: "UPDATE trace_meta SET value='6' WHERE key='schema_version'")
         }
@@ -1355,7 +1492,10 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(root.id, identity)
         XCTAssertEqual(root.url.path, alias.path)
         XCTAssertEqual(root.scanURL.path, scanPath)
-        XCTAssertEqual(scanPath, target.path)
+        XCTAssertEqual(
+            TraceFileIO.canonicalPath(scanPath).comparisonKey,
+            TraceFileIO.canonicalPath(target.path).comparisonKey
+        )
     }
 
     func testUnmountedSymlinkRootPreservesIndexedContentAndCheckpoint() async throws {
@@ -1392,7 +1532,50 @@ final class IndexingRegressionTests: XCTestCase {
         let result = try ClaudeCodeSource(roots: [root]).discoverResult(scopedTo: nil)
 
         XCTAssertTrue(result.files.isEmpty)
-        XCTAssertTrue(result.failures.isEmpty)
+        XCTAssertEqual(result.failures.count, 1)
+        XCTAssertEqual(result.failures.first?.kind, .missingRoot)
+        XCTAssertEqual(
+            result.failures.first.map { TraceFileIO.canonicalPath($0.path).comparisonKey },
+            TraceFileIO.canonicalPath(root.path).comparisonKey
+        )
+    }
+
+    func testNeverSeenMissingDefaultRootStaysQuietAndUnscanned() async throws {
+        let parent = try directory()
+        let missing = parent.appendingPathComponent("optional-default")
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let terminal = await IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [missing])]
+        ).indexAllResult(scope: .proseOnly)
+
+        let health = try await database.sourceHealth()
+        let recovery = try await database.unresolvedRecoveryWork()
+        XCTAssertEqual(terminal.phase, .complete)
+        XCTAssertEqual(terminal.failedFiles, 0)
+        XCTAssertNil(health.first?.lastScanMilliseconds)
+        XCTAssertNil(health.first?.error)
+        XCTAssertEqual(recovery.reconciliationPaths, [])
+    }
+
+    func testPreviouslyScannedMissingDefaultRootPreservesContent() async throws {
+        let parent = try directory()
+        let root = parent.appendingPathComponent("default-root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [root])]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+        try FileManager.default.removeItem(at: root)
+
+        let terminal = await coordinator.indexAllResult(scope: .proseOnly)
+        let statistics = try await database.statistics()
+        let search = try await database.search(query: "searchable")
+
+        XCTAssertEqual(terminal.failedFiles, 1)
+        XCTAssertEqual(statistics.sourceFileCount, 1)
+        XCTAssertEqual(search.results.count, 1)
     }
 
     func testWatcherFlagsDistinguishFileChangesFromRecovery() {

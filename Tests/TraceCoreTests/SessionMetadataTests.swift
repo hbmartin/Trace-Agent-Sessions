@@ -127,6 +127,42 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(newestUnreadable?.title, "Fallback request")
     }
 
+    func testCodexMetadataUsesConfiguredParentForSymlinkedSessionsRoot() async throws {
+        let parent = try directory()
+        let configuredParent = parent.appendingPathComponent("configured")
+        let mountedSessions = parent.appendingPathComponent("mounted/sessions")
+        try FileManager.default.createDirectory(
+            at: configuredParent, withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: mountedSessions, withIntermediateDirectories: true
+        )
+        let configuredSessions = configuredParent.appendingPathComponent("sessions")
+        try FileManager.default.createSymbolicLink(
+            at: configuredSessions, withDestinationURL: mountedSessions
+        )
+        let rollout = mountedSessions.appendingPathComponent("rollout-symlink.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "codex-symlink", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": [
+                "type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Fallback title"]],
+            ]],
+        ], to: rollout)
+        try write([
+            ["id": "codex-symlink", "thread_name": "Configured sidecar title",
+             "updated_at": "2026-09-20"],
+        ], to: configuredParent.appendingPathComponent("session_index.jsonl"))
+        let database = try IndexDatabase(url: parent.appendingPathComponent("trace.sqlite"))
+
+        await IndexCoordinator(
+            database: database, sources: [CodexSource(root: configuredSessions)]
+        ).indexAll(scope: .proseOnly)
+
+        let sessions = try await database.sessions()
+        XCTAssertEqual(sessions.first?.title, "Configured sidecar title")
+    }
+
     func testSafetyVerificationRefreshesMissedCodexTitleChange() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")

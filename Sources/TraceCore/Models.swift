@@ -53,34 +53,106 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     public let agent: AgentKind
     public let url: URL
     public let isDefault: Bool
+    private let cachedScanURL: URL
+    private let cachedScanPath: TraceFileIO.CanonicalPath
+    let hasSymlinkedComponent: Bool
 
     public init(agent: AgentKind, url: URL, isDefault: Bool = true) {
         self.agent = agent
         // The configured path is the durable identity. Resolving it here made the
         // same symlink alternate identities as its target mounted and unmounted.
-        self.url = url.standardizedFileURL
+        self.url = url.standardized
         self.isDefault = isDefault
+        let resolved = Self.resolveScanURL(self.url)
+        cachedScanURL = resolved.url
+        cachedScanPath = TraceFileIO.canonicalPath(resolved.url.path)
+        hasSymlinkedComponent = resolved.encounteredSymlink
     }
 
-    /// The path used for I/O. Unlike `URL.resolvingSymlinksInPath`, this resolves a
-    /// root symlink even when its destination is temporarily unavailable.
-    public var scanURL: URL {
-        var candidate = url
-        var visited: Set<String> = []
-        for _ in 0..<32 {
-            guard visited.insert(candidate.path).inserted,
-                  let destination = try? FileManager.default.destinationOfSymbolicLink(
-                    atPath: candidate.path
-                  ) else { break }
-            if destination.hasPrefix("/") {
-                candidate = URL(fileURLWithPath: destination)
-            } else {
-                candidate = candidate.deletingLastPathComponent()
-                    .appendingPathComponent(destination)
+    /// The stable path used for I/O during this source configuration. Every
+    /// symlinked component is resolved lexically, including dangling targets.
+    public var scanURL: URL { cachedScanURL }
+    var scanPath: TraceFileIO.CanonicalPath { cachedScanPath }
+
+    private enum CodingKeys: String, CodingKey { case agent, url, isDefault }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            agent: try values.decode(AgentKind.self, forKey: .agent),
+            url: try values.decode(URL.self, forKey: .url),
+            isDefault: try values.decode(Bool.self, forKey: .isDefault)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(agent, forKey: .agent)
+        try values.encode(url, forKey: .url)
+        try values.encode(isDefault, forKey: .isDefault)
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.agent == rhs.agent && lhs.url == rhs.url && lhs.isDefault == rhs.isDefault
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(agent)
+        hasher.combine(url)
+        hasher.combine(isDefault)
+    }
+
+    public static func deduplicated(_ roots: [SourceRoot]) -> [SourceRoot] {
+        var configuredKeys: Set<String> = []
+        var scanKeys: Set<String> = []
+        var kept: [SourceRoot] = []
+        let ordered = roots.enumerated().sorted { lhs, rhs in
+            if lhs.element.isDefault != rhs.element.isDefault {
+                return lhs.element.isDefault
             }
-            candidate = candidate.standardizedFileURL
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+        for root in ordered {
+            let configured = TraceFileIO.canonicalPath(root.url.path).comparisonKey
+            let configuredKey = "\(root.agent.rawValue):\(configured)"
+            let scanKey = "\(root.agent.rawValue):\(root.scanPath.comparisonKey)"
+            guard !configuredKeys.contains(configuredKey), !scanKeys.contains(scanKey) else { continue }
+            configuredKeys.insert(configuredKey)
+            scanKeys.insert(scanKey)
+            kept.append(root)
         }
-        return candidate
+        return kept
+    }
+
+    private static func resolveScanURL(_ configuredURL: URL) -> (url: URL, encounteredSymlink: Bool) {
+        let manager = FileManager.default
+        var pending = Array(configuredURL.standardized.pathComponents.dropFirst())
+        var candidate = URL(fileURLWithPath: "/", isDirectory: true)
+        var visited: Set<String> = []
+        var encounteredSymlink = false
+        var hops = 0
+
+        while !pending.isEmpty {
+            candidate.appendPathComponent(pending.removeFirst())
+            while hops < 32,
+                  let destination = try? manager.destinationOfSymbolicLink(atPath: candidate.path) {
+                let resolutionState = candidate.path + "\u{0}" + pending.joined(separator: "/")
+                guard visited.insert(resolutionState).inserted else {
+                    return (candidate.standardized, encounteredSymlink)
+                }
+                // macOS exposes stable top-level aliases such as /var ->
+                // /private/var. They canonicalize path identity but do not make
+                // an otherwise optional default root an unavailable mount.
+                if candidate.pathComponents.count > 2 { encounteredSymlink = true }
+                hops += 1
+                let resolved = destination.hasPrefix("/")
+                    ? URL(fileURLWithPath: destination)
+                    : candidate.deletingLastPathComponent().appendingPathComponent(destination)
+                pending = Array(resolved.standardized.pathComponents.dropFirst()) + pending
+                candidate = URL(fileURLWithPath: "/", isDirectory: true)
+            }
+        }
+        return (candidate.standardized, encounteredSymlink)
     }
 }
 
@@ -89,25 +161,27 @@ public struct DiscoveredSourceFile: Hashable, Sendable {
     public let root: URL
     public let url: URL
     public let format: SourceFormat
+    let canonicalPath: TraceFileIO.CanonicalPath
 
     public init(agent: AgentKind, root: URL, url: URL, format: SourceFormat) {
         self.agent = agent
-        self.root = root.standardizedFileURL
-        self.url = URL(fileURLWithPath: TraceFileIO.canonicalPath(url.path).path)
+        self.root = root.standardized
+        canonicalPath = TraceFileIO.canonicalPath(url.path)
+        self.url = URL(fileURLWithPath: canonicalPath.path)
         self.format = format
     }
 }
 
 public struct IndexRecoveryWork: Sendable {
     public let filePaths: Set<String>
-    public let rootPaths: Set<String>
+    public let reconciliationPaths: Set<String>
 
-    public init(filePaths: Set<String> = [], rootPaths: Set<String> = []) {
+    public init(filePaths: Set<String> = [], reconciliationPaths: Set<String> = []) {
         self.filePaths = filePaths
-        self.rootPaths = rootPaths
+        self.reconciliationPaths = reconciliationPaths
     }
 
-    public var isEmpty: Bool { filePaths.isEmpty && rootPaths.isEmpty }
+    public var isEmpty: Bool { filePaths.isEmpty && reconciliationPaths.isEmpty }
 }
 
 public struct SourceFingerprint: Equatable, Sendable {
