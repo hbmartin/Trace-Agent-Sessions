@@ -639,6 +639,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                         || responder === scrollView
                         || responder === scrollView.contentView
                         || responder === scrollView.verticalScroller
+                        || responder is MessageTextView
                     if isScroll || (type == .keyDown && transcriptOwnsKeyboard
                         && scrollingKeys.contains(keyCode)) {
                         self.beginUserScrolling()

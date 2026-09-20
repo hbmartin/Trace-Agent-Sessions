@@ -8,6 +8,7 @@ public actor IndexScheduler {
         let paths: Set<String>
         let reconciliationPaths: Set<String>
         let watermarks: [String: UInt64]
+        let streamRoots: [String: Set<String>]
         let scope: IndexScope
         let activity: IndexActivity
         let retryAttempt: Int
@@ -22,6 +23,7 @@ public actor IndexScheduler {
     private var pendingPaths: Set<String> = []
     private var pendingReconciliationPaths: Set<String> = []
     private var pendingWatermarks: [String: UInt64] = [:]
+    private var pendingStreamRoots: [String: Set<String>] = [:]
     private var pendingActivity: IndexActivity?
     private var fullScan = false
     private var rebuild = false
@@ -49,7 +51,8 @@ public actor IndexScheduler {
                         reconciliationPaths: Set<String> = [],
                         rebuild: Bool = false, scope: IndexScope? = nil,
                         activity: IndexActivity? = nil,
-                        watermarks: [String: UInt64] = [:]) {
+                        watermarks: [String: UInt64] = [:],
+                        streamRoots: [String: Set<String>] = [:]) {
         guard !stopping else { return }
         let scopeChanged = scope.map { $0 != self.scope } ?? false
         if scopeChanged || rebuild {
@@ -68,6 +71,7 @@ public actor IndexScheduler {
         for (volume, eventID) in watermarks {
             pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
         }
+        mergeStreamRoots(streamRoots)
         let inferred = activity ?? (rebuild ? .rebuild : (scopeChanged ? .scopeChange : (reconcile ? .initialBuild
             : (!reconciliationPaths.isEmpty ? .subtreeRecovery : .fileChanges))))
         let requestsPass = reconcile || rebuild || !paths.isEmpty
@@ -88,6 +92,7 @@ public actor IndexScheduler {
             if !retrying, !fullScan, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
                pendingActivity == nil {
                 let watermarks = pendingWatermarks
+                pendingStreamRoots.removeAll()
                 pendingWatermarks.removeAll()
                 let checkpointable = checkpointableWatermarks(watermarks)
                 if !checkpointable.isEmpty {
@@ -105,6 +110,7 @@ public actor IndexScheduler {
                     paths: pendingPaths,
                     reconciliationPaths: pendingReconciliationPaths,
                     watermarks: pendingWatermarks,
+                    streamRoots: pendingStreamRoots,
                     scope: scope,
                     activity: pendingActivity ?? .fileChanges,
                     retryAttempt: 0,
@@ -115,6 +121,7 @@ public actor IndexScheduler {
                 pendingPaths.removeAll()
                 pendingReconciliationPaths.removeAll()
                 pendingWatermarks.removeAll()
+                pendingStreamRoots.removeAll()
                 pendingActivity = nil
             }
             let operation = Task {
@@ -140,17 +147,23 @@ public actor IndexScheduler {
             self.operation = nil
             if batch.generation != configurationGeneration {
                 mergeWatermarks(batch.watermarks)
+                mergeStreamRoots(batch.streamRoots)
                 continue
             }
             if result.phase == .complete {
                 let hasFailures = !result.failedPaths.isEmpty
                     || !result.failedReconciliationPaths.isEmpty
                 if hasFailures {
+                    let failedPaths = result.failedPaths.union(result.failedReconciliationPaths)
                     let recovery = Batch(
                         fullScan: false, rebuild: false,
                         paths: result.failedPaths,
                         reconciliationPaths: result.failedReconciliationPaths,
-                        watermarks: batch.watermarks, scope: batch.scope,
+                        watermarks: affectedWatermarks(
+                            batch.watermarks, streamRoots: batch.streamRoots,
+                            failedPaths: failedPaths
+                        ),
+                        streamRoots: batch.streamRoots, scope: batch.scope,
                         activity: .subtreeRecovery, retryAttempt: batch.retryAttempt,
                         generation: configurationGeneration
                     )
@@ -167,9 +180,7 @@ public actor IndexScheduler {
                 // scheduled retry and any dormant period. Unrelated streams can
                 // still advance independently.
                 let checkpointable = checkpointableWatermarks(batch.watermarks)
-                if !checkpointable.isEmpty || batch.watermarks.isEmpty {
-                    await didComplete(batch.activity, checkpointable)
-                }
+                await didComplete(batch.activity, checkpointable)
             } else if result.phase == .failed {
                 if batch.retryAttempt == 0 {
                     retainForRetry(batch)
@@ -200,6 +211,12 @@ public actor IndexScheduler {
         }
     }
 
+    private func mergeStreamRoots(_ roots: [String: Set<String>]) {
+        for (volume, paths) in roots {
+            pendingStreamRoots[volume, default: []].formUnion(paths)
+        }
+    }
+
     private func retainForRetry(_ batch: Batch) {
         let candidate = Batch(
             fullScan: batch.fullScan,
@@ -209,12 +226,14 @@ public actor IndexScheduler {
             paths: batch.paths,
             reconciliationPaths: batch.reconciliationPaths,
             watermarks: batch.watermarks,
+            streamRoots: batch.streamRoots,
             scope: scope,
             activity: batch.activity,
             retryAttempt: batch.retryAttempt + 1,
             generation: configurationGeneration
         )
         retryBatch = merged(retryBatch, candidate, retryAttempt: max(1, candidate.retryAttempt))
+        retryReady = false
         scheduleRetry()
     }
 
@@ -222,7 +241,7 @@ public actor IndexScheduler {
         let candidate = Batch(
             fullScan: batch.fullScan, rebuild: false,
             paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
-            watermarks: batch.watermarks, scope: scope,
+            watermarks: batch.watermarks, streamRoots: batch.streamRoots, scope: scope,
             activity: batch.activity, retryAttempt: batch.retryAttempt,
             generation: configurationGeneration
         )
@@ -235,12 +254,16 @@ public actor IndexScheduler {
         for (volume, eventID) in incoming.watermarks {
             watermarks[volume] = max(watermarks[volume] ?? 0, eventID)
         }
+        var streamRoots = existing.streamRoots
+        for (volume, roots) in incoming.streamRoots {
+            streamRoots[volume, default: []].formUnion(roots)
+        }
         return Batch(
             fullScan: existing.fullScan || incoming.fullScan,
             rebuild: false,
             paths: existing.paths.union(incoming.paths),
             reconciliationPaths: existing.reconciliationPaths.union(incoming.reconciliationPaths),
-            watermarks: watermarks,
+            watermarks: watermarks, streamRoots: streamRoots,
             scope: scope,
             activity: Self.moreSignificant(existing.activity, incoming.activity),
             retryAttempt: max(existing.retryAttempt, retryAttempt),
@@ -262,6 +285,20 @@ public actor IndexScheduler {
         return checkpointable
     }
 
+    private func affectedWatermarks(
+        _ watermarks: [String: UInt64], streamRoots: [String: Set<String>],
+        failedPaths: Set<String>
+    ) -> [String: UInt64] {
+        guard !failedPaths.isEmpty else { return watermarks }
+        let failures = failedPaths.map(TraceFileIO.canonicalPath)
+        return watermarks.filter { volume, _ in
+            guard let roots = streamRoots[volume], !roots.isEmpty else { return true }
+            return roots.lazy.map(TraceFileIO.canonicalPath).contains { root in
+                failures.contains { root.intersects($0) }
+            }
+        }
+    }
+
     private func replacingWatermark(
         in batch: Batch, volume: String, eventID: UInt64
     ) -> Batch {
@@ -270,7 +307,7 @@ public actor IndexScheduler {
         return Batch(
             fullScan: batch.fullScan, rebuild: batch.rebuild,
             paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
-            watermarks: watermarks, scope: batch.scope,
+            watermarks: watermarks, streamRoots: batch.streamRoots, scope: batch.scope,
             activity: batch.activity, retryAttempt: batch.retryAttempt,
             generation: batch.generation
         )
@@ -296,6 +333,8 @@ public actor IndexScheduler {
         pendingPaths.formUnion(dormantBatch.paths)
         pendingReconciliationPaths.formUnion(dormantBatch.reconciliationPaths)
         mergeWatermarks(dormantBatch.watermarks)
+        mergeStreamRoots(dormantBatch.streamRoots)
+        fullScan = fullScan || dormantBatch.fullScan
         pendingActivity = Self.moreSignificant(pendingActivity, dormantBatch.activity)
         self.dormantBatch = nil
     }

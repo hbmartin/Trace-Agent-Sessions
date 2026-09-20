@@ -59,7 +59,7 @@ struct IndexProgressLabel: View {
             HStack(spacing: 8) {
                 if busy { ProgressView().controlSize(.small) }
                 Text(label).font(.caption)
-                    .foregroundStyle(progress.phase == .failed || progress.unresolvedFailedFiles > 0 ? .red : .secondary)
+                    .foregroundStyle(progress.phase == .failed || hasUnresolvedFailures ? .red : .secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             .contentShape(Rectangle())
@@ -87,6 +87,9 @@ struct IndexProgressLabel: View {
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
         if progress.unresolvedFailedFiles > 0 {
             lines.append("\(progress.unresolvedFailedFiles) files still failing")
+        }
+        if progress.unresolvedDiscoveryFailures > 0 {
+            lines.append("\(progress.unresolvedDiscoveryFailures) source locations still unavailable")
         }
         if let agent = progress.agent { lines.append("Provider: \(agent.displayName)") }
         if let project = progress.projectName { lines.append("Project: \(project)") }
@@ -125,19 +128,34 @@ struct IndexProgressLabel: View {
                 : "Checking moved and deleted sessions…"
         case .aggregating: "Updating token totals…"
         case .complete:
-            if progress.unresolvedFailedFiles > 0 {
-                "Index updated · \(progress.unresolvedFailedFiles) files still failing"
+            if hasUnresolvedFailures {
+                "Index updated · \(unresolvedSummary)"
             } else if progress.failedFiles > 0 {
                 "Index updated · \(progress.failedFiles) failed files"
             } else if progress.rollupError != nil {
                 "Index current · Token totals need retry"
             } else { "Index current · Watching for changes" }
         case .cancelled:
-            progress.unresolvedFailedFiles > 0
-                ? "Indexing stopped · \(progress.unresolvedFailedFiles) files still failing"
+            hasUnresolvedFailures
+                ? "Indexing stopped · \(unresolvedSummary)"
                 : "Indexing stopped · Progress saved"
         case .failed: progress.error ?? "Indexing failed"
         }
+    }
+
+    private var hasUnresolvedFailures: Bool {
+        progress.unresolvedFailedFiles > 0 || progress.unresolvedDiscoveryFailures > 0
+    }
+
+    private var unresolvedSummary: String {
+        var parts: [String] = []
+        if progress.unresolvedFailedFiles > 0 {
+            parts.append("\(progress.unresolvedFailedFiles) files still failing")
+        }
+        if progress.unresolvedDiscoveryFailures > 0 {
+            parts.append("\(progress.unresolvedDiscoveryFailures) source locations unavailable")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var activityDescription: String {

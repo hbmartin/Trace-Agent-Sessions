@@ -67,8 +67,26 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "settings")
     }
 
+    func testLaunchPreservesConfiguredClaudeRootStrings() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-onboarding"])
+        let suiteName = "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let configured = ["/tmp/TraceConfiguredRoot", "/tmp/TraceConfiguredRoot"]
+        defaults.set(configured, forKey: "additionalClaudeRoots")
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Find any agent session."].waitForExistence(timeout: 10))
+        XCTAssertEqual(defaults.stringArray(forKey: "additionalClaudeRoots"), configured,
+                       "launch must not rewrite durable roots using transient filesystem state")
+    }
+
     func testPartialWatcherStartupFailureStillRunsInitialIndexing() throws {
-        let (app, _) = try makeApp(extra: ["--ui-show-main"])
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let codex = directory.appendingPathComponent("Sources/Codex")
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        app.launchEnvironment["TRACE_TEST_SPLIT_WATCHERS_BY_ROOT"] = "1"
         app.launchEnvironment["TRACE_TEST_FAIL_WATCHER_ROOT_CONTAINS"] = "/Claude"
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
@@ -81,6 +99,20 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "periodic reconciliation"
         )).firstMatch.waitForExistence(timeout: 5))
+
+        let rollout = codex.appendingPathComponent("rollout-live.jsonl")
+        let live = [
+            #"{"type":"session_meta","timestamp":"2026-09-20T18:00:00Z","payload":{"id":"watcher-live","cwd":"/tmp/WatcherLive"}}"#,
+            #"{"type":"response_item","timestamp":"2026-09-20T18:00:01Z","payload":{"type":"message","id":"watcher-message","role":"user","content":[{"type":"input_text","text":"Successful watcher live marker"}]}}"#,
+        ].joined(separator: "\n") + "\n"
+        try Data(live.utf8).write(to: rollout)
+        let search = app.textFields["mainSearch"]
+        search.click()
+        search.typeText("Successful watcher live marker")
+        XCTAssertTrue(app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Successful watcher live marker"
+        )).firstMatch.waitForExistence(timeout: 15),
+        "a successful watcher must remain active after a sibling watcher fails")
     }
 
     func testTranscriptVisibilityDensityProjectFilterAndErrorHover() throws {
@@ -2487,7 +2519,7 @@ final class TraceUITests: XCTestCase {
         try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])
-        let firstIndex = try XCTUnwrap(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
+        _ = try XCTUnwrap(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
         let afterFirstPage = scroll.staticTexts.matching(NSPredicate(
             format: "value BEGINSWITH %@", "Keyboard scroll message "
@@ -2509,6 +2541,11 @@ final class TraceUITests: XCTestCase {
         ))
         let visibleMessage = try XCTUnwrap(firstHittable(in: visibleMessages, timeout: 10))
         visibleMessage.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("c", modifierFlags: .command)
+        XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
+            "Keyboard scroll message"
+        ) == true, "the boundary case must run with selectable message text as first responder")
         try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.typeKey(.pageDown, modifierFlags: [])

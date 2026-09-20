@@ -159,11 +159,16 @@ private struct SourcesPreferences: View {
         let existing = [defaultURL] + settings.additionalClaudeRoots.map {
             URL(fileURLWithPath: $0)
         }
-        let before = ClaudeCodeSource(roots: existing).roots.count
-        let after = ClaudeCodeSource(roots: existing + [url]).roots.count
-        if after > before {
-            settings.additionalClaudeRoots.append(url.path)
-            model.reloadSourcesAndRebuild()
+        Task {
+            let shouldAdd = await Task.detached(priority: .userInitiated) {
+                let before = ClaudeCodeSource(roots: existing).roots.count
+                let after = ClaudeCodeSource(roots: existing + [url]).roots.count
+                return after > before
+            }.value
+            if shouldAdd {
+                settings.additionalClaudeRoots.append(url.path)
+                model.reloadSourcesAndRebuild()
+            }
         }
     }
 

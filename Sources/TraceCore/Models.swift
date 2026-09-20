@@ -184,6 +184,18 @@ public struct IndexRecoveryWork: Sendable {
     public var isEmpty: Bool { filePaths.isEmpty && reconciliationPaths.isEmpty }
 }
 
+public struct SourceFailureCounts: Equatable, Sendable {
+    public let fileFailures: Int
+    public let discoveryFailures: Int
+
+    public init(fileFailures: Int = 0, discoveryFailures: Int = 0) {
+        self.fileFailures = fileFailures
+        self.discoveryFailures = discoveryFailures
+    }
+
+    public var total: Int { fileFailures + discoveryFailures }
+}
+
 public struct SourceFingerprint: Equatable, Sendable {
     public let device: UInt64
     public let inode: UInt64

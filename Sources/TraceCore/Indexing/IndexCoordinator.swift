@@ -32,6 +32,7 @@ public struct IndexProgress: Sendable {
     public var unchangedFiles: Int = 0
     public var failedFiles: Int = 0
     public var unresolvedFailedFiles: Int = 0
+    public var unresolvedDiscoveryFailures: Int = 0
     public var failedPaths: Set<String> = []
     public var failedReconciliationPaths: Set<String> = []
     public var committedBytes: Int64 = 0
@@ -161,7 +162,10 @@ public actor IndexCoordinator {
         status.activity = activity
         status.incremental = activity == .fileChanges
         let mutations = PassMutationTracker()
-        status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount()) ?? 0
+        if let counts = try? await database.unresolvedSourceFailureCounts() {
+            status.unresolvedFailedFiles = counts.fileFailures
+            status.unresolvedDiscoveryFailures = counts.discoveryFailures
+        }
         do {
             try Task.checkCancellation()
             let oldScope = try await database.storedIndexScope()
@@ -226,20 +230,33 @@ public actor IndexCoordinator {
             } else {
                 if !reconciliationPaths.isEmpty {
                     for source in sources {
-                        for path in reconciliationPaths.sorted() {
+                        for root in source.roots {
                             try Task.checkCancellation()
-                            let scope = TraceFileIO.canonicalPath(path)
-                            let matchingRoots = source.roots.filter { scope.intersects($0.scanPath) }
-                            guard !matchingRoots.isEmpty else { continue }
+                            let scopes = Self.minimalScopes(Set(reconciliationPaths.compactMap {
+                                let scope = TraceFileIO.canonicalPath($0)
+                                guard scope.intersects(root.scanPath) else { return nil }
+                                return scope.contains(root.scanPath) ? root.scanPath.path : scope.path
+                            })).map(TraceFileIO.canonicalPath)
+                            guard !scopes.isEmpty else { continue }
                             do {
-                                absorbDiscoveryResult(
-                                    try source.discoverResult(scopedTo: [scope.path]),
-                                    source: source, roots: matchingRoots, scope: scope
+                                let result = try source.discoverResult(
+                                    scopedTo: Set(scopes.map(\.path))
                                 )
+                                allFiles += result.files
+                                for scope in scopes {
+                                    discoveryAttempts.append((source, root, scope,
+                                        result.failures.filter { failure in
+                                            failure.root.path == root.url.path
+                                                && scope.intersects(
+                                                    TraceFileIO.canonicalPath(failure.path)
+                                                )
+                                        }
+                                    ))
+                                }
                             } catch is CancellationError {
                                 throw CancellationError()
                             } catch {
-                                for root in matchingRoots {
+                                for scope in scopes {
                                     discoveryAttempts.append((source, root, scope, [.init(
                                         agent: source.agent, root: root.url, path: scope.path,
                                         message: error.localizedDescription
@@ -257,6 +274,9 @@ public actor IndexCoordinator {
                     } else if let (_, file, _) = classify(url: url) { allFiles.append(file) }
                 }
             }
+            var discoveryErrorReplacements: [(
+                rootID: Int64, scannedScope: String, failures: [DiscoveryFailure]
+            )] = []
             for attempt in discoveryAttempts {
                 guard let rootID = rootIDs[attempt.root.id] else { continue }
                 let failures = attempt.failures
@@ -269,9 +289,7 @@ public actor IndexCoordinator {
                     // Optional default roots that have never existed stay quiet.
                     continue
                 }
-                try await database.replaceDiscoveryErrors(
-                    rootID: rootID, scannedScope: attempt.scope.path, failures: failures
-                )
+                discoveryErrorReplacements.append((rootID, attempt.scope.path, failures))
                 for failure in failures {
                     let failedScope = TraceFileIO.canonicalPath(failure.path)
                     failedDiscoveryScopes[attempt.source.agent, default: []].insert(failedScope)
@@ -280,6 +298,10 @@ public actor IndexCoordinator {
                     status.error = failure.message
                 }
             }
+            try await database.replaceDiscoveryErrors(discoveryErrorReplacements)
+            status.failedReconciliationPaths = Self.minimalScopes(
+                status.failedReconciliationPaths
+            )
             // A stable order and finite discovered set make progress comparable within a run.
             allFiles.sort { ($0.agent.rawValue, $0.url.path) < ($1.agent.rawValue, $1.url.path) }
             var seen: Set<String> = []
@@ -288,7 +310,7 @@ public actor IndexCoordinator {
             for file in allFiles {
                 try Task.checkCancellation()
                 guard let source = source(for: file.agent),
-                      let rootID = rootIDs["\(file.agent.rawValue):\(file.root.standardizedFileURL.path)"] else { continue }
+                      let rootID = rootIDs["\(file.agent.rawValue):\(file.root.path)"] else { continue }
                 status.phase = .indexing
                 status.agent = file.agent
                 status.currentPath = file.url.path
@@ -346,8 +368,7 @@ public actor IndexCoordinator {
                 }
                 status.completedFiles += 1
                 if needsFailureRecount {
-                    status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
-                        ?? status.unresolvedFailedFiles
+                    updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
                 }
                 status.mutationRevision = await mutations.version()
                 await progress(status)
@@ -363,8 +384,7 @@ public actor IndexCoordinator {
                         await mutations.markChanged()
                     }
                 }
-                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
-                    ?? status.unresolvedFailedFiles
+                updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
                 status.mutationRevision = await mutations.version()
                 await progress(status)
             }
@@ -386,8 +406,7 @@ public actor IndexCoordinator {
                         await mutations.markChanged()
                     }
                 }
-                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
-                    ?? status.unresolvedFailedFiles
+                updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
             } else if !reconciliationPaths.isEmpty {
                 status.phase = .reconciling
                 await progress(status)
@@ -405,8 +424,7 @@ public actor IndexCoordinator {
                         await mutations.markChanged()
                     }
                 }
-                status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
-                    ?? status.unresolvedFailedFiles
+                updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
             }
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots {
@@ -440,10 +458,26 @@ public actor IndexCoordinator {
         }
         status.indexChanged = await mutations.hasChanges()
         status.mutationRevision = await mutations.version()
-        status.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount())
-            ?? status.unresolvedFailedFiles
+        updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
         await progress(status)
         return status
+    }
+
+    private func updateFailureCounts(
+        _ status: inout IndexProgress, _ counts: SourceFailureCounts?
+    ) {
+        guard let counts else { return }
+        status.unresolvedFailedFiles = counts.fileFailures
+        status.unresolvedDiscoveryFailures = counts.discoveryFailures
+    }
+
+    private static func minimalScopes(_ paths: Set<String>) -> Set<String> {
+        let canonical = paths.map(TraceFileIO.canonicalPath)
+        return Set(canonical.compactMap { candidate in
+            canonical.contains { other in
+                other.comparisonKey != candidate.comparisonKey && other.contains(candidate)
+            } ? nil : candidate.path
+        })
     }
 
     public func hydrate(_ summary: MessageSummary) async throws -> HydratedMessage {

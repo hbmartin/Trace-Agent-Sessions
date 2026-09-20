@@ -223,14 +223,17 @@ final class TraceModel: ObservableObject {
                 }.value
                 self.database = database
                 if database.contentWasResetOnOpen { prepareForIndexReset() }
-                let sources = makeSources()
+                let sources = await makeSources()
                 _ = try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots))
                 let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
                 globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
                 mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
                 scheduler = makeScheduler(coordinator)
-                progress.unresolvedFailedFiles = (try? await database.unresolvedSourceFailureCount()) ?? 0
+                if let counts = try? await database.unresolvedSourceFailureCounts() {
+                    progress.unresolvedFailedFiles = counts.fileFailures
+                    progress.unresolvedDiscoveryFailures = counts.discoveryFailures
+                }
                 if let recovery = try? await database.unresolvedRecoveryWork(), !recovery.isEmpty {
                     let scanPathsByConfiguredPath = sources.flatMap(\.roots).reduce(
                         into: [String: String](), { result, root in
@@ -310,7 +313,7 @@ final class TraceModel: ObservableObject {
         if coordinator != nil {
             Task { [weak self] in
                 guard let self else { return }
-                let sources = self.makeSources()
+                let sources = await self.makeSources()
                 guard await self.startWatching(sources) else { return }
                 self.startIndexing()
             }
@@ -348,6 +351,8 @@ final class TraceModel: ObservableObject {
                    incrementalProgressVisible || update.phase == .failed || update.failedFiles > 0
                     || progress.phase == .failed || progress.failedFiles > 0
                     || update.unresolvedFailedFiles > 0 || progress.unresolvedFailedFiles > 0
+                    || update.unresolvedDiscoveryFailures > 0
+                    || progress.unresolvedDiscoveryFailures > 0
                     || update.metadataWarning != nil || update.rollupError != nil {
                     progress = update
                 }
@@ -565,7 +570,8 @@ final class TraceModel: ObservableObject {
                     ? (buffered.paths.isEmpty && buffered.reconciliationPaths.isEmpty
                         ? self.startupActivity : self.activity(for: buffered))
                     : self.startupActivity,
-                watermarks: buffered.watermarks
+                watermarks: buffered.watermarks,
+                streamRoots: buffered.streamRoots
             )
             self.watcherStartupPending = false
             let arrivedDuringSubmission = self.bufferedSourceChanges
@@ -594,7 +600,7 @@ final class TraceModel: ObservableObject {
         sourceChangeTask = Task {
             await previousScheduler.stop()
             guard !Task.isCancelled else { return }
-            let sources = makeSources()
+            let sources = await makeSources()
             do {
                 if try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots)) {
                     await reloadSummaries(
@@ -1219,16 +1225,22 @@ final class TraceModel: ObservableObject {
         try? await diagnostics.markCleanShutdown()
     }
 
-    private func makeSources() -> [any SessionSource] {
-        if let directory = TraceRuntime.testDirectory {
-            let roots = directory.appendingPathComponent("Sources")
-            return [ClaudeCodeSource(roots: [roots.appendingPathComponent("Claude")]),
-                    CodexSource(root: roots.appendingPathComponent("Codex")),
-                    GeminiSource(root: roots.appendingPathComponent("Gemini"))]
-        }
-        let defaultClaude = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
-        let custom = settings.additionalClaudeRoots.map { URL(fileURLWithPath: $0) }
-        return [ClaudeCodeSource(roots: [defaultClaude] + custom), CodexSource(), GeminiSource()]
+    private func makeSources() async -> [any SessionSource] {
+        let testDirectory = TraceRuntime.testDirectory
+        let additionalClaudeRoots = settings.additionalClaudeRoots
+        return await Task.detached(priority: .userInitiated) { () -> [any SessionSource] in
+            if let directory = testDirectory {
+                let roots = directory.appendingPathComponent("Sources")
+                return [ClaudeCodeSource(roots: [roots.appendingPathComponent("Claude")]),
+                        CodexSource(root: roots.appendingPathComponent("Codex")),
+                        GeminiSource(root: roots.appendingPathComponent("Gemini"))]
+            }
+            let defaultClaude = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude/projects")
+            let custom = additionalClaudeRoots.map { URL(fileURLWithPath: $0) }
+            return [ClaudeCodeSource(roots: [defaultClaude] + custom),
+                    CodexSource(), GeminiSource()]
+        }.value
     }
 
     private func startWatching(
@@ -1251,7 +1263,15 @@ final class TraceModel: ObservableObject {
         let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
         var grouped: [String: [URL]] = [:]
         for root in roots + metadataRoots {
-            grouped[Self.volumeIdentifier(for: root), default: []].append(root)
+            let volumeID = Self.volumeIdentifier(for: root)
+            let groupingID: String
+            if TraceTestHooks.isUITesting,
+               TraceTestHooks.environment["TRACE_TEST_SPLIT_WATCHERS_BY_ROOT"] == "1" {
+                groupingID = volumeID + ":" + TraceFileIO.canonicalPath(root.path).comparisonKey
+            } else {
+                groupingID = volumeID
+            }
+            grouped[groupingID, default: []].append(root)
         }
         var configurations: [(id: String, roots: [URL], checkpoint: UInt64?)] = []
         for (volumeID, volumeRoots) in grouped {
@@ -1307,6 +1327,7 @@ final class TraceModel: ObservableObject {
                     }
                     relevant.recoveryReasons = changes.recoveryReasons
                     relevant.watermarks = changes.watermarks
+                    relevant.streamRoots = changes.streamRoots
                     relevant.historyDone = changes.historyDone
                     guard !relevant.paths.isEmpty || relevant.requiresReconciliation
                         || !relevant.watermarks.isEmpty else { return }
@@ -1329,6 +1350,7 @@ final class TraceModel: ObservableObject {
                 failedCanonical.contains(where: { $0.intersects(root) }) ? root.path : nil
             })
             startupError = "Some source folders could not be monitored; periodic reconciliation remains active."
+            startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
         }
         return true
     }
@@ -1340,7 +1362,8 @@ final class TraceModel: ObservableObject {
             reconciliationPaths: changes.reconciliationPaths,
             scope: settings.indexScope,
             activity: changes.hasIndexWork ? activity(for: changes) : .fileChanges,
-            watermarks: changes.watermarks
+            watermarks: changes.watermarks,
+            streamRoots: changes.streamRoots
         )
     }
 
