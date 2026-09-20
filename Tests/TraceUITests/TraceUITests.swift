@@ -34,10 +34,15 @@ final class TraceUITests: XCTestCase {
             data.append(0x0A)
         }
         try data.write(to: sources.appendingPathComponent("session.jsonl"))
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"] + extra
         app.launchEnvironment["TRACE_TEST_DIRECTORY"] = directory.path
+        let suiteName = "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)"
+        addTeardownBlock {
+            app.terminate()
+            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: directory)
+        }
         return (app, directory)
     }
 
@@ -137,9 +142,17 @@ final class TraceUITests: XCTestCase {
             )
             return count == 1 ? true : nil
         } ?? false, "a successful watcher must remain active after a sibling watcher fails")
-        XCTAssertGreaterThan(try sqliteInteger(
+        let checkpointCount = try sqliteInteger(
             checkpointDatabase, sql: "SELECT count(*) FROM fsevents_checkpoint"
-        ), 0)
+        )
+        XCTAssertGreaterThanOrEqual(
+            checkpointCount, 2,
+            "split source and metadata watchers must retain distinct checkpoint identities"
+        )
+        XCTAssertEqual(try sqliteInteger(
+            checkpointDatabase,
+            sql: "SELECT count(*) FROM fsevents_checkpoint WHERE volume_id NOT LIKE '%:root:%'"
+        ), 0, "split watcher checkpoint identifiers must use the opaque root-key format")
         XCTAssertEqual(try sqliteInteger(
             checkpointDatabase,
             sql: "SELECT count(*) FROM fsevents_checkpoint WHERE volume_id LIKE '%\(directory.lastPathComponent)%'"
@@ -158,6 +171,39 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForLineCount(
             activityAudit, line: "rootRecovery", count: 1, timeout: 15
         ), "a failed sibling watcher must not downgrade forced root recovery")
+    }
+
+    func testForcedRootChangeOnEmptyIndexReportsInitialBuild() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-settings"])
+        try FileManager.default.removeItem(
+            at: directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        )
+        let encodedRoots = try JSONEncoder().encode(["/tmp/TraceEmptyRootRecoveryTrigger"])
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(
+            decoding: encodedRoots, as: UTF8.self
+        )
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        let activityAudit = directory.appendingPathComponent("startup-activity-audit")
+        let passCompleted = directory.appendingPathComponent("initial-pass-completed")
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activityAudit.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = passCompleted.path
+
+        app.launch()
+
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForFile(passCompleted, timeout: 15))
+        try? FileManager.default.removeItem(at: activityAudit)
+        let sources = app.descendants(matching: .any)["Sources"].firstMatch
+        XCTAssertTrue(sources.waitForExistence(timeout: 5))
+        sources.click()
+        let remove = app.buttons["removeAdditionalClaudeRoot-0"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.click()
+
+        XCTAssertTrue(waitForLineCount(
+            activityAudit, line: "initialBuild", count: 1, timeout: 15
+        ), "forced reconciliation without cached source files must remain an initial build")
     }
 
     func testTranscriptVisibilityDensityProjectFilterAndErrorHover() throws {

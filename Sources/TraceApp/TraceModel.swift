@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 import TraceCore
@@ -16,9 +17,13 @@ enum WatcherGroupingPolicy {
     func groupIdentifier(for root: URL, volumeIdentifier: String) -> String {
         switch self {
         case .byVolume:
-            volumeIdentifier
+            return volumeIdentifier
         case .byRoot:
-            volumeIdentifier + ":" + TraceFileIO.canonicalPath(root.path).comparisonKey
+            let key = TraceFileIO.canonicalPath(root.path).comparisonKey
+            let digest = SHA256.hash(data: Data(key.utf8)).map {
+                String(format: "%02x", $0)
+            }.joined()
+            return volumeIdentifier + ":root:" + digest
         }
     }
 }
@@ -345,22 +350,19 @@ final class TraceModel: ObservableObject {
     private func makeScheduler(_ coordinator: IndexCoordinator) -> IndexScheduler {
         IndexScheduler(
             coordinator: coordinator, scope: settings.indexScope,
-            didFinish: { [weak self] activity, completedWithoutFailures in
-                await self?.finishIndexActivity(
-                    activity, completedWithoutFailures: completedWithoutFailures
-                )
+            progress: { [weak self] update in
+                await self?.receiveProgress(update)
+            },
+            didFinish: { [weak self] activity in
+                await self?.finishIndexActivity(activity)
+            },
+            didComplete: { [weak self] _, watermarks in
+                try? await self?.database?.saveEventCheckpoints(watermarks)
             }
-        ) { [weak self] update in
-            await self?.receiveProgress(update)
-        } didComplete: { [weak self] _, watermarks in
-            try? await self?.database?.saveEventCheckpoints(watermarks)
-        }
+        )
     }
 
-    private func finishIndexActivity(
-        _ activity: IndexActivity, completedWithoutFailures: Bool
-    ) async {
-        guard completedWithoutFailures else { return }
+    private func finishIndexActivity(_ activity: IndexActivity) async {
         if activity == .safetyVerification || activity == .initialBuild
             || activity == .launchReconciliation {
             try? await database?.markSafetyReconciliationComplete()
@@ -1294,29 +1296,25 @@ final class TraceModel: ObservableObject {
         let statistics = try? await database.statistics()
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
         let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
-        var grouped: [String: (volumeID: String, roots: [URL])] = [:]
+        var grouped: [String: [URL]] = [:]
         for root in roots + metadataRoots {
             let volumeID = Self.volumeIdentifier(for: root)
             let groupingID = watcherGroupingPolicy.groupIdentifier(
                 for: root, volumeIdentifier: volumeID
             )
-            if grouped[groupingID] == nil {
-                grouped[groupingID] = (volumeID, [])
-            }
-            grouped[groupingID]?.roots.append(root)
+            grouped[groupingID, default: []].append(root)
         }
         var configurations: [(id: String, roots: [URL], checkpoint: UInt64?)] = []
-        for groupingID in grouped.keys.sorted() {
-            guard let group = grouped[groupingID] else { continue }
-            let checkpoint = try? await database.eventCheckpoint(volumeID: group.volumeID)
+        for (groupingID, groupRoots) in grouped.sorted(by: { $0.key < $1.key }) {
+            let checkpoint = try? await database.eventCheckpoint(volumeID: groupingID)
             guard generation == watcherGeneration, !Task.isCancelled else { return false }
             if checkpoint == nil {
-                let sourcePaths = group.roots.map { TraceFileIO.canonicalPath($0.path) }
+                let sourcePaths = groupRoots.map { TraceFileIO.canonicalPath($0.path) }
                     .filter { candidate in canonicalRoots.contains { $0.comparisonKey == candidate.comparisonKey } }
                     .map(\.path)
                 reconciliationPaths.formUnion(sourcePaths)
             }
-            configurations.append((group.volumeID, group.roots, checkpoint))
+            configurations.append((groupingID, groupRoots, checkpoint))
         }
 
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
@@ -1324,13 +1322,11 @@ final class TraceModel: ObservableObject {
         watcherStartupPending = true
         bufferedSourceChanges = SourceChanges()
         startupReconciliationPaths = reconciliationPaths
-        if forceRootReconciliation {
-            startupActivity = .rootRecovery
-        } else if !startupReconciliationPaths.isEmpty {
-            startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
-        } else {
-            startupActivity = .cachedLaunch
-        }
+        startupActivity = Self.startupActivity(
+            hasCachedIndex: hasCachedIndex,
+            forceRootReconciliation: forceRootReconciliation,
+            reconciliationPaths: startupReconciliationPaths
+        )
 
         let replacements = configurations.map { configuration in
             (configuration, FSEventsWatcher(
@@ -1383,11 +1379,22 @@ final class TraceModel: ObservableObject {
                 failedCanonical.contains(where: { $0.intersects(root) }) ? root.path : nil
             })
             startupError = "Some source folders could not be monitored; periodic reconciliation remains active."
-            if !forceRootReconciliation {
-                startupActivity = hasCachedIndex ? .launchReconciliation : .initialBuild
-            }
+            startupActivity = Self.startupActivity(
+                hasCachedIndex: hasCachedIndex,
+                forceRootReconciliation: forceRootReconciliation,
+                reconciliationPaths: startupReconciliationPaths
+            )
         }
         return true
+    }
+
+    private static func startupActivity(
+        hasCachedIndex: Bool, forceRootReconciliation: Bool,
+        reconciliationPaths: Set<String>
+    ) -> IndexActivity {
+        guard !reconciliationPaths.isEmpty else { return .cachedLaunch }
+        guard hasCachedIndex else { return .initialBuild }
+        return forceRootReconciliation ? .rootRecovery : .launchReconciliation
     }
 
     private func submitSourceChanges(_ changes: SourceChanges) async {

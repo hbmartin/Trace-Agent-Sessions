@@ -87,6 +87,8 @@ private struct GeneralPreferences: View {
 private struct SourcesPreferences: View {
     @ObservedObject var model: TraceModel
     @ObservedObject var settings: AppSettings
+    @State private var addRootTask: Task<Void, Never>?
+    @State private var addRootTaskID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -135,9 +137,11 @@ private struct SourcesPreferences: View {
                             }
                             .accessibilityIdentifier("removeAdditionalClaudeRoot-\(index)")
                             .labelStyle(.iconOnly)
+                            .disabled(addRootTask != nil)
                         }
                     }
                     Button("Add Folder…", systemImage: "plus") { addClaudeRoot() }
+                        .disabled(addRootTask != nil)
                 }
                 .padding(8)
             }
@@ -154,6 +158,11 @@ private struct SourcesPreferences: View {
             }
         }
         .padding()
+        .onDisappear {
+            addRootTask?.cancel()
+            addRootTask = nil
+            addRootTaskID = nil
+        }
     }
 
     private func addClaudeRoot() {
@@ -165,21 +174,26 @@ private struct SourcesPreferences: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let defaultURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects")
-        Task { @MainActor in
-            while !Task.isCancelled {
-                let snapshot = settings.additionalClaudeRoots
-                let existing = [defaultURL] + snapshot.map { URL(fileURLWithPath: $0) }
-                let shouldAdd = await Task.detached(priority: .userInitiated) {
-                    let before = ClaudeCodeSource(roots: existing).roots.count
-                    let after = ClaudeCodeSource(roots: existing + [url]).roots.count
-                    return after > before
-                }.value
-                guard snapshot == settings.additionalClaudeRoots else { continue }
-                guard shouldAdd else { return }
-                settings.additionalClaudeRoots.append(url.path)
-                model.reloadSourcesAndRebuild()
-                return
+        let taskID = UUID()
+        addRootTaskID = taskID
+        addRootTask = Task { @MainActor in
+            defer {
+                if addRootTaskID == taskID {
+                    addRootTask = nil
+                    addRootTaskID = nil
+                }
             }
+            let snapshot = settings.additionalClaudeRoots
+            let existing = [defaultURL] + snapshot.map { URL(fileURLWithPath: $0) }
+            let shouldAdd = await Task.detached(priority: .userInitiated) {
+                let before = ClaudeCodeSource(roots: existing).roots.count
+                let after = ClaudeCodeSource(roots: existing + [url]).roots.count
+                return after > before
+            }.value
+            guard !Task.isCancelled, addRootTaskID == taskID,
+                  snapshot == settings.additionalClaudeRoots, shouldAdd else { return }
+            settings.additionalClaudeRoots.append(url.path)
+            model.reloadSourcesAndRebuild()
         }
     }
 

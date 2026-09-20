@@ -373,6 +373,7 @@ public actor IndexDatabase {
         }
     }
 
+    /// The last time a safety sweep completed. Recoverable per-path failures may remain queued.
     public func lastSafetyReconciliationMilliseconds() throws -> Int64? {
         try pool.read { db in
             try String.fetchOne(
@@ -381,6 +382,7 @@ public actor IndexDatabase {
         }
     }
 
+    /// Records a completed safety sweep, independent of durable per-path recovery state.
     public func markSafetyReconciliationComplete() throws {
         let now = Int64(Date().timeIntervalSince1970 * 1_000)
         try pool.write { db in
@@ -1082,12 +1084,6 @@ public actor IndexDatabase {
             ) ?? 0
             return .init(fileFailures: files, discoveryFailures: discovery)
         }
-    }
-
-    /// Retained for source compatibility; this now counts actual failed files only.
-    @available(*, deprecated, message: "Use unresolvedSourceFailureCounts()")
-    public func unresolvedSourceFailureCount() throws -> Int {
-        try unresolvedSourceFailureCounts().fileFailures
     }
 
     public func unresolvedRecoveryWork() throws -> IndexRecoveryWork {

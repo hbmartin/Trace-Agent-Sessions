@@ -162,6 +162,8 @@ public actor IndexCoordinator {
         status.activity = activity
         status.incremental = activity == .fileChanges
         let mutations = PassMutationTracker()
+        var firstDiscoveryError: String?
+        var firstFileError: String?
         if let counts = try? await database.unresolvedSourceFailureCounts() {
             status.unresolvedFailedFiles = counts.fileFailures
             status.unresolvedDiscoveryFailures = counts.discoveryFailures
@@ -329,7 +331,8 @@ public actor IndexCoordinator {
                     failedDiscoveryScopes[attempt.source.agent, default: []].insert(failedScope)
                     status.failedFiles += 1
                     status.failedReconciliationPaths.insert(failedScope.path)
-                    if status.error == nil { status.error = failure.message }
+                    if firstDiscoveryError == nil { firstDiscoveryError = failure.message }
+                    status.error = firstFileError ?? firstDiscoveryError
                 }
             }
             try await database.replaceDiscoveryErrors(discoveryErrorReplacements)
@@ -382,7 +385,8 @@ public actor IndexCoordinator {
                 catch {
                     status.failedFiles += 1
                     needsFailureRecount = true
-                    if status.error == nil { status.error = error.localizedDescription }
+                    if firstFileError == nil { firstFileError = error.localizedDescription }
+                    status.error = firstFileError ?? firstDiscoveryError
                     status.failedPaths.insert(file.url.path)
                     try await database.recordSourceError(
                         file: file, rootID: rootID, error: error.localizedDescription
@@ -522,9 +526,7 @@ public actor IndexCoordinator {
             !canonical.contains { other in
                 other.comparisonKey != candidate.comparisonKey && other.contains(candidate)
             }
-        }.sorted {
-            ($0.comparisonKey, $0.path) < ($1.comparisonKey, $1.path)
-        }
+        }.sorted { $0.comparisonKey < $1.comparisonKey }
     }
 
     public func hydrate(_ summary: MessageSummary) async throws -> HydratedMessage {
