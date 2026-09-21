@@ -193,7 +193,7 @@ public actor IndexCoordinator {
             var failedDiscoveryScopes: [AgentKind: Set<TraceFileIO.CanonicalPath>] = [:]
             var discoveryAttempts: [(
                 source: any SessionSource, root: SourceRoot,
-                scope: TraceFileIO.CanonicalPath,
+                scope: SourceRootScope,
                 failures: [NormalizedDiscoveryFailure]
             )] = []
             let canonicalReconciliationPaths = reconciliationPaths.map(
@@ -202,7 +202,7 @@ public actor IndexCoordinator {
 
             func absorbDiscoveryResult(
                 _ result: DiscoveryResult, source: any SessionSource,
-                roots: [SourceRoot], scope: TraceFileIO.CanonicalPath
+                roots: [SourceRoot], scope: SourceRootScope
             ) {
                 allFiles += result.files
                 for root in roots {
@@ -219,17 +219,18 @@ public actor IndexCoordinator {
                 for source in sources {
                     for root in source.roots {
                         try Task.checkCancellation()
-                        let scope = root.scanPath
+                        let scope = root.rootScope
                         do {
                             absorbDiscoveryResult(
-                                try source.discoverResult(scopedTo: [scope.path]),
+                                try source.discoverResult(scopedTo: [scope.scanPath.path]),
                                 source: source, roots: [root], scope: scope
                             )
                         } catch is CancellationError {
                             throw CancellationError()
                         } catch {
                             let failure = DiscoveryFailure(
-                                agent: source.agent, root: root.url, path: scope.path,
+                                agent: source.agent, root: root.url,
+                                path: scope.scanPath.path,
                                 message: error.localizedDescription
                             )
                             discoveryAttempts.append((
@@ -244,15 +245,16 @@ public actor IndexCoordinator {
                     for source in sources {
                         for root in source.roots {
                             try Task.checkCancellation()
-                            let scopes = Self.minimalCanonicalScopes(
+                            let canonicalScopes = Self.minimalCanonicalScopes(
                                 canonicalReconciliationPaths.compactMap { scope in
                                 guard scope.intersects(root.scanPath) else { return nil }
                                 return scope.contains(root.scanPath) ? root.scanPath : scope
                             })
+                            let scopes = canonicalScopes.compactMap(root.scope(forScanPath:))
                             guard !scopes.isEmpty else { continue }
                             do {
                                 let result = try source.discoverResult(
-                                    scopedTo: Set(scopes.map(\.path))
+                                    scopedTo: Set(scopes.map(\.scanPath.path))
                                 )
                                 allFiles += result.files
                                 let failures = normalizedDiscoveryFailures(
@@ -262,7 +264,7 @@ public actor IndexCoordinator {
                                 for scope in scopes {
                                     discoveryAttempts.append((source, root, scope,
                                         failures.filter { failure in
-                                            scope.intersects(failure.path)
+                                            scope.scanPath.intersects(failure.scanPath)
                                         }
                                     ))
                                 }
@@ -271,7 +273,8 @@ public actor IndexCoordinator {
                             } catch {
                                 for scope in scopes {
                                     let failure = DiscoveryFailure(
-                                        agent: source.agent, root: root.url, path: scope.path,
+                                        agent: source.agent, root: root.url,
+                                        path: scope.scanPath.path,
                                         message: error.localizedDescription
                                     )
                                     discoveryAttempts.append((
@@ -295,18 +298,18 @@ public actor IndexCoordinator {
             discoveryAttempts.sort { lhs, rhs in
                 (
                     lhs.source.agent.rawValue, lhs.root.scanPath.comparisonKey,
-                    lhs.scope.comparisonKey
+                    lhs.scope.scanPath.comparisonKey
                 ) < (
                     rhs.source.agent.rawValue, rhs.root.scanPath.comparisonKey,
-                    rhs.scope.comparisonKey
+                    rhs.scope.scanPath.comparisonKey
                 )
             }
             for attempt in discoveryAttempts {
                 guard let rootID = rootIDs[attempt.root.id] else { continue }
-                let failures = attempt.failures.map(\.failure)
+                let failures = attempt.failures
                 var suppressNeverSeenDefault = false
                 if attempt.root.isDefault, !attempt.root.hasSymlinkedComponent, !failures.isEmpty,
-                   failures.allSatisfy({ $0.kind == .missingRoot }) {
+                   failures.allSatisfy({ $0.failure.kind == .missingRoot }) {
                     suppressNeverSeenDefault = !(try await database.rootHasBeenScanned(rootID: rootID))
                 }
                 if suppressNeverSeenDefault {
@@ -314,12 +317,13 @@ public actor IndexCoordinator {
                     continue
                 }
                 discoveryErrorReplacements.append(.init(
-                    rootID: rootID, root: attempt.root,
-                    scannedScope: attempt.scope.path, failures: failures
+                    rootID: rootID,
+                    scannedScope: attempt.scope.relativeScope,
+                    failures: failures
                 ))
                 for entry in attempt.failures {
                     let failure = entry.failure
-                    let failedScope = entry.path
+                    let failedScope = entry.scanPath
                     failedDiscoveryScopes[attempt.source.agent, default: []].insert(failedScope)
                     status.failedFiles += 1
                     status.failedReconciliationPaths.insert(failedScope.path)

@@ -261,17 +261,11 @@ final class TraceModel: ObservableObject {
                     progress.unresolvedFailedFiles = counts.fileFailures
                     progress.unresolvedDiscoveryFailures = counts.discoveryFailures
                 }
-                if let recovery = try? await database.unresolvedRecoveryWork(), !recovery.isEmpty {
-                    let scanPathsByConfiguredPath = sources.flatMap(\.roots).reduce(
-                        into: [String: String](), { result, root in
-                            result[root.url.path] = root.scanURL.path
-                        }
-                    )
+                let recovery = try await database.unresolvedRecoveryWork()
+                if !recovery.isEmpty {
                     await scheduler?.request(
                         paths: recovery.filePaths,
-                        reconciliationPaths: Set(recovery.reconciliationPaths.map {
-                            scanPathsByConfiguredPath[$0] ?? $0
-                        }),
+                        reconciliationPaths: recovery.reconciliationPaths,
                         scope: settings.indexScope,
                         activity: .subtreeRecovery
                     )
