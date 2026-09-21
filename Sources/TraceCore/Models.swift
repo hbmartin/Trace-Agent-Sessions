@@ -192,8 +192,6 @@ public struct SourceFailureCounts: Equatable, Sendable {
         self.fileFailures = fileFailures
         self.discoveryFailures = discoveryFailures
     }
-
-    public var total: Int { fileFailures + discoveryFailures }
 }
 
 public struct SourceFingerprint: Equatable, Sendable {

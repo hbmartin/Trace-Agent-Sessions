@@ -293,7 +293,6 @@ public actor IndexDatabase {
                     updated_at_ms INTEGER NOT NULL,
                     UNIQUE(root_id, scope_path)
                 );
-                CREATE INDEX idx_source_scan_error_root ON source_scan_error(root_id);
                 INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
                 SELECT id, path, last_error, coalesce(last_scan_ms, 0)
                 FROM source_root WHERE last_error IS NOT NULL;
@@ -374,6 +373,7 @@ public actor IndexDatabase {
         }
     }
 
+    /// The last time a safety sweep completed. Recoverable per-path failures may remain queued.
     public func lastSafetyReconciliationMilliseconds() throws -> Int64? {
         try pool.read { db in
             try String.fetchOne(
@@ -382,6 +382,7 @@ public actor IndexDatabase {
         }
     }
 
+    /// Records a completed safety sweep, independent of durable per-path recovery state.
     public func markSafetyReconciliationComplete() throws {
         let now = Int64(Date().timeIntervalSince1970 * 1_000)
         try pool.write { db in
@@ -1085,11 +1086,6 @@ public actor IndexDatabase {
         }
     }
 
-    /// Retained for source compatibility; this now counts actual failed files only.
-    public func unresolvedSourceFailureCount() throws -> Int {
-        try unresolvedSourceFailureCounts().fileFailures
-    }
-
     public func unresolvedRecoveryWork() throws -> IndexRecoveryWork {
         try pool.read { db in
             let files = try Set(String.fetchAll(
@@ -1100,12 +1096,6 @@ public actor IndexDatabase {
             ))
             return .init(filePaths: files, reconciliationPaths: roots)
         }
-    }
-
-    func replaceDiscoveryErrors(
-        rootID: Int64, scannedScope: String, failures: [DiscoveryFailure]
-    ) throws {
-        try replaceDiscoveryErrors([(rootID, scannedScope, failures)])
     }
 
     func replaceDiscoveryErrors(

@@ -2,13 +2,15 @@ import Foundation
 
 /// All app indexing requests enter here. Events arriving during a pass are merged for its successor.
 public actor IndexScheduler {
+    private typealias CanonicalStreamRoots = [String: Set<TraceFileIO.CanonicalPath>]
+
     private struct Batch: Sendable {
         let fullScan: Bool
         let rebuild: Bool
         let paths: Set<String>
         let reconciliationPaths: Set<String>
         let watermarks: [String: UInt64]
-        let streamRoots: [String: Set<String>]
+        let streamRoots: CanonicalStreamRoots
         let scope: IndexScope
         let activity: IndexActivity
         let retryAttempt: Int
@@ -18,12 +20,13 @@ public actor IndexScheduler {
     private let coordinator: IndexCoordinator
     private let progress: @Sendable (IndexProgress) async -> Void
     private let didComplete: @Sendable (IndexActivity, [String: UInt64]) async -> Void
+    private let didFinish: @Sendable (IndexActivity) async -> Void
     private let retryDelay: Duration
     private var scope: IndexScope
     private var pendingPaths: Set<String> = []
     private var pendingReconciliationPaths: Set<String> = []
     private var pendingWatermarks: [String: UInt64] = [:]
-    private var pendingStreamRoots: [String: Set<String>] = [:]
+    private var pendingStreamRoots: CanonicalStreamRoots = [:]
     private var pendingActivity: IndexActivity?
     private var fullScan = false
     private var rebuild = false
@@ -37,14 +40,16 @@ public actor IndexScheduler {
     private var stopping = false
 
     public init(coordinator: IndexCoordinator, scope: IndexScope,
-                retryDelay: Duration = .seconds(5),
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
+                retryDelay: Duration = .seconds(5),
+                didFinish: @escaping @Sendable (IndexActivity) async -> Void = { _ in },
                 didComplete: @escaping @Sendable (IndexActivity, [String: UInt64]) async -> Void = { _, _ in }) {
         self.coordinator = coordinator
         self.scope = scope
         self.retryDelay = retryDelay
         self.progress = progress
         self.didComplete = didComplete
+        self.didFinish = didFinish
     }
 
     public func request(paths: Set<String> = [], reconcile: Bool = false,
@@ -56,8 +61,14 @@ public actor IndexScheduler {
         guard !stopping else { return }
         let scopeChanged = scope.map { $0 != self.scope } ?? false
         if scopeChanged || rebuild {
-            if let retryBatch { mergeWatermarks(retryBatch.watermarks) }
-            if let dormantBatch { mergeWatermarks(dormantBatch.watermarks) }
+            if let retryBatch {
+                mergeWatermarks(retryBatch.watermarks)
+                mergeCanonicalStreamRoots(retryBatch.streamRoots)
+            }
+            if let dormantBatch {
+                mergeWatermarks(dormantBatch.watermarks)
+                mergeCanonicalStreamRoots(dormantBatch.streamRoots)
+            }
             retryBatch = nil
             retryReady = false
             dormantBatch = nil
@@ -92,9 +103,12 @@ public actor IndexScheduler {
             if !retrying, !fullScan, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
                pendingActivity == nil {
                 let watermarks = pendingWatermarks
-                pendingStreamRoots.removeAll()
+                let streamRoots = pendingStreamRoots
                 pendingWatermarks.removeAll()
-                let checkpointable = checkpointableWatermarks(watermarks)
+                pendingStreamRoots.removeAll()
+                let checkpointable = checkpointableWatermarks(
+                    watermarks, streamRoots: streamRoots
+                )
                 if !checkpointable.isEmpty {
                     await didComplete(.fileChanges, checkpointable)
                 }
@@ -147,7 +161,7 @@ public actor IndexScheduler {
             self.operation = nil
             if batch.generation != configurationGeneration {
                 mergeWatermarks(batch.watermarks)
-                mergeStreamRoots(batch.streamRoots)
+                mergeCanonicalStreamRoots(batch.streamRoots)
                 continue
             }
             if result.phase == .complete {
@@ -179,8 +193,13 @@ public actor IndexScheduler {
                 // Failed paths retain their stream watermarks through the one
                 // scheduled retry and any dormant period. Unrelated streams can
                 // still advance independently.
-                let checkpointable = checkpointableWatermarks(batch.watermarks)
-                await didComplete(batch.activity, checkpointable)
+                let checkpointable = checkpointableWatermarks(
+                    batch.watermarks, streamRoots: batch.streamRoots
+                )
+                if !checkpointable.isEmpty {
+                    await didComplete(batch.activity, checkpointable)
+                }
+                await didFinish(batch.activity)
             } else if result.phase == .failed {
                 if batch.retryAttempt == 0 {
                     retainForRetry(batch)
@@ -212,6 +231,13 @@ public actor IndexScheduler {
     }
 
     private func mergeStreamRoots(_ roots: [String: Set<String>]) {
+        for (volume, paths) in roots {
+            let canonical = paths.map(TraceFileIO.canonicalPath)
+            pendingStreamRoots[volume, default: []].formUnion(canonical)
+        }
+    }
+
+    private func mergeCanonicalStreamRoots(_ roots: CanonicalStreamRoots) {
         for (volume, paths) in roots {
             pendingStreamRoots[volume, default: []].formUnion(paths)
         }
@@ -271,13 +297,21 @@ public actor IndexScheduler {
         )
     }
 
-    private func checkpointableWatermarks(_ watermarks: [String: UInt64]) -> [String: UInt64] {
+    private func checkpointableWatermarks(
+        _ watermarks: [String: UInt64], streamRoots: CanonicalStreamRoots
+    ) -> [String: UInt64] {
         var checkpointable: [String: UInt64] = [:]
         for (volume, eventID) in watermarks {
             if let retry = retryBatch, retry.watermarks[volume] != nil {
-                retryBatch = replacingWatermark(in: retry, volume: volume, eventID: eventID)
+                retryBatch = replacingWatermark(
+                    in: retry, volume: volume, eventID: eventID,
+                    streamRoots: streamRoots[volume] ?? []
+                )
             } else if let dormant = dormantBatch, dormant.watermarks[volume] != nil {
-                dormantBatch = replacingWatermark(in: dormant, volume: volume, eventID: eventID)
+                dormantBatch = replacingWatermark(
+                    in: dormant, volume: volume, eventID: eventID,
+                    streamRoots: streamRoots[volume] ?? []
+                )
             } else {
                 checkpointable[volume] = eventID
             }
@@ -286,28 +320,31 @@ public actor IndexScheduler {
     }
 
     private func affectedWatermarks(
-        _ watermarks: [String: UInt64], streamRoots: [String: Set<String>],
+        _ watermarks: [String: UInt64], streamRoots: CanonicalStreamRoots,
         failedPaths: Set<String>
     ) -> [String: UInt64] {
         guard !failedPaths.isEmpty else { return watermarks }
         let failures = failedPaths.map(TraceFileIO.canonicalPath)
         return watermarks.filter { volume, _ in
             guard let roots = streamRoots[volume], !roots.isEmpty else { return true }
-            return roots.lazy.map(TraceFileIO.canonicalPath).contains { root in
+            return roots.contains { root in
                 failures.contains { root.intersects($0) }
             }
         }
     }
 
     private func replacingWatermark(
-        in batch: Batch, volume: String, eventID: UInt64
+        in batch: Batch, volume: String, eventID: UInt64,
+        streamRoots incomingRoots: Set<TraceFileIO.CanonicalPath>
     ) -> Batch {
         var watermarks = batch.watermarks
         watermarks[volume] = max(watermarks[volume] ?? 0, eventID)
+        var streamRoots = batch.streamRoots
+        streamRoots[volume, default: []].formUnion(incomingRoots)
         return Batch(
             fullScan: batch.fullScan, rebuild: batch.rebuild,
             paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
-            watermarks: watermarks, streamRoots: batch.streamRoots, scope: batch.scope,
+            watermarks: watermarks, streamRoots: streamRoots, scope: batch.scope,
             activity: batch.activity, retryAttempt: batch.retryAttempt,
             generation: batch.generation
         )
@@ -333,7 +370,7 @@ public actor IndexScheduler {
         pendingPaths.formUnion(dormantBatch.paths)
         pendingReconciliationPaths.formUnion(dormantBatch.reconciliationPaths)
         mergeWatermarks(dormantBatch.watermarks)
-        mergeStreamRoots(dormantBatch.streamRoots)
+        mergeCanonicalStreamRoots(dormantBatch.streamRoots)
         fullScan = fullScan || dormantBatch.fullScan
         pendingActivity = Self.moreSignificant(pendingActivity, dormantBatch.activity)
         self.dormantBatch = nil
@@ -398,6 +435,7 @@ public actor IndexScheduler {
         pendingPaths.removeAll()
         pendingReconciliationPaths.removeAll()
         pendingWatermarks.removeAll()
+        pendingStreamRoots.removeAll()
         pendingActivity = nil
         retryBatch = nil
         retryReady = false

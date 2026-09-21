@@ -162,6 +162,8 @@ public actor IndexCoordinator {
         status.activity = activity
         status.incremental = activity == .fileChanges
         let mutations = PassMutationTracker()
+        var firstDiscoveryError: String?
+        var firstFileError: String?
         if let counts = try? await database.unresolvedSourceFailureCounts() {
             status.unresolvedFailedFiles = counts.fileFailures
             status.unresolvedDiscoveryFailures = counts.discoveryFailures
@@ -191,18 +193,37 @@ public actor IndexCoordinator {
             var failedDiscoveryScopes: [AgentKind: Set<TraceFileIO.CanonicalPath>] = [:]
             var discoveryAttempts: [(
                 source: any SessionSource, root: SourceRoot,
-                scope: TraceFileIO.CanonicalPath, failures: [DiscoveryFailure]
+                scope: TraceFileIO.CanonicalPath,
+                failures: [(failure: DiscoveryFailure, path: TraceFileIO.CanonicalPath)]
             )] = []
+            let canonicalReconciliationPaths = reconciliationPaths.map(
+                TraceFileIO.canonicalPath
+            )
+
+            func canonicalizedFailures(
+                _ failures: [DiscoveryFailure]
+            ) -> [(failure: DiscoveryFailure, path: TraceFileIO.CanonicalPath)] {
+                failures.map { ($0, TraceFileIO.canonicalPath($0.path)) }.sorted { lhs, rhs in
+                    (
+                        lhs.failure.agent.rawValue, lhs.failure.root.path,
+                        lhs.path.comparisonKey, lhs.failure.message
+                    ) < (
+                        rhs.failure.agent.rawValue, rhs.failure.root.path,
+                        rhs.path.comparisonKey, rhs.failure.message
+                    )
+                }
+            }
 
             func absorbDiscoveryResult(
                 _ result: DiscoveryResult, source: any SessionSource,
                 roots: [SourceRoot], scope: TraceFileIO.CanonicalPath
             ) {
                 allFiles += result.files
+                let failures = canonicalizedFailures(result.failures)
                 for root in roots {
                     discoveryAttempts.append((
                         source, root, scope,
-                        result.failures.filter { $0.root.path == root.url.path }
+                        failures.filter { $0.failure.root.path == root.url.path }
                     ))
                 }
             }
@@ -220,10 +241,13 @@ public actor IndexCoordinator {
                         } catch is CancellationError {
                             throw CancellationError()
                         } catch {
-                            discoveryAttempts.append((source, root, scope, [.init(
+                            let failure = DiscoveryFailure(
                                 agent: source.agent, root: root.url, path: scope.path,
                                 message: error.localizedDescription
-                            )]))
+                            )
+                            discoveryAttempts.append((
+                                source, root, scope, canonicalizedFailures([failure])
+                            ))
                         }
                     }
                 }
@@ -232,24 +256,23 @@ public actor IndexCoordinator {
                     for source in sources {
                         for root in source.roots {
                             try Task.checkCancellation()
-                            let scopes = Self.minimalScopes(Set(reconciliationPaths.compactMap {
-                                let scope = TraceFileIO.canonicalPath($0)
+                            let scopes = Self.minimalCanonicalScopes(
+                                canonicalReconciliationPaths.compactMap { scope in
                                 guard scope.intersects(root.scanPath) else { return nil }
-                                return scope.contains(root.scanPath) ? root.scanPath.path : scope.path
-                            })).map(TraceFileIO.canonicalPath)
+                                return scope.contains(root.scanPath) ? root.scanPath : scope
+                            })
                             guard !scopes.isEmpty else { continue }
                             do {
                                 let result = try source.discoverResult(
                                     scopedTo: Set(scopes.map(\.path))
                                 )
                                 allFiles += result.files
+                                let failures = canonicalizedFailures(result.failures)
                                 for scope in scopes {
                                     discoveryAttempts.append((source, root, scope,
-                                        result.failures.filter { failure in
-                                            failure.root.path == root.url.path
-                                                && scope.intersects(
-                                                    TraceFileIO.canonicalPath(failure.path)
-                                                )
+                                        failures.filter { failure in
+                                            failure.failure.root.path == root.url.path
+                                                && scope.intersects(failure.path)
                                         }
                                     ))
                                 }
@@ -257,10 +280,13 @@ public actor IndexCoordinator {
                                 throw CancellationError()
                             } catch {
                                 for scope in scopes {
-                                    discoveryAttempts.append((source, root, scope, [.init(
+                                    let failure = DiscoveryFailure(
                                         agent: source.agent, root: root.url, path: scope.path,
                                         message: error.localizedDescription
-                                    )]))
+                                    )
+                                    discoveryAttempts.append((
+                                        source, root, scope, canonicalizedFailures([failure])
+                                    ))
                                 }
                             }
                         }
@@ -277,9 +303,18 @@ public actor IndexCoordinator {
             var discoveryErrorReplacements: [(
                 rootID: Int64, scannedScope: String, failures: [DiscoveryFailure]
             )] = []
+            discoveryAttempts.sort { lhs, rhs in
+                (
+                    lhs.source.agent.rawValue, lhs.root.scanPath.comparisonKey,
+                    lhs.scope.comparisonKey
+                ) < (
+                    rhs.source.agent.rawValue, rhs.root.scanPath.comparisonKey,
+                    rhs.scope.comparisonKey
+                )
+            }
             for attempt in discoveryAttempts {
                 guard let rootID = rootIDs[attempt.root.id] else { continue }
-                let failures = attempt.failures
+                let failures = attempt.failures.map(\.failure)
                 var suppressNeverSeenDefault = false
                 if attempt.root.isDefault, !attempt.root.hasSymlinkedComponent, !failures.isEmpty,
                    failures.allSatisfy({ $0.kind == .missingRoot }) {
@@ -290,12 +325,14 @@ public actor IndexCoordinator {
                     continue
                 }
                 discoveryErrorReplacements.append((rootID, attempt.scope.path, failures))
-                for failure in failures {
-                    let failedScope = TraceFileIO.canonicalPath(failure.path)
+                for entry in attempt.failures {
+                    let failure = entry.failure
+                    let failedScope = entry.path
                     failedDiscoveryScopes[attempt.source.agent, default: []].insert(failedScope)
                     status.failedFiles += 1
                     status.failedReconciliationPaths.insert(failedScope.path)
-                    status.error = failure.message
+                    if firstDiscoveryError == nil { firstDiscoveryError = failure.message }
+                    status.error = firstFileError ?? firstDiscoveryError
                 }
             }
             try await database.replaceDiscoveryErrors(discoveryErrorReplacements)
@@ -348,7 +385,8 @@ public actor IndexCoordinator {
                 catch {
                     status.failedFiles += 1
                     needsFailureRecount = true
-                    status.error = error.localizedDescription
+                    if firstFileError == nil { firstFileError = error.localizedDescription }
+                    status.error = firstFileError ?? firstDiscoveryError
                     status.failedPaths.insert(file.url.path)
                     try await database.recordSourceError(
                         file: file, rootID: rootID, error: error.localizedDescription
@@ -410,7 +448,7 @@ public actor IndexCoordinator {
             } else if !reconciliationPaths.isEmpty {
                 status.phase = .reconciling
                 await progress(status)
-                let scopes = reconciliationPaths.map(TraceFileIO.canonicalPath)
+                let scopes = canonicalReconciliationPaths
                 let live = Set(allFiles.map { $0.canonicalPath.comparisonKey })
                 for source in sources {
                     let failedScopes = failedDiscoveryScopes[source.agent] ?? []
@@ -472,12 +510,23 @@ public actor IndexCoordinator {
     }
 
     private static func minimalScopes(_ paths: Set<String>) -> Set<String> {
-        let canonical = paths.map(TraceFileIO.canonicalPath)
-        return Set(canonical.compactMap { candidate in
-            canonical.contains { other in
+        Set(minimalCanonicalScopes(paths.map(TraceFileIO.canonicalPath)).map(\.path))
+    }
+
+    private static func minimalCanonicalScopes(
+        _ paths: [TraceFileIO.CanonicalPath]
+    ) -> [TraceFileIO.CanonicalPath] {
+        var unique: [String: TraceFileIO.CanonicalPath] = [:]
+        for path in paths {
+            if let existing = unique[path.comparisonKey], existing.path <= path.path { continue }
+            unique[path.comparisonKey] = path
+        }
+        let canonical = Array(unique.values)
+        return canonical.filter { candidate in
+            !canonical.contains { other in
                 other.comparisonKey != candidate.comparisonKey && other.contains(candidate)
-            } ? nil : candidate.path
-        })
+            }
+        }.sorted { $0.comparisonKey < $1.comparisonKey }
     }
 
     public func hydrate(_ summary: MessageSummary) async throws -> HydratedMessage {
