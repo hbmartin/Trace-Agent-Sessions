@@ -40,7 +40,7 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(session.title, "Chosen title")
         XCTAssertTrue(session.hasPlan)
         let originalMessages = try await database.messages(sessionID: session.id)
-        let originalState = try await database.sourceState(path: file.path)
+        let originalState = try await database.sourceState(agent: .claudeCode, path: file.path)
         let queue = try DatabaseQueue(path: databaseURL.path)
         try await queue.write { db in
             XCTAssertEqual(try String.fetchOne(db, sql: "SELECT first_user_message FROM session"), "First real request")
@@ -51,7 +51,7 @@ final class SessionMetadataTests: XCTestCase {
         await coordinator.indexAll(scope: .everything)
         let refreshed = try await database.session(id: session.id)
         let refreshedMessages = try await database.messages(sessionID: session.id)
-        let refreshedState = try await database.sourceState(path: file.path)
+        let refreshedState = try await database.sourceState(agent: .claudeCode, path: file.path)
         XCTAssertEqual(refreshed?.title, "Chosen title")
         XCTAssertEqual(refreshed?.hasPlan, true)
         let adapterTitle = try await queue.read { db in
@@ -396,7 +396,7 @@ final class SessionMetadataTests: XCTestCase {
         let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
         let coordinator = IndexCoordinator(database: database, sources: [GeminiSource(root: root)])
         await coordinator.indexAll(scope: .proseOnly)
-        let initialState = try await database.sourceState(path: file.path)
+        let initialState = try await database.sourceState(agent: .gemini, path: file.path)
         XCTAssertEqual(initialState?.contentSessionID, "real-session-id")
         XCTAssertEqual(initialState?.metadataSessionID, "real-session-id")
 
@@ -411,7 +411,7 @@ final class SessionMetadataTests: XCTestCase {
             try handle.write(contentsOf: JSONSerialization.data(withJSONObject: next) + Data([10]))
             try handle.close()
             await coordinator.refresh(paths: [file.path], scope: .proseOnly)
-            let state = try await database.sourceState(path: file.path)
+            let state = try await database.sourceState(agent: .gemini, path: file.path)
             XCTAssertEqual(state?.contentSessionID, "real-session-id")
             XCTAssertEqual(state?.metadataSessionID, "real-session-id")
         }
@@ -476,7 +476,7 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertFalse(finished.value,
                        "hydration should finish while the detached legacy scan is still running")
         await run.value
-        let state = try await database.sourceState(path: file.path)
+        let state = try await database.sourceState(agent: .gemini, path: file.path)
         XCTAssertEqual(state?.contentSessionID, "legacy-id")
     }
 
