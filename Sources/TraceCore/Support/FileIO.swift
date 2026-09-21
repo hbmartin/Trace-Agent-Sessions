@@ -59,7 +59,7 @@ public enum TraceFileIO {
 
     static func comparisonKey(_ path: String, caseSensitive: Bool) -> String {
         caseSensitive ? path : path.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
+            options: [.caseInsensitive],
             locale: Locale(identifier: "en_US_POSIX")
         )
     }

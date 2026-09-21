@@ -1488,7 +1488,7 @@ final class TraceUITests: XCTestCase {
         let sqlite = Process()
         sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
         sqlite.arguments = [directory.appendingPathComponent("index.sqlite").path,
-            "CREATE TRIGGER fail_rebuild_root BEFORE UPDATE OF agent ON source_root "
+            "CREATE TRIGGER fail_rebuild_root BEFORE UPDATE OF is_default ON source_root "
                 + "BEGIN SELECT RAISE(ABORT, 'forced rebuild failure'); END;"]
         try sqlite.run()
         sqlite.waitUntilExit()

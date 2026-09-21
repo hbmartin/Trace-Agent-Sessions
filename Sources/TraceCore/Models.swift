@@ -55,6 +55,8 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     public let isDefault: Bool
     private let cachedScanURL: URL
     private let cachedScanPath: TraceFileIO.CanonicalPath
+    private let configuredComponents: [String]
+    private let scanComponents: [String]
     let hasSymlinkedComponent: Bool
 
     public init(agent: AgentKind, url: URL, isDefault: Bool = true) {
@@ -66,6 +68,8 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
         let resolved = Self.resolveScanURL(self.url)
         cachedScanURL = resolved.url
         cachedScanPath = TraceFileIO.canonicalPath(resolved.url.path)
+        configuredComponents = Self.lexicalComponents(self.url.path)
+        scanComponents = Self.lexicalComponents(cachedScanPath.path)
         hasSymlinkedComponent = resolved.encounteredSymlink
     }
 
@@ -74,37 +78,76 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     public var scanURL: URL { cachedScanURL }
     var scanPath: TraceFileIO.CanonicalPath { cachedScanPath }
 
-    /// Resolves a discovery scope against this root's scan identity. The fallback
-    /// through the configured path also handles a dangling symlink, which
-    /// `URL.resolvingSymlinksInPath()` cannot resolve on its own.
-    func canonicalScopePath(_ rawPath: String) -> TraceFileIO.CanonicalPath {
-        let direct = TraceFileIO.canonicalPath(rawPath)
-        if cachedScanPath.contains(direct) { return direct }
-
-        let configured = TraceFileIO.canonicalPath(url.path)
-        guard configured.contains(direct) else { return direct }
-        let suffix = directURLComponents(direct.path).dropFirst(
-            directURLComponents(configured.path).count
+    var rootScope: SourceRootScope {
+        SourceRootScope(
+            scanPath: cachedScanPath,
+            relativeScope: RootRelativeScope(
+                components: [], caseSensitive: cachedScanPath.isCaseSensitive
+            )
         )
+    }
+
+    /// Resolves a discovery path against the scan identity captured when this root
+    /// was created. Configured-path containment is checked first so a later symlink
+    /// repoint cannot reinterpret an alias path inside the old target.
+    func scope(forRawPath rawPath: String) -> SourceRootScope? {
+        let lexical = Self.lexicalComponents(rawPath)
+        let scanPath: TraceFileIO.CanonicalPath
+        if Self.hasPrefix(
+            lexical, prefix: configuredComponents,
+            caseSensitive: cachedScanPath.isCaseSensitive
+        ) {
+            var mapped = cachedScanURL
+            for component in lexical.dropFirst(configuredComponents.count) {
+                mapped.appendPathComponent(component)
+            }
+            scanPath = TraceFileIO.canonicalPath(mapped.path)
+        } else {
+            scanPath = TraceFileIO.canonicalPath(rawPath)
+        }
+        return scope(forScanPath: scanPath)
+    }
+
+    func scope(forScanPath path: TraceFileIO.CanonicalPath) -> SourceRootScope? {
+        guard cachedScanPath.contains(path) else { return nil }
+        let components = Self.lexicalComponents(path.path)
+        guard Self.hasPrefix(
+            components, prefix: scanComponents,
+            caseSensitive: cachedScanPath.isCaseSensitive
+        ) else { return nil }
+        return SourceRootScope(
+            scanPath: path,
+            relativeScope: RootRelativeScope(
+                components: Array(components.dropFirst(scanComponents.count)),
+                caseSensitive: cachedScanPath.isCaseSensitive
+            )
+        )
+    }
+
+    func scope(forRelativePath path: String) -> SourceRootScope? {
+        guard let relativeScope = RootRelativeScope(
+            persistedPath: path, caseSensitive: cachedScanPath.isCaseSensitive
+        ) else { return nil }
         var mapped = cachedScanURL
-        for component in suffix { mapped.appendPathComponent(component) }
-        return TraceFileIO.canonicalPath(mapped.path)
-    }
-
-    /// Converts a canonical scan scope back to the configured root spelling so
-    /// its durable identity survives a later symlink repoint.
-    func configuredScopePath(_ scope: TraceFileIO.CanonicalPath) -> String {
-        guard cachedScanPath.contains(scope) else { return scope.path }
-        let suffix = directURLComponents(scope.path).dropFirst(
-            directURLComponents(cachedScanPath.path).count
+        for component in relativeScope.components { mapped.appendPathComponent(component) }
+        return SourceRootScope(
+            scanPath: TraceFileIO.canonicalPath(mapped.path),
+            relativeScope: relativeScope
         )
-        var configured = url
-        for component in suffix { configured.appendPathComponent(component) }
-        return configured.standardized.path
     }
 
-    private func directURLComponents(_ path: String) -> [String] {
-        URL(fileURLWithPath: path).standardized.pathComponents
+    private static func lexicalComponents(_ path: String) -> [String] {
+        URL(fileURLWithPath: path, isDirectory: true).standardized.pathComponents
+    }
+
+    private static func hasPrefix(
+        _ components: [String], prefix: [String], caseSensitive: Bool
+    ) -> Bool {
+        guard components.count >= prefix.count else { return false }
+        return zip(components, prefix).allSatisfy { component, expected in
+            TraceFileIO.comparisonKey(component, caseSensitive: caseSensitive)
+                == TraceFileIO.comparisonKey(expected, caseSensitive: caseSensitive)
+        }
     }
 
     private enum CodingKeys: String, CodingKey { case agent, url, isDefault }
@@ -186,6 +229,66 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
             }
         }
         return (candidate.standardized, encounteredSymlink)
+    }
+}
+
+struct SourceRootScope: Sendable {
+    let scanPath: TraceFileIO.CanonicalPath
+    let relativeScope: RootRelativeScope
+}
+
+struct RootRelativeScope: Hashable, Sendable {
+    let path: String
+    let components: [String]
+    private let comparisonComponents: [String]
+    let isCaseSensitive: Bool
+
+    init(components: [String], caseSensitive: Bool) {
+        self.components = components
+        path = components.joined(separator: "/")
+        comparisonComponents = components.map {
+            TraceFileIO.comparisonKey($0, caseSensitive: caseSensitive)
+        }
+        isCaseSensitive = caseSensitive
+    }
+
+    init?(persistedPath: String, caseSensitive: Bool) {
+        guard !persistedPath.hasPrefix("/") else { return nil }
+        let components = persistedPath.isEmpty
+            ? []
+            : persistedPath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            return nil
+        }
+        self.init(components: components, caseSensitive: caseSensitive)
+    }
+
+    var comparisonKey: String { comparisonComponents.joined(separator: "/") }
+    var isRoot: Bool { components.isEmpty }
+
+    func contains(_ other: RootRelativeScope) -> Bool {
+        guard isCaseSensitive == other.isCaseSensitive,
+              comparisonComponents.count <= other.comparisonComponents.count
+        else { return false }
+        return zip(comparisonComponents, other.comparisonComponents).allSatisfy(==)
+    }
+
+    func intersects(_ other: RootRelativeScope) -> Bool {
+        contains(other) || other.contains(self)
+    }
+
+    func scope(forPersistedPath path: String) -> RootRelativeScope? {
+        RootRelativeScope(persistedPath: path, caseSensitive: isCaseSensitive)
+    }
+
+    static func == (lhs: RootRelativeScope, rhs: RootRelativeScope) -> Bool {
+        lhs.isCaseSensitive == rhs.isCaseSensitive
+            && lhs.comparisonComponents == rhs.comparisonComponents
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(isCaseSensitive)
+        hasher.combine(comparisonComponents)
     }
 }
 

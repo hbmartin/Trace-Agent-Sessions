@@ -3,11 +3,17 @@ import GRDB
 
 public enum IndexDatabaseError: LocalizedError {
     case timestampCollisionLimit
+    case unsupportedStoredAgent(String)
+    case invalidStoredRecoveryScope(String)
 
     public var errorDescription: String? {
         switch self {
         case .timestampCollisionLimit:
             "More than 1,048,576 messages share one millisecond timestamp."
+        case .unsupportedStoredAgent(let agent):
+            "The index contains recovery work for unsupported agent \(agent)."
+        case .invalidStoredRecoveryScope(let scope):
+            "The index contains an invalid recovery scope: \(scope)"
         }
     }
 }
@@ -34,14 +40,26 @@ struct IndexedSourceState: Sendable {
 
 struct DiscoveryErrorReplacement: Sendable {
     let rootID: Int64
-    let root: SourceRoot
-    let scannedScope: String
-    let failures: [DiscoveryFailure]
+    let scannedScope: RootRelativeScope
+    let failures: [NormalizedDiscoveryFailure]
+}
+
+private struct StoredRootIdentity: Hashable {
+    let agent: String
+    let path: String
+}
+
+private struct StoredRecoveryRow: Sendable {
+    let rootID: Int64
+    let relativeScope: String
+    let agent: String
+    let rootPath: String
+    let isDefault: Bool
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 11
-    public static let indexFormatVersion = 4
+    public static let schemaVersion = 12
+    public static let indexFormatVersion = 5
     private static let sourceStateSelection = """
         sf.*,
         (sf.last_error IS NOT NULL OR EXISTS (
@@ -311,6 +329,39 @@ public actor IndexDatabase {
             try db.execute(sql: "DROP INDEX IF EXISTS idx_source_scan_error_root")
             try db.execute(sql: "UPDATE trace_meta SET value='11' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v12-relative-discovery-scopes") { db in
+            try db.execute(sql: """
+                DROP TABLE source_scan_error;
+
+                CREATE TABLE source_root_v12 (
+                    id INTEGER PRIMARY KEY,
+                    agent TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    is_default INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_scan_ms INTEGER,
+                    last_error TEXT,
+                    UNIQUE(agent, path)
+                );
+                INSERT INTO source_root_v12(
+                    id, agent, path, is_default, enabled, last_scan_ms, last_error
+                )
+                SELECT id, agent, path, is_default, enabled, last_scan_ms, last_error
+                FROM source_root;
+                DROP TABLE source_root;
+                ALTER TABLE source_root_v12 RENAME TO source_root;
+
+                CREATE TABLE source_scan_error (
+                    id INTEGER PRIMARY KEY,
+                    root_id INTEGER NOT NULL REFERENCES source_root(id) ON DELETE CASCADE,
+                    relative_scope TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    UNIQUE(root_id, relative_scope)
+                );
+                UPDATE trace_meta SET value='12' WHERE key='schema_version';
+                """)
+        }
         try migrator.migrate(pool)
     }
 
@@ -423,15 +474,19 @@ public actor IndexDatabase {
     /// invalidates event checkpoints so it receives a fresh reconciliation after relaunch.
     @discardableResult
     public func synchronizeConfiguredRoots(_ roots: [SourceRoot]) throws -> Bool {
-        let configured = Set(roots.map { $0.url.path })
+        let configured = Set(roots.map {
+            StoredRootIdentity(agent: $0.agent.rawValue, path: $0.url.path)
+        })
         return try pool.writeWithoutTransaction { db in
-            let stored = try Row.fetchAll(db, sql: "SELECT id, path FROM source_root")
-            let storedPaths = Set(stored.map { (row: Row) -> String in row["path"] })
+            let stored = try Row.fetchAll(db, sql: "SELECT id, agent, path FROM source_root")
+            let storedIdentities = Set(stored.map { (row: Row) -> StoredRootIdentity in
+                StoredRootIdentity(agent: row["agent"], path: row["path"])
+            })
             let removed = stored.compactMap { row -> Int64? in
-                let path: String = row["path"]
-                return configured.contains(path) ? nil : row["id"]
+                let identity = StoredRootIdentity(agent: row["agent"], path: row["path"])
+                return configured.contains(identity) ? nil : row["id"]
             }
-            let hasUnregisteredRoots = !configured.subtracting(storedPaths).isEmpty
+            let hasUnregisteredRoots = !configured.subtracting(storedIdentities).isEmpty
             guard !removed.isEmpty || hasUnregisteredRoots else { return false }
             try db.inTransaction {
                 for rootID in removed {
@@ -486,11 +541,15 @@ public actor IndexDatabase {
                 sql: """
                     INSERT INTO source_root(agent, path, is_default, enabled)
                     VALUES (?, ?, ?, 1)
-                    ON CONFLICT(path) DO UPDATE SET agent=excluded.agent, is_default=excluded.is_default, enabled=1
+                    ON CONFLICT(agent, path) DO UPDATE SET
+                        is_default=excluded.is_default, enabled=1
                     """,
                 arguments: [root.agent.rawValue, root.url.path, root.isDefault]
             )
-            return try Int64.fetchOne(db, sql: "SELECT id FROM source_root WHERE path=?", arguments: [root.url.path])!
+            return try Int64.fetchOne(
+                db, sql: "SELECT id FROM source_root WHERE agent=? AND path=?",
+                arguments: [root.agent.rawValue, root.url.path]
+            )!
         }
     }
 
@@ -1094,36 +1153,46 @@ public actor IndexDatabase {
     }
 
     public func unresolvedRecoveryWork() throws -> IndexRecoveryWork {
-        try pool.read { db in
+        let snapshot = try pool.read { db -> (Set<String>, [StoredRecoveryRow]) in
             let files = try Set(String.fetchAll(
                 db, sql: "SELECT path FROM source_file WHERE last_error IS NOT NULL"
             ))
             let rows = try Row.fetchAll(db, sql: """
-                SELECT e.scope_path, r.agent, r.path, r.is_default
+                SELECT e.root_id, e.relative_scope, r.agent, r.path, r.is_default
                 FROM source_scan_error e
                 JOIN source_root r ON r.id=e.root_id
-                """)
-            var scopes: Set<String> = []
-            for row in rows {
-                let agentRaw: String = row["agent"]
-                guard let agent = AgentKind(rawValue: agentRaw) else { continue }
-                let root = SourceRoot(
-                    agent: agent,
-                    url: URL(fileURLWithPath: row["path"] as String),
+                ORDER BY e.root_id, e.relative_scope
+                """).map { row in
+                StoredRecoveryRow(
+                    rootID: row["root_id"], relativeScope: row["relative_scope"],
+                    agent: row["agent"], rootPath: row["path"],
                     isDefault: row["is_default"]
                 )
-                let stored: String = row["scope_path"]
-                let scope = root.canonicalScopePath(stored)
-                if scope.intersects(root.scanPath) {
-                    scopes.insert(scope.contains(root.scanPath) ? root.scanPath.path : scope.path)
-                } else {
-                    // A legacy row may name the target of a symlink before it was
-                    // repointed. Recover the current root so the stale row clears.
-                    scopes.insert(root.scanPath.path)
-                }
             }
-            return .init(filePaths: files, reconciliationPaths: scopes)
+            return (files, rows)
         }
+        var roots: [Int64: SourceRoot] = [:]
+        var scopes: Set<String> = []
+        for row in snapshot.1 {
+            let root: SourceRoot
+            if let cached = roots[row.rootID] {
+                root = cached
+            } else {
+                guard let agent = AgentKind(rawValue: row.agent) else {
+                    throw IndexDatabaseError.unsupportedStoredAgent(row.agent)
+                }
+                root = SourceRoot(
+                    agent: agent, url: URL(fileURLWithPath: row.rootPath),
+                    isDefault: row.isDefault
+                )
+                roots[row.rootID] = root
+            }
+            guard let scope = root.scope(forRelativePath: row.relativeScope) else {
+                throw IndexDatabaseError.invalidStoredRecoveryScope(row.relativeScope)
+            }
+            scopes.insert(scope.scanPath.path)
+        }
+        return .init(filePaths: snapshot.0, reconciliationPaths: scopes)
     }
 
     func replaceDiscoveryErrors(
@@ -1133,33 +1202,34 @@ public actor IndexDatabase {
         try pool.write { db in
             let now = Int64(Date().timeIntervalSince1970 * 1_000)
             for replacement in replacements {
-                let scanned = replacement.root.canonicalScopePath(replacement.scannedScope)
-                let replacesWholeRoot = scanned.contains(replacement.root.scanPath)
                 let existing = try Row.fetchAll(
-                    db, sql: "SELECT id, scope_path FROM source_scan_error WHERE root_id=?",
+                    db, sql: "SELECT id, relative_scope FROM source_scan_error WHERE root_id=?",
                     arguments: [replacement.rootID]
                 )
                 for row in existing {
-                    let scopePath: String = row["scope_path"]
+                    let scopePath: String = row["relative_scope"]
                     let errorID: Int64 = row["id"]
-                    let errorScope = replacement.root.canonicalScopePath(scopePath)
-                    if replacesWholeRoot || scanned.contains(errorScope) {
+                    guard let errorScope = replacement.scannedScope.scope(
+                        forPersistedPath: scopePath
+                    ) else {
+                        throw IndexDatabaseError.invalidStoredRecoveryScope(scopePath)
+                    }
+                    if replacement.scannedScope.contains(errorScope) {
                         try db.execute(
                             sql: "DELETE FROM source_scan_error WHERE id=?",
                             arguments: [errorID]
                         )
                     }
                 }
-                for entry in normalizedDiscoveryFailures(
-                    replacement.failures, for: replacement.root
-                ) {
+                for entry in replacement.failures {
                     try db.execute(sql: """
-                        INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
+                        INSERT INTO source_scan_error(root_id, relative_scope, error, updated_at_ms)
                         VALUES (?, ?, ?, ?)
-                        ON CONFLICT(root_id, scope_path) DO UPDATE SET
+                        ON CONFLICT(root_id, relative_scope) DO UPDATE SET
                             error=excluded.error, updated_at_ms=excluded.updated_at_ms
                         """, arguments: [
-                            replacement.rootID, entry.failure.path, entry.failure.message, now,
+                            replacement.rootID, entry.relativeScope.path,
+                            entry.failure.message, now,
                         ])
                 }
                 try db.execute(

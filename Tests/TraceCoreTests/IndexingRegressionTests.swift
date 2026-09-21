@@ -842,6 +842,9 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(
                 sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v11-remove-redundant-scan-error-index'"
             )
+            try db.execute(
+                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v12-relative-discovery-scopes'"
+            )
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
         }
@@ -851,10 +854,10 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "11")
+        XCTAssertEqual(schema, "12")
     }
 
-    func testV10MigrationPreservesIndexCheckpointAndMigratesRootError() async throws {
+    func testV12MigrationResetsIndexAndAddsCompoundRootIdentity() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")
         let url = root.appendingPathComponent("index.sqlite")
@@ -866,28 +869,33 @@ final class IndexingRegressionTests: XCTestCase {
         let originalIDs = try await database.search(query: "searchable").results.map(\.id)
         let raw = try DatabaseQueue(path: url.path)
         try await raw.write { db in
-            try db.execute(sql: "UPDATE source_root SET last_error='legacy discovery error'")
-            try db.execute(sql: "DROP TABLE source_scan_error")
+            // Recreate the material parts of a v11 database: roots were unique by
+            // path alone and discovery errors still stored absolute scope paths.
+            try db.execute(sql: "CREATE UNIQUE INDEX source_root_v11_path ON source_root(path)")
+            try db.execute(sql: "ALTER TABLE source_scan_error RENAME COLUMN relative_scope TO scope_path")
+            try db.execute(sql: """
+                INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
+                SELECT id, path || '/missing', 'legacy discovery error', 0 FROM source_root
+                """)
             try db.execute(
-                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v10-scoped-discovery-errors'"
+                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v12-relative-discovery-scopes'"
             )
-            try db.execute(
-                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v11-remove-redundant-scan-error-index'"
-            )
-            try db.execute(sql: "UPDATE trace_meta SET value='9' WHERE key='schema_version'")
+            try db.execute(sql: "UPDATE trace_meta SET value='4' WHERE key='index_format_version'")
+            try db.execute(sql: "UPDATE trace_meta SET value='11' WHERE key='schema_version'")
         }
 
         let migrated = try IndexDatabase(url: url)
 
-        XCTAssertFalse(migrated.contentWasResetOnOpen)
+        XCTAssertTrue(migrated.contentWasResetOnOpen)
         let migratedCheckpoint = try await migrated.eventCheckpoint(volumeID: "volume")
         let migratedIDs = try await migrated.search(query: "searchable").results.map(\.id)
-        XCTAssertEqual(migratedCheckpoint, 303)
-        XCTAssertEqual(migratedIDs, originalIDs)
+        XCTAssertNil(migratedCheckpoint)
+        XCTAssertNotEqual(migratedIDs, originalIDs)
+        XCTAssertTrue(migratedIDs.isEmpty)
         let recovery = try await migrated.unresolvedRecoveryWork()
-        XCTAssertEqual(recovery.reconciliationPaths, [source.roots[0].url.path])
+        XCTAssertTrue(recovery.isEmpty)
         let health = try await migrated.sourceHealth()
-        XCTAssertEqual(health.first?.error, "legacy discovery error")
+        XCTAssertTrue(health.isEmpty)
         let redundantIndex = try await raw.read { db in
             try String.fetchOne(
                 db, sql: "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_source_scan_error_root'"
@@ -897,7 +905,27 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "11")
+        XCTAssertEqual(schema, "12")
+        let claudeID = try await migrated.register(root: source.roots[0])
+        let codexID = try await migrated.register(root: .init(agent: .codex, url: root))
+        XCTAssertNotEqual(claudeID, codexID)
+        var duplicateRelativeScopeWasRejected = false
+        do {
+            try await raw.write { db in
+                try db.execute(sql: """
+                    INSERT INTO source_scan_error(root_id, relative_scope, error, updated_at_ms)
+                    VALUES (?, 'missing', 'first', 0), (?, 'missing', 'duplicate', 0)
+                    """, arguments: [claudeID, claudeID])
+            }
+        } catch {
+            duplicateRelativeScopeWasRejected = true
+        }
+        XCTAssertTrue(duplicateRelativeScopeWasRejected)
+        await IndexCoordinator(database: migrated, sources: [source]).indexAll(scope: .proseOnly)
+        let rebuilt = try await migrated.search(query: "searchable")
+        XCTAssertEqual(rebuilt.results.count, 1)
+        let reopenedAgain = try IndexDatabase(url: url)
+        XCTAssertFalse(reopenedAgain.contentWasResetOnOpen)
     }
 
     func testConfiguredRootSynchronizationPurgesRemovedRootImmediately() async throws {
@@ -996,7 +1024,7 @@ final class IndexingRegressionTests: XCTestCase {
         let raw = try DatabaseQueue(path: url.path)
         try await raw.write { db in
             try db.execute(sql: """
-                CREATE TRIGGER fail_incremental_root BEFORE UPDATE OF agent ON source_root
+                CREATE TRIGGER fail_incremental_root BEFORE UPDATE OF is_default ON source_root
                 BEGIN SELECT RAISE(ABORT, 'forced incremental failure'); END
                 """)
         }
@@ -1186,7 +1214,7 @@ final class IndexingRegressionTests: XCTestCase {
         let raw = try DatabaseQueue(path: databaseURL.path)
         try await raw.write { db in
             try db.execute(sql: """
-                CREATE TRIGGER fail_safety_pass BEFORE UPDATE OF agent ON source_root
+                CREATE TRIGGER fail_safety_pass BEFORE UPDATE OF is_default ON source_root
                 BEGIN SELECT RAISE(ABORT, 'forced safety failure'); END
                 """)
         }
@@ -1490,18 +1518,18 @@ final class IndexingRegressionTests: XCTestCase {
             agent: .claudeCode, root: root, path: second.path, message: "second failed"
         )
         try await database.replaceDiscoveryErrors([
-            .init(
+            try discoveryReplacement(
                 rootID: rootID, root: sourceRoot,
-                scannedScope: first.path, failures: [firstFailure]
+                scannedPath: first.path, failures: [firstFailure]
             ),
-            .init(
+            try discoveryReplacement(
                 rootID: rootID, root: sourceRoot,
-                scannedScope: second.path, failures: [secondFailure]
+                scannedPath: second.path, failures: [secondFailure]
             ),
         ])
 
-        try await database.replaceDiscoveryErrors([.init(
-            rootID: rootID, root: sourceRoot, scannedScope: first.path, failures: []
+        try await database.replaceDiscoveryErrors([try discoveryReplacement(
+            rootID: rootID, root: sourceRoot, scannedPath: first.path, failures: []
         )])
 
         let recovery = try await database.unresolvedRecoveryWork()
@@ -1523,14 +1551,14 @@ final class IndexingRegressionTests: XCTestCase {
         let firstID = try await database.register(root: firstRoot)
         let secondID = try await database.register(root: secondRoot)
         try await database.replaceDiscoveryErrors([
-            .init(
-                rootID: firstID, root: firstRoot, scannedScope: first.path,
+            try discoveryReplacement(
+                rootID: firstID, root: firstRoot, scannedPath: first.path,
                 failures: [.init(
                     agent: .claudeCode, root: first, path: first.path, message: "first"
                 )]
             ),
-            .init(
-                rootID: secondID, root: secondRoot, scannedScope: second.path,
+            try discoveryReplacement(
+                rootID: secondID, root: secondRoot, scannedPath: second.path,
                 failures: [.init(
                     agent: .codex, root: second, path: second.path, message: "second"
                 )]
@@ -1547,13 +1575,13 @@ final class IndexingRegressionTests: XCTestCase {
 
         do {
             try await database.replaceDiscoveryErrors([
-                .init(
+                try discoveryReplacement(
                     rootID: firstID, root: firstRoot,
-                    scannedScope: first.path, failures: []
+                    scannedPath: first.path, failures: []
                 ),
-                .init(
+                try discoveryReplacement(
                     rootID: secondID, root: secondRoot,
-                    scannedScope: second.path, failures: []
+                    scannedPath: second.path, failures: []
                 ),
             ])
             XCTFail("expected the second replacement to abort the transaction")
@@ -1592,6 +1620,7 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v9-reset-fsevents-checkpoints'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v10-scoped-discovery-errors'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v11-remove-redundant-scan-error-index'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v12-relative-discovery-scopes'")
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "DROP TABLE fsevents_checkpoint")
             try db.execute(sql: "UPDATE trace_meta SET value='3' WHERE key='schema_version'")
@@ -1606,7 +1635,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "11")
+        XCTAssertEqual(schema, "12")
     }
 
     func testV7MigrationBackfillsPlaceholdersWithoutChangingIndexedIDs() async throws {
@@ -1634,6 +1663,7 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v9-reset-fsevents-checkpoints'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v10-scoped-discovery-errors'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v11-remove-redundant-scan-error-index'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v12-relative-discovery-scopes'")
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "DROP TABLE fsevents_checkpoint")
             try db.execute(sql: "UPDATE trace_meta SET value='6' WHERE key='schema_version'")
@@ -1976,9 +2006,10 @@ final class IndexingRegressionTests: XCTestCase {
 
         XCTAssertEqual(normalized.failure.path, failurePath)
         XCTAssertEqual(
-            normalized.path.path,
+            normalized.scanPath.path,
             target.appendingPathComponent("missing/child").standardized.path
         )
+        XCTAssertEqual(normalized.relativeScope.path, "missing/child")
     }
 
     func testDiscoveryFailurePersistsStableScopeAndRecoversCanonically() async throws {
@@ -2005,14 +2036,14 @@ final class IndexingRegressionTests: XCTestCase {
             let recovery = try await database.unresolvedRecoveryWork()
             let raw = try DatabaseQueue(path: databaseURL.path)
             let storedScope = try await raw.read { db in
-                try String.fetchOne(db, sql: "SELECT scope_path FROM source_scan_error")
+                try String.fetchOne(db, sql: "SELECT relative_scope FROM source_scan_error")
             }
 
             XCTAssertEqual(terminal.phase, .complete)
             XCTAssertEqual(terminal.failedFiles, 1)
             XCTAssertEqual(terminal.error, "aliased discovery failure")
             XCTAssertEqual(terminal.failedReconciliationPaths, [canonicalFailurePath])
-            XCTAssertEqual(storedScope, failurePath)
+            XCTAssertEqual(storedScope, "missing/child")
             XCTAssertEqual(recovery.reconciliationPaths, [canonicalFailurePath])
         }
 
@@ -2035,8 +2066,12 @@ final class IndexingRegressionTests: XCTestCase {
             root: alias, isDefault: false,
             explicitFailures: [.init(path: failurePath, message: "first target failed")]
         )
-        _ = await IndexCoordinator(database: database, sources: [failing])
+        let failingTerminal = await IndexCoordinator(database: database, sources: [failing])
             .indexAllResult(scope: .proseOnly)
+        let beforeRepoint = try await database.unresolvedSourceFailureCounts()
+        XCTAssertEqual(failingTerminal.failedFiles, 1)
+        XCTAssertEqual(failingTerminal.error, "first target failed")
+        XCTAssertEqual(beforeRepoint.discoveryFailures, 1)
 
         try FileManager.default.removeItem(at: alias)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: secondTarget)
@@ -2094,7 +2129,128 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
     }
 
-    func testLegacyTargetFailureRecoversCurrentRootAfterSymlinkRepoint() async throws {
+    func testSubtreeRecoveryPreservesContentWhenWholeAliasedRootIsUnavailable() async throws {
+        let parent = try directory()
+        let target = parent.appendingPathComponent("mounted/source")
+        let subtree = target.appendingPathComponent("project")
+        let alias = parent.appendingPathComponent("configured-root")
+        try FileManager.default.createDirectory(at: subtree, withIntermediateDirectories: true)
+        try Data(line(1).utf8).write(to: subtree.appendingPathComponent("session.jsonl"))
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [alias])
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let sourceRoot = try XCTUnwrap(source.roots.first)
+        let rootID = try await database.register(root: sourceRoot)
+        let failure = DiscoveryFailure(
+            agent: .claudeCode, root: alias, path: alias.appendingPathComponent("project").path,
+            message: "project unavailable"
+        )
+        try await database.replaceDiscoveryErrors([try discoveryReplacement(
+            rootID: rootID, root: sourceRoot,
+            scannedPath: failure.path, failures: [failure]
+        )])
+        let beforeUnmount = try await database.statistics()
+        XCTAssertEqual(beforeUnmount.sourceFileCount, 1)
+
+        try FileManager.default.removeItem(at: target.deletingLastPathComponent())
+        let recovery = try await database.unresolvedRecoveryWork()
+        let terminal = await coordinator.reconcile(
+            paths: recovery.reconciliationPaths, scope: .proseOnly,
+            activity: .subtreeRecovery
+        )
+
+        let afterUnmount = try await database.statistics()
+        let search = try await database.search(query: "searchable")
+        let remaining = try await database.unresolvedRecoveryWork()
+        XCTAssertEqual(terminal.failedFiles, 1)
+        XCTAssertEqual(terminal.unresolvedDiscoveryFailures, 1)
+        XCTAssertEqual(afterUnmount.sourceFileCount, 1)
+        XCTAssertEqual(search.results.count, 1)
+        XCTAssertEqual(remaining.reconciliationPaths, [target.path])
+    }
+
+    func testMissingDescendantUnderAvailableRootClearsErrorAndStaleContent() async throws {
+        let root = try directory()
+        let subtree = root.appendingPathComponent("project")
+        let file = subtree.appendingPathComponent("session.jsonl")
+        try FileManager.default.createDirectory(at: subtree, withIntermediateDirectories: true)
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [root])
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let sourceRoot = try XCTUnwrap(source.roots.first)
+        let rootID = try await database.register(root: sourceRoot)
+        let failure = DiscoveryFailure(
+            agent: .claudeCode, root: root, path: subtree.path, message: "project unavailable"
+        )
+        try await database.replaceDiscoveryErrors([try discoveryReplacement(
+            rootID: rootID, root: sourceRoot,
+            scannedPath: subtree.path, failures: [failure]
+        )])
+
+        try FileManager.default.removeItem(at: subtree)
+        let recovery = try await database.unresolvedRecoveryWork()
+        let terminal = await coordinator.reconcile(
+            paths: recovery.reconciliationPaths, scope: .proseOnly,
+            activity: .subtreeRecovery
+        )
+        let staleState = try await database.sourceState(path: file.path)
+        let remaining = try await database.unresolvedRecoveryWork()
+
+        XCTAssertEqual(terminal.failedFiles, 0)
+        XCTAssertNil(staleState)
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testConfiguredAliasRepointedInsideFrozenTargetStillUsesFrozenScope() throws {
+        let parent = try directory()
+        let target = parent.appendingPathComponent("target")
+        let nested = target.appendingPathComponent("nested")
+        let alias = parent.appendingPathComponent("configured-root")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let root = SourceRoot(agent: .claudeCode, url: alias, isDefault: false)
+
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: nested)
+        let failure = DiscoveryFailure(
+            agent: .claudeCode, root: alias,
+            path: alias.appendingPathComponent("missing/child").path,
+            message: "unavailable"
+        )
+        let normalized = try XCTUnwrap(normalizedDiscoveryFailures([failure], for: root).first)
+
+        XCTAssertEqual(
+            normalized.scanPath.path,
+            target.appendingPathComponent("missing/child").path
+        )
+        XCTAssertEqual(normalized.relativeScope.path, "missing/child")
+    }
+
+    func testOutOfRootDiscoveryFailureIsIgnored() async throws {
+        let parent = try directory()
+        let root = parent.appendingPathComponent("root")
+        let outside = parent.appendingPathComponent("outside/failure")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let source = MultiScopeFailureSource(
+            root: root, isDefault: false,
+            explicitFailures: [.init(path: outside.path, message: "outside")]
+        )
+
+        let terminal = await IndexCoordinator(database: database, sources: [source])
+            .indexAllResult(scope: .proseOnly)
+        let counts = try await database.unresolvedSourceFailureCounts()
+
+        XCTAssertEqual(terminal.failedFiles, 0)
+        XCTAssertNil(terminal.error)
+        XCTAssertEqual(counts.discoveryFailures, 0)
+    }
+
+    func testRelativeFailureRecoversCurrentRootAfterSymlinkRepoint() async throws {
         let parent = try directory()
         let firstTarget = parent.appendingPathComponent("first/source")
         let secondTarget = parent.appendingPathComponent("second/source")
@@ -2106,19 +2262,21 @@ final class IndexingRegressionTests: XCTestCase {
         let database = try IndexDatabase(url: databaseURL)
         let originalRoot = SourceRoot(agent: .claudeCode, url: alias, isDefault: false)
         let rootID = try await database.register(root: originalRoot)
-        let legacyPath = firstTarget.appendingPathComponent("missing/child").path
         let raw = try DatabaseQueue(path: databaseURL.path)
         try await raw.write { db in
             try db.execute(sql: """
-                INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
+                INSERT INTO source_scan_error(root_id, relative_scope, error, updated_at_ms)
                 VALUES (?, ?, 'legacy failure', 0)
-                """, arguments: [rootID, legacyPath])
+                """, arguments: [rootID, "missing/child"])
         }
 
         try FileManager.default.removeItem(at: alias)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: secondTarget)
         let recovery = try await database.unresolvedRecoveryWork()
-        XCTAssertEqual(recovery.reconciliationPaths, [secondTarget.path])
+        XCTAssertEqual(
+            recovery.reconciliationPaths,
+            [secondTarget.appendingPathComponent("missing/child").path]
+        )
 
         let healthy = MultiScopeFailureSource(
             root: alias, isDefault: false, explicitFailures: []
@@ -2161,7 +2319,92 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(health.first?.error, terminal.error)
     }
 
-    func testReplaceDiscoveryErrorsNormalizesRawAliasFailures() async throws {
+    func testFailureDedupPreservesDiacriticsAndCanonicalUnicodeEquivalence() throws {
+        let rootURL = try directory()
+        let root = SourceRoot(agent: .claudeCode, url: rootURL, isDefault: false)
+        let plain = DiscoveryFailure(
+            agent: .claudeCode, root: rootURL,
+            path: rootURL.appendingPathComponent("cafe/child").path,
+            message: "plain"
+        )
+        let accented = DiscoveryFailure(
+            agent: .claudeCode, root: rootURL,
+            path: rootURL.appendingPathComponent("café/child").path,
+            message: "accented"
+        )
+        let decomposed = DiscoveryFailure(
+            agent: .claudeCode, root: rootURL,
+            path: rootURL.appendingPathComponent("café/child").path,
+            message: "decomposed"
+        )
+
+        XCTAssertEqual(normalizedDiscoveryFailures([plain, accented], for: root).count, 2)
+        XCTAssertEqual(normalizedDiscoveryFailures([accented, decomposed], for: root).count, 1)
+    }
+
+    func testAgentsSharingConfiguredPathKeepIndependentRootsAndFailures() async throws {
+        let rootURL = try directory()
+        let databaseURL = rootURL.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: databaseURL)
+        let claude = SourceRoot(agent: .claudeCode, url: rootURL, isDefault: false)
+        let codex = SourceRoot(agent: .codex, url: rootURL, isDefault: false)
+        let claudeID = try await database.register(root: claude)
+        let codexID = try await database.register(root: codex)
+        XCTAssertNotEqual(claudeID, codexID)
+        try await database.replaceDiscoveryErrors([
+            try discoveryReplacement(
+                rootID: claudeID, root: claude, scannedPath: rootURL.path,
+                failures: [.init(
+                    agent: .claudeCode, root: rootURL, path: rootURL.path,
+                    message: "claude failure"
+                )]
+            ),
+            try discoveryReplacement(
+                rootID: codexID, root: codex, scannedPath: rootURL.path,
+                failures: [.init(
+                    agent: .codex, root: rootURL, path: rootURL.path,
+                    message: "codex failure"
+                )]
+            ),
+        ])
+        let raw = try DatabaseQueue(path: databaseURL.path)
+        try await raw.write { db in
+            try db.execute(sql: """
+                INSERT INTO source_root(agent, path, is_default, enabled)
+                VALUES ('future_agent', ?, 0, 1)
+                """, arguments: [rootURL.path])
+            let unknownID = db.lastInsertedRowID
+            try db.execute(sql: """
+                INSERT INTO source_scan_error(root_id, relative_scope, error, updated_at_ms)
+                VALUES (?, '', 'future failure', 0)
+                """, arguments: [unknownID])
+        }
+        let beforeSync = try await database.unresolvedSourceFailureCounts()
+        XCTAssertEqual(beforeSync.discoveryFailures, 3)
+        do {
+            _ = try await database.unresolvedRecoveryWork()
+            XCTFail("unsupported stored agents must not be skipped silently")
+        } catch IndexDatabaseError.unsupportedStoredAgent(let agent) {
+            XCTAssertEqual(agent, "future_agent")
+        }
+
+        let changed = try await database.synchronizeConfiguredRoots([claude])
+        let health = try await database.sourceHealth()
+        let counts = try await database.unresolvedSourceFailureCounts()
+        let unknownCount = try await raw.read { db in
+            try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM source_root WHERE agent='future_agent'"
+            ) ?? -1
+        }
+
+        XCTAssertTrue(changed)
+        XCTAssertEqual(health.map(\.agent), [.claudeCode])
+        XCTAssertEqual(health.first?.error, "claude failure")
+        XCTAssertEqual(counts.discoveryFailures, 1)
+        XCTAssertEqual(unknownCount, 0)
+    }
+
+    func testPreparedDiscoveryErrorsPersistNormalizedAliasFailures() async throws {
         let root = try directory()
         let target = root.appendingPathComponent("target")
         let alias = root.appendingPathComponent("alias")
@@ -2173,8 +2416,8 @@ final class IndexingRegressionTests: XCTestCase {
         let aliasFailure = alias.appendingPathComponent("missing/child").path
         let targetFailure = target.appendingPathComponent("missing/child").path
 
-        try await database.replaceDiscoveryErrors([.init(
-            rootID: rootID, root: sourceRoot, scannedScope: root.path,
+        try await database.replaceDiscoveryErrors([try discoveryReplacement(
+            rootID: rootID, root: sourceRoot, scannedPath: root.path,
             failures: [
                 .init(
                     agent: .claudeCode, root: root, path: aliasFailure,
@@ -2201,8 +2444,8 @@ final class IndexingRegressionTests: XCTestCase {
         let upper = root.appendingPathComponent("Missing/child").path
         let lower = root.appendingPathComponent("missing/child").path
 
-        try await database.replaceDiscoveryErrors([.init(
-            rootID: rootID, root: sourceRoot, scannedScope: root.path,
+        try await database.replaceDiscoveryErrors([try discoveryReplacement(
+            rootID: rootID, root: sourceRoot, scannedPath: root.path,
             failures: [
                 .init(agent: .claudeCode, root: root, path: upper, message: "upper"),
                 .init(agent: .claudeCode, root: root, path: lower, message: "lower"),
@@ -2319,7 +2562,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(TraceFileIO.comparisonKey(path, caseSensitive: true), path)
         XCTAssertEqual(
             TraceFileIO.comparisonKey(path, caseSensitive: false),
-            "/tmp/trace/resume.jsonl"
+            "/tmp/trace/résumé.jsonl"
         )
     }
 
@@ -2696,6 +2939,18 @@ private struct ScopedDiscoveryFailureSource: SessionSource {
     ) throws -> HydratedMessage {
         try base.hydrate(fileURL: fileURL, format: format, locator: locator)
     }
+}
+
+private func discoveryReplacement(
+    rootID: Int64, root: SourceRoot, scannedPath: String,
+    failures: [DiscoveryFailure]
+) throws -> DiscoveryErrorReplacement {
+    let scope = try XCTUnwrap(root.scope(forRawPath: scannedPath))
+    return DiscoveryErrorReplacement(
+        rootID: rootID,
+        scannedScope: scope.relativeScope,
+        failures: normalizedDiscoveryFailures(failures, for: root)
+    )
 }
 
 private struct SyntheticDiscoveryFailure: Sendable {

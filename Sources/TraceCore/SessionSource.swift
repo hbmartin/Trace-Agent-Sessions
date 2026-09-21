@@ -23,7 +23,7 @@ public struct DiscoveryFailure: Hashable, Sendable {
 
     public let agent: AgentKind
     public let root: URL
-    public private(set) var path: String
+    public let path: String
     public let message: String
     public let kind: Kind
 
@@ -38,47 +38,45 @@ public struct DiscoveryFailure: Hashable, Sendable {
         self.kind = kind
     }
 
-    func with(path: String) -> Self {
-        var copy = self
-        copy.path = path
-        return copy
-    }
 }
 
 struct NormalizedDiscoveryFailure: Sendable {
     let failure: DiscoveryFailure
-    let path: TraceFileIO.CanonicalPath
+    let scanPath: TraceFileIO.CanonicalPath
+    let relativeScope: RootRelativeScope
 }
 
 func normalizedDiscoveryFailures(
     _ failures: [DiscoveryFailure], for root: SourceRoot
 ) -> [NormalizedDiscoveryFailure] {
-    let ordered = failures.map { failure in
-        let path = root.canonicalScopePath(failure.path)
+    let ordered = failures.compactMap { failure -> NormalizedDiscoveryFailure? in
+        guard let scope = root.scope(forRawPath: failure.path) else { return nil }
         return NormalizedDiscoveryFailure(
-            failure: failure.with(path: root.configuredScopePath(path)), path: path
+            failure: failure,
+            scanPath: scope.scanPath,
+            relativeScope: scope.relativeScope
         )
     }.sorted { lhs, rhs in
         let left = (
-            lhs.path.comparisonKey,
+            lhs.relativeScope.comparisonKey,
             lhs.failure.kind == .unreadable ? 0 : 1,
-            lhs.failure.path,
             lhs.failure.message,
+            lhs.failure.path,
             lhs.failure.agent.rawValue,
             lhs.failure.root.path
         )
         let right = (
-            rhs.path.comparisonKey,
+            rhs.relativeScope.comparisonKey,
             rhs.failure.kind == .unreadable ? 0 : 1,
-            rhs.failure.path,
             rhs.failure.message,
+            rhs.failure.path,
             rhs.failure.agent.rawValue,
             rhs.failure.root.path
         )
         return left < right
     }
-    var seen: Set<String> = []
-    return ordered.filter { seen.insert($0.path.comparisonKey).inserted }
+    var seen: Set<RootRelativeScope> = []
+    return ordered.filter { seen.insert($0.relativeScope).inserted }
 }
 
 public struct DiscoveryResult: Sendable {
@@ -185,12 +183,42 @@ public extension SessionSource {
             // Do not touch roots that cannot contribute to this scoped request.
             guard !starts.isEmpty else { continue }
 
+            let rootItemType: FileAttributeType?
+            do { rootItemType = try itemTypeIfPresent(for: root.scanURL) }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                failures.append(.init(
+                    agent: agent, root: root.url, path: root.scanURL.path,
+                    message: error.localizedDescription
+                ))
+                continue
+            }
+            guard let rootItemType else {
+                failures.append(.init(
+                    agent: agent, root: root.url, path: root.scanURL.path,
+                    message: "The configured source root is not currently available",
+                    kind: .missingRoot
+                ))
+                continue
+            }
+            guard rootItemType == .typeDirectory else {
+                failures.append(.init(
+                    agent: agent, root: root.url, path: root.scanURL.path,
+                    message: "The configured source root is not a directory"
+                ))
+                continue
+            }
+
             var seenStarts: Set<String> = []
             for start in starts where seenStarts.insert(TraceFileIO.canonicalPath(start.path).comparisonKey).inserted {
                 let startPath = TraceFileIO.canonicalPath(start.path)
                 let startsAtRoot = startPath.comparisonKey == rootPath.comparisonKey
                 let itemType: FileAttributeType?
-                do { itemType = try itemTypeIfPresent(for: URL(fileURLWithPath: start.path)) }
+                do {
+                    itemType = startsAtRoot
+                        ? rootItemType
+                        : try itemTypeIfPresent(for: URL(fileURLWithPath: start.path))
+                }
                 catch is CancellationError { throw CancellationError() }
                 catch {
                     failures.append(.init(
@@ -200,15 +228,8 @@ public extension SessionSource {
                     continue
                 }
                 guard let itemType else {
-                    // A missing descendant is a successful empty subtree scan. A
-                    // missing root is classified later using its persisted history.
-                    if startsAtRoot {
-                        failures.append(.init(
-                            agent: agent, root: root.url, path: start.path,
-                            message: "The configured source root is not currently available",
-                            kind: .missingRoot
-                        ))
-                    }
+                    // The root preflight above proved the root is available, so a
+                    // missing descendant is a successful empty subtree scan.
                     continue
                 }
                 if itemType != .typeDirectory {
