@@ -194,36 +194,23 @@ public actor IndexCoordinator {
             var discoveryAttempts: [(
                 source: any SessionSource, root: SourceRoot,
                 scope: TraceFileIO.CanonicalPath,
-                failures: [(failure: DiscoveryFailure, path: TraceFileIO.CanonicalPath)]
+                failures: [NormalizedDiscoveryFailure]
             )] = []
             let canonicalReconciliationPaths = reconciliationPaths.map(
                 TraceFileIO.canonicalPath
             )
-
-            func canonicalizedFailures(
-                _ failures: [DiscoveryFailure]
-            ) -> [(failure: DiscoveryFailure, path: TraceFileIO.CanonicalPath)] {
-                failures.map { ($0, TraceFileIO.canonicalPath($0.path)) }.sorted { lhs, rhs in
-                    (
-                        lhs.failure.agent.rawValue, lhs.failure.root.path,
-                        lhs.path.comparisonKey, lhs.failure.message
-                    ) < (
-                        rhs.failure.agent.rawValue, rhs.failure.root.path,
-                        rhs.path.comparisonKey, rhs.failure.message
-                    )
-                }
-            }
 
             func absorbDiscoveryResult(
                 _ result: DiscoveryResult, source: any SessionSource,
                 roots: [SourceRoot], scope: TraceFileIO.CanonicalPath
             ) {
                 allFiles += result.files
-                let failures = canonicalizedFailures(result.failures)
                 for root in roots {
                     discoveryAttempts.append((
                         source, root, scope,
-                        failures.filter { $0.failure.root.path == root.url.path }
+                        normalizedDiscoveryFailures(
+                            result.failures.filter { $0.root.path == root.url.path }, for: root
+                        )
                     ))
                 }
             }
@@ -246,7 +233,8 @@ public actor IndexCoordinator {
                                 message: error.localizedDescription
                             )
                             discoveryAttempts.append((
-                                source, root, scope, canonicalizedFailures([failure])
+                                source, root, scope,
+                                normalizedDiscoveryFailures([failure], for: root)
                             ))
                         }
                     }
@@ -267,12 +255,14 @@ public actor IndexCoordinator {
                                     scopedTo: Set(scopes.map(\.path))
                                 )
                                 allFiles += result.files
-                                let failures = canonicalizedFailures(result.failures)
+                                let failures = normalizedDiscoveryFailures(
+                                    result.failures.filter { $0.root.path == root.url.path },
+                                    for: root
+                                )
                                 for scope in scopes {
                                     discoveryAttempts.append((source, root, scope,
                                         failures.filter { failure in
-                                            failure.failure.root.path == root.url.path
-                                                && scope.intersects(failure.path)
+                                            scope.intersects(failure.path)
                                         }
                                     ))
                                 }
@@ -285,7 +275,8 @@ public actor IndexCoordinator {
                                         message: error.localizedDescription
                                     )
                                     discoveryAttempts.append((
-                                        source, root, scope, canonicalizedFailures([failure])
+                                        source, root, scope,
+                                        normalizedDiscoveryFailures([failure], for: root)
                                     ))
                                 }
                             }
@@ -300,9 +291,7 @@ public actor IndexCoordinator {
                     } else if let (_, file, _) = classify(url: url) { allFiles.append(file) }
                 }
             }
-            var discoveryErrorReplacements: [(
-                rootID: Int64, scannedScope: String, failures: [DiscoveryFailure]
-            )] = []
+            var discoveryErrorReplacements: [DiscoveryErrorReplacement] = []
             discoveryAttempts.sort { lhs, rhs in
                 (
                     lhs.source.agent.rawValue, lhs.root.scanPath.comparisonKey,
@@ -314,13 +303,7 @@ public actor IndexCoordinator {
             }
             for attempt in discoveryAttempts {
                 guard let rootID = rootIDs[attempt.root.id] else { continue }
-                let failures = attempt.failures.map { entry in
-                    DiscoveryFailure(
-                        agent: entry.failure.agent, root: entry.failure.root,
-                        path: entry.path.path, message: entry.failure.message,
-                        kind: entry.failure.kind
-                    )
-                }
+                let failures = attempt.failures.map(\.failure)
                 var suppressNeverSeenDefault = false
                 if attempt.root.isDefault, !attempt.root.hasSymlinkedComponent, !failures.isEmpty,
                    failures.allSatisfy({ $0.kind == .missingRoot }) {
@@ -330,7 +313,10 @@ public actor IndexCoordinator {
                     // Optional default roots that have never existed stay quiet.
                     continue
                 }
-                discoveryErrorReplacements.append((rootID, attempt.scope.path, failures))
+                discoveryErrorReplacements.append(.init(
+                    rootID: rootID, root: attempt.root,
+                    scannedScope: attempt.scope.path, failures: failures
+                ))
                 for entry in attempt.failures {
                     let failure = entry.failure
                     let failedScope = entry.path

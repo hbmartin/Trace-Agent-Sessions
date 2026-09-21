@@ -135,22 +135,24 @@ final class TraceUITests: XCTestCase {
         ].joined(separator: "\n") + "\n"
         try Data(live.utf8).write(to: rollout)
         let checkpointDatabase = directory.appendingPathComponent("index.sqlite")
-        XCTAssertTrue(poll(timeout: 15) {
-            let count = try? sqliteInteger(
-                checkpointDatabase,
-                sql: "SELECT count(*) FROM message WHERE prefix='Successful watcher live marker'"
-            )
-            return count == 1 ? true : nil
-        } ?? false, "a successful watcher must remain active after a sibling watcher fails")
-        let checkpointCount: Int64 = try XCTUnwrap(poll(timeout: 15) {
-            guard let count = try? sqliteInteger(
-                checkpointDatabase, sql: "SELECT count(*) FROM fsevents_checkpoint"
-            ) else { return nil }
-            return count >= 2 ? count : nil
-        }, "split source and metadata watcher checkpoints must be persisted")
-        XCTAssertGreaterThanOrEqual(
-            checkpointCount, 2,
-            "split source and metadata watchers must retain distinct checkpoint identities"
+        let messageResult = pollSQLiteInteger(
+            checkpointDatabase,
+            sql: "SELECT count(*) FROM message WHERE prefix='Successful watcher live marker'",
+            timeout: 15, until: { $0 == 1 }
+        )
+        XCTAssertNil(messageResult.error, "the message-count sqlite3 query must succeed")
+        XCTAssertEqual(
+            messageResult.value, 1,
+            "a successful watcher must remain active after a sibling watcher fails"
+        )
+        let checkpointResult = pollSQLiteInteger(
+            checkpointDatabase, sql: "SELECT count(*) FROM fsevents_checkpoint",
+            timeout: 15, until: { $0 >= 2 }
+        )
+        XCTAssertNil(checkpointResult.error, "the checkpoint-count sqlite3 query must succeed")
+        XCTAssertNotNil(
+            checkpointResult.value,
+            "split source and metadata watcher checkpoints must be persisted"
         )
         XCTAssertEqual(try sqliteInteger(
             checkpointDatabase,
@@ -1116,6 +1118,24 @@ final class TraceUITests: XCTestCase {
             Thread.sleep(forTimeInterval: interval)
         }
         return value()
+    }
+
+    private func pollSQLiteInteger(
+        _ database: URL, sql: String, timeout: TimeInterval,
+        until predicate: (Int64) -> Bool
+    ) -> (value: Int64?, error: Error?) {
+        var latestError: Error?
+        let value: Int64? = poll(timeout: timeout) {
+            do {
+                let value = try sqliteInteger(database, sql: sql)
+                latestError = nil
+                return predicate(value) ? value : nil
+            } catch {
+                latestError = error
+                return nil
+            }
+        }
+        return (value, latestError)
     }
 
     private func waitForFile(_ url: URL, timeout: TimeInterval = 10) -> Bool {

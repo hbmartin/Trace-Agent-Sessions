@@ -1490,11 +1490,19 @@ final class IndexingRegressionTests: XCTestCase {
             agent: .claudeCode, root: root, path: second.path, message: "second failed"
         )
         try await database.replaceDiscoveryErrors([
-            (rootID, first.path, [firstFailure]),
-            (rootID, second.path, [secondFailure]),
+            .init(
+                rootID: rootID, root: sourceRoot,
+                scannedScope: first.path, failures: [firstFailure]
+            ),
+            .init(
+                rootID: rootID, root: sourceRoot,
+                scannedScope: second.path, failures: [secondFailure]
+            ),
         ])
 
-        try await database.replaceDiscoveryErrors([(rootID, first.path, [])])
+        try await database.replaceDiscoveryErrors([.init(
+            rootID: rootID, root: sourceRoot, scannedScope: first.path, failures: []
+        )])
 
         let recovery = try await database.unresolvedRecoveryWork()
         let failureCounts = try await database.unresolvedSourceFailureCounts()
@@ -1510,15 +1518,23 @@ final class IndexingRegressionTests: XCTestCase {
         try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
         let databaseURL = parent.appendingPathComponent("index.sqlite")
         let database = try IndexDatabase(url: databaseURL)
-        let firstID = try await database.register(root: .init(agent: .claudeCode, url: first))
-        let secondID = try await database.register(root: .init(agent: .codex, url: second))
+        let firstRoot = SourceRoot(agent: .claudeCode, url: first)
+        let secondRoot = SourceRoot(agent: .codex, url: second)
+        let firstID = try await database.register(root: firstRoot)
+        let secondID = try await database.register(root: secondRoot)
         try await database.replaceDiscoveryErrors([
-            (firstID, first.path, [.init(
-                agent: .claudeCode, root: first, path: first.path, message: "first"
-            )]),
-            (secondID, second.path, [.init(
-                agent: .codex, root: second, path: second.path, message: "second"
-            )]),
+            .init(
+                rootID: firstID, root: firstRoot, scannedScope: first.path,
+                failures: [.init(
+                    agent: .claudeCode, root: first, path: first.path, message: "first"
+                )]
+            ),
+            .init(
+                rootID: secondID, root: secondRoot, scannedScope: second.path,
+                failures: [.init(
+                    agent: .codex, root: second, path: second.path, message: "second"
+                )]
+            ),
         ])
         let raw = try DatabaseQueue(path: databaseURL.path)
         try await raw.write { db in
@@ -1531,8 +1547,14 @@ final class IndexingRegressionTests: XCTestCase {
 
         do {
             try await database.replaceDiscoveryErrors([
-                (firstID, first.path, []),
-                (secondID, second.path, []),
+                .init(
+                    rootID: firstID, root: firstRoot,
+                    scannedScope: first.path, failures: []
+                ),
+                .init(
+                    rootID: secondID, root: secondRoot,
+                    scannedScope: second.path, failures: []
+                ),
             ])
             XCTFail("expected the second replacement to abort the transaction")
         } catch { }
@@ -1939,7 +1961,27 @@ final class IndexingRegressionTests: XCTestCase {
         )
     }
 
-    func testDiscoveryFailurePersistsCanonicalScopeAcrossDatabaseReopen() async throws {
+    func testDiscoveryFailureNormalizationMapsDanglingConfiguredSymlink() throws {
+        let parent = try directory()
+        let target = parent.appendingPathComponent("unmounted/source")
+        let alias = parent.appendingPathComponent("configured-root")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let failurePath = alias.appendingPathComponent("missing/child").path
+        let root = SourceRoot(agent: .claudeCode, url: alias, isDefault: false)
+        let failure = DiscoveryFailure(
+            agent: .claudeCode, root: alias, path: failurePath, message: "unavailable"
+        )
+
+        let normalized = try XCTUnwrap(normalizedDiscoveryFailures([failure], for: root).first)
+
+        XCTAssertEqual(normalized.failure.path, failurePath)
+        XCTAssertEqual(
+            normalized.path.path,
+            target.appendingPathComponent("missing/child").standardized.path
+        )
+    }
+
+    func testDiscoveryFailurePersistsStableScopeAndRecoversCanonically() async throws {
         let parent = try directory()
         let target = parent.appendingPathComponent("mounted/source")
         let alias = parent.appendingPathComponent("configured-root")
@@ -1952,24 +1994,226 @@ final class IndexingRegressionTests: XCTestCase {
 
         do {
             let database = try IndexDatabase(url: databaseURL)
-            let source = AliasedDiscoveryFailureSource(
-                root: alias, failurePath: failurePath
+            let source = MultiScopeFailureSource(
+                root: alias, isDefault: false,
+                explicitFailures: [.init(
+                    path: failurePath, message: "aliased discovery failure"
+                )]
             )
             let terminal = await IndexCoordinator(database: database, sources: [source])
                 .indexAllResult(scope: .proseOnly)
             let recovery = try await database.unresolvedRecoveryWork()
+            let raw = try DatabaseQueue(path: databaseURL.path)
+            let storedScope = try await raw.read { db in
+                try String.fetchOne(db, sql: "SELECT scope_path FROM source_scan_error")
+            }
 
             XCTAssertEqual(terminal.phase, .complete)
             XCTAssertEqual(terminal.failedFiles, 1)
             XCTAssertEqual(terminal.error, "aliased discovery failure")
+            XCTAssertEqual(terminal.failedReconciliationPaths, [canonicalFailurePath])
+            XCTAssertEqual(storedScope, failurePath)
             XCTAssertEqual(recovery.reconciliationPaths, [canonicalFailurePath])
-            XCTAssertFalse(recovery.reconciliationPaths.contains(failurePath))
         }
 
         let reopened = try IndexDatabase(url: databaseURL)
         let durableRecovery = try await reopened.unresolvedRecoveryWork()
         XCTAssertEqual(durableRecovery.reconciliationPaths, [canonicalFailurePath])
-        XCTAssertFalse(durableRecovery.reconciliationPaths.contains(failurePath))
+    }
+
+    func testFullScanClearsDiscoveryFailureAfterRootSymlinkIsRepointed() async throws {
+        let parent = try directory()
+        let firstTarget = parent.appendingPathComponent("first/source")
+        let secondTarget = parent.appendingPathComponent("second/source")
+        let alias = parent.appendingPathComponent("configured-root")
+        try FileManager.default.createDirectory(at: firstTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondTarget, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: firstTarget)
+        let failurePath = alias.appendingPathComponent("missing/child").path
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let failing = MultiScopeFailureSource(
+            root: alias, isDefault: false,
+            explicitFailures: [.init(path: failurePath, message: "first target failed")]
+        )
+        _ = await IndexCoordinator(database: database, sources: [failing])
+            .indexAllResult(scope: .proseOnly)
+
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: secondTarget)
+        let healthy = MultiScopeFailureSource(
+            root: alias, isDefault: false, explicitFailures: []
+        )
+        let terminal = await IndexCoordinator(database: database, sources: [healthy])
+            .indexAllResult(scope: .proseOnly)
+
+        XCTAssertEqual(terminal.phase, .complete)
+        XCTAssertEqual(terminal.failedFiles, 0)
+        XCTAssertEqual(terminal.unresolvedDiscoveryFailures, 0)
+        let recovery = try await database.unresolvedRecoveryWork()
+        XCTAssertTrue(recovery.isEmpty)
+    }
+
+    func testReconciliationClearsDiscoveryFailureAfterRootSymlinkIsRepointed() async throws {
+        let parent = try directory()
+        let firstTarget = parent.appendingPathComponent("first/source")
+        let secondTarget = parent.appendingPathComponent("second/source")
+        let alias = parent.appendingPathComponent("configured-root")
+        try FileManager.default.createDirectory(at: firstTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondTarget, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: firstTarget)
+        let failurePath = alias.appendingPathComponent("missing/child").path
+        let databaseURL = parent.appendingPathComponent("index.sqlite")
+
+        do {
+            let database = try IndexDatabase(url: databaseURL)
+            let failing = MultiScopeFailureSource(
+                root: alias, isDefault: false,
+                explicitFailures: [.init(path: failurePath, message: "first target failed")]
+            )
+            _ = await IndexCoordinator(database: database, sources: [failing])
+                .indexAllResult(scope: .proseOnly)
+        }
+
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: secondTarget)
+        let reopened = try IndexDatabase(url: databaseURL)
+        let recovery = try await reopened.unresolvedRecoveryWork()
+        let currentFailurePath = secondTarget.appendingPathComponent("missing/child").path
+        XCTAssertEqual(recovery.reconciliationPaths, [currentFailurePath])
+
+        let healthy = MultiScopeFailureSource(
+            root: alias, isDefault: false, explicitFailures: []
+        )
+        let terminal = await IndexCoordinator(database: reopened, sources: [healthy]).reconcile(
+            paths: recovery.reconciliationPaths, scope: .proseOnly, activity: .subtreeRecovery
+        )
+
+        XCTAssertEqual(terminal.phase, .complete)
+        XCTAssertTrue(terminal.failedReconciliationPaths.isEmpty)
+        let remaining = try await reopened.unresolvedRecoveryWork()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testLegacyTargetFailureRecoversCurrentRootAfterSymlinkRepoint() async throws {
+        let parent = try directory()
+        let firstTarget = parent.appendingPathComponent("first/source")
+        let secondTarget = parent.appendingPathComponent("second/source")
+        let alias = parent.appendingPathComponent("configured-root")
+        try FileManager.default.createDirectory(at: firstTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondTarget, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: firstTarget)
+        let databaseURL = parent.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: databaseURL)
+        let originalRoot = SourceRoot(agent: .claudeCode, url: alias, isDefault: false)
+        let rootID = try await database.register(root: originalRoot)
+        let legacyPath = firstTarget.appendingPathComponent("missing/child").path
+        let raw = try DatabaseQueue(path: databaseURL.path)
+        try await raw.write { db in
+            try db.execute(sql: """
+                INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
+                VALUES (?, ?, 'legacy failure', 0)
+                """, arguments: [rootID, legacyPath])
+        }
+
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: secondTarget)
+        let recovery = try await database.unresolvedRecoveryWork()
+        XCTAssertEqual(recovery.reconciliationPaths, [secondTarget.path])
+
+        let healthy = MultiScopeFailureSource(
+            root: alias, isDefault: false, explicitFailures: []
+        )
+        _ = await IndexCoordinator(database: database, sources: [healthy]).reconcile(
+            paths: recovery.reconciliationPaths, scope: .proseOnly, activity: .subtreeRecovery
+        )
+        let remaining = try await database.unresolvedRecoveryWork()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testCanonicalDuplicateFailuresCountAndPersistOnce() async throws {
+        let root = try directory()
+        let target = root.appendingPathComponent("target")
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let aliasFailure = alias.appendingPathComponent("missing/child").path
+        let targetFailure = target.appendingPathComponent("missing/child").path
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = MultiScopeFailureSource(
+            root: root, isDefault: false,
+            explicitFailures: [
+                .init(path: aliasFailure, message: "zeta failure"),
+                .init(path: targetFailure, message: "alpha failure"),
+            ]
+        )
+
+        let terminal = await IndexCoordinator(database: database, sources: [source])
+            .indexAllResult(scope: .proseOnly)
+        let counts = try await database.unresolvedSourceFailureCounts()
+        let recovery = try await database.unresolvedRecoveryWork()
+        let health = try await database.sourceHealth()
+
+        XCTAssertEqual(terminal.failedFiles, 1)
+        XCTAssertEqual(terminal.error, "alpha failure")
+        XCTAssertEqual(terminal.failedReconciliationPaths, [targetFailure])
+        XCTAssertEqual(counts.discoveryFailures, 1)
+        XCTAssertEqual(recovery.reconciliationPaths, [targetFailure])
+        XCTAssertEqual(health.first?.error, terminal.error)
+    }
+
+    func testReplaceDiscoveryErrorsNormalizesRawAliasFailures() async throws {
+        let root = try directory()
+        let target = root.appendingPathComponent("target")
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let sourceRoot = SourceRoot(agent: .claudeCode, url: root, isDefault: false)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let rootID = try await database.register(root: sourceRoot)
+        let aliasFailure = alias.appendingPathComponent("missing/child").path
+        let targetFailure = target.appendingPathComponent("missing/child").path
+
+        try await database.replaceDiscoveryErrors([.init(
+            rootID: rootID, root: sourceRoot, scannedScope: root.path,
+            failures: [
+                .init(
+                    agent: .claudeCode, root: root, path: aliasFailure,
+                    message: "missing-root failure", kind: .missingRoot
+                ),
+                .init(
+                    agent: .claudeCode, root: root, path: targetFailure,
+                    message: "unreadable failure"
+                ),
+            ]
+        )])
+
+        let counts = try await database.unresolvedSourceFailureCounts()
+        let health = try await database.sourceHealth()
+        XCTAssertEqual(counts.discoveryFailures, 1)
+        XCTAssertEqual(health.first?.error, "unreadable failure")
+    }
+
+    func testReplaceDiscoveryErrorsUsesVolumeCaseSensitivityForMissingPaths() async throws {
+        let root = try directory()
+        let sourceRoot = SourceRoot(agent: .claudeCode, url: root, isDefault: false)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let rootID = try await database.register(root: sourceRoot)
+        let upper = root.appendingPathComponent("Missing/child").path
+        let lower = root.appendingPathComponent("missing/child").path
+
+        try await database.replaceDiscoveryErrors([.init(
+            rootID: rootID, root: sourceRoot, scannedScope: root.path,
+            failures: [
+                .init(agent: .claudeCode, root: root, path: upper, message: "upper"),
+                .init(agent: .claudeCode, root: root, path: lower, message: "lower"),
+            ]
+        )])
+
+        let expected = sourceRoot.scanPath.isCaseSensitive ? 2 : 1
+        let counts = try await database.unresolvedSourceFailureCounts()
+        let recovery = try await database.unresolvedRecoveryWork()
+        XCTAssertEqual(counts.discoveryFailures, expected)
+        XCTAssertEqual(recovery.reconciliationPaths.count, expected)
     }
 
     func testNeverSeenMissingDefaultRootStaysQuietAndUnscanned() async throws {
@@ -2454,63 +2698,40 @@ private struct ScopedDiscoveryFailureSource: SessionSource {
     }
 }
 
+private struct SyntheticDiscoveryFailure: Sendable {
+    let path: String
+    let message: String
+    var kind: DiscoveryFailure.Kind = .unreadable
+}
+
 private struct MultiScopeFailureSource: SessionSource {
     let agent = AgentKind.claudeCode
     let roots: [SourceRoot]
+    let explicitFailures: [SyntheticDiscoveryFailure]?
 
-    init(root: URL) {
-        roots = [.init(agent: .claudeCode, url: root)]
+    init(
+        root: URL, isDefault: Bool = true,
+        explicitFailures: [SyntheticDiscoveryFailure]? = nil
+    ) {
+        roots = [.init(agent: .claudeCode, url: root, isDefault: isDefault)]
+        self.explicitFailures = explicitFailures
     }
 
     func discover() throws -> [DiscoveredSourceFile] { [] }
 
     func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
-        let paths = paths ?? [roots[0].scanURL.path]
-        return .init(failures: paths.map { path in
-            .init(
-                agent: agent, root: roots[0].url, path: path,
+        let failures = explicitFailures ?? (paths ?? [roots[0].scanURL.path]).map { path in
+            SyntheticDiscoveryFailure(
+                path: path,
                 message: "\(URL(fileURLWithPath: path).lastPathComponent) failed"
             )
+        }
+        return .init(failures: failures.map { failure in
+            .init(
+                agent: agent, root: roots[0].url, path: failure.path,
+                message: failure.message, kind: failure.kind
+            )
         })
-    }
-
-    func records(
-        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?
-    ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        AsyncThrowingStream { $0.finish() }
-    }
-
-    func records(
-        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
-        initialSessionID: String?
-    ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        records(in: file, from: offset, through: boundary)
-    }
-
-    func hydrate(
-        fileURL: URL, format: SourceFormat, locator: RecordLocator
-    ) throws -> HydratedMessage {
-        throw SessionSourceError.unsupportedLocator
-    }
-}
-
-private struct AliasedDiscoveryFailureSource: SessionSource {
-    let agent = AgentKind.claudeCode
-    let roots: [SourceRoot]
-    let failurePath: String
-
-    init(root: URL, failurePath: String) {
-        roots = [.init(agent: .claudeCode, url: root, isDefault: false)]
-        self.failurePath = failurePath
-    }
-
-    func discover() throws -> [DiscoveredSourceFile] { [] }
-
-    func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
-        .init(failures: [.init(
-            agent: agent, root: roots[0].url, path: failurePath,
-            message: "aliased discovery failure"
-        )])
     }
 
     func records(

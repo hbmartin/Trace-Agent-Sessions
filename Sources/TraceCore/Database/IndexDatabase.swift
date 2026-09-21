@@ -32,6 +32,13 @@ struct IndexedSourceState: Sendable {
     let hadRecordedError: Bool
 }
 
+struct DiscoveryErrorReplacement: Sendable {
+    let rootID: Int64
+    let root: SourceRoot
+    let scannedScope: String
+    let failures: [DiscoveryFailure]
+}
+
 public actor IndexDatabase {
     public static let schemaVersion = 11
     public static let indexFormatVersion = 4
@@ -1091,21 +1098,43 @@ public actor IndexDatabase {
             let files = try Set(String.fetchAll(
                 db, sql: "SELECT path FROM source_file WHERE last_error IS NOT NULL"
             ))
-            let roots = try Set(String.fetchAll(
-                db, sql: "SELECT scope_path FROM source_scan_error"
-            ))
-            return .init(filePaths: files, reconciliationPaths: roots)
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT e.scope_path, r.agent, r.path, r.is_default
+                FROM source_scan_error e
+                JOIN source_root r ON r.id=e.root_id
+                """)
+            var scopes: Set<String> = []
+            for row in rows {
+                let agentRaw: String = row["agent"]
+                guard let agent = AgentKind(rawValue: agentRaw) else { continue }
+                let root = SourceRoot(
+                    agent: agent,
+                    url: URL(fileURLWithPath: row["path"] as String),
+                    isDefault: row["is_default"]
+                )
+                let stored: String = row["scope_path"]
+                let scope = root.canonicalScopePath(stored)
+                if scope.intersects(root.scanPath) {
+                    scopes.insert(scope.contains(root.scanPath) ? root.scanPath.path : scope.path)
+                } else {
+                    // A legacy row may name the target of a symlink before it was
+                    // repointed. Recover the current root so the stale row clears.
+                    scopes.insert(root.scanPath.path)
+                }
+            }
+            return .init(filePaths: files, reconciliationPaths: scopes)
         }
     }
 
     func replaceDiscoveryErrors(
-        _ replacements: [(rootID: Int64, scannedScope: String, failures: [DiscoveryFailure])]
+        _ replacements: [DiscoveryErrorReplacement]
     ) throws {
         guard !replacements.isEmpty else { return }
         try pool.write { db in
             let now = Int64(Date().timeIntervalSince1970 * 1_000)
             for replacement in replacements {
-                let scanned = TraceFileIO.canonicalPath(replacement.scannedScope)
+                let scanned = replacement.root.canonicalScopePath(replacement.scannedScope)
+                let replacesWholeRoot = scanned.contains(replacement.root.scanPath)
                 let existing = try Row.fetchAll(
                     db, sql: "SELECT id, scope_path FROM source_scan_error WHERE root_id=?",
                     arguments: [replacement.rootID]
@@ -1113,21 +1142,25 @@ public actor IndexDatabase {
                 for row in existing {
                     let scopePath: String = row["scope_path"]
                     let errorID: Int64 = row["id"]
-                    let errorScope = TraceFileIO.canonicalPath(scopePath)
-                    if scanned.contains(errorScope) {
+                    let errorScope = replacement.root.canonicalScopePath(scopePath)
+                    if replacesWholeRoot || scanned.contains(errorScope) {
                         try db.execute(
                             sql: "DELETE FROM source_scan_error WHERE id=?",
                             arguments: [errorID]
                         )
                     }
                 }
-                for failure in replacement.failures {
+                for entry in normalizedDiscoveryFailures(
+                    replacement.failures, for: replacement.root
+                ) {
                     try db.execute(sql: """
                         INSERT INTO source_scan_error(root_id, scope_path, error, updated_at_ms)
                         VALUES (?, ?, ?, ?)
                         ON CONFLICT(root_id, scope_path) DO UPDATE SET
                             error=excluded.error, updated_at_ms=excluded.updated_at_ms
-                        """, arguments: [replacement.rootID, failure.path, failure.message, now])
+                        """, arguments: [
+                            replacement.rootID, entry.failure.path, entry.failure.message, now,
+                        ])
                 }
                 try db.execute(
                     sql: "UPDATE source_root SET last_scan_ms=?, last_error=NULL WHERE id=?",
