@@ -1939,6 +1939,39 @@ final class IndexingRegressionTests: XCTestCase {
         )
     }
 
+    func testDiscoveryFailurePersistsCanonicalScopeAcrossDatabaseReopen() async throws {
+        let parent = try directory()
+        let target = parent.appendingPathComponent("mounted/source")
+        let alias = parent.appendingPathComponent("configured-root")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let failurePath = alias.appendingPathComponent("missing/child").path
+        let canonicalFailurePath = TraceFileIO.canonicalPath(failurePath).path
+        XCTAssertNotEqual(canonicalFailurePath, failurePath)
+        let databaseURL = parent.appendingPathComponent("index.sqlite")
+
+        do {
+            let database = try IndexDatabase(url: databaseURL)
+            let source = AliasedDiscoveryFailureSource(
+                root: alias, failurePath: failurePath
+            )
+            let terminal = await IndexCoordinator(database: database, sources: [source])
+                .indexAllResult(scope: .proseOnly)
+            let recovery = try await database.unresolvedRecoveryWork()
+
+            XCTAssertEqual(terminal.phase, .complete)
+            XCTAssertEqual(terminal.failedFiles, 1)
+            XCTAssertEqual(terminal.error, "aliased discovery failure")
+            XCTAssertEqual(recovery.reconciliationPaths, [canonicalFailurePath])
+            XCTAssertFalse(recovery.reconciliationPaths.contains(failurePath))
+        }
+
+        let reopened = try IndexDatabase(url: databaseURL)
+        let durableRecovery = try await reopened.unresolvedRecoveryWork()
+        XCTAssertEqual(durableRecovery.reconciliationPaths, [canonicalFailurePath])
+        XCTAssertFalse(durableRecovery.reconciliationPaths.contains(failurePath))
+    }
+
     func testNeverSeenMissingDefaultRootStaysQuietAndUnscanned() async throws {
         let parent = try directory()
         let missing = parent.appendingPathComponent("optional-default")
@@ -2439,6 +2472,45 @@ private struct MultiScopeFailureSource: SessionSource {
                 message: "\(URL(fileURLWithPath: path).lastPathComponent) failed"
             )
         })
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
+    }
+
+    func hydrate(
+        fileURL: URL, format: SourceFormat, locator: RecordLocator
+    ) throws -> HydratedMessage {
+        throw SessionSourceError.unsupportedLocator
+    }
+}
+
+private struct AliasedDiscoveryFailureSource: SessionSource {
+    let agent = AgentKind.claudeCode
+    let roots: [SourceRoot]
+    let failurePath: String
+
+    init(root: URL, failurePath: String) {
+        roots = [.init(agent: .claudeCode, url: root, isDefault: false)]
+        self.failurePath = failurePath
+    }
+
+    func discover() throws -> [DiscoveredSourceFile] { [] }
+
+    func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
+        .init(failures: [.init(
+            agent: agent, root: roots[0].url, path: failurePath,
+            message: "aliased discovery failure"
+        )])
     }
 
     func records(

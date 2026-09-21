@@ -142,9 +142,12 @@ final class TraceUITests: XCTestCase {
             )
             return count == 1 ? true : nil
         } ?? false, "a successful watcher must remain active after a sibling watcher fails")
-        let checkpointCount = try sqliteInteger(
-            checkpointDatabase, sql: "SELECT count(*) FROM fsevents_checkpoint"
-        )
+        let checkpointCount: Int64 = try XCTUnwrap(poll(timeout: 15) {
+            guard let count = try? sqliteInteger(
+                checkpointDatabase, sql: "SELECT count(*) FROM fsevents_checkpoint"
+            ) else { return nil }
+            return count >= 2 ? count : nil
+        }, "split source and metadata watcher checkpoints must be persisted")
         XCTAssertGreaterThanOrEqual(
             checkpointCount, 2,
             "split source and metadata watchers must retain distinct checkpoint identities"
