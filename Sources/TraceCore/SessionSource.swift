@@ -23,7 +23,7 @@ public struct DiscoveryFailure: Hashable, Sendable {
 
     public let agent: AgentKind
     public let root: URL
-    public let path: String
+    public private(set) var path: String
     public let message: String
     public let kind: Kind
 
@@ -37,6 +37,48 @@ public struct DiscoveryFailure: Hashable, Sendable {
         self.message = message
         self.kind = kind
     }
+
+    func with(path: String) -> Self {
+        var copy = self
+        copy.path = path
+        return copy
+    }
+}
+
+struct NormalizedDiscoveryFailure: Sendable {
+    let failure: DiscoveryFailure
+    let path: TraceFileIO.CanonicalPath
+}
+
+func normalizedDiscoveryFailures(
+    _ failures: [DiscoveryFailure], for root: SourceRoot
+) -> [NormalizedDiscoveryFailure] {
+    let ordered = failures.map { failure in
+        let path = root.canonicalScopePath(failure.path)
+        return NormalizedDiscoveryFailure(
+            failure: failure.with(path: root.configuredScopePath(path)), path: path
+        )
+    }.sorted { lhs, rhs in
+        let left = (
+            lhs.path.comparisonKey,
+            lhs.failure.kind == .unreadable ? 0 : 1,
+            lhs.failure.path,
+            lhs.failure.message,
+            lhs.failure.agent.rawValue,
+            lhs.failure.root.path
+        )
+        let right = (
+            rhs.path.comparisonKey,
+            rhs.failure.kind == .unreadable ? 0 : 1,
+            rhs.failure.path,
+            rhs.failure.message,
+            rhs.failure.agent.rawValue,
+            rhs.failure.root.path
+        )
+        return left < right
+    }
+    var seen: Set<String> = []
+    return ordered.filter { seen.insert($0.path.comparisonKey).inserted }
 }
 
 public struct DiscoveryResult: Sendable {

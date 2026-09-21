@@ -74,6 +74,39 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     public var scanURL: URL { cachedScanURL }
     var scanPath: TraceFileIO.CanonicalPath { cachedScanPath }
 
+    /// Resolves a discovery scope against this root's scan identity. The fallback
+    /// through the configured path also handles a dangling symlink, which
+    /// `URL.resolvingSymlinksInPath()` cannot resolve on its own.
+    func canonicalScopePath(_ rawPath: String) -> TraceFileIO.CanonicalPath {
+        let direct = TraceFileIO.canonicalPath(rawPath)
+        if cachedScanPath.contains(direct) { return direct }
+
+        let configured = TraceFileIO.canonicalPath(url.path)
+        guard configured.contains(direct) else { return direct }
+        let suffix = directURLComponents(direct.path).dropFirst(
+            directURLComponents(configured.path).count
+        )
+        var mapped = cachedScanURL
+        for component in suffix { mapped.appendPathComponent(component) }
+        return TraceFileIO.canonicalPath(mapped.path)
+    }
+
+    /// Converts a canonical scan scope back to the configured root spelling so
+    /// its durable identity survives a later symlink repoint.
+    func configuredScopePath(_ scope: TraceFileIO.CanonicalPath) -> String {
+        guard cachedScanPath.contains(scope) else { return scope.path }
+        let suffix = directURLComponents(scope.path).dropFirst(
+            directURLComponents(cachedScanPath.path).count
+        )
+        var configured = url
+        for component in suffix { configured.appendPathComponent(component) }
+        return configured.standardized.path
+    }
+
+    private func directURLComponents(_ path: String) -> [String] {
+        URL(fileURLWithPath: path).standardized.pathComponents
+    }
+
     private enum CodingKeys: String, CodingKey { case agent, url, isDefault }
 
     public init(from decoder: Decoder) throws {
