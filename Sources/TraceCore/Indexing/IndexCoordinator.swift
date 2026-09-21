@@ -314,7 +314,13 @@ public actor IndexCoordinator {
             }
             for attempt in discoveryAttempts {
                 guard let rootID = rootIDs[attempt.root.id] else { continue }
-                let failures = attempt.failures.map(\.failure)
+                let failures = attempt.failures.map { entry in
+                    DiscoveryFailure(
+                        agent: entry.failure.agent, root: entry.failure.root,
+                        path: entry.path.path, message: entry.failure.message,
+                        kind: entry.failure.kind
+                    )
+                }
                 var suppressNeverSeenDefault = false
                 if attempt.root.isDefault, !attempt.root.hasSymlinkedComponent, !failures.isEmpty,
                    failures.allSatisfy({ $0.kind == .missingRoot }) {
