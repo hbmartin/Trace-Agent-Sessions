@@ -20,6 +20,7 @@ public enum IndexDatabaseError: LocalizedError {
 
 struct IndexedSourceState: Sendable {
     let id: Int64
+    let rootID: Int64
     let agent: AgentKind
     let format: SourceFormat
     let path: String
@@ -40,8 +41,14 @@ struct IndexedSourceState: Sendable {
 
 struct DiscoveryErrorReplacement: Sendable {
     let rootID: Int64
-    let scannedScope: RootRelativeScope
+    let scannedScopes: Set<RootRelativeScope>
     let failures: [NormalizedDiscoveryFailure]
+}
+
+struct IndexedSourcePath: Sendable {
+    let id: Int64
+    let rootID: Int64
+    let path: String
 }
 
 private struct StoredRootIdentity: Hashable {
@@ -50,6 +57,7 @@ private struct StoredRootIdentity: Hashable {
 }
 
 private struct StoredRecoveryRow: Sendable {
+    let errorID: Int64
     let rootID: Int64
     let relativeScope: String
     let agent: String
@@ -351,6 +359,45 @@ public actor IndexDatabase {
                 DROP TABLE source_root;
                 ALTER TABLE source_root_v12 RENAME TO source_root;
 
+                CREATE TABLE source_file_v12 (
+                    id INTEGER PRIMARY KEY,
+                    root_id INTEGER NOT NULL REFERENCES source_root(id) ON DELETE CASCADE,
+                    agent TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    dev INTEGER NOT NULL,
+                    inode INTEGER NOT NULL,
+                    size INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    scanned_bytes INTEGER NOT NULL DEFAULT 0,
+                    head_hash BLOB NOT NULL,
+                    head_length INTEGER NOT NULL,
+                    adapter_version INTEGER NOT NULL DEFAULT 1,
+                    last_error TEXT,
+                    metadata_revision TEXT,
+                    content_generation INTEGER NOT NULL DEFAULT 0,
+                    content_session_id TEXT,
+                    metadata_session_id TEXT,
+                    is_placeholder INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(agent, path)
+                );
+                INSERT INTO source_file_v12(
+                    id, root_id, agent, format, path, dev, inode, size, mtime_ns,
+                    scanned_bytes, head_hash, head_length, adapter_version, last_error,
+                    metadata_revision, content_generation, content_session_id,
+                    metadata_session_id, is_placeholder
+                )
+                SELECT
+                    id, root_id, agent, format, path, dev, inode, size, mtime_ns,
+                    scanned_bytes, head_hash, head_length, adapter_version, last_error,
+                    metadata_revision, content_generation, content_session_id,
+                    metadata_session_id, is_placeholder
+                FROM source_file;
+                DROP TABLE source_file;
+                ALTER TABLE source_file_v12 RENAME TO source_file;
+                CREATE INDEX idx_source_inode ON source_file(dev, inode);
+                CREATE INDEX idx_source_error ON source_file(id) WHERE last_error IS NOT NULL;
+
                 CREATE TABLE source_scan_error (
                     id INTEGER PRIMARY KEY,
                     root_id INTEGER NOT NULL REFERENCES source_root(id) ON DELETE CASCADE,
@@ -562,13 +609,13 @@ public actor IndexDatabase {
         }
     }
 
-    func sourceState(path: String) throws -> IndexedSourceState? {
+    func sourceState(agent: AgentKind, path: String) throws -> IndexedSourceState? {
         try pool.read { db in
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT \(Self.sourceStateSelection)
                 FROM source_file sf
-                WHERE sf.path=?
-                """, arguments: [path]) else {
+                WHERE sf.agent=? AND sf.path=?
+                """, arguments: [agent.rawValue, path]) else {
                 return nil
             }
             return sourceState(from: row)
@@ -602,6 +649,7 @@ public actor IndexDatabase {
     private func sourceState(from row: Row) -> IndexedSourceState {
         IndexedSourceState(
             id: row["id"],
+            rootID: row["root_id"],
             agent: AgentKind(rawValue: row["agent"])!,
             format: SourceFormat(rawValue: row["format"])!,
             path: row["path"],
@@ -699,8 +747,10 @@ public actor IndexDatabase {
         }
     }
 
-    func deleteSource(path: String) throws {
-        if let state = try sourceState(path: path) { try deleteSource(id: state.id) }
+    func deleteSource(agent: AgentKind, path: String) throws {
+        if let state = try sourceState(agent: agent, path: path) {
+            try deleteSource(id: state.id)
+        }
     }
 
     func replaceSourceContents(id: Int64) throws {
@@ -1113,9 +1163,14 @@ public actor IndexDatabase {
                 ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?, 0, 1)
                 """, arguments: [rootID, file.agent.rawValue, file.format.rawValue,
                                  file.url.path, Data()])
-            let id = try Int64.fetchOne(db, sql: "SELECT id FROM source_file WHERE path=?",
-                                        arguments: [file.url.path])!
-            try db.execute(sql: "UPDATE source_file SET last_error=? WHERE id=?", arguments: [error, id])
+            let id = try Int64.fetchOne(
+                db, sql: "SELECT id FROM source_file WHERE agent=? AND path=?",
+                arguments: [file.agent.rawValue, file.url.path]
+            )!
+            try db.execute(
+                sql: "UPDATE source_file SET root_id=?, last_error=? WHERE id=?",
+                arguments: [rootID, error, id]
+            )
             try db.execute(
                 sql: """
                     INSERT INTO adapter_health(source_file_id, last_error, error_count)
@@ -1127,13 +1182,14 @@ public actor IndexDatabase {
         }
     }
 
-    func clearSourceError(path: String) throws -> Bool {
+    func clearSourceError(agent: AgentKind, path: String) throws -> Bool {
         try pool.write { db in
             guard let id = try Int64.fetchOne(db, sql: """
                 SELECT sf.id FROM source_file sf
                 LEFT JOIN adapter_health ah ON ah.source_file_id=sf.id
-                WHERE sf.path=? AND (sf.last_error IS NOT NULL OR ah.last_error IS NOT NULL)
-                """, arguments: [path]) else { return false }
+                WHERE sf.agent=? AND sf.path=?
+                    AND (sf.last_error IS NOT NULL OR ah.last_error IS NOT NULL)
+                """, arguments: [agent.rawValue, path]) else { return false }
             try db.execute(sql: "UPDATE source_file SET last_error=NULL WHERE id=?", arguments: [id])
             try db.execute(sql: "UPDATE adapter_health SET last_error=NULL WHERE source_file_id=?", arguments: [id])
             return true
@@ -1158,12 +1214,12 @@ public actor IndexDatabase {
                 db, sql: "SELECT path FROM source_file WHERE last_error IS NOT NULL"
             ))
             let rows = try Row.fetchAll(db, sql: """
-                SELECT e.root_id, e.relative_scope, r.agent, r.path, r.is_default
+                SELECT e.id, e.root_id, e.relative_scope, r.agent, r.path, r.is_default
                 FROM source_scan_error e
                 JOIN source_root r ON r.id=e.root_id
-                ORDER BY e.root_id, e.relative_scope
                 """).map { row in
                 StoredRecoveryRow(
+                    errorID: row["id"],
                     rootID: row["root_id"], relativeScope: row["relative_scope"],
                     agent: row["agent"], rootPath: row["path"],
                     isDefault: row["is_default"]
@@ -1173,13 +1229,15 @@ public actor IndexDatabase {
         }
         var roots: [Int64: SourceRoot] = [:]
         var scopes: Set<String> = []
+        var invalidErrorIDs: [Int64] = []
         for row in snapshot.1 {
             let root: SourceRoot
             if let cached = roots[row.rootID] {
                 root = cached
             } else {
                 guard let agent = AgentKind(rawValue: row.agent) else {
-                    throw IndexDatabaseError.unsupportedStoredAgent(row.agent)
+                    invalidErrorIDs.append(row.errorID)
+                    continue
                 }
                 root = SourceRoot(
                     agent: agent, url: URL(fileURLWithPath: row.rootPath),
@@ -1188,9 +1246,19 @@ public actor IndexDatabase {
                 roots[row.rootID] = root
             }
             guard let scope = root.scope(forRelativePath: row.relativeScope) else {
-                throw IndexDatabaseError.invalidStoredRecoveryScope(row.relativeScope)
+                invalidErrorIDs.append(row.errorID)
+                continue
             }
             scopes.insert(scope.scanPath.path)
+        }
+        if !invalidErrorIDs.isEmpty {
+            try pool.write { db in
+                for errorID in invalidErrorIDs {
+                    try db.execute(
+                        sql: "DELETE FROM source_scan_error WHERE id=?", arguments: [errorID]
+                    )
+                }
+            }
         }
         return .init(filePaths: snapshot.0, reconciliationPaths: scopes)
     }
@@ -1202,6 +1270,7 @@ public actor IndexDatabase {
         try pool.write { db in
             let now = Int64(Date().timeIntervalSince1970 * 1_000)
             for replacement in replacements {
+                guard let referenceScope = replacement.scannedScopes.first else { continue }
                 let existing = try Row.fetchAll(
                     db, sql: "SELECT id, relative_scope FROM source_scan_error WHERE root_id=?",
                     arguments: [replacement.rootID]
@@ -1209,12 +1278,17 @@ public actor IndexDatabase {
                 for row in existing {
                     let scopePath: String = row["relative_scope"]
                     let errorID: Int64 = row["id"]
-                    guard let errorScope = replacement.scannedScope.scope(
-                        forPersistedPath: scopePath
+                    guard let errorScope = RootRelativeScope(
+                        persistedPath: scopePath,
+                        caseSensitive: referenceScope.isCaseSensitive
                     ) else {
-                        throw IndexDatabaseError.invalidStoredRecoveryScope(scopePath)
+                        try db.execute(
+                            sql: "DELETE FROM source_scan_error WHERE id=?",
+                            arguments: [errorID]
+                        )
+                        continue
                     }
-                    if replacement.scannedScope.contains(errorScope) {
+                    if replacement.scannedScopes.contains(where: { $0.contains(errorScope) }) {
                         try db.execute(
                             sql: "DELETE FROM source_scan_error WHERE id=?",
                             arguments: [errorID]
@@ -1240,10 +1314,14 @@ public actor IndexDatabase {
         }
     }
 
-    func paths(agent: AgentKind) throws -> [(id: Int64, path: String)] {
+    func paths(agent: AgentKind) throws -> [IndexedSourcePath] {
         try pool.read { db in
-            try Row.fetchAll(db, sql: "SELECT id, path FROM source_file WHERE agent=?", arguments: [agent.rawValue])
-                .map { ($0["id"], $0["path"]) }
+            try Row.fetchAll(
+                db, sql: "SELECT id, root_id, path FROM source_file WHERE agent=?",
+                arguments: [agent.rawValue]
+            ).map {
+                IndexedSourcePath(id: $0["id"], rootID: $0["root_id"], path: $0["path"])
+            }
         }
     }
 

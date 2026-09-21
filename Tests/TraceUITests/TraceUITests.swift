@@ -178,6 +178,28 @@ final class TraceUITests: XCTestCase {
         ), "a failed sibling watcher must not downgrade forced root recovery")
     }
 
+    func testRecoveryLoadFailureQueuesRootFallbackAndStartupContinues() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let activityAudit = directory.appendingPathComponent("startup-activity-audit")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_FAIL_RECOVERY_LOAD_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activityAudit.path
+
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "Could not load pending index recovery"
+        )).firstMatch.waitForExistence(timeout: 10))
+        let dismiss = app.sheets.buttons["OK"].firstMatch
+        if dismiss.exists { dismiss.click() }
+        XCTAssertTrue(app.staticTexts["Find the sample answer"].firstMatch.waitForExistence(
+            timeout: 15
+        ), "recovery metadata failure must not prevent initial indexing")
+        XCTAssertTrue(waitForLineCount(
+            activityAudit, line: "rootRecovery", count: 1, timeout: 15
+        ), "startup must queue a whole-root recovery fallback")
+    }
+
     func testForcedRootChangeOnEmptyIndexReportsInitialBuild() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-settings"])
         try FileManager.default.removeItem(

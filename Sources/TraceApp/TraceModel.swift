@@ -261,13 +261,26 @@ final class TraceModel: ObservableObject {
                     progress.unresolvedFailedFiles = counts.fileFailures
                     progress.unresolvedDiscoveryFailures = counts.discoveryFailures
                 }
-                let recovery = try await database.unresolvedRecoveryWork()
-                if !recovery.isEmpty {
+                do {
+                    if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_RECOVERY_LOAD_ONCE") {
+                        throw SessionSourceError.unreadableFile("synthetic recovery metadata")
+                    }
+                    let recovery = try await database.unresolvedRecoveryWork()
+                    if !recovery.isEmpty {
+                        await scheduler?.request(
+                            paths: recovery.filePaths,
+                            reconciliationPaths: recovery.reconciliationPaths,
+                            scope: settings.indexScope,
+                            activity: .subtreeRecovery
+                        )
+                    }
+                } catch {
+                    startupError = "Could not load pending index recovery; a safe root scan was queued: \(error.localizedDescription)"
+                    startupActivityObserver(.rootRecovery)
                     await scheduler?.request(
-                        paths: recovery.filePaths,
-                        reconciliationPaths: recovery.reconciliationPaths,
+                        reconciliationPaths: Set(sources.flatMap(\.roots).map { $0.scanURL.path }),
                         scope: settings.indexScope,
-                        activity: .subtreeRecovery
+                        activity: .rootRecovery
                     )
                 }
                 timeZoneObserver = NotificationCenter.default.addObserver(

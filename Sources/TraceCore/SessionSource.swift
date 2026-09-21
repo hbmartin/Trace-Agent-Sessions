@@ -50,7 +50,17 @@ func normalizedDiscoveryFailures(
     _ failures: [DiscoveryFailure], for root: SourceRoot
 ) -> [NormalizedDiscoveryFailure] {
     let ordered = failures.compactMap { failure -> NormalizedDiscoveryFailure? in
-        guard let scope = root.scope(forRawPath: failure.path) else { return nil }
+        let standardizedFailurePath = URL(fileURLWithPath: failure.path).standardized.path
+        let scope: SourceRootScope
+        if standardizedFailurePath == root.url.path
+            || standardizedFailurePath == root.scanURL.path {
+            // Root preflight failures refer to the frozen root identity. Avoid
+            // re-resolving an unavailable path on a different volume.
+            scope = root.rootScope
+        } else {
+            guard let mapped = root.scope(forRawPath: failure.path) else { return nil }
+            scope = mapped
+        }
         return NormalizedDiscoveryFailure(
             failure: failure,
             scanPath: scope.scanPath,
@@ -167,14 +177,13 @@ public extension SessionSource {
         }
 
         for root in roots {
-            let rootPath = root.scanPath
             let starts: [URL]
             if let paths {
-                let scopes = paths.map(TraceFileIO.canonicalPath)
-                if scopes.contains(where: { $0.contains(rootPath) }) {
+                let scopes = paths.compactMap(root.reconciliationScope(forRawPath:))
+                if scopes.contains(where: { $0.relativeScope.components.isEmpty }) {
                     starts = [root.scanURL]
                 } else {
-                    starts = scopes.filter { rootPath.contains($0) }.map { URL(fileURLWithPath: $0.path) }
+                    starts = scopes.map { URL(fileURLWithPath: $0.scanPath.path) }
                 }
             } else {
                 starts = [root.scanURL]
@@ -210,9 +219,12 @@ public extension SessionSource {
             }
 
             var seenStarts: Set<String> = []
-            for start in starts where seenStarts.insert(TraceFileIO.canonicalPath(start.path).comparisonKey).inserted {
+            for start in starts {
                 let startPath = TraceFileIO.canonicalPath(start.path)
-                let startsAtRoot = startPath.comparisonKey == rootPath.comparisonKey
+                guard let startScope = root.scope(forScanPath: startPath),
+                      seenStarts.insert(startScope.relativeScope.comparisonKey).inserted
+                else { continue }
+                let startsAtRoot = startScope.relativeScope.components.isEmpty
                 let itemType: FileAttributeType?
                 do {
                     itemType = startsAtRoot

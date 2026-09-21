@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Launch-time hooks used by the isolated UI test process.
 public enum TraceTestHooks {
@@ -9,6 +10,12 @@ public enum TraceTestHooks {
 
     public static let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing")
     public static let environment = ProcessInfo.processInfo.environment
+    private static let consumedFailures = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    public static func failOnce(for key: String) -> Bool {
+        guard isUITesting, environment[key] == "1" else { return false }
+        return consumedFailures.withLock { $0.insert(key).inserted }
+    }
 
     public static func delayMilliseconds(
         for key: String,
