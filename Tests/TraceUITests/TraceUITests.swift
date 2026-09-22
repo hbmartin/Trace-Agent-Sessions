@@ -203,12 +203,18 @@ final class TraceUITests: XCTestCase {
     func testRecoveryLoadFailureWaitsForOnboardingThenRunsOneRootPass() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let activityAudit = directory.appendingPathComponent("startup-activity-audit")
+        let passAudit = directory.appendingPathComponent("index-activity-audit")
+        let recoveryLoadStarted = directory.appendingPathComponent("recovery-load-started")
         app.launchEnvironment["TRACE_TEST_FAIL_RECOVERY_LOAD_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_RECOVERY_LOAD_DELAY_MS"] = "3000"
+        app.launchEnvironment["TRACE_TEST_RECOVERY_LOAD_STARTED_PATH"] = recoveryLoadStarted.path
         app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activityAudit.path
+        app.launchEnvironment["TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"] = passAudit.path
 
         app.launch()
 
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForFile(recoveryLoadStarted, timeout: 10))
         XCTAssertFalse(
             waitForLineCount(activityAudit, line: "rootRecovery", count: 1, timeout: 2),
             "recovery fallback must remain pending until onboarding finishes"
@@ -220,10 +226,14 @@ final class TraceUITests: XCTestCase {
             ),
             0
         )
-        let dismiss = app.sheets.buttons["OK"].firstMatch
-        if dismiss.exists { dismiss.click() }
 
         app.buttons["Build Index"].click()
+
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
+            format: "value CONTAINS %@", "Could not load pending index recovery"
+        )).firstMatch.waitForExistence(timeout: 10))
+        let dismiss = app.sheets.buttons["OK"].firstMatch
+        if dismiss.exists { dismiss.click() }
 
         XCTAssertTrue(app.staticTexts["Find the sample answer"].firstMatch.waitForExistence(
             timeout: 15
@@ -231,12 +241,21 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForLineCount(
             activityAudit, line: "rootRecovery", count: 1, timeout: 15
         ))
-        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(waitForLineCount(
+            passAudit, line: "rootRecovery", count: 1, timeout: 15
+        ))
+        XCTAssertEqual(try sqliteInteger(
+            directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT count(*) FROM trace_meta WHERE key='last_safety_reconciliation_ms'"
+        ), 1)
+        Thread.sleep(forTimeInterval: 4)
         XCTAssertEqual(
             fileLines(in: activityAudit).filter { $0 == "rootRecovery" }.count,
             1,
             "pending recovery and onboarding startup must merge into one pass"
         )
+        XCTAssertFalse(fileLines(in: passAudit).contains("safetyVerification"),
+                       "the merged pass must suppress the three-second safety retry")
     }
 
     func testForcedRootChangeOnEmptyIndexReportsInitialBuild() throws {

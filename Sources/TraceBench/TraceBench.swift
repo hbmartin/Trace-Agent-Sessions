@@ -58,6 +58,7 @@ struct TraceBench {
                        CodexSource(root: sourceDirectory.appendingPathComponent("Codex")),
                        GeminiSource(root: sourceDirectory.appendingPathComponent("Gemini"))]
         } else { sources = [ClaudeCodeSource(), CodexSource(), GeminiSource()] }
+        _ = try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots))
         let coordinator = IndexCoordinator(database: database, sources: sources)
         let clock = ContinuousClock()
         let start = clock.now

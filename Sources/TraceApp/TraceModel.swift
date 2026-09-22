@@ -174,7 +174,6 @@ final class TraceModel: ObservableObject {
     private var startupReconciliationPaths: Set<String> = []
     private var startupActivity = IndexActivity.cachedLaunch
     private var pendingStartupRecovery = IndexRecoveryWork()
-    private var pendingStartupRecoveryActivity: IndexActivity?
     private var watchedSourceRoots: [URL] = []
     private var watcherGeneration: UInt64 = 0
     private var safetyVerificationTask: Task<Void, Never>?
@@ -255,32 +254,34 @@ final class TraceModel: ObservableObject {
                 let sources = await makeSources()
                 _ = try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots))
                 let coordinator = IndexCoordinator(database: database, sources: sources)
-                self.coordinator = coordinator
-                globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-                mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-                scheduler = makeScheduler(coordinator)
                 if let counts = try? await database.unresolvedSourceFailureCounts() {
                     progress.unresolvedFailedFiles = counts.fileFailures
                     progress.unresolvedDiscoveryFailures = counts.discoveryFailures
                 }
                 do {
+                    if let delay = TraceTestHooks.delayMilliseconds(
+                        for: "TRACE_TEST_RECOVERY_LOAD_DELAY_MS", cappedAt: 5_000
+                    ) {
+                        TraceTestHooks.touch(pathKey: "TRACE_TEST_RECOVERY_LOAD_STARTED_PATH")
+                        try await Task.sleep(for: .milliseconds(delay))
+                    }
                     if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_RECOVERY_LOAD_ONCE") {
                         throw SessionSourceError.unreadableFile("synthetic recovery metadata")
                     }
                     let recovery = try await database.unresolvedRecoveryWork()
                     if !recovery.isEmpty {
                         pendingStartupRecovery = recovery
-                        pendingStartupRecoveryActivity = Self.recoveryActivity(
-                            for: recovery, sources: sources
-                        )
                     }
                 } catch {
                     startupError = "Could not load pending index recovery; a safe root scan was queued: \(error.localizedDescription)"
                     pendingStartupRecovery = .init(
                         reconciliationPaths: Set(sources.flatMap(\.roots).map { $0.scanURL.path }),
                     )
-                    pendingStartupRecoveryActivity = .rootRecovery
                 }
+                self.coordinator = coordinator
+                globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+                mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+                scheduler = makeScheduler(coordinator)
                 timeZoneObserver = NotificationCenter.default.addObserver(
                     forName: Notification.Name.NSSystemTimeZoneDidChange,
                     object: nil, queue: .main
@@ -316,7 +317,7 @@ final class TraceModel: ObservableObject {
                         Task { [weak self] in
                             guard let self else { return }
                             await self.loadCachedUsageAtStartup()
-                            self.startIndexing()
+                            self.startIndexing(sources: sources)
                         }
                     }
                 } else {
@@ -347,7 +348,7 @@ final class TraceModel: ObservableObject {
                 guard let self else { return }
                 let sources = await self.makeSources()
                 guard await self.startWatching(sources) else { return }
-                self.startIndexing()
+                self.startIndexing(sources: sources)
             }
         }
     }
@@ -358,20 +359,13 @@ final class TraceModel: ObservableObject {
             progress: { [weak self] update in
                 await self?.receiveProgress(update)
             },
-            didFinish: { [weak self] activity in
-                await self?.finishIndexActivity(activity)
-            },
             didComplete: { [weak self] _, watermarks in
                 try? await self?.database?.saveEventCheckpoints(watermarks)
+            },
+            didSatisfySafetyReconciliation: { [weak self] in
+                try? await self?.database?.markSafetyReconciliationComplete()
             }
         )
-    }
-
-    private func finishIndexActivity(_ activity: IndexActivity) async {
-        if activity == .safetyVerification || activity == .initialBuild
-            || activity == .launchReconciliation {
-            try? await database?.markSafetyReconciliationComplete()
-        }
     }
 
     private func receiveProgress(_ update: IndexProgress) async {
@@ -379,6 +373,10 @@ final class TraceModel: ObservableObject {
         if !disposition.passTerminal { usageSnapshotRequestID = UUID() }
         if disposition.passTerminal {
             TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
+            TraceTestHooks.appendLine(
+                update.activity.rawValue,
+                pathKey: "TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"
+            )
         }
         if update.incremental {
             if disposition.passTerminal {
@@ -593,7 +591,7 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    func startIndexing() {
+    func startIndexing(sources: [any SessionSource]) {
         guard settings.onboardingComplete, !initialIndexRequested, let scheduler else { return }
         initialIndexRequested = true
         Task { [weak self] in
@@ -601,9 +599,10 @@ final class TraceModel: ObservableObject {
             let buffered = self.bufferedSourceChanges
             self.bufferedSourceChanges = SourceChanges()
             let recovery = self.pendingStartupRecovery
-            let recoveryActivity = self.pendingStartupRecoveryActivity
+            let recoveryActivity = recovery.isEmpty ? nil : Self.recoveryActivity(
+                for: recovery, sources: sources
+            )
             self.pendingStartupRecovery = .init()
-            self.pendingStartupRecoveryActivity = nil
             let baseActivity = self.startupReconciliationPaths.isEmpty
                 ? (buffered.paths.isEmpty && buffered.reconciliationPaths.isEmpty
                     ? self.startupActivity : self.activity(for: buffered))
@@ -611,6 +610,8 @@ final class TraceModel: ObservableObject {
             let activity = recoveryActivity.map {
                 IndexActivity.moreSignificant(baseActivity, $0)
             } ?? baseActivity
+            let satisfiesSafetyReconciliation = baseActivity.satisfiesSafetyReconciliation
+                || (recoveryActivity?.satisfiesSafetyReconciliation ?? false)
             self.startupActivityObserver(activity)
             await scheduler.request(
                 paths: buffered.paths.union(recovery.filePaths),
@@ -619,6 +620,7 @@ final class TraceModel: ObservableObject {
                     .union(recovery.reconciliationPaths),
                 scope: self.settings.indexScope,
                 activity: activity,
+                satisfiesSafetyReconciliation: satisfiesSafetyReconciliation,
                 watermarks: buffered.watermarks,
                 streamRoots: buffered.streamRoots
             )
@@ -669,7 +671,7 @@ final class TraceModel: ObservableObject {
             initialIndexRequested = false
             guard await startWatching(sources, forceRootReconciliation: true) else { return }
             // Root changes reconcile existing files; unchanged sources retain their index.
-            startIndexing()
+            startIndexing(sources: sources)
         }
     }
 

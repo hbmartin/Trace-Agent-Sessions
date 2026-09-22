@@ -150,6 +150,7 @@ final class IndexingRegressionTests: XCTestCase {
         ).indexAll(scope: .proseOnly)
 
         let retainedSource = ClaudeCodeSource(roots: [retainedRoot])
+        _ = try await database.synchronizeConfiguredRoots(retainedSource.roots)
         await IndexCoordinator(
             database: database, sources: [retainedSource]
         ).reconcile(
@@ -274,11 +275,12 @@ final class IndexingRegressionTests: XCTestCase {
             },
             didFinish: { activity in
                 await finishes.receive(activity: activity)
-                guard activity == .safetyVerification else { return }
-                try? await database.markSafetyReconciliationComplete()
             },
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
+            },
+            didSatisfySafetyReconciliation: {
+                try? await database.markSafetyReconciliationComplete()
             }
         )
         await scheduler.request(
@@ -849,6 +851,9 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(
                 sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v13-agent-source-identity'"
             )
+            try db.execute(
+                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v14-supported-agent-rollups'"
+            )
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
         }
@@ -858,7 +863,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "13")
+        XCTAssertEqual(schema, "14")
     }
 
     func testV13MigratesShippedV12SourceIdentityAndResetsDerivedContent() async throws {
@@ -917,6 +922,8 @@ final class IndexingRegressionTests: XCTestCase {
                     CREATE INDEX idx_source_error ON source_file(id) WHERE last_error IS NOT NULL;
                     DELETE FROM grdb_migrations
                     WHERE identifier='trace-v13-agent-source-identity';
+                    DELETE FROM grdb_migrations
+                    WHERE identifier='trace-v14-supported-agent-rollups';
                     UPDATE trace_meta SET value='5' WHERE key='index_format_version';
                     UPDATE trace_meta SET value='12' WHERE key='schema_version';
                     """)
@@ -943,7 +950,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "13")
+        XCTAssertEqual(schema, "14")
         let migratedSchema = try await raw.read { db in
             let sourceFileSQL = try String.fetchOne(
                 db, sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name='source_file'"
@@ -976,6 +983,61 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(migratedStatistics.sourceFileCount, 2)
         let reopenedAgain = try IndexDatabase(url: url)
         XCTAssertFalse(reopenedAgain.contentWasResetOnOpen)
+    }
+
+    func testV14InvalidatesOnlyDerivedUsageRollups() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let url = root.appendingPathComponent("index.sqlite")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: url)
+        await IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [root])]
+        ).indexAll(scope: .proseOnly)
+        let originalStatistics = try await database.statistics()
+        XCTAssertEqual(originalStatistics.messageCount, 1)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            let projectID = try XCTUnwrap(Int64.fetchOne(
+                db, sql: "SELECT id FROM project LIMIT 1"
+            ))
+            try db.execute(sql: """
+                INSERT INTO usage_daily(
+                    day, project_id, model, is_sidechain, input_tokens,
+                    output_tokens, cache_write_tokens, cache_read_tokens,
+                    reasoning_tokens
+                ) VALUES ('2026-09-22', ?, 'stale', 0, 1, 1, 0, 0, 0)
+                """, arguments: [projectID])
+            try db.execute(sql: """
+                DELETE FROM grdb_migrations
+                WHERE identifier='trace-v14-supported-agent-rollups';
+                UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty';
+                UPDATE trace_meta SET value='13' WHERE key='schema_version';
+                """)
+        }
+
+        let migrated = try IndexDatabase(url: url)
+        let migratedStatistics = try await migrated.statistics()
+        let state = try await migrated.sourceState(agent: .claudeCode, path: file.path)
+        let migrationState = try await raw.read { db in
+            let usageRows = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM usage_daily"
+            ) ?? -1
+            let dirty = try String.fetchOne(
+                db, sql: "SELECT value FROM trace_meta WHERE key='usage_rollups_dirty'"
+            )
+            let schema = try String.fetchOne(
+                db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"
+            )
+            return (usageRows, dirty, schema)
+        }
+
+        XCTAssertFalse(migrated.contentWasResetOnOpen)
+        XCTAssertEqual(migratedStatistics.messageCount, 1)
+        XCTAssertNotNil(state)
+        XCTAssertEqual(migrationState.0, 0)
+        XCTAssertEqual(migrationState.1, "1")
+        XCTAssertEqual(migrationState.2, "14")
     }
 
     func testConfiguredRootSynchronizationPurgesRemovedRootImmediately() async throws {
@@ -1226,11 +1288,12 @@ final class IndexingRegressionTests: XCTestCase {
             retryDelay: .seconds(30),
             didFinish: { activity in
                 await finishes.receive(activity: activity)
-                guard activity == .safetyVerification else { return }
-                try? await database.markSafetyReconciliationComplete()
             },
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
+            },
+            didSatisfySafetyReconciliation: {
+                try? await database.markSafetyReconciliationComplete()
             }
         )
 
@@ -1248,6 +1311,59 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(finishValues.first?.activity, .safetyVerification)
         let completedSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()
         XCTAssertNotNil(completedSafetyTimestamp)
+        await scheduler.stop()
+    }
+
+    func testSafetyQualificationMergesIndependentlyFromPresentedActivity() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [root])]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(line(2).utf8))
+        try handle.close()
+
+        let latch = BatchLatch()
+        let finishes = FinishRecorder()
+        let safety = SafetyRecorder()
+        let scheduler = IndexScheduler(
+            coordinator: coordinator, scope: .proseOnly,
+            progress: { progress in
+                if progress.phase == .indexing && progress.currentFileBytes > 0 {
+                    await latch.pauseOnce()
+                }
+            },
+            didFinish: { await finishes.receive(activity: $0) },
+            didSatisfySafetyReconciliation: { await safety.receive() }
+        )
+
+        await scheduler.request(paths: [file.path], activity: .fileChanges)
+        try await latch.waitForPause()
+        await scheduler.request(reconcile: true, activity: .initialBuild)
+        await scheduler.request(
+            reconciliationPaths: [root.path], activity: .rootRecovery
+        )
+        await latch.release()
+        await scheduler.waitUntilIdle()
+
+        let mergedFinishes = await finishes.values
+        let mergedSafetyCount = await safety.count
+        XCTAssertEqual(mergedFinishes.map(\.activity), [.fileChanges, .rootRecovery])
+        XCTAssertEqual(mergedSafetyCount, 1,
+                       "merged initial-build work must satisfy safety bookkeeping")
+
+        await scheduler.request(
+            reconciliationPaths: [root.path], activity: .rootRecovery
+        )
+        await scheduler.waitUntilIdle()
+        let standaloneSafetyCount = await safety.count
+        XCTAssertEqual(standaloneSafetyCount, 1,
+                       "standalone root recovery must not satisfy safety bookkeeping")
         await scheduler.stop()
     }
 
@@ -1276,7 +1392,8 @@ final class IndexingRegressionTests: XCTestCase {
             retryDelay: .seconds(30),
             didFinish: { activity in
                 await finishes.receive(activity: activity)
-                guard activity == .safetyVerification else { return }
+            },
+            didSatisfySafetyReconciliation: {
                 try? await database.markSafetyReconciliationComplete()
             }
         )
@@ -2555,7 +2672,9 @@ final class IndexingRegressionTests: XCTestCase {
             ),
         ])
         let raw = try DatabaseQueue(path: databaseURL.path)
-        try await raw.write { db in
+        let unknownRows = try await raw.write { db -> (
+            sessionID: Int64, messageID: Int64
+        ) in
             try db.execute(sql: """
                 INSERT INTO source_root(agent, path, is_default, enabled)
                 VALUES ('future_agent', ?, 0, 1)
@@ -2572,6 +2691,42 @@ final class IndexingRegressionTests: XCTestCase {
                 ) VALUES (?, 'future_agent', 'future_format', ?, 0, 0, 0, 0,
                     0, x'', 0, 'future file failure', 1)
                 """, arguments: [unknownID, rootURL.appendingPathComponent("future.data").path])
+            let sourceID = db.lastInsertedRowID
+            try db.execute(sql: """
+                INSERT INTO project(canonical_key, root_path, display_name)
+                VALUES ('future-project', '/tmp/future', 'Future Project')
+                """)
+            let projectID = db.lastInsertedRowID
+            try db.execute(sql: """
+                INSERT INTO session(
+                    project_id, source_file_id, agent, external_id,
+                    started_at, last_activity_at, message_count
+                ) VALUES (?, ?, 'future_agent', 'future-session', 1, 1, 1)
+                """, arguments: [projectID, sourceID])
+            let sessionID = db.lastInsertedRowID
+            try db.execute(sql: """
+                INSERT INTO message(
+                    source_file_id, session_id, source_key, seq, role, ts,
+                    loc_kind, char_count, prefix
+                ) VALUES (?, ?, 'future-message', 0, 'user', 1,
+                    'byte_range', 12, 'futuremarker')
+                """, arguments: [sourceID, sessionID])
+            let messageID = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO message_fts(rowid, body) VALUES (?, 'futuremarker')",
+                arguments: [messageID]
+            )
+            try db.execute(sql: """
+                INSERT INTO usage_observation(
+                    source_file_id, session_id, project_id, source_key, agent,
+                    dedupe_key, ts, model, input_tokens, output_tokens, is_sidechain
+                ) VALUES (?, ?, ?, 'future-usage', 'future_agent',
+                    'future-dedupe', 1, 'future-model', 99, 7, 0)
+                """, arguments: [sourceID, sessionID, projectID])
+            try db.execute(
+                sql: "UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty'"
+            )
+            return (sessionID, messageID)
         }
         let beforeSync = try await database.unresolvedSourceFailureCounts()
         XCTAssertEqual(beforeSync.discoveryFailures, 2)
@@ -2581,6 +2736,16 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(recovery.filePaths.isEmpty)
 
         let changed = try await database.synchronizeConfiguredRoots([claude])
+        _ = try await database.rebuildUsageRollupsIfDirty()
+        let visibleStatistics = try await database.statistics()
+        let visibleProjects = try await database.projects()
+        let visibleSessions = try await database.sessions()
+        let visibleMessages = try await database.messages(sessionID: unknownRows.sessionID)
+        let visibleMessage = try await database.message(id: unknownRows.messageID)
+        let visibleSearch = try await database.search(query: "futuremarker", limit: 1)
+        let visibleUsage = try await database.usage(
+            fromDay: nil, throughDay: nil, includeSidechains: true
+        )
         let health = try await database.sourceHealth()
         let counts = try await database.unresolvedSourceFailureCounts()
         let unknownCounts = try await raw.read { db in
@@ -2599,6 +2764,17 @@ final class IndexingRegressionTests: XCTestCase {
         }
 
         XCTAssertTrue(changed)
+        XCTAssertEqual(visibleStatistics.sourceFileCount, 0)
+        XCTAssertEqual(visibleStatistics.projectCount, 0)
+        XCTAssertEqual(visibleStatistics.sessionCount, 0)
+        XCTAssertEqual(visibleStatistics.messageCount, 0)
+        XCTAssertTrue(visibleProjects.isEmpty)
+        XCTAssertTrue(visibleSessions.isEmpty)
+        XCTAssertTrue(visibleMessages.isEmpty)
+        XCTAssertNil(visibleMessage)
+        XCTAssertTrue(visibleSearch.results.isEmpty)
+        XCTAssertNil(visibleSearch.nextCursor)
+        XCTAssertTrue(visibleUsage.isEmpty)
         XCTAssertEqual(health.map(\.agent), [.claudeCode])
         XCTAssertEqual(health.first?.error, "claude failure")
         XCTAssertEqual(counts.discoveryFailures, 1)
@@ -2621,11 +2797,29 @@ final class IndexingRegressionTests: XCTestCase {
                 JOIN source_root r ON r.id=e.root_id
                 WHERE r.agent='future_agent'
                 """) ?? -1
-            return (roots, files, failures)
+            let sessions = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM session WHERE agent='future_agent'"
+            ) ?? -1
+            let messages = try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM message m
+                JOIN session s ON s.id=m.session_id
+                WHERE s.agent='future_agent'
+                """) ?? -1
+            let searchRows = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM message_fts WHERE message_fts MATCH 'futuremarker'"
+            ) ?? -1
+            let usage = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM usage_observation WHERE agent='future_agent'"
+            ) ?? -1
+            return (roots, files, failures, sessions, messages, searchRows, usage)
         }
         XCTAssertEqual(reopenedUnknownCounts.0, 1)
         XCTAssertEqual(reopenedUnknownCounts.1, 1)
         XCTAssertEqual(reopenedUnknownCounts.2, 1)
+        XCTAssertEqual(reopenedUnknownCounts.3, 1)
+        XCTAssertEqual(reopenedUnknownCounts.4, 1)
+        XCTAssertEqual(reopenedUnknownCounts.5, 1)
+        XCTAssertEqual(reopenedUnknownCounts.6, 1)
     }
 
     func testMalformedKnownRecoveryScopeSchedulesRootAndIsReadOnlyUntilReplacement() async throws {
@@ -2905,6 +3099,78 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(results.results.isEmpty)
     }
 
+    func testPostDiscoveryContextMismatchFailsRequestedSubtreeWithoutFiles() throws {
+        let configured = URL(fileURLWithPath: "/tmp/trace-configured")
+        let capturedPath = TraceFileIO.CanonicalPath(
+            path: "/tmp/trace-captured", comparisonKey: "/tmp/trace-captured",
+            isCaseSensitive: true
+        )
+        let currentPath = TraceFileIO.CanonicalPath(
+            path: "/tmp/trace-current", comparisonKey: "/tmp/trace-current",
+            isCaseSensitive: true
+        )
+        let root = SourceRoot(
+            agent: .claudeCode, url: configured, isDefault: false,
+            frozenScanURL: URL(fileURLWithPath: capturedPath.path),
+            frozenCaseSensitive: true
+        )
+        let captured = SourceRootPathContext(
+            scanPath: capturedPath, configuredComponents: configured.pathComponents
+        )
+        let current = SourceRootPathContext(
+            scanPath: currentPath, configuredComponents: configured.pathComponents
+        )
+        let subtreePath = TraceFileIO.canonicalPath(
+            URL(fileURLWithPath: capturedPath.path).appendingPathComponent("subtree").path
+        )
+        let subtree = try XCTUnwrap(root.scope(forScanPath: subtreePath, in: captured))
+        let discovered = DiscoveredSourceFile(
+            agent: .claudeCode, root: configured,
+            url: URL(fileURLWithPath: subtreePath.path).appendingPathComponent("session.jsonl"),
+            format: .claudeJSONL
+        )
+
+        let verified = verifiedDiscoveryResult(
+            .init(files: [discovered]), agent: .claudeCode, root: root,
+            capturedContext: captured, currentContext: current, scopes: [subtree]
+        )
+
+        XCTAssertTrue(verified.files.isEmpty)
+        XCTAssertEqual(verified.failures.count, 1)
+        XCTAssertEqual(verified.failures.first?.scanPath.path, subtree.scanPath.path)
+        XCTAssertEqual(verified.failures.first?.relativeScope, subtree.relativeScope)
+    }
+
+    func testPartialCoordinatorRefreshPreservesOtherConfiguredRoots() async throws {
+        let parent = try directory()
+        let firstRoot = parent.appendingPathComponent("first")
+        let secondRoot = parent.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: firstRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondRoot, withIntermediateDirectories: true)
+        let firstFile = firstRoot.appendingPathComponent("first.jsonl")
+        let secondFile = secondRoot.appendingPathComponent("second.jsonl")
+        try Data(line(1, project: "/tmp/First").utf8).write(to: firstFile)
+        try Data(line(2, project: "/tmp/Second").utf8).write(to: secondFile)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let allSources = [ClaudeCodeSource(roots: [firstRoot, secondRoot])]
+        _ = try await database.synchronizeConfiguredRoots(allSources.flatMap(\.roots))
+        await IndexCoordinator(database: database, sources: allSources)
+            .indexAll(scope: .proseOnly)
+
+        await IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [firstRoot])]
+        ).indexAll(scope: .proseOnly)
+
+        let statistics = try await database.statistics()
+        let secondState = try await database.sourceState(
+            agent: .claudeCode, path: secondFile.path
+        )
+        let secondSearch = try await database.search(query: "message 2")
+        XCTAssertEqual(statistics.sourceFileCount, 2)
+        XCTAssertNotNil(secondState)
+        XCTAssertEqual(secondSearch.results.count, 1)
+    }
+
     func testCapturedCaseSensitiveRootContextDoesNotBroadenDeletion() throws {
         let configured = URL(fileURLWithPath: "/Volumes/External/TraceRoot")
         let root = SourceRoot(
@@ -2916,13 +3182,13 @@ final class IndexingRegressionTests: XCTestCase {
             comparisonKey: configured.path,
             isCaseSensitive: true
         )
-        let captured = SourceRootScope(
+        let captured = SourceRootPathContext(
             scanPath: livePath,
-            relativeScope: RootRelativeScope(components: [], caseSensitive: true)
+            configuredComponents: configured.standardized.pathComponents
         )
         let storedUpper = try XCTUnwrap(root.relativeScope(
             forStoredPath: configured.appendingPathComponent("A/session.jsonl").path,
-            relativeTo: captured
+            in: captured
         ))
         let scannedLower = RootRelativeScope(components: ["a"], caseSensitive: true)
 
@@ -3811,4 +4077,9 @@ private actor FinishRecorder {
     func receive(activity: IndexActivity) {
         values.append(.init(activity: activity))
     }
+}
+
+private actor SafetyRecorder {
+    private(set) var count = 0
+    func receive() { count += 1 }
 }

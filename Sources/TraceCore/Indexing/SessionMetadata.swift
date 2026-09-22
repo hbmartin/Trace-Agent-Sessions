@@ -205,16 +205,22 @@ enum SessionMetadataReader {
 }
 
 /// Source-specific sidecars are optional. Never open the agent's database for writing.
-struct CodexSessionNamesSnapshot: Sendable {
-    let names: [String: String]
+enum CodexSessionNamesLoadResult: Sendable {
+    case loaded([String: String])
+    case absent
+    case unavailable(String)
 }
 
 enum CodexSessionNames {
-    static func load(directory: URL) -> CodexSessionNamesSnapshot? {
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        ) else { return nil }
+    static func load(directory: URL) -> CodexSessionNamesLoadResult {
+        let contents: [URL]
+        do {
+            contents = try FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil
+            )
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
         let sessionIndex = directory.appendingPathComponent("session_index.jsonl")
         let hasSessionIndex = contents.contains {
             $0.standardizedFileURL.path == sessionIndex.standardizedFileURL.path
@@ -229,39 +235,59 @@ enum CodexSessionNames {
                     $1.lastPathComponent, options: .numeric
                 ) == .orderedDescending
             }
-        guard hasSessionIndex || !databases.isEmpty else { return nil }
+        guard hasSessionIndex || !databases.isEmpty else { return .absent }
 
         var indexed: [String: (String, String)] = [:]
-        if hasSessionIndex, let cursor = try? JSONLineCursor(url: sessionIndex, from: 0) {
-            while let line = try? cursor.next() {
-                guard let object = try? JSONHelpers.object(from: line.data),
-                      let id = object["id"] as? String,
-                      let name = SessionMetadataReader.nonempty(object["thread_name"]) else { continue }
-                let date = object["updated_at"] as? String ?? ""
-                if indexed[id] == nil || date >= indexed[id]!.1 { indexed[id] = (name, date) }
+        if hasSessionIndex {
+            do {
+                let cursor = try JSONLineCursor(url: sessionIndex, from: 0)
+                while let line = try cursor.next() {
+                    guard let object = try? JSONHelpers.object(from: line.data),
+                          let id = object["id"] as? String,
+                          let name = SessionMetadataReader.nonempty(object["thread_name"])
+                    else { continue }
+                    let date = object["updated_at"] as? String ?? ""
+                    if indexed[id] == nil || date >= indexed[id]!.1 {
+                        indexed[id] = (name, date)
+                    }
+                }
+            } catch {
+                return .unavailable(error.localizedDescription)
             }
         }
         var names = indexed.mapValues { $0.0 }
         guard let newestDatabase = databases.first else {
-            return .init(names: names)
+            return .loaded(names)
         }
 
         var config = Configuration()
         config.readonly = true
         config.busyMode = .timeout(0.2)
-        guard let queue = try? DatabaseQueue(path: newestDatabase.path, configuration: config),
-              let rows = try? queue.read({ db in
-                  let columns = try db.columns(in: "threads").map(\.name)
-                  guard columns.contains("id") else { return [Row]() }
-                  let fields = ["id", "name", "title"].filter { columns.contains($0) }.joined(separator: ", ")
-                  return try Row.fetchAll(db, sql: "SELECT \(fields) FROM threads")
-              }) else { return .init(names: names) }
-        for row in rows {
-            guard let id: String = row["id"] else { continue }
-            let name: String? = row.hasColumn("name") ? row["name"] : nil
-            let title: String? = row.hasColumn("title") ? row["title"] : nil
-            names[id] = SessionMetadataReader.nonempty(name) ?? names[id] ?? SessionMetadataReader.nonempty(title)
+        do {
+            let queue = try DatabaseQueue(path: newestDatabase.path, configuration: config)
+            let rows = try queue.read { db in
+                let columns = try db.columns(in: "threads").map(\.name)
+                guard columns.contains("id") else {
+                    throw SessionSourceError.malformedRecord(
+                        "Codex metadata threads table has no id column"
+                    )
+                }
+                let fields = ["id", "name", "title"]
+                    .filter { columns.contains($0) }
+                    .joined(separator: ", ")
+                return try Row.fetchAll(db, sql: "SELECT \(fields) FROM threads")
+            }
+            for row in rows {
+                guard let id: String = row["id"] else { continue }
+                let name: String? = row.hasColumn("name") ? row["name"] : nil
+                let title: String? = row.hasColumn("title") ? row["title"] : nil
+                names[id] = SessionMetadataReader.nonempty(name)
+                    ?? names[id]
+                    ?? SessionMetadataReader.nonempty(title)
+            }
+        } catch {
+            return .unavailable(error.localizedDescription)
         }
-        return .init(names: names)
+        return .loaded(names)
     }
 }

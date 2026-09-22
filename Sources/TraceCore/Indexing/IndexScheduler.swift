@@ -13,6 +13,7 @@ public actor IndexScheduler {
         let streamRoots: CanonicalStreamRoots
         let scope: IndexScope
         let activity: IndexActivity
+        let satisfiesSafetyReconciliation: Bool
         let retryAttempt: Int
         let generation: UInt64
     }
@@ -21,6 +22,7 @@ public actor IndexScheduler {
     private let progress: @Sendable (IndexProgress) async -> Void
     private let didComplete: @Sendable (IndexActivity, [String: UInt64]) async -> Void
     private let didFinish: @Sendable (IndexActivity) async -> Void
+    private let didSatisfySafetyReconciliation: @Sendable () async -> Void
     private let retryDelay: Duration
     private var scope: IndexScope
     private var pendingPaths: Set<String> = []
@@ -28,6 +30,7 @@ public actor IndexScheduler {
     private var pendingWatermarks: [String: UInt64] = [:]
     private var pendingStreamRoots: CanonicalStreamRoots = [:]
     private var pendingActivity: IndexActivity?
+    private var pendingSatisfiesSafetyReconciliation = false
     private var fullScan = false
     private var rebuild = false
     private var worker: Task<Void, Never>?
@@ -43,19 +46,22 @@ public actor IndexScheduler {
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
                 retryDelay: Duration = .seconds(5),
                 didFinish: @escaping @Sendable (IndexActivity) async -> Void = { _ in },
-                didComplete: @escaping @Sendable (IndexActivity, [String: UInt64]) async -> Void = { _, _ in }) {
+                didComplete: @escaping @Sendable (IndexActivity, [String: UInt64]) async -> Void = { _, _ in },
+                didSatisfySafetyReconciliation: @escaping @Sendable () async -> Void = {}) {
         self.coordinator = coordinator
         self.scope = scope
         self.retryDelay = retryDelay
         self.progress = progress
         self.didComplete = didComplete
         self.didFinish = didFinish
+        self.didSatisfySafetyReconciliation = didSatisfySafetyReconciliation
     }
 
     public func request(paths: Set<String> = [], reconcile: Bool = false,
                         reconciliationPaths: Set<String> = [],
                         rebuild: Bool = false, scope: IndexScope? = nil,
                         activity: IndexActivity? = nil,
+                        satisfiesSafetyReconciliation: Bool? = nil,
                         watermarks: [String: UInt64] = [:],
                         streamRoots: [String: Set<String>] = [:]) {
         guard !stopping else { return }
@@ -91,6 +97,8 @@ public actor IndexScheduler {
         self.rebuild = self.rebuild || rebuild
         if requestsPass {
             pendingActivity = IndexActivity.moreSignificant(pendingActivity, inferred)
+            pendingSatisfiesSafetyReconciliation = pendingSatisfiesSafetyReconciliation
+                || (satisfiesSafetyReconciliation ?? inferred.satisfiesSafetyReconciliation)
         }
         reactivateDormantIfCovered()
         if worker == nil { worker = Task { await drain() } }
@@ -129,6 +137,7 @@ public actor IndexScheduler {
                     streamRoots: pendingStreamRoots,
                     scope: scope,
                     activity: pendingActivity ?? .fileChanges,
+                    satisfiesSafetyReconciliation: pendingSatisfiesSafetyReconciliation,
                     retryAttempt: 0,
                     generation: configurationGeneration
                 )
@@ -139,6 +148,7 @@ public actor IndexScheduler {
                 pendingWatermarks.removeAll()
                 pendingStreamRoots.removeAll()
                 pendingActivity = nil
+                pendingSatisfiesSafetyReconciliation = false
             }
             let operation = Task {
                 if batch.fullScan {
@@ -180,7 +190,8 @@ public actor IndexScheduler {
                             failedPaths: failedPaths
                         ),
                         streamRoots: batch.streamRoots, scope: batch.scope,
-                        activity: .subtreeRecovery, retryAttempt: batch.retryAttempt,
+                        activity: .subtreeRecovery, satisfiesSafetyReconciliation: false,
+                        retryAttempt: batch.retryAttempt,
                         generation: configurationGeneration
                     )
                     if batch.retryAttempt == 0 {
@@ -200,6 +211,9 @@ public actor IndexScheduler {
                 )
                 if !checkpointable.isEmpty {
                     await didComplete(batch.activity, checkpointable)
+                }
+                if batch.satisfiesSafetyReconciliation {
+                    await didSatisfySafetyReconciliation()
                 }
                 await didFinish(batch.activity)
             } else if result.phase == .failed {
@@ -257,6 +271,7 @@ public actor IndexScheduler {
             streamRoots: batch.streamRoots,
             scope: scope,
             activity: batch.activity,
+            satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
             retryAttempt: batch.retryAttempt + 1,
             generation: configurationGeneration
         )
@@ -270,7 +285,9 @@ public actor IndexScheduler {
             fullScan: batch.fullScan, rebuild: false,
             paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
             watermarks: batch.watermarks, streamRoots: batch.streamRoots, scope: scope,
-            activity: batch.activity, retryAttempt: batch.retryAttempt,
+            activity: batch.activity,
+            satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
+            retryAttempt: batch.retryAttempt,
             generation: configurationGeneration
         )
         dormantBatch = merged(dormantBatch, candidate, retryAttempt: candidate.retryAttempt)
@@ -294,6 +311,8 @@ public actor IndexScheduler {
             watermarks: watermarks, streamRoots: streamRoots,
             scope: scope,
             activity: IndexActivity.moreSignificant(existing.activity, incoming.activity),
+            satisfiesSafetyReconciliation: existing.satisfiesSafetyReconciliation
+                || incoming.satisfiesSafetyReconciliation,
             retryAttempt: max(existing.retryAttempt, retryAttempt),
             generation: configurationGeneration
         )
@@ -347,7 +366,9 @@ public actor IndexScheduler {
             fullScan: batch.fullScan, rebuild: batch.rebuild,
             paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
             watermarks: watermarks, streamRoots: streamRoots, scope: batch.scope,
-            activity: batch.activity, retryAttempt: batch.retryAttempt,
+            activity: batch.activity,
+            satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
+            retryAttempt: batch.retryAttempt,
             generation: batch.generation
         )
     }
@@ -377,6 +398,8 @@ public actor IndexScheduler {
         pendingActivity = IndexActivity.moreSignificant(
             pendingActivity, dormantBatch.activity
         )
+        pendingSatisfiesSafetyReconciliation = pendingSatisfiesSafetyReconciliation
+            || dormantBatch.satisfiesSafetyReconciliation
         self.dormantBatch = nil
     }
 
@@ -421,6 +444,7 @@ public actor IndexScheduler {
         pendingWatermarks.removeAll()
         pendingStreamRoots.removeAll()
         pendingActivity = nil
+        pendingSatisfiesSafetyReconciliation = false
         retryBatch = nil
         retryReady = false
         dormantBatch = nil

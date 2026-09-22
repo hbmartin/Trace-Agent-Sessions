@@ -52,6 +52,57 @@ struct NormalizedDiscoveryFailure: Sendable {
     }
 }
 
+struct VerifiedDiscoveryResult: Sendable {
+    let files: [DiscoveredSourceFile]
+    let failures: [NormalizedDiscoveryFailure]
+}
+
+func verifiedDiscoveryResult(
+    _ result: DiscoveryResult, agent: AgentKind, root: SourceRoot,
+    capturedContext: SourceRootPathContext, currentContext: SourceRootPathContext,
+    scopes: [SourceRootScope]
+) -> VerifiedDiscoveryResult {
+    let scannedScopes = Set(scopes.map(\.relativeScope))
+    guard capturedContext == currentContext else {
+        let failures = scopes.map { scope in
+            NormalizedDiscoveryFailure(
+                failure: DiscoveryFailure(
+                    agent: agent, root: root.url, path: scope.scanPath.path,
+                    message: "The configured source path changed while Trace was running"
+                ),
+                scope: scope
+            )
+        }
+        return .init(
+            files: [],
+            failures: deduplicatedNormalizedDiscoveryFailures(failures)
+        )
+    }
+    let failures = normalizedDiscoveryFailures(
+        result.failures.filter { $0.root.path == root.url.path },
+        for: root, in: capturedContext
+    ).filter { failure in
+        scannedScopes.contains { $0.intersects(failure.relativeScope) }
+    }
+    return .init(files: result.files, failures: failures)
+}
+
+func sourceFormat(for url: URL, agent: AgentKind) -> SourceFormat? {
+    let pathExtension = url.pathExtension.lowercased()
+    switch agent {
+    case .claudeCode:
+        return pathExtension == "jsonl" ? .claudeJSONL : nil
+    case .codex:
+        return pathExtension == "jsonl" && url.lastPathComponent.hasPrefix("rollout-")
+            ? .codexJSONL : nil
+    case .gemini:
+        guard url.deletingLastPathComponent().lastPathComponent == "chats",
+              url.lastPathComponent.hasPrefix("session-") else { return nil }
+        if pathExtension == "jsonl" { return .geminiJSONL }
+        return pathExtension == "json" ? .geminiJSON : nil
+    }
+}
+
 func normalizedDiscoveryFailures(
     _ failures: [DiscoveryFailure], for root: SourceRoot,
     in capturedContext: SourceRootPathContext? = nil
@@ -232,7 +283,7 @@ public extension SessionSource {
                 guard let mappedScope = root.scope(forScanPath: startPath, in: context),
                       mappedScope.relativeScope == start.scope.relativeScope else {
                     failures.append(.init(
-                        agent: agent, root: root.url, path: root.scanURL.path,
+                        agent: agent, root: root.url, path: start.scope.scanPath.path,
                         message: "The configured source path changed while Trace was running"
                     ))
                     continue

@@ -59,8 +59,14 @@ private struct StoredRecoveryRow: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 13
+    public static let schemaVersion = 14
     public static let indexFormatVersion = 6
+    private static let supportedAgentValues = AgentKind.allCases.map(\.rawValue)
+    private static let supportedAgentPlaceholders = AgentKind.allCases
+        .map { _ in "?" }.joined(separator: ",")
+    private static var supportedAgentArguments: StatementArguments {
+        StatementArguments(supportedAgentValues)
+    }
     private static let sourceStateSelection = """
         sf.*,
         (sf.last_error IS NOT NULL OR EXISTS (
@@ -408,6 +414,13 @@ public actor IndexDatabase {
                 UPDATE trace_meta SET value='13' WHERE key='schema_version';
                 """)
         }
+        migrator.registerMigration("trace-v14-supported-agent-rollups") { db in
+            try db.execute(sql: """
+                DELETE FROM usage_daily;
+                UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty';
+                UPDATE trace_meta SET value='14' WHERE key='schema_version';
+                """)
+        }
         try migrator.migrate(pool)
     }
 
@@ -563,10 +576,25 @@ public actor IndexDatabase {
 
     public func statistics() throws -> IndexStatistics {
         let counts = try pool.read { db -> (Int, Int, Int, Int) in
-            let files = try Int.fetchOne(db, sql: "SELECT count(*) FROM source_file") ?? 0
-            let projects = try Int.fetchOne(db, sql: "SELECT count(*) FROM project") ?? 0
-            let sessions = try Int.fetchOne(db, sql: "SELECT count(*) FROM session") ?? 0
-            let messages = try Int.fetchOne(db, sql: "SELECT count(*) FROM message") ?? 0
+            let values = Self.supportedAgentValues
+            let placeholders = Self.supportedAgentPlaceholders
+            let files = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM source_file WHERE agent IN (\(placeholders))",
+                arguments: StatementArguments(values)
+            ) ?? 0
+            let projects = try Int.fetchOne(
+                db, sql: "SELECT count(DISTINCT project_id) FROM session WHERE agent IN (\(placeholders))",
+                arguments: StatementArguments(values)
+            ) ?? 0
+            let sessions = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM session WHERE agent IN (\(placeholders))",
+                arguments: StatementArguments(values)
+            ) ?? 0
+            let messages = try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM message m
+                JOIN session s ON s.id=m.session_id
+                WHERE s.agent IN (\(placeholders))
+                """, arguments: StatementArguments(values)) ?? 0
             return (files, projects, sessions, messages)
         }
         let paths = [url.path, url.path + "-wal", url.path + "-shm"]
@@ -1204,13 +1232,17 @@ public actor IndexDatabase {
 
     public func unresolvedSourceFailureCounts() throws -> SourceFailureCounts {
         try pool.read { db in
-            let files = try String.fetchAll(
-                db, sql: "SELECT agent FROM source_file WHERE last_error IS NOT NULL"
-            ).count { AgentKind(rawValue: $0) != nil }
-            let discovery = try String.fetchAll(db, sql: """
-                SELECT r.agent FROM source_scan_error e
+            let values = Self.supportedAgentValues
+            let placeholders = Self.supportedAgentPlaceholders
+            let files = try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM source_file
+                WHERE last_error IS NOT NULL AND agent IN (\(placeholders))
+                """, arguments: StatementArguments(values)) ?? 0
+            let discovery = try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM source_scan_error e
                 JOIN source_root r ON r.id=e.root_id
-                """).count { AgentKind(rawValue: $0) != nil }
+                WHERE r.agent IN (\(placeholders))
+                """, arguments: StatementArguments(values)) ?? 0
             return .init(fileFailures: files, discoveryFailures: discovery)
         }
     }
@@ -1218,17 +1250,18 @@ public actor IndexDatabase {
     public func unresolvedRecoveryWork() throws -> IndexRecoveryWork {
         let snapshot = try pool.read { db -> (Set<String>, [StoredRecoveryRow]) in
             let files = try Set(Row.fetchAll(
-                db, sql: "SELECT agent, path FROM source_file WHERE last_error IS NOT NULL"
-            ).compactMap { row -> String? in
-                let rawAgent: String = row["agent"]
-                guard AgentKind(rawValue: rawAgent) != nil else { return nil }
-                return row["path"]
-            })
+                db, sql: """
+                    SELECT agent, path FROM source_file
+                    WHERE last_error IS NOT NULL
+                        AND agent IN (\(Self.supportedAgentPlaceholders))
+                    """, arguments: Self.supportedAgentArguments
+            ).map { $0["path"] as String })
             let rows = try Row.fetchAll(db, sql: """
                 SELECT e.root_id, e.relative_scope, r.agent, r.path, r.is_default
                 FROM source_scan_error e
                 JOIN source_root r ON r.id=e.root_id
-                """).map { row in
+                WHERE r.agent IN (\(Self.supportedAgentPlaceholders))
+                """, arguments: Self.supportedAgentArguments).map { row in
                 StoredRecoveryRow(
                     rootID: row["root_id"], relativeScope: row["relative_scope"],
                     agent: row["agent"], rootPath: row["path"],
@@ -1409,6 +1442,7 @@ public actor IndexDatabase {
                            max(u.cache_read_tokens) OVER response AS total_cache_read,
                            max(u.reasoning_tokens) OVER response AS total_reasoning
                     FROM usage_observation u
+                    WHERE u.agent IN (\(supportedAgentPlaceholders))
                     WINDOW response AS (PARTITION BY u.agent, u.dedupe_key)
                 )
                 SELECT strftime('%Y-%m-%d', c.ts / 1000, 'unixepoch', 'localtime'),
@@ -1422,7 +1456,7 @@ public actor IndexDatabase {
                 JOIN session s ON s.id = c.session_id
                 WHERE c.occurrence = 1
                 GROUP BY 1, 2, 3, 4
-                """)
+                """, arguments: supportedAgentArguments)
             try db.execute(sql: "UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty'")
             try db.execute(
                 sql: "INSERT INTO trace_meta(key, value) VALUES ('usage_rollups_timezone', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -1446,7 +1480,8 @@ public actor IndexDatabase {
         guard let pattern = FTSQueryParser.parse(query) else { return .init(results: [], nextCursor: nil) }
         return try pool.read { db in
             var filterArguments = StatementArguments()
-            var predicates: [String] = []
+            var predicates = ["s.agent IN (\(Self.supportedAgentPlaceholders))"]
+            filterArguments += Self.supportedAgentArguments
 
             if !filters.agents.isEmpty {
                 let values = filters.agents.sorted { $0.rawValue < $1.rawValue }
@@ -1675,8 +1710,9 @@ public actor IndexDatabase {
                        count(s.id) AS session_count,
                        coalesce(max(s.last_activity_at), 0) AS last_activity
                 FROM project p JOIN session s ON s.project_id=p.id
+                    AND s.agent IN (\(Self.supportedAgentPlaceholders))
                 GROUP BY p.id ORDER BY last_activity DESC
-                """).map {
+                """, arguments: Self.supportedAgentArguments).map {
                     .init(
                         id: $0["id"], canonicalKey: $0["canonical_key"],
                         displayName: $0["display_name"], rootPath: $0["root_path"],
@@ -1690,11 +1726,12 @@ public actor IndexDatabase {
         projectCanonicalKey: String? = nil, limit: Int = 500
     ) throws -> [SessionSummary] {
         try pool.read { db in
-            let predicate = projectCanonicalKey == nil
-                ? ""
-                : "WHERE p.canonical_key=?"
-            var arguments = StatementArguments()
-            if let projectCanonicalKey { arguments += [projectCanonicalKey] }
+            var predicates = ["s.agent IN (\(Self.supportedAgentPlaceholders))"]
+            var arguments = Self.supportedAgentArguments
+            if let projectCanonicalKey {
+                predicates.append("p.canonical_key=?")
+                arguments += [projectCanonicalKey]
+            }
             arguments += [limit]
             return try Row.fetchAll(db, sql: """
                 SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
@@ -1704,14 +1741,17 @@ public actor IndexDatabase {
                 FROM session s
                 JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN project p ON p.id=s.project_id
-                \(predicate) ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
+                WHERE \(predicates.joined(separator: " AND "))
+                ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
                 """, arguments: arguments).compactMap(sessionSummary(from:))
         }
     }
 
     public func session(id: Int64) throws -> SessionSummary? {
         try pool.read { db in
-            try Row.fetchOne(db, sql: """
+            var arguments: StatementArguments = [id]
+            arguments += Self.supportedAgentArguments
+            return try Row.fetchOne(db, sql: """
                 SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                        sf.path AS source_path,
                        sf.content_generation AS source_generation,
@@ -1719,29 +1759,39 @@ public actor IndexDatabase {
                 FROM session s
                 JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN project p ON p.id=s.project_id
-                WHERE s.id=?
-                """, arguments: [id]).flatMap(sessionSummary(from:))
+                WHERE s.id=? AND s.agent IN (\(Self.supportedAgentPlaceholders))
+                """, arguments: arguments).flatMap(sessionSummary(from:))
         }
     }
 
     public func messages(sessionID: Int64) throws -> [MessageSummary] {
         try pool.read { db in
+            var arguments: StatementArguments = [sessionID]
+            arguments += Self.supportedAgentArguments
             let rows = try Row.fetchAll(db, sql: """
                 SELECT m.*, sf.path AS source_path, sf.format AS source_format
-                FROM message m JOIN source_file sf ON sf.id=m.source_file_id
-                WHERE m.session_id=? ORDER BY m.seq
-                """, arguments: [sessionID])
+                FROM message m
+                JOIN source_file sf ON sf.id=m.source_file_id
+                JOIN session s ON s.id=m.session_id
+                WHERE m.session_id=?
+                    AND s.agent IN (\(Self.supportedAgentPlaceholders))
+                ORDER BY m.seq
+                """, arguments: arguments)
             return rows.compactMap(messageSummary(from:))
         }
     }
 
     public func message(id: Int64) throws -> MessageSummary? {
         try pool.read { db in
+            var arguments: StatementArguments = [id]
+            arguments += Self.supportedAgentArguments
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT m.*, sf.path AS source_path, sf.format AS source_format
-                FROM message m JOIN source_file sf ON sf.id=m.source_file_id
-                WHERE m.id=?
-                """, arguments: [id])
+                FROM message m
+                JOIN source_file sf ON sf.id=m.source_file_id
+                JOIN session s ON s.id=m.session_id
+                WHERE m.id=? AND s.agent IN (\(Self.supportedAgentPlaceholders))
+                """, arguments: arguments)
             else { return nil }
             return messageSummary(from: row)
         }
@@ -1757,11 +1807,13 @@ public actor IndexDatabase {
                     SELECT f.root_id, count(*) AS file_count, max(h.last_error) AS error
                     FROM source_file f
                     LEFT JOIN adapter_health h ON h.source_file_id=f.id
+                    WHERE f.agent IN (\(Self.supportedAgentPlaceholders))
                     GROUP BY f.root_id
                 ), session_health AS (
                     SELECT f.root_id, min(s.started_at) AS earliest
                     FROM source_file f
                     JOIN session s ON s.source_file_id=f.id
+                    WHERE s.agent IN (\(Self.supportedAgentPlaceholders))
                     GROUP BY f.root_id
                 )
                 SELECT r.id, r.agent, r.path, r.last_scan_ms,
@@ -1771,8 +1823,12 @@ public actor IndexDatabase {
                 LEFT JOIN scan_health e ON e.root_id=r.id
                 LEFT JOIN file_health f ON f.root_id=r.id
                 LEFT JOIN session_health s ON s.root_id=r.id
+                WHERE r.agent IN (\(Self.supportedAgentPlaceholders))
                 ORDER BY r.agent, r.path
-                """)
+                """, arguments: StatementArguments(
+                    Self.supportedAgentValues + Self.supportedAgentValues
+                        + Self.supportedAgentValues
+                ))
             return rows.compactMap(sourceHealth(from:))
         }
     }
