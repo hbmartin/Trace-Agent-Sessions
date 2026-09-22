@@ -264,7 +264,6 @@ final class IndexingRegressionTests: XCTestCase {
         let latch = BatchLatch()
         let recorder = RunRecorder()
         let completions = CompletionRecorder()
-        let finishes = FinishRecorder()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
             progress: { progress in
@@ -272,9 +271,6 @@ final class IndexingRegressionTests: XCTestCase {
                 if progress.phase == .indexing && progress.currentFileBytes > 0 {
                     await latch.pauseOnce()
                 }
-            },
-            didFinish: { activity in
-                await finishes.receive(activity: activity)
             },
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
@@ -300,8 +296,8 @@ final class IndexingRegressionTests: XCTestCase {
         let completed = await completions.values
         XCTAssertEqual(completed.count, 1, "the replacement full scan must absorb cancelled work")
         XCTAssertEqual(completed.first?.watermarks["volume"], 31)
-        let finished = await finishes.values
-        XCTAssertEqual(finished.map(\.activity), [.rebuild])
+        let terminalActivities = await recorder.terminalActivities
+        XCTAssertEqual(terminalActivities, [.safetyVerification, .rebuild])
         let cancelledSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()
         XCTAssertNil(cancelledSafetyTimestamp,
                      "a cancelled safety pass must not advance its timestamp")
@@ -854,6 +850,10 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(
                 sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v14-supported-agent-rollups'"
             )
+            try db.execute(
+                sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v15-supported-agent-view'"
+            )
+            try db.execute(sql: "DROP VIEW supported_agent")
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
         }
@@ -863,7 +863,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "14")
+        XCTAssertEqual(schema, "15")
     }
 
     func testV13MigratesShippedV12SourceIdentityAndResetsDerivedContent() async throws {
@@ -924,6 +924,9 @@ final class IndexingRegressionTests: XCTestCase {
                     WHERE identifier='trace-v13-agent-source-identity';
                     DELETE FROM grdb_migrations
                     WHERE identifier='trace-v14-supported-agent-rollups';
+                    DELETE FROM grdb_migrations
+                    WHERE identifier='trace-v15-supported-agent-view';
+                    DROP VIEW supported_agent;
                     UPDATE trace_meta SET value='5' WHERE key='index_format_version';
                     UPDATE trace_meta SET value='12' WHERE key='schema_version';
                     """)
@@ -950,7 +953,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "14")
+        XCTAssertEqual(schema, "15")
         let migratedSchema = try await raw.read { db in
             let sourceFileSQL = try String.fetchOne(
                 db, sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name='source_file'"
@@ -1011,6 +1014,9 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: """
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v14-supported-agent-rollups';
+                DELETE FROM grdb_migrations
+                WHERE identifier='trace-v15-supported-agent-view';
+                DROP VIEW supported_agent;
                 UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty';
                 UPDATE trace_meta SET value='13' WHERE key='schema_version';
                 """)
@@ -1037,7 +1043,56 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertNotNil(state)
         XCTAssertEqual(migrationState.0, 0)
         XCTAssertEqual(migrationState.1, "1")
-        XCTAssertEqual(migrationState.2, "14")
+        XCTAssertEqual(migrationState.2, "15")
+    }
+
+    func testV15AddsSupportedAgentViewWithoutResettingContent() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let url = root.appendingPathComponent("index.sqlite")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: url)
+        await IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [root])]
+        ).indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        let originalIDs = try await raw.read { db in
+            (
+                try Int64.fetchOne(db, sql: "SELECT id FROM session"),
+                try Int64.fetchOne(db, sql: "SELECT id FROM message")
+            )
+        }
+        try await raw.write { db in
+            try db.execute(sql: """
+                DROP VIEW supported_agent;
+                DELETE FROM grdb_migrations
+                WHERE identifier='trace-v15-supported-agent-view';
+                UPDATE trace_meta SET value='14' WHERE key='schema_version';
+                """)
+        }
+
+        let migrated = try IndexDatabase(url: url)
+        let migratedState = try await raw.read { db in
+            let agents = try String.fetchAll(
+                db, sql: "SELECT agent FROM supported_agent ORDER BY agent"
+            )
+            let schema = try String.fetchOne(
+                db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"
+            )
+            let ids = (
+                try Int64.fetchOne(db, sql: "SELECT id FROM session"),
+                try Int64.fetchOne(db, sql: "SELECT id FROM message")
+            )
+            return (agents, schema, ids)
+        }
+
+        XCTAssertFalse(migrated.contentWasResetOnOpen)
+        XCTAssertEqual(migratedState.0, AgentKind.allCases.map(\.rawValue).sorted())
+        XCTAssertEqual(migratedState.1, "15")
+        XCTAssertEqual(migratedState.2.0, originalIDs.0)
+        XCTAssertEqual(migratedState.2.1, originalIDs.1)
+        let statistics = try await migrated.statistics()
+        XCTAssertEqual(statistics.messageCount, 1)
     }
 
     func testConfiguredRootSynchronizationPurgesRemovedRootImmediately() async throws {
@@ -1215,12 +1270,10 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.close()
         let terminal = ProgressRecorder()
         let completions = CompletionRecorder()
-        let finishes = FinishRecorder()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
             progress: { terminal.receive($0) },
             retryDelay: .milliseconds(20),
-            didFinish: { activity in await finishes.receive(activity: activity) },
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
             }
@@ -1248,9 +1301,6 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(values.first(where: { $0.activity == .safetyVerification })?
             .watermarks["healthy-volume"], 9,
         "a completed safety pass must report completion and checkpoint an unaffected volume")
-        let finishValues = await finishes.values
-        XCTAssertEqual(finishValues.first?.activity, .safetyVerification)
-
         await scheduler.request(activity: .fileChanges, watermarks: ["later-volume": 10])
         await scheduler.waitUntilIdle()
         values = await completions.values
@@ -1281,14 +1331,11 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.write(contentsOf: Data(line(2).utf8))
         try handle.close()
         let completions = CompletionRecorder()
-        let finishes = FinishRecorder()
+        let progress = ProgressRecorder()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
-            progress: { _ in },
+            progress: { progress.receive($0) },
             retryDelay: .seconds(30),
-            didFinish: { activity in
-                await finishes.receive(activity: activity)
-            },
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
             },
@@ -1306,9 +1353,8 @@ final class IndexingRegressionTests: XCTestCase {
 
         let values = await completions.values
         XCTAssertTrue(values.isEmpty)
-        let finishValues = await finishes.values
-        XCTAssertEqual(finishValues.count, 1)
-        XCTAssertEqual(finishValues.first?.activity, .safetyVerification)
+        XCTAssertEqual(progress.terminal?.phase, .complete)
+        XCTAssertEqual(progress.terminal?.activity, .safetyVerification)
         let completedSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()
         XCTAssertNotNil(completedSafetyTimestamp)
         await scheduler.stop()
@@ -1329,16 +1375,16 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.close()
 
         let latch = BatchLatch()
-        let finishes = FinishRecorder()
+        let runs = RunRecorder()
         let safety = SafetyRecorder()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
             progress: { progress in
+                await runs.receive(progress)
                 if progress.phase == .indexing && progress.currentFileBytes > 0 {
                     await latch.pauseOnce()
                 }
             },
-            didFinish: { await finishes.receive(activity: $0) },
             didSatisfySafetyReconciliation: { await safety.receive() }
         )
 
@@ -1351,9 +1397,9 @@ final class IndexingRegressionTests: XCTestCase {
         await latch.release()
         await scheduler.waitUntilIdle()
 
-        let mergedFinishes = await finishes.values
+        let mergedActivities = await runs.terminalActivities
         let mergedSafetyCount = await safety.count
-        XCTAssertEqual(mergedFinishes.map(\.activity), [.fileChanges, .rootRecovery])
+        XCTAssertEqual(mergedActivities, [.fileChanges, .rootRecovery])
         XCTAssertEqual(mergedSafetyCount, 1,
                        "merged initial-build work must satisfy safety bookkeeping")
 
@@ -1384,15 +1430,11 @@ final class IndexingRegressionTests: XCTestCase {
                 BEGIN SELECT RAISE(ABORT, 'forced safety failure'); END
                 """)
         }
-        let finishes = FinishRecorder()
         let progress = ProgressRecorder()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
             progress: { progress.receive($0) },
             retryDelay: .seconds(30),
-            didFinish: { activity in
-                await finishes.receive(activity: activity)
-            },
             didSatisfySafetyReconciliation: {
                 try? await database.markSafetyReconciliationComplete()
             }
@@ -1402,8 +1444,6 @@ final class IndexingRegressionTests: XCTestCase {
         await scheduler.waitUntilIdle()
 
         XCTAssertEqual(progress.terminal?.phase, .failed)
-        let finishValues = await finishes.values
-        XCTAssertTrue(finishValues.isEmpty)
         let failedSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()
         XCTAssertNil(failedSafetyTimestamp,
                      "a fatal safety pass must not advance its timestamp")
@@ -2039,7 +2079,7 @@ final class IndexingRegressionTests: XCTestCase {
         let databaseURL = root.appendingPathComponent("index.sqlite")
         let database = try IndexDatabase(url: databaseURL)
         let source = CodexSource(root: fixtures)
-        let coordinator = IndexCoordinator(database: database, sources: [source])
+        let coordinator = IndexCoordinator(database: database, sources: [source, source])
         await coordinator.indexAll(scope: .everything)
         let sessions = try await database.sessions()
         let session = try XCTUnwrap(sessions.first { $0.hadError })
@@ -2748,6 +2788,11 @@ final class IndexingRegressionTests: XCTestCase {
         )
         let health = try await database.sourceHealth()
         let counts = try await database.unresolvedSourceFailureCounts()
+        let supportedAgents = try await raw.read {
+            try String.fetchAll(
+                $0, sql: "SELECT agent FROM supported_agent ORDER BY agent"
+            )
+        }
         let unknownCounts = try await raw.read { db in
             let roots = try Int.fetchOne(
                 db, sql: "SELECT count(*) FROM source_root WHERE agent='future_agent'"
@@ -2779,6 +2824,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(health.first?.error, "claude failure")
         XCTAssertEqual(counts.discoveryFailures, 1)
         XCTAssertEqual(counts.fileFailures, 0)
+        XCTAssertEqual(supportedAgents, AgentKind.allCases.map(\.rawValue).sorted())
         XCTAssertEqual(unknownCounts.0, 1)
         XCTAssertEqual(unknownCounts.1, 1)
         XCTAssertEqual(unknownCounts.2, 1)
@@ -4049,8 +4095,12 @@ private final class ProgressRecorder: @unchecked Sendable {
 
 private actor RunRecorder {
     var terminalPhases: [IndexProgress.Phase] = []
+    var terminalActivities: [IndexActivity] = []
     func receive(_ progress: IndexProgress) {
-        if [.complete, .cancelled, .failed].contains(progress.phase) { terminalPhases.append(progress.phase) }
+        if [.complete, .cancelled, .failed].contains(progress.phase) {
+            terminalPhases.append(progress.phase)
+            terminalActivities.append(progress.activity)
+        }
     }
 }
 
@@ -4064,18 +4114,6 @@ private actor CompletionRecorder {
 
     func receive(activity: IndexActivity, watermarks: [String: UInt64]) {
         values.append(.init(activity: activity, watermarks: watermarks))
-    }
-}
-
-private actor FinishRecorder {
-    struct Entry: Sendable {
-        let activity: IndexActivity
-    }
-
-    private(set) var values: [Entry] = []
-
-    func receive(activity: IndexActivity) {
-        values.append(.init(activity: activity))
     }
 }
 

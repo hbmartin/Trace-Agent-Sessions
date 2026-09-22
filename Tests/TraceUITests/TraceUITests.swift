@@ -104,6 +104,50 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(second.exists, "the single remaining duplicate must persist across relaunch")
     }
 
+    func testSourceRemovalDuringRecoveryLoadAppliesInSameLaunch() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-settings"])
+        let additionalRoot = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(
+            at: additionalRoot, withIntermediateDirectories: true
+        )
+        let encodedRoots = try JSONEncoder().encode([additionalRoot.path])
+        let recoveryStarted = directory.appendingPathComponent("recovery-load-started")
+        let passCompleted = directory.appendingPathComponent("index-pass-completed")
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(
+            decoding: encodedRoots, as: UTF8.self
+        )
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launchEnvironment["TRACE_TEST_RECOVERY_LOAD_DELAY_MS"] = "3000"
+        app.launchEnvironment["TRACE_TEST_RECOVERY_LOAD_STARTED_PATH"] = recoveryStarted.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = passCompleted.path
+
+        app.launch()
+
+        XCTAssertTrue(waitForFile(recoveryStarted, timeout: 10))
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        let sources = app.descendants(matching: .any)["Sources"].firstMatch
+        XCTAssertTrue(sources.waitForExistence(timeout: 5))
+        sources.click()
+        let remove = app.buttons["removeAdditionalClaudeRoot-0"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.click()
+        XCTAssertTrue(waitForFile(passCompleted, timeout: 20))
+
+        let escapedPath = additionalRoot.path.replacingOccurrences(of: "'", with: "''")
+        let persistedRoot = pollSQLiteInteger(
+            directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT count(*) FROM source_root WHERE path='\(escapedPath)'",
+            timeout: 10, until: { $0 == 0 }
+        )
+        XCTAssertNil(persistedRoot.error)
+        XCTAssertEqual(
+            persistedRoot.value, 0,
+            "the startup coordinator must use the source configuration changed during recovery"
+        )
+    }
+
     func testPartialWatcherStartupFailureStillRunsInitialIndexing() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let codex = directory.appendingPathComponent("Sources/Codex")
@@ -227,13 +271,19 @@ final class TraceUITests: XCTestCase {
             0
         )
 
-        app.buttons["Build Index"].click()
-
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "Could not load pending index recovery"
         )).firstMatch.waitForExistence(timeout: 10))
         let dismiss = app.sheets.buttons["OK"].firstMatch
         if dismiss.exists { dismiss.click() }
+
+        let mainWindow = app.windows["Trace"]
+        if mainWindow.exists {
+            let close = mainWindow.buttons["_XCUI:CloseWindow"]
+            if close.exists { close.click() }
+        }
+        app.activate()
+        app.buttons["Build Index"].click()
 
         XCTAssertTrue(app.staticTexts["Find the sample answer"].firstMatch.waitForExistence(
             timeout: 15
@@ -244,10 +294,13 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForLineCount(
             passAudit, line: "rootRecovery", count: 1, timeout: 15
         ))
-        XCTAssertEqual(try sqliteInteger(
+        let safetyTimestamp = pollSQLiteInteger(
             directory.appendingPathComponent("index.sqlite"),
-            sql: "SELECT count(*) FROM trace_meta WHERE key='last_safety_reconciliation_ms'"
-        ), 1)
+            sql: "SELECT count(*) FROM trace_meta WHERE key='last_safety_reconciliation_ms'",
+            timeout: 10, until: { $0 == 1 }
+        )
+        XCTAssertNil(safetyTimestamp.error)
+        XCTAssertEqual(safetyTimestamp.value, 1)
         Thread.sleep(forTimeInterval: 4)
         XCTAssertEqual(
             fileLines(in: activityAudit).filter { $0 == "rootRecovery" }.count,
