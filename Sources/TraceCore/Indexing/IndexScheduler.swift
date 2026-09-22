@@ -89,7 +89,9 @@ public actor IndexScheduler {
             || !reconciliationPaths.isEmpty || inferred != .fileChanges || scopeChanged
         fullScan = fullScan || reconcile || rebuild || scopeChanged
         self.rebuild = self.rebuild || rebuild
-        if requestsPass { pendingActivity = Self.moreSignificant(pendingActivity, inferred) }
+        if requestsPass {
+            pendingActivity = IndexActivity.moreSignificant(pendingActivity, inferred)
+        }
         reactivateDormantIfCovered()
         if worker == nil { worker = Task { await drain() } }
     }
@@ -291,7 +293,7 @@ public actor IndexScheduler {
             reconciliationPaths: existing.reconciliationPaths.union(incoming.reconciliationPaths),
             watermarks: watermarks, streamRoots: streamRoots,
             scope: scope,
-            activity: Self.moreSignificant(existing.activity, incoming.activity),
+            activity: IndexActivity.moreSignificant(existing.activity, incoming.activity),
             retryAttempt: max(existing.retryAttempt, retryAttempt),
             generation: configurationGeneration
         )
@@ -372,7 +374,9 @@ public actor IndexScheduler {
         mergeWatermarks(dormantBatch.watermarks)
         mergeCanonicalStreamRoots(dormantBatch.streamRoots)
         fullScan = fullScan || dormantBatch.fullScan
-        pendingActivity = Self.moreSignificant(pendingActivity, dormantBatch.activity)
+        pendingActivity = IndexActivity.moreSignificant(
+            pendingActivity, dormantBatch.activity
+        )
         self.dormantBatch = nil
     }
 
@@ -402,26 +406,6 @@ public actor IndexScheduler {
     private func cancelScheduledRetry() {
         retryTask?.cancel()
         retryTask = nil
-    }
-
-    private static func moreSignificant(_ current: IndexActivity?, _ next: IndexActivity) -> IndexActivity {
-        guard let current else { return next }
-        func rank(_ activity: IndexActivity) -> Int {
-            switch activity {
-            case .cachedLaunch: 0
-            case .fileChanges: 1
-            case .launchCatchUp: 2
-            case .launchReconciliation: 3
-            case .subtreeRecovery: 4
-            case .rootRecovery: 5
-            case .eventStreamRecovery: 6
-            case .safetyVerification: 7
-            case .initialBuild: 8
-            case .scopeChange: 9
-            case .rebuild: 10
-            }
-        }
-        return rank(next) > rank(current) ? next : current
     }
 
     public func waitUntilIdle() async {

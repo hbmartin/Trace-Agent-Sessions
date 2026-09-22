@@ -200,6 +200,45 @@ final class TraceUITests: XCTestCase {
         ), "startup must queue a whole-root recovery fallback")
     }
 
+    func testRecoveryLoadFailureWaitsForOnboardingThenRunsOneRootPass() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let activityAudit = directory.appendingPathComponent("startup-activity-audit")
+        app.launchEnvironment["TRACE_TEST_FAIL_RECOVERY_LOAD_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activityAudit.path
+
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        XCTAssertFalse(
+            waitForLineCount(activityAudit, line: "rootRecovery", count: 1, timeout: 2),
+            "recovery fallback must remain pending until onboarding finishes"
+        )
+        XCTAssertEqual(
+            try sqliteInteger(
+                directory.appendingPathComponent("index.sqlite"),
+                sql: "SELECT count(*) FROM source_file"
+            ),
+            0
+        )
+        let dismiss = app.sheets.buttons["OK"].firstMatch
+        if dismiss.exists { dismiss.click() }
+
+        app.buttons["Build Index"].click()
+
+        XCTAssertTrue(app.staticTexts["Find the sample answer"].firstMatch.waitForExistence(
+            timeout: 15
+        ))
+        XCTAssertTrue(waitForLineCount(
+            activityAudit, line: "rootRecovery", count: 1, timeout: 15
+        ))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(
+            fileLines(in: activityAudit).filter { $0 == "rootRecovery" }.count,
+            1,
+            "pending recovery and onboarding startup must merge into one pass"
+        )
+    }
+
     func testForcedRootChangeOnEmptyIndexReportsInitialBuild() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-settings"])
         try FileManager.default.removeItem(

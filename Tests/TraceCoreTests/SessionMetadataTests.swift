@@ -163,6 +163,46 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(sessions.first?.title, "Configured sidecar title")
     }
 
+    func testMovingCodexSessionToNestedRootWithoutMetadataPreservesTitle() async throws {
+        let parent = try directory()
+        let sessions = parent.appendingPathComponent("sessions")
+        let nested = sessions.appendingPathComponent("2026/09")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let file = nested.appendingPathComponent("rollout-nested.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "codex-nested", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": [
+                "type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Fallback nested request"]],
+            ]],
+        ], to: file)
+        try write([
+            ["id": "codex-nested", "thread_name": "Preserved nested title",
+             "updated_at": "2026-09-21"],
+        ], to: parent.appendingPathComponent("session_index.jsonl"))
+        let database = try IndexDatabase(url: parent.appendingPathComponent("trace.sqlite"))
+
+        await IndexCoordinator(
+            database: database, sources: [CodexSource(root: sessions)]
+        ).indexAll(scope: .proseOnly)
+        let initialTitle = try await database.sessions().first?.title
+        XCTAssertEqual(initialTitle, "Preserved nested title")
+
+        let nestedSource = CodexSource(roots: [sessions, nested])
+        let terminal = await IndexCoordinator(
+            database: database, sources: [nestedSource]
+        ).indexAllResult(scope: .proseOnly)
+
+        XCTAssertEqual(terminal.phase, .complete)
+        let preservedTitle = try await database.sessions().first?.title
+        XCTAssertEqual(preservedTitle, "Preserved nested title")
+        let storedState = try await database.sourceState(agent: .codex, path: file.path)
+        let state = try XCTUnwrap(storedState)
+        let nestedRoot = try XCTUnwrap(nestedSource.roots.first { $0.url == nested })
+        let nestedRootID = try await database.register(root: nestedRoot)
+        XCTAssertEqual(state.rootID, nestedRootID)
+    }
+
     func testSafetyVerificationRefreshesMissedCodexTitleChange() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")

@@ -44,29 +44,31 @@ struct NormalizedDiscoveryFailure: Sendable {
     let failure: DiscoveryFailure
     let scanPath: TraceFileIO.CanonicalPath
     let relativeScope: RootRelativeScope
+
+    init(failure: DiscoveryFailure, scope: SourceRootScope) {
+        self.failure = failure
+        scanPath = scope.scanPath
+        relativeScope = scope.relativeScope
+    }
 }
 
 func normalizedDiscoveryFailures(
-    _ failures: [DiscoveryFailure], for root: SourceRoot
+    _ failures: [DiscoveryFailure], for root: SourceRoot,
+    in capturedContext: SourceRootPathContext? = nil
 ) -> [NormalizedDiscoveryFailure] {
-    let ordered = failures.compactMap { failure -> NormalizedDiscoveryFailure? in
-        let standardizedFailurePath = URL(fileURLWithPath: failure.path).standardized.path
-        let scope: SourceRootScope
-        if standardizedFailurePath == root.url.path
-            || standardizedFailurePath == root.scanURL.path {
-            // Root preflight failures refer to the frozen root identity. Avoid
-            // re-resolving an unavailable path on a different volume.
-            scope = root.rootScope
-        } else {
-            guard let mapped = root.scope(forRawPath: failure.path) else { return nil }
-            scope = mapped
-        }
-        return NormalizedDiscoveryFailure(
-            failure: failure,
-            scanPath: scope.scanPath,
-            relativeScope: scope.relativeScope
-        )
-    }.sorted { lhs, rhs in
+    let context = capturedContext ?? root.mappingContext
+    return deduplicatedNormalizedDiscoveryFailures(failures.compactMap { failure in
+        guard let scope = root.scope(
+            forRawPath: failure.path, in: context
+        ) else { return nil }
+        return NormalizedDiscoveryFailure(failure: failure, scope: scope)
+    })
+}
+
+func deduplicatedNormalizedDiscoveryFailures(
+    _ failures: [NormalizedDiscoveryFailure]
+) -> [NormalizedDiscoveryFailure] {
+    let ordered = failures.sorted { lhs, rhs in
         let left = (
             lhs.relativeScope.comparisonKey,
             lhs.failure.kind == .unreadable ? 0 : 1,
@@ -177,16 +179,22 @@ public extension SessionSource {
         }
 
         for root in roots {
-            let starts: [URL]
+            let context = root.mappingContext
+            let rootScope = root.rootScope(in: context)
+            let starts: [(url: URL, scope: SourceRootScope)]
             if let paths {
-                let scopes = paths.compactMap(root.reconciliationScope(forRawPath:))
-                if scopes.contains(where: { $0.relativeScope.components.isEmpty }) {
-                    starts = [root.scanURL]
+                let scopes = paths.compactMap {
+                    root.reconciliationScope(forRawPath: $0, in: context)
+                }
+                if scopes.contains(where: { $0.relativeScope.isRoot }) {
+                    starts = [(root.scanURL, rootScope)]
                 } else {
-                    starts = scopes.map { URL(fileURLWithPath: $0.scanPath.path) }
+                    starts = scopes.map {
+                        (URL(fileURLWithPath: $0.scanPath.path), $0)
+                    }
                 }
             } else {
-                starts = [root.scanURL]
+                starts = [(root.scanURL, rootScope)]
             }
 
             // Do not touch roots that cannot contribute to this scoped request.
@@ -220,21 +228,30 @@ public extension SessionSource {
 
             var seenStarts: Set<String> = []
             for start in starts {
-                let startPath = TraceFileIO.canonicalPath(start.path)
-                guard let startScope = root.scope(forScanPath: startPath),
-                      seenStarts.insert(startScope.relativeScope.comparisonKey).inserted
-                else { continue }
-                let startsAtRoot = startScope.relativeScope.components.isEmpty
+                let startPath = TraceFileIO.canonicalPath(start.url.path)
+                guard let mappedScope = root.scope(forScanPath: startPath, in: context),
+                      mappedScope.relativeScope == start.scope.relativeScope else {
+                    failures.append(.init(
+                        agent: agent, root: root.url, path: root.scanURL.path,
+                        message: "The configured source path changed while Trace was running"
+                    ))
+                    continue
+                }
+                let startScope = start.scope
+                guard seenStarts.insert(startScope.relativeScope.comparisonKey).inserted else {
+                    continue
+                }
+                let startsAtRoot = startScope.relativeScope.isRoot
                 let itemType: FileAttributeType?
                 do {
                     itemType = startsAtRoot
                         ? rootItemType
-                        : try itemTypeIfPresent(for: URL(fileURLWithPath: start.path))
+                        : try itemTypeIfPresent(for: start.url)
                 }
                 catch is CancellationError { throw CancellationError() }
                 catch {
                     failures.append(.init(
-                        agent: agent, root: root.url, path: start.path,
+                        agent: agent, root: root.url, path: start.url.path,
                         message: error.localizedDescription
                     ))
                     continue
@@ -245,13 +262,16 @@ public extension SessionSource {
                     continue
                 }
                 if itemType != .typeDirectory {
-                    if allowedExtensions.contains(start.pathExtension.lowercased()), let format = classify(start) {
-                        files.append(.init(agent: agent, root: root.url, url: start, format: format))
+                    if allowedExtensions.contains(start.url.pathExtension.lowercased()),
+                       let format = classify(start.url) {
+                        files.append(.init(
+                            agent: agent, root: root.url, url: start.url, format: format
+                        ))
                     }
                     continue
                 }
                 guard let enumerator = manager.enumerator(
-                    at: start,
+                    at: start.url,
                     includingPropertiesForKeys: [.isRegularFileKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants],
                     errorHandler: { url, error in
@@ -263,7 +283,7 @@ public extension SessionSource {
                     }
                 ) else {
                     failures.append(.init(
-                        agent: agent, root: root.url, path: start.path,
+                        agent: agent, root: root.url, path: start.url.path,
                         message: "the file-system enumerator could not be created"
                     ))
                     continue

@@ -14,6 +14,30 @@ public enum IndexActivity: String, Equatable, Sendable {
     case scopeChange
 }
 
+extension IndexActivity {
+    public static func moreSignificant(
+        _ current: IndexActivity?, _ next: IndexActivity
+    ) -> IndexActivity {
+        guard let current else { return next }
+        func rank(_ activity: IndexActivity) -> Int {
+            switch activity {
+            case .cachedLaunch: 0
+            case .fileChanges: 1
+            case .launchCatchUp: 2
+            case .launchReconciliation: 3
+            case .subtreeRecovery: 4
+            case .eventStreamRecovery: 5
+            case .safetyVerification: 6
+            case .initialBuild: 7
+            case .rootRecovery: 8
+            case .scopeChange: 9
+            case .rebuild: 10
+            }
+        }
+        return rank(next) > rank(current) ? next : current
+    }
+}
+
 public struct IndexProgress: Sendable {
     public enum Phase: String, Sendable {
         case waiting, discovering, indexing, reconciling, aggregating, complete, cancelled, failed
@@ -85,6 +109,7 @@ public actor IndexCoordinator {
     private struct RootDiscoveryAttempt {
         let source: any SessionSource
         let root: SourceRoot
+        let mappingContext: SourceRootPathContext
         let scannedScopes: Set<RootRelativeScope>
         let failures: [NormalizedDiscoveryFailure]
     }
@@ -98,7 +123,7 @@ public actor IndexCoordinator {
     private let sources: [any SessionSource]
     private let gate = IndexRunGate()
     private struct CodexNameCacheEntry {
-        let names: [String: String]
+        let snapshot: CodexSessionNamesSnapshot?
         let loadedAt: ContinuousClock.Instant
     }
     private var codexNameCache: [String: CodexNameCacheEntry] = [:]
@@ -108,15 +133,17 @@ public actor IndexCoordinator {
         self.sources = sources
     }
 
-    private func codexNames(directory: URL, force: Bool = false) async -> [String: String] {
+    private func codexNames(
+        directory: URL, force: Bool = false
+    ) async -> CodexSessionNamesSnapshot? {
         let key = directory.standardizedFileURL.path
         if !force, let cached = codexNameCache[key],
            cached.loadedAt.duration(to: .now) < .seconds(30) {
-            return cached.names
+            return cached.snapshot
         }
-        let names = await Self.loadCodexNames(directory: directory)
-        codexNameCache[key] = .init(names: names, loadedAt: .now)
-        return names
+        let snapshot = await Self.loadCodexNames(directory: directory)
+        codexNameCache[key] = .init(snapshot: snapshot, loadedAt: .now)
+        return snapshot
     }
 
     public func indexAll(scope: IndexScope, rebuild: Bool = false,
@@ -195,9 +222,16 @@ public actor IndexCoordinator {
             try await database.setIndexScope(scope)
             status.mutationRevision = await mutations.version()
             await progress(status)
+            if try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots)) {
+                await mutations.markChanged()
+            }
             var rootIDs: [String: Int64] = [:]
+            var rootsByID: [String: SourceRoot] = [:]
             for source in sources {
-                for root in source.roots { rootIDs[root.id] = try await database.register(root: root) }
+                for root in source.roots {
+                    rootIDs[root.id] = try await database.register(root: root)
+                    rootsByID[root.id] = root
+                }
             }
             var allFiles: [DiscoveredSourceFile] = []
             let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
@@ -209,19 +243,35 @@ public actor IndexCoordinator {
             var missingSources: Set<MissingSourceFile> = []
             var discoveryAttempts: [RootDiscoveryAttempt] = []
 
+            func verifiedDiscoveryResult(
+                _ result: DiscoveryResult, source: any SessionSource,
+                root: SourceRoot, mappingContext: SourceRootPathContext
+            ) -> DiscoveryResult {
+                guard root.mappingContext == mappingContext else {
+                    return .init(failures: [.init(
+                        agent: source.agent, root: root.url,
+                        path: mappingContext.scanPath.path,
+                        message: "The configured source path changed while Trace was running"
+                    )])
+                }
+                return result
+            }
+
             func absorbDiscoveryResult(
                 _ result: DiscoveryResult, source: any SessionSource,
-                root: SourceRoot, scopes: [SourceRootScope]
+                root: SourceRoot, mappingContext: SourceRootPathContext,
+                scopes: [SourceRootScope]
             ) {
                 allFiles += result.files
                 let scannedScopes = Set(scopes.map(\.relativeScope))
                 let failures = normalizedDiscoveryFailures(
-                    result.failures.filter { $0.root.path == root.url.path }, for: root
+                    result.failures.filter { $0.root.path == root.url.path },
+                    for: root, in: mappingContext
                 ).filter { failure in
                     scannedScopes.contains { $0.intersects(failure.relativeScope) }
                 }
                 discoveryAttempts.append(.init(
-                    source: source, root: root,
+                    source: source, root: root, mappingContext: mappingContext,
                     scannedScopes: scannedScopes, failures: failures
                 ))
             }
@@ -230,11 +280,17 @@ public actor IndexCoordinator {
                 for source in sources {
                     for root in source.roots {
                         try Task.checkCancellation()
-                        let scope = root.rootScope
+                        let context = root.mappingContext
+                        let scope = root.rootScope(in: context)
                         do {
-                            absorbDiscoveryResult(
+                            let result = verifiedDiscoveryResult(
                                 try source.discoverResult(scopedTo: [scope.scanPath.path]),
-                                source: source, root: root, scopes: [scope]
+                                source: source, root: root, mappingContext: context
+                            )
+                            absorbDiscoveryResult(
+                                result,
+                                source: source, root: root, mappingContext: context,
+                                scopes: [scope]
                             )
                         } catch is CancellationError {
                             throw CancellationError()
@@ -245,9 +301,9 @@ public actor IndexCoordinator {
                                 message: error.localizedDescription
                             )
                             discoveryAttempts.append(.init(
-                                source: source, root: root,
+                                source: source, root: root, mappingContext: context,
                                 scannedScopes: [scope.relativeScope],
-                                failures: normalizedDiscoveryFailures([failure], for: root)
+                                failures: [.init(failure: failure, scope: scope)]
                             ))
                         }
                     }
@@ -257,16 +313,24 @@ public actor IndexCoordinator {
                     for source in sources {
                         for root in source.roots {
                             try Task.checkCancellation()
+                            let context = root.mappingContext
                             let scopes = Self.minimalRootScopes(
-                                reconciliationPaths.compactMap(root.reconciliationScope(forRawPath:))
+                                reconciliationPaths.compactMap {
+                                    root.reconciliationScope(forRawPath: $0, in: context)
+                                }
                             )
                             guard !scopes.isEmpty else { continue }
                             do {
-                                let result = try source.discoverResult(
-                                    scopedTo: Set(scopes.map(\.scanPath.path))
+                                let result = verifiedDiscoveryResult(
+                                    try source.discoverResult(
+                                        scopedTo: Set(scopes.map(\.scanPath.path))
+                                    ),
+                                    source: source, root: root,
+                                    mappingContext: context
                                 )
                                 absorbDiscoveryResult(
-                                    result, source: source, root: root, scopes: scopes
+                                    result, source: source, root: root,
+                                    mappingContext: context, scopes: scopes
                                 )
                             } catch is CancellationError {
                                 throw CancellationError()
@@ -277,12 +341,12 @@ public actor IndexCoordinator {
                                         path: scope.scanPath.path,
                                         message: error.localizedDescription
                                     )
-                                    return normalizedDiscoveryFailures([failure], for: root)
+                                    return [.init(failure: failure, scope: scope)]
                                 }
                                 discoveryAttempts.append(.init(
-                                    source: source, root: root,
+                                    source: source, root: root, mappingContext: context,
                                     scannedScopes: Set(scopes.map(\.relativeScope)),
-                                    failures: Self.deduplicatedFailures(failures)
+                                    failures: deduplicatedNormalizedDiscoveryFailures(failures)
                                 ))
                             }
                         }
@@ -342,11 +406,6 @@ public actor IndexCoordinator {
             status.failedReconciliationPaths = Self.minimalScopes(
                 status.failedReconciliationPaths
             )
-            // A stable order and finite discovered set make progress comparable within a run.
-            allFiles.sort {
-                ($0.agent.rawValue, $0.url.path, $0.root.path)
-                    < ($1.agent.rawValue, $1.url.path, $1.root.path)
-            }
             var uniqueFiles: [SourceFileKey: DiscoveredSourceFile] = [:]
             for file in allFiles {
                 let key = SourceFileKey(
@@ -356,10 +415,11 @@ public actor IndexCoordinator {
                     uniqueFiles[key] = file
                     continue
                 }
-                let existingDepth = existing.root.standardized.pathComponents.count
-                let candidateDepth = file.root.standardized.pathComponents.count
-                if candidateDepth > existingDepth
-                    || (candidateDepth == existingDepth && file.root.path < existing.root.path) {
+                let existingID = "\(existing.agent.rawValue):\(existing.root.path)"
+                let candidateID = "\(file.agent.rawValue):\(file.root.path)"
+                guard let existingRoot = rootsByID[existingID],
+                      let candidateRoot = rootsByID[candidateID] else { continue }
+                if Self.prefers(candidateRoot, over: existingRoot) {
                     uniqueFiles[key] = file
                 }
             }
@@ -423,10 +483,14 @@ public actor IndexCoordinator {
                             agent: file.agent, path: file.url.path
                         ),
                            try await database.hasUntitledCodexSessions(sourceID: state.id) {
-                            let names = await codexNames(directory: file.root.deletingLastPathComponent())
-                            if try await database.updateCodexNames(
-                                names, root: file.root, sourceID: state.id, onlyMissing: true
-                            ) { await mutations.markChanged() }
+                            if let snapshot = await codexNames(
+                                directory: file.root.deletingLastPathComponent()
+                            ), try await database.updateCodexNames(
+                                snapshot.names, root: file.root, sourceID: state.id,
+                                onlyMissing: true
+                            ) {
+                                await mutations.markChanged()
+                            }
                         }
                     } catch is CancellationError { throw CancellationError() }
                     catch { status.metadataWarning = "Codex title lookup: \(error.localizedDescription)" }
@@ -446,12 +510,10 @@ public actor IndexCoordinator {
                     ($0.agent.rawValue, $0.path) < ($1.agent.rawValue, $1.path)
                 }) {
                     try Task.checkCancellation()
-                    if try await database.sourceState(
+                    if let state = try await database.sourceState(
                         agent: missing.agent, path: missing.path
-                    ) != nil {
-                        try await database.deleteSource(
-                            agent: missing.agent, path: missing.path
-                        )
+                    ) {
+                        try await database.deleteSource(id: state.id)
                         await mutations.markChanged()
                     }
                 }
@@ -478,11 +540,14 @@ public actor IndexCoordinator {
                         guard let attempt = attemptsByRootID[stored.rootID] else { continue }
                         let failedScopes = attempt.failures.map(\.relativeScope)
                         let coversWholeRoot = attempt.scannedScopes.contains {
-                            $0.components.isEmpty
+                            $0.isRoot
                         }
-                        let relative = attempt.root.relativeScope(forStoredPath: stored.path)
+                        let relative = attempt.root.relativeScope(
+                            forStoredPath: stored.path,
+                            in: attempt.mappingContext
+                        )
                         if coversWholeRoot {
-                            if failedScopes.contains(where: { $0.components.isEmpty }) {
+                            if failedScopes.contains(where: \.isRoot) {
                                 continue
                             }
                             if !failedScopes.isEmpty {
@@ -505,11 +570,13 @@ public actor IndexCoordinator {
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots {
                     do {
-                        let names = await codexNames(
+                        guard let snapshot = await codexNames(
                             directory: root.url.deletingLastPathComponent(),
                             force: fullScan || activity == .safetyVerification
-                        )
-                        if try await database.updateCodexNames(names, root: root.url) {
+                        ) else { continue }
+                        if try await database.updateCodexNames(
+                            snapshot.names, root: root.url
+                        ) {
                             await mutations.markChanged()
                         }
                     } catch is CancellationError { throw CancellationError() }
@@ -581,26 +648,6 @@ public actor IndexCoordinator {
                     && other.relativeScope.contains(candidate.relativeScope)
             }
         }.sorted { $0.relativeScope.comparisonKey < $1.relativeScope.comparisonKey }
-    }
-
-    private static func deduplicatedFailures(
-        _ failures: [NormalizedDiscoveryFailure]
-    ) -> [NormalizedDiscoveryFailure] {
-        var unique: [RootRelativeScope: NormalizedDiscoveryFailure] = [:]
-        for failure in failures {
-            let existing = unique[failure.relativeScope]
-            if existing == nil || (
-                failure.failure.message, failure.failure.path
-            ) < (
-                existing!.failure.message, existing!.failure.path
-            ) {
-                unique[failure.relativeScope] = failure
-            }
-        }
-        return unique.values.sorted {
-            ($0.relativeScope.comparisonKey, $0.failure.message, $0.failure.path)
-                < ($1.relativeScope.comparisonKey, $1.failure.message, $1.failure.path)
-        }
     }
 
     public func hydrate(_ summary: MessageSummary) async throws -> HydratedMessage {
@@ -725,7 +772,9 @@ public actor IndexCoordinator {
         )
     }
 
-    private nonisolated static func loadCodexNames(directory: URL) async -> [String: String] {
+    private nonisolated static func loadCodexNames(
+        directory: URL
+    ) async -> CodexSessionNamesSnapshot? {
         let task = Task.detached(priority: .utility) { CodexSessionNames.load(directory: directory) }
         return await withTaskCancellationHandler(
             operation: { await task.value },
@@ -784,7 +833,7 @@ public actor IndexCoordinator {
             state = try await database.sourceState(agent: file.agent, path: file.url.path)
         }
 
-        if let existing = state, existing.agent != file.agent || existing.format != file.format {
+        if let existing = state, existing.format != file.format {
             try await database.deleteSource(id: existing.id)
             await mutation()
             state = nil
@@ -1057,27 +1106,30 @@ public actor IndexCoordinator {
     private func classification(
         url: URL, agent: AgentKind
     ) -> (any SessionSource, DiscoveredSourceFile, SourceRoot)? {
-        classifications(url: url).first { $0.1.agent == agent }
+        classifications(url: url, agent: agent).first
     }
 
     private func classifications(
-        url: URL
+        url: URL, agent requestedAgent: AgentKind? = nil
     ) -> [(any SessionSource, DiscoveredSourceFile, SourceRoot)] {
         let candidate = TraceFileIO.canonicalPath(url.path)
         var matches: [AgentKind: (any SessionSource, DiscoveredSourceFile, SourceRoot)] = [:]
-        for source in sources {
+        for source in sources where requestedAgent == nil || source.agent == requestedAgent {
             for root in source.roots {
                 guard root.scope(forScanPath: candidate) != nil else { continue }
                 let format: SourceFormat?
+                let pathExtension = url.pathExtension.lowercased()
                 switch source.agent {
                 case .claudeCode:
-                    format = url.pathExtension == "jsonl" ? .claudeJSONL : nil
+                    format = pathExtension == "jsonl" ? .claudeJSONL : nil
                 case .codex:
-                    format = url.pathExtension == "jsonl" && url.lastPathComponent.hasPrefix("rollout-") ? .codexJSONL : nil
+                    format = pathExtension == "jsonl"
+                        && url.lastPathComponent.hasPrefix("rollout-") ? .codexJSONL : nil
                 case .gemini:
                     guard url.deletingLastPathComponent().lastPathComponent == "chats",
                           url.lastPathComponent.hasPrefix("session-") else { continue }
-                    format = url.pathExtension == "jsonl" ? .geminiJSONL : (url.pathExtension == "json" ? .geminiJSON : nil)
+                    format = pathExtension == "jsonl"
+                        ? .geminiJSONL : (pathExtension == "json" ? .geminiJSON : nil)
                 }
                 if let format {
                     let match = (
@@ -1088,17 +1140,19 @@ public actor IndexCoordinator {
                         root
                     )
                     if let existing = matches[source.agent] {
-                        let existingDepth = existing.2.scanURL.pathComponents.count
-                        let candidateDepth = root.scanURL.pathComponents.count
-                        if candidateDepth < existingDepth
-                            || (candidateDepth == existingDepth
-                                && root.url.path >= existing.2.url.path) { continue }
+                        if !Self.prefers(root, over: existing.2) { continue }
                     }
                     matches[source.agent] = match
                 }
             }
         }
         return matches.values.sorted { $0.1.agent.rawValue < $1.1.agent.rawValue }
+    }
+
+    private static func prefers(_ candidate: SourceRoot, over existing: SourceRoot) -> Bool {
+        candidate.rootSelectionDepth > existing.rootSelectionDepth
+            || (candidate.rootSelectionDepth == existing.rootSelectionDepth
+                && candidate.url.path < existing.url.path)
     }
 }
 

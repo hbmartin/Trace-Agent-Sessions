@@ -205,10 +205,34 @@ enum SessionMetadataReader {
 }
 
 /// Source-specific sidecars are optional. Never open the agent's database for writing.
+struct CodexSessionNamesSnapshot: Sendable {
+    let names: [String: String]
+}
+
 enum CodexSessionNames {
-    static func load(directory: URL) -> [String: String] {
+    static func load(directory: URL) -> CodexSessionNamesSnapshot? {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return nil }
+        let sessionIndex = directory.appendingPathComponent("session_index.jsonl")
+        let hasSessionIndex = contents.contains {
+            $0.standardizedFileURL.path == sessionIndex.standardizedFileURL.path
+        }
+        let databases = contents
+            .filter {
+                TraceFileIO.isCodexMetadataSidecar($0)
+                    && $0.lastPathComponent != "session_index.jsonl"
+            }
+            .sorted {
+                $0.lastPathComponent.compare(
+                    $1.lastPathComponent, options: .numeric
+                ) == .orderedDescending
+            }
+        guard hasSessionIndex || !databases.isEmpty else { return nil }
+
         var indexed: [String: (String, String)] = [:]
-        if let cursor = try? JSONLineCursor(url: directory.appendingPathComponent("session_index.jsonl"), from: 0) {
+        if hasSessionIndex, let cursor = try? JSONLineCursor(url: sessionIndex, from: 0) {
             while let line = try? cursor.next() {
                 guard let object = try? JSONHelpers.object(from: line.data),
                       let id = object["id"] as? String,
@@ -218,14 +242,9 @@ enum CodexSessionNames {
             }
         }
         var names = indexed.mapValues { $0.0 }
-        let newestDatabase = ((try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        )) ?? [])
-            .filter { TraceFileIO.isCodexMetadataSidecar($0) && $0.lastPathComponent != "session_index.jsonl" }
-            .sorted { $0.lastPathComponent.compare($1.lastPathComponent, options: .numeric) == .orderedDescending }
-            .first
-        guard let newestDatabase else { return names }
+        guard let newestDatabase = databases.first else {
+            return .init(names: names)
+        }
 
         var config = Configuration()
         config.readonly = true
@@ -236,13 +255,13 @@ enum CodexSessionNames {
                   guard columns.contains("id") else { return [Row]() }
                   let fields = ["id", "name", "title"].filter { columns.contains($0) }.joined(separator: ", ")
                   return try Row.fetchAll(db, sql: "SELECT \(fields) FROM threads")
-              }) else { return names }
+              }) else { return .init(names: names) }
         for row in rows {
             guard let id: String = row["id"] else { continue }
             let name: String? = row.hasColumn("name") ? row["name"] : nil
             let title: String? = row.hasColumn("title") ? row["title"] : nil
             names[id] = SessionMetadataReader.nonempty(name) ?? names[id] ?? SessionMetadataReader.nonempty(title)
         }
-        return names
+        return .init(names: names)
     }
 }
