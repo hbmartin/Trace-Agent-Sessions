@@ -239,18 +239,6 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     /// Maps an indexed path back into this root without re-resolving symlinks.
     /// A failed mapping is intentionally conservative during subtree cleanup.
     func relativeScope(
-        forStoredPath path: String,
-        relativeTo capturedRootScope: SourceRootScope? = nil
-    ) -> RootRelativeScope? {
-        let rootScope = capturedRootScope ?? self.rootScope
-        return relativeScope(
-            forStoredPath: path,
-            scanComponents: Self.lexicalComponents(rootScope.scanPath.path),
-            caseSensitive: rootScope.relativeScope.isCaseSensitive
-        )
-    }
-
-    func relativeScope(
         forStoredPath path: String, in context: SourceRootPathContext
     ) -> RootRelativeScope? {
         relativeScope(

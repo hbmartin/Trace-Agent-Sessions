@@ -120,11 +120,28 @@ final class SessionMetadataTests: XCTestCase {
         let fallback = try await database.session(id: session.id)
         XCTAssertEqual(fallback?.title, "Fallback request")
 
-        try await external.write { try $0.execute(sql: "UPDATE threads SET title='Stale older database title'") }
-        try Data("not a database".utf8).write(to: root.appendingPathComponent("state_6.sqlite"))
+        try await external.write {
+            try $0.execute(sql: "UPDATE threads SET title='Persisted database title'")
+        }
         await coordinator.refresh(paths: [sidecar.path], scope: .proseOnly)
+        let persisted = try await database.session(id: session.id)
+        XCTAssertEqual(persisted?.title, "Persisted database title")
+
+        try Data("not a database".utf8).write(to: root.appendingPathComponent("state_6.sqlite"))
+        let warning = MetadataWarningRecorder()
+        await coordinator.refresh(paths: [sidecar.path], scope: .proseOnly) {
+            warning.receive($0)
+        }
         let newestUnreadable = try await database.session(id: session.id)
-        XCTAssertEqual(newestUnreadable?.title, "Fallback request")
+        XCTAssertEqual(newestUnreadable?.title, "Persisted database title")
+        XCTAssertNotNil(warning.terminal?.metadataWarning)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("state_6.sqlite"))
+        try FileManager.default.removeItem(at: root.appendingPathComponent("state_5.sqlite"))
+        try FileManager.default.removeItem(at: sidecar)
+        await coordinator.refresh(paths: [sidecar.path], scope: .proseOnly)
+        let providersAbsent = try await database.session(id: session.id)
+        XCTAssertEqual(providersAbsent?.title, "Persisted database title")
     }
 
     func testCodexMetadataUsesConfiguredParentForSymlinkedSessionsRoot() async throws {
@@ -179,6 +196,8 @@ final class SessionMetadataTests: XCTestCase {
         try write([
             ["id": "codex-nested", "thread_name": "Preserved nested title",
              "updated_at": "2026-09-21"],
+            ["id": "codex-new-nested", "thread_name": "New nested title",
+             "updated_at": "2026-09-22"],
         ], to: parent.appendingPathComponent("session_index.jsonl"))
         let database = try IndexDatabase(url: parent.appendingPathComponent("trace.sqlite"))
 
@@ -189,9 +208,10 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(initialTitle, "Preserved nested title")
 
         let nestedSource = CodexSource(roots: [sessions, nested])
-        let terminal = await IndexCoordinator(
+        let nestedCoordinator = IndexCoordinator(
             database: database, sources: [nestedSource]
-        ).indexAllResult(scope: .proseOnly)
+        )
+        let terminal = await nestedCoordinator.indexAllResult(scope: .proseOnly)
 
         XCTAssertEqual(terminal.phase, .complete)
         let preservedTitle = try await database.sessions().first?.title
@@ -201,6 +221,20 @@ final class SessionMetadataTests: XCTestCase {
         let nestedRoot = try XCTUnwrap(nestedSource.roots.first { $0.url == nested })
         let nestedRootID = try await database.register(root: nestedRoot)
         XCTAssertEqual(state.rootID, nestedRootID)
+
+        let added = nested.appendingPathComponent("rollout-new-nested.jsonl")
+        try write([
+            ["type": "session_meta", "payload": [
+                "id": "codex-new-nested", "cwd": "/tmp/codex",
+            ]],
+            ["type": "response_item", "payload": [
+                "type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "New nested request"]],
+            ]],
+        ], to: added)
+        await nestedCoordinator.refresh(paths: [added.path], scope: .proseOnly)
+        let titles = try await database.sessions().map(\.title)
+        XCTAssertEqual(Set(titles), ["Preserved nested title", "New nested title"])
     }
 
     func testSafetyVerificationRefreshesMissedCodexTitleChange() async throws {

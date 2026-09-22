@@ -9,28 +9,18 @@ public struct GeminiSource: SessionSource {
     }
 
     public func discover() throws -> [DiscoveredSourceFile] {
-        try discoverFiles(extensions: ["json", "jsonl"]) { url in
-            guard url.deletingLastPathComponent().lastPathComponent == "chats",
-                  url.lastPathComponent.hasPrefix("session-")
-            else { return nil }
-            return url.pathExtension.lowercased() == "jsonl" ? .geminiJSONL : .geminiJSON
-        }
+        try discoverFiles(extensions: ["json", "jsonl"]) { sourceFormat(for: $0, agent: agent) }
     }
 
     public func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] {
-        try discoverFiles(extensions: ["json", "jsonl"], scopedTo: paths) { url in
-            guard url.deletingLastPathComponent().lastPathComponent == "chats",
-                  url.lastPathComponent.hasPrefix("session-")
-            else { return nil }
-            return url.pathExtension.lowercased() == "jsonl" ? .geminiJSONL : .geminiJSON
+        try discoverFiles(extensions: ["json", "jsonl"], scopedTo: paths) {
+            sourceFormat(for: $0, agent: agent)
         }
     }
 
     public func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
-        try discoverFilesResult(extensions: ["json", "jsonl"], scopedTo: paths) { url in
-            guard url.deletingLastPathComponent().lastPathComponent == "chats",
-                  url.lastPathComponent.hasPrefix("session-") else { return nil }
-            return url.pathExtension.lowercased() == "jsonl" ? .geminiJSONL : .geminiJSON
+        try discoverFilesResult(extensions: ["json", "jsonl"], scopedTo: paths) {
+            sourceFormat(for: $0, agent: agent)
         }
     }
 

@@ -11,20 +11,18 @@ public struct ClaudeCodeSource: SessionSource {
     }
 
     public func discover() throws -> [DiscoveredSourceFile] {
-        try discoverFiles(extensions: ["jsonl"]) { url in
-            url.pathExtension.lowercased() == "jsonl" ? .claudeJSONL : nil
-        }
+        try discoverFiles(extensions: ["jsonl"]) { sourceFormat(for: $0, agent: agent) }
     }
 
     public func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] {
-        try discoverFiles(extensions: ["jsonl"], scopedTo: paths) { url in
-            url.pathExtension.lowercased() == "jsonl" ? .claudeJSONL : nil
+        try discoverFiles(extensions: ["jsonl"], scopedTo: paths) {
+            sourceFormat(for: $0, agent: agent)
         }
     }
 
     public func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
-        try discoverFilesResult(extensions: ["jsonl"], scopedTo: paths) { url in
-            url.pathExtension.lowercased() == "jsonl" ? .claudeJSONL : nil
+        try discoverFilesResult(extensions: ["jsonl"], scopedTo: paths) {
+            sourceFormat(for: $0, agent: agent)
         }
     }
 
