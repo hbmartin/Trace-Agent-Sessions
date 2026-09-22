@@ -1,1 +1,5 @@
+// Keep the vendored GRDB target aligned with Trace's supported macOS range.
+MACOSX_DEPLOYMENT_TARGET = 15.0
+ARCHS[sdk=macosx*] = arm64
+
 CUSTOM_OTHER_SWIFT_FLAGS = -D SQLITE_ENABLE_SNAPSHOT -D SQLITE_ENABLE_FTS5

@@ -1,1 +1,8 @@
-CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_FTS5
+// configure-grdb.sh patches SQLiteLib's upstream deployment target before build.
+ARCHS[sdk=macosx*] = arm64
+
+// SQLiteLib's amalgamation script hardcodes an x86_64 configure probe. Add the
+// native host architecture only for that helper so it can run on Apple silicon
+// without changing the architecture of the sqlitecustom product.
+TRACE_SQLITE_AMALGAMATION_ARCH_amalgamation = -arch $(NATIVE_ARCH_ACTUAL)
+CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_FTS5 $(TRACE_SQLITE_AMALGAMATION_ARCH_$(TARGET_NAME))
