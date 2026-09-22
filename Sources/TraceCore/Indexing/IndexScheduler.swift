@@ -21,7 +21,6 @@ public actor IndexScheduler {
     private let coordinator: IndexCoordinator
     private let progress: @Sendable (IndexProgress) async -> Void
     private let didComplete: @Sendable (IndexActivity, [String: UInt64]) async -> Void
-    private let didFinish: @Sendable (IndexActivity) async -> Void
     private let didSatisfySafetyReconciliation: @Sendable () async -> Void
     private let retryDelay: Duration
     private var scope: IndexScope
@@ -45,7 +44,6 @@ public actor IndexScheduler {
     public init(coordinator: IndexCoordinator, scope: IndexScope,
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
                 retryDelay: Duration = .seconds(5),
-                didFinish: @escaping @Sendable (IndexActivity) async -> Void = { _ in },
                 didComplete: @escaping @Sendable (IndexActivity, [String: UInt64]) async -> Void = { _, _ in },
                 didSatisfySafetyReconciliation: @escaping @Sendable () async -> Void = {}) {
         self.coordinator = coordinator
@@ -53,7 +51,6 @@ public actor IndexScheduler {
         self.retryDelay = retryDelay
         self.progress = progress
         self.didComplete = didComplete
-        self.didFinish = didFinish
         self.didSatisfySafetyReconciliation = didSatisfySafetyReconciliation
     }
 
@@ -154,17 +151,23 @@ public actor IndexScheduler {
                 if batch.fullScan {
                     await coordinator.indexAllResult(
                         scope: batch.scope, rebuild: batch.rebuild,
-                        activity: batch.activity, progress: progress
+                        activity: batch.activity,
+                        satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
+                        progress: progress
                     )
                 } else if !batch.reconciliationPaths.isEmpty {
                     await coordinator.reconcile(
                         paths: batch.reconciliationPaths, changedPaths: batch.paths,
-                        scope: batch.scope, activity: batch.activity, progress: progress
+                        scope: batch.scope, activity: batch.activity,
+                        satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
+                        progress: progress
                     )
                 } else {
                     await coordinator.refreshResult(
                         paths: batch.paths, scope: batch.scope,
-                        activity: batch.activity, progress: progress
+                        activity: batch.activity,
+                        satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
+                        progress: progress
                     )
                 }
             }
@@ -215,7 +218,6 @@ public actor IndexScheduler {
                 if batch.satisfiesSafetyReconciliation {
                     await didSatisfySafetyReconciliation()
                 }
-                await didFinish(batch.activity)
             } else if result.phase == .failed {
                 if batch.retryAttempt == 0 {
                     retainForRetry(batch)

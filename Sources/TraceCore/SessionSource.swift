@@ -283,7 +283,7 @@ public extension SessionSource {
                 guard let mappedScope = root.scope(forScanPath: startPath, in: context),
                       mappedScope.relativeScope == start.scope.relativeScope else {
                     failures.append(.init(
-                        agent: agent, root: root.url, path: start.scope.scanPath.path,
+                        agent: agent, root: root.url, path: rootScope.scanPath.path,
                         message: "The configured source path changed while Trace was running"
                     ))
                     continue

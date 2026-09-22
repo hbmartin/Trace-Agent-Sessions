@@ -206,19 +206,27 @@ enum SessionMetadataReader {
 
 /// Source-specific sidecars are optional. Never open the agent's database for writing.
 enum CodexSessionNamesLoadResult: Sendable {
-    case loaded([String: String])
+    case loaded([String: String], complete: Bool, warning: String?)
     case absent
     case unavailable(String)
 }
 
 enum CodexSessionNames {
-    static func load(directory: URL) -> CodexSessionNamesLoadResult {
+    static func load(directory: URL) throws -> CodexSessionNamesLoadResult {
+        try Task.checkCancellation()
         let contents: [URL]
         do {
             contents = try FileManager.default.contentsOfDirectory(
                 at: directory, includingPropertiesForKeys: nil
             )
         } catch {
+            try Task.checkCancellation()
+            let fileError = error as NSError
+            let isMissing = (fileError.domain == NSCocoaErrorDomain
+                && fileError.code == CocoaError.Code.fileReadNoSuchFile.rawValue)
+                || (fileError.domain == NSPOSIXErrorDomain
+                    && fileError.code == Int(ENOENT))
+            if isMissing { return .absent }
             return .unavailable(error.localizedDescription)
         }
         let sessionIndex = directory.appendingPathComponent("session_index.jsonl")
@@ -235,13 +243,17 @@ enum CodexSessionNames {
                     $1.lastPathComponent, options: .numeric
                 ) == .orderedDescending
             }
-        guard hasSessionIndex || !databases.isEmpty else { return .absent }
+        guard hasSessionIndex || !databases.isEmpty else {
+            try Task.checkCancellation()
+            return .absent
+        }
 
         var indexed: [String: (String, String)] = [:]
         if hasSessionIndex {
             do {
                 let cursor = try JSONLineCursor(url: sessionIndex, from: 0)
                 while let line = try cursor.next() {
+                    try Task.checkCancellation()
                     guard let object = try? JSONHelpers.object(from: line.data),
                           let id = object["id"] as? String,
                           let name = SessionMetadataReader.nonempty(object["thread_name"])
@@ -251,15 +263,20 @@ enum CodexSessionNames {
                         indexed[id] = (name, date)
                     }
                 }
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
+                try Task.checkCancellation()
                 return .unavailable(error.localizedDescription)
             }
         }
         var names = indexed.mapValues { $0.0 }
         guard let newestDatabase = databases.first else {
-            return .loaded(names)
+            try Task.checkCancellation()
+            return .loaded(names, complete: true, warning: nil)
         }
 
+        try Task.checkCancellation()
         var config = Configuration()
         config.readonly = true
         config.busyMode = .timeout(0.2)
@@ -278,6 +295,7 @@ enum CodexSessionNames {
                 return try Row.fetchAll(db, sql: "SELECT \(fields) FROM threads")
             }
             for row in rows {
+                try Task.checkCancellation()
                 guard let id: String = row["id"] else { continue }
                 let name: String? = row.hasColumn("name") ? row["name"] : nil
                 let title: String? = row.hasColumn("title") ? row["title"] : nil
@@ -285,9 +303,18 @@ enum CodexSessionNames {
                     ?? names[id]
                     ?? SessionMetadataReader.nonempty(title)
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            try Task.checkCancellation()
+            if hasSessionIndex {
+                return .loaded(
+                    names, complete: false, warning: error.localizedDescription
+                )
+            }
             return .unavailable(error.localizedDescription)
         }
-        return .loaded(names)
+        try Task.checkCancellation()
+        return .loaded(names, complete: true, warning: nil)
     }
 }

@@ -181,6 +181,8 @@ final class TraceModel: ObservableObject {
     private var hydratingMessageIDs: Set<Int64> = []
     private let hydrationCacheLimit = 512
     private var sourceChangeTask: Task<Void, Never>?
+    private var sourceConfigurationRevision: UInt64 = 0
+    private var startupSetupComplete = false
     private var lastSummaryRefresh = ContinuousClock.now
     private var incrementalProgressTask: Task<Void, Never>?
     private var pendingIncrementalProgress: IndexProgress?
@@ -251,13 +253,13 @@ final class TraceModel: ObservableObject {
                 }.value
                 self.database = database
                 if database.contentWasResetOnOpen { prepareForIndexReset() }
-                let sources = await makeSources()
+                var sources = await makeSources()
                 _ = try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots))
-                let coordinator = IndexCoordinator(database: database, sources: sources)
                 if let counts = try? await database.unresolvedSourceFailureCounts() {
                     progress.unresolvedFailedFiles = counts.fileFailures
                     progress.unresolvedDiscoveryFailures = counts.discoveryFailures
                 }
+                var recoveryLoadError: Error?
                 do {
                     if let delay = TraceTestHooks.delayMilliseconds(
                         for: "TRACE_TEST_RECOVERY_LOAD_DELAY_MS", cappedAt: 5_000
@@ -273,11 +275,29 @@ final class TraceModel: ObservableObject {
                         pendingStartupRecovery = recovery
                     }
                 } catch {
+                    recoveryLoadError = error
                     startupError = "Could not load pending index recovery; a safe root scan was queued: \(error.localizedDescription)"
+                }
+                var configuredRevision = sourceConfigurationRevision
+                while true {
+                    let revision = sourceConfigurationRevision
+                    let latestSources = await makeSources()
+                    _ = try await database.synchronizeConfiguredRoots(
+                        latestSources.flatMap(\.roots)
+                    )
+                    sources = latestSources
+                    guard revision == sourceConfigurationRevision else { continue }
+                    configuredRevision = revision
+                    break
+                }
+                if recoveryLoadError != nil {
                     pendingStartupRecovery = .init(
-                        reconciliationPaths: Set(sources.flatMap(\.roots).map { $0.scanURL.path }),
+                        reconciliationPaths: Set(
+                            sources.flatMap(\.roots).map { $0.scanURL.path }
+                        )
                     )
                 }
+                let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
                 globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
                 mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
@@ -300,8 +320,11 @@ final class TraceModel: ObservableObject {
                 }
                 loadPricing()
                 await reloadSummaries(loadCosts: false)
+                guard configuredRevision == sourceConfigurationRevision else { return }
+                startupSetupComplete = true
                 if settings.onboardingComplete {
                     guard await startWatching(sources) else { return }
+                    guard configuredRevision == sourceConfigurationRevision else { return }
                     if ProcessInfo.processInfo.arguments.contains("--index-smoke"), TraceRuntime.testDirectory != nil {
                         await scheduler?.request(reconcile: true, scope: settings.indexScope)
                         await scheduler?.waitUntilIdle()
@@ -343,7 +366,7 @@ final class TraceModel: ObservableObject {
             startupError = "Could not update the login item: \(error.localizedDescription)"
         }
         settings.onboardingComplete = true
-        if coordinator != nil {
+        if startupSetupComplete, coordinator != nil {
             Task { [weak self] in
                 guard let self else { return }
                 let sources = await self.makeSources()
@@ -644,13 +667,15 @@ final class TraceModel: ObservableObject {
     }
 
     func reloadSourcesAndRebuild() {
+        sourceConfigurationRevision &+= 1
+        let revision = sourceConfigurationRevision
         guard let database, let previousScheduler = scheduler else { return }
         sourceChangeTask?.cancel()
         invalidateWatchers()
         beginIndexReplacement()
         sourceChangeTask = Task {
             await previousScheduler.stop()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             let sources = await makeSources()
             do {
                 if try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots)) {
@@ -662,14 +687,16 @@ final class TraceModel: ObservableObject {
                 startupError = "Could not update source folders: \(error.localizedDescription)"
                 return
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             let coordinator = IndexCoordinator(database: database, sources: sources)
             self.coordinator = coordinator
             globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
             mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
             scheduler = makeScheduler(coordinator)
             initialIndexRequested = false
+            startupSetupComplete = true
             guard await startWatching(sources, forceRootReconciliation: true) else { return }
+            guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             // Root changes reconcile existing files; unchanged sources retain their index.
             startIndexing(sources: sources)
         }
@@ -1279,10 +1306,16 @@ final class TraceModel: ObservableObject {
     private func makeSources() async -> [any SessionSource] {
         let testDirectory = TraceRuntime.testDirectory
         let additionalClaudeRoots = settings.additionalClaudeRoots
+        let useConfiguredTestRoots = ProcessInfo.processInfo.environment[
+            "TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"
+        ] == "1"
         return await Task.detached(priority: .userInitiated) { () -> [any SessionSource] in
             if let directory = testDirectory {
                 let roots = directory.appendingPathComponent("Sources")
-                return [ClaudeCodeSource(roots: [roots.appendingPathComponent("Claude")]),
+                let claudeRoots = [roots.appendingPathComponent("Claude")]
+                    + (useConfiguredTestRoots
+                        ? additionalClaudeRoots.map { URL(fileURLWithPath: $0) } : [])
+                return [ClaudeCodeSource(roots: claudeRoots),
                         CodexSource(root: roots.appendingPathComponent("Codex")),
                         GeminiSource(root: roots.appendingPathComponent("Gemini"))]
             }
