@@ -160,6 +160,46 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertNil(recorder.terminal?.metadataWarning)
     }
 
+    func testSymlinkedCodexHomeLoadsNames() throws {
+        let parent = try directory()
+        let actual = parent.appendingPathComponent("actual-codex")
+        let alias = parent.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: true)
+        try write([["id": "symlink-session", "thread_name": "Symlink title"]],
+                  to: actual.appendingPathComponent("session_index.jsonl"))
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
+
+        let result = try CodexSessionNames.load(directory: alias)
+        guard case .loaded(let names, let complete, _, let warning) = result else {
+            return XCTFail("Expected names from the symlinked Codex home")
+        }
+        XCTAssertEqual(names["symlink-session"], "Symlink title")
+        XCTAssertTrue(complete)
+        XCTAssertNil(warning)
+    }
+
+    func testUnreadableCodexIndexStillLoadsStateDatabase() async throws {
+        let root = try directory()
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("session_index.jsonl"),
+            withIntermediateDirectories: true
+        )
+        let state = try DatabaseQueue(path: root.appendingPathComponent("state_5.sqlite").path)
+        try await state.write { db in
+            try db.execute(sql: "CREATE TABLE threads (id TEXT, name TEXT, title TEXT)")
+            try db.execute(sql: "INSERT INTO threads VALUES ('database-session', 'Database title', NULL)")
+        }
+
+        let result = try CodexSessionNames.load(directory: root)
+        guard case .loaded(let names, let complete, let databaseFailed, let warning) = result else {
+            return XCTFail("Expected the readable state database to supply names")
+        }
+        XCTAssertEqual(names["database-session"], "Database title")
+        XCTAssertFalse(complete)
+        XCTAssertFalse(databaseFailed)
+        XCTAssertNotNil(warning)
+    }
+
     func testCodexCancellationDoesNotBecomeMetadataWarning() async throws {
         let root = try directory()
         let cancelled = await Task { () -> Bool in
@@ -235,7 +275,7 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(repairedTitle, "Repaired title")
     }
 
-    func testCodexPartialDatabaseFailureAppliesIndexNamesAndPreservesUnmatchedTitles() async throws {
+    func testCodexPartialDatabaseFailureFillsMissingAndPreservesExistingTitles() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")
         try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
@@ -257,8 +297,13 @@ final class SessionMetadataTests: XCTestCase {
             database: database, sources: [CodexSource(root: sessions)]
         )
         await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: root.appendingPathComponent("trace.sqlite").path)
+        try await raw.write {
+            try $0.execute(sql: "UPDATE session SET generated_title=NULL WHERE external_id='partial-two'")
+        }
         try write([
             ["id": "partial-one", "thread_name": "Updated from index"],
+            ["id": "partial-two", "thread_name": "Filled from index"],
         ], to: root.appendingPathComponent("session_index.jsonl"))
         try Data("not a database".utf8).write(
             to: root.appendingPathComponent("state_99.sqlite")
@@ -275,11 +320,11 @@ final class SessionMetadataTests: XCTestCase {
         })
         XCTAssertEqual(
             titles[sessions.appendingPathComponent("rollout-partial-one.jsonl").path],
-            "Updated from index"
+            "Initial one"
         )
         XCTAssertEqual(
             titles[sessions.appendingPathComponent("rollout-partial-two.jsonl").path],
-            "Initial two"
+            "Filled from index"
         )
         XCTAssertNotNil(recorder.terminal?.metadataWarning)
     }
@@ -348,6 +393,87 @@ final class SessionMetadataTests: XCTestCase {
             titles[localSessions.appendingPathComponent("rollout-shared.jsonl").path],
             "Updated local title"
         )
+    }
+
+    func testSeparateCodexRootWithoutMetadataDoesNotBorrowDefaultNames() async throws {
+        let parent = try directory()
+        let defaultHome = parent.appendingPathComponent("default")
+        let otherHome = parent.appendingPathComponent("other")
+        let defaultSessions = defaultHome.appendingPathComponent("sessions")
+        let otherSessions = otherHome.appendingPathComponent("sessions")
+        for sessions in [defaultSessions, otherSessions] {
+            try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+            try write([
+                ["type": "session_meta", "payload": ["id": "shared-id", "cwd": "/tmp/codex"]],
+                ["type": "response_item", "payload": ["type": "message", "role": "user",
+                    "content": [["type": "input_text", "text": "Local fallback"]]]],
+            ], to: sessions.appendingPathComponent("rollout-shared.jsonl"))
+        }
+        try write([["id": "shared-id", "thread_name": "Default-only title"]],
+                  to: defaultHome.appendingPathComponent("session_index.jsonl"))
+        let database = try IndexDatabase(url: parent.appendingPathComponent("trace.sqlite"))
+        let coordinator = IndexCoordinator(
+            database: database, sources: [CodexSource(roots: [defaultSessions, otherSessions])]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+        var titles = Dictionary(uniqueKeysWithValues: try await database.sessions().map {
+            ($0.sourcePath, $0.title)
+        })
+        XCTAssertEqual(titles[defaultSessions.appendingPathComponent("rollout-shared.jsonl").path],
+                       "Default-only title")
+        XCTAssertEqual(titles[otherSessions.appendingPathComponent("rollout-shared.jsonl").path],
+                       "Local fallback")
+
+        let unreadable = otherHome.appendingPathComponent("state_9.sqlite")
+        try Data("not a database".utf8).write(to: unreadable)
+        await coordinator.refresh(paths: [unreadable.path], scope: .proseOnly)
+        titles = Dictionary(uniqueKeysWithValues: try await database.sessions().map {
+            ($0.sourcePath, $0.title)
+        })
+        XCTAssertEqual(titles[otherSessions.appendingPathComponent("rollout-shared.jsonl").path],
+                       "Local fallback")
+    }
+
+    func testChangedFileUsesOwningCodexSourceForMissingTitle() async throws {
+        let parent = try directory()
+        let first = parent.appendingPathComponent("first/sessions")
+        let second = parent.appendingPathComponent("second/sessions")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        let rollout = second.appendingPathComponent("rollout-second.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "second-id", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Second fallback"]]]],
+        ], to: rollout)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("trace.sqlite"))
+        let sources = [CodexSource(root: first), CodexSource(root: second)]
+        let coordinator = IndexCoordinator(database: database, sources: sources)
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: parent.appendingPathComponent("trace.sqlite").path)
+        let initialGenerated = try await raw.read {
+            try String.fetchOne($0, sql: "SELECT generated_title FROM session WHERE external_id='second-id'")
+        }
+        XCTAssertNil(initialGenerated)
+        try write([["id": "second-id", "thread_name": "Second source title"]],
+                  to: second.deletingLastPathComponent().appendingPathComponent("session_index.jsonl"))
+        let handle = try FileHandle(forWritingTo: rollout)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"response_item\",\"payload\":{\"type\":\"plan\",\"text\":\"Updated\"}}\n".utf8))
+        try handle.close()
+
+        let freshCoordinator = IndexCoordinator(database: database, sources: sources)
+        let result = await freshCoordinator.refreshResult(paths: [rollout.path], scope: .proseOnly)
+
+        let title = try await database.sessions().first?.title
+        XCTAssertEqual(result.phase, .complete)
+        XCTAssertEqual(result.indexedFiles, 1)
+        XCTAssertNil(result.metadataWarning)
+        let generated = try await raw.read {
+            try String.fetchOne($0, sql: "SELECT generated_title FROM session WHERE external_id='second-id'")
+        }
+        XCTAssertEqual(generated, "Second source title")
+        XCTAssertEqual(title, "Second source title")
     }
 
     func testCodexMetadataWarningsAreDirectorySortedAndDeduplicated() async throws {
@@ -474,6 +600,76 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(Set(titles), ["Preserved nested title", "New nested title"])
     }
 
+    func testIncompleteNestedCodexMetadataOnlyReplacesLocallySuppliedNames() async throws {
+        let home = try directory()
+        let defaultSessions = home.appendingPathComponent("sessions")
+        let nestedSessions = defaultSessions.appendingPathComponent("2026/09")
+        let localMetadata = nestedSessions.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: nestedSessions, withIntermediateDirectories: true)
+        for id in ["inherited-id", "local-id", "fill-id"] {
+            try write([
+                ["type": "session_meta", "payload": ["id": id, "cwd": "/tmp/codex"]],
+                ["type": "response_item", "payload": ["type": "message", "role": "user",
+                    "content": [["type": "input_text", "text": "Fallback for \(id)"]]]],
+            ], to: nestedSessions.appendingPathComponent("rollout-\(id).jsonl"))
+        }
+        let defaultIndex = home.appendingPathComponent("session_index.jsonl")
+        let localIndex = localMetadata.appendingPathComponent("session_index.jsonl")
+        try write([
+            ["id": "inherited-id", "thread_name": "Inherited original"],
+            ["id": "fill-id", "thread_name": "Fill original"],
+        ], to: defaultIndex)
+        try write([["id": "local-id", "thread_name": "Local original"]], to: localIndex)
+        let databaseURL = home.appendingPathComponent("trace.sqlite")
+        let database = try IndexDatabase(url: databaseURL)
+        let coordinator = IndexCoordinator(
+            database: database,
+            sources: [CodexSource(roots: [defaultSessions, nestedSessions])]
+        )
+        await coordinator.indexAll(scope: .proseOnly)
+
+        let raw = try DatabaseQueue(path: databaseURL.path)
+        try await raw.write {
+            try $0.execute(sql: "UPDATE session SET generated_title=NULL WHERE external_id='fill-id'")
+        }
+        try write([
+            ["id": "inherited-id", "thread_name": "Inherited changed"],
+            ["id": "fill-id", "thread_name": "Fill changed"],
+        ], to: defaultIndex)
+        try FileManager.default.removeItem(at: localIndex)
+        try FileManager.default.createDirectory(at: localIndex, withIntermediateDirectories: true)
+        let localState = try DatabaseQueue(path: localMetadata.appendingPathComponent("state_9.sqlite").path)
+        try await localState.write { db in
+            try db.execute(sql: "CREATE TABLE threads (id TEXT, name TEXT, title TEXT)")
+            try db.execute(sql: "INSERT INTO threads VALUES ('local-id', 'Local changed', NULL)")
+        }
+
+        await coordinator.refresh(paths: [localIndex.path], scope: .proseOnly)
+        var titles = Dictionary(uniqueKeysWithValues: try await database.sessions().map {
+            ($0.sourcePath, $0.title)
+        })
+        XCTAssertEqual(titles[nestedSessions.appendingPathComponent("rollout-inherited-id.jsonl").path],
+                       "Inherited original")
+        XCTAssertEqual(titles[nestedSessions.appendingPathComponent("rollout-local-id.jsonl").path],
+                       "Local changed")
+        XCTAssertEqual(titles[nestedSessions.appendingPathComponent("rollout-fill-id.jsonl").path],
+                       "Fill changed")
+
+        try FileManager.default.removeItem(at: localIndex)
+        try write([["id": "local-id", "thread_name": "Local complete"]], to: localIndex)
+        try await localState.write {
+            try $0.execute(sql: "UPDATE threads SET name='Local complete'")
+        }
+        await coordinator.refresh(paths: [localIndex.path], scope: .proseOnly)
+        titles = Dictionary(uniqueKeysWithValues: try await database.sessions().map {
+            ($0.sourcePath, $0.title)
+        })
+        XCTAssertEqual(titles[nestedSessions.appendingPathComponent("rollout-inherited-id.jsonl").path],
+                       "Inherited changed")
+        XCTAssertEqual(titles[nestedSessions.appendingPathComponent("rollout-local-id.jsonl").path],
+                       "Local complete")
+    }
+
     func testSafetyVerificationRefreshesMissedCodexTitleChange() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")
@@ -508,7 +704,7 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(refreshedTitle, "Recovered safety title")
     }
 
-    func testSafetyQualifiedRootRecoveryRefreshesMissedCodexTitleChange() async throws {
+    func testStandaloneRootRecoveryRefreshesMissedCodexTitleChange() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")
         try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
@@ -539,12 +735,83 @@ final class SessionMetadataTests: XCTestCase {
         }
 
         _ = await coordinator.reconcile(
-            paths: [sessions.path], scope: .proseOnly, activity: .rootRecovery,
-            satisfiesSafetyReconciliation: true
+            paths: [sessions.path], scope: .proseOnly, activity: .rootRecovery
         )
 
         let refreshedTitle = try await database.sessions().first?.title
         XCTAssertEqual(refreshedTitle, "Merged safety title")
+    }
+
+    func testCodexWALChangeRefreshesTitleWithoutOpeningWAL() async throws {
+        let root = try directory()
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let rollout = sessions.appendingPathComponent("rollout-wal.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "wal-id", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Fallback"]]]],
+        ], to: rollout)
+        let stateURL = root.appendingPathComponent("state_5.sqlite")
+        let state = try DatabaseQueue(path: stateURL.path)
+        try await state.write { db in
+            try db.execute(sql: "CREATE TABLE threads (id TEXT, name TEXT, title TEXT)")
+            try db.execute(sql: "INSERT INTO threads VALUES ('wal-id', 'Initial name', NULL)")
+        }
+        let database = try IndexDatabase(url: root.appendingPathComponent("trace.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        try await state.write { try $0.execute(sql: "UPDATE threads SET name='Name from WAL event'") }
+
+        await coordinator.refresh(
+            paths: [stateURL.path + "-wal"], scope: .proseOnly
+        )
+
+        let title = try await database.sessions().first?.title
+        XCTAssertEqual(title, "Name from WAL event")
+    }
+
+    func testSafetyPassRetriesTransientEarlyMetadataFailure() async throws {
+        let root = try directory()
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let rollout = sessions.appendingPathComponent("rollout-retry.jsonl")
+        try write([
+            ["type": "session_meta", "payload": ["id": "retry-id", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Fallback"]]]],
+        ], to: rollout)
+        let stateURL = root.appendingPathComponent("state_9.sqlite")
+        let database = try IndexDatabase(url: root.appendingPathComponent("trace.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        try Data("not a database".utf8).write(to: stateURL)
+        let handle = try FileHandle(forWritingTo: rollout)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"response_item\",\"payload\":{\"type\":\"plan\",\"text\":\"Updated\"}}\n".utf8))
+        try handle.close()
+        let repaired = TestCompletionFlag()
+
+        let terminal = await coordinator.reconcile(
+            paths: [sessions.path], scope: .proseOnly, activity: .safetyVerification
+        ) { update in
+            if update.phase == .indexing, update.metadataWarning != nil, !repaired.value {
+                repaired.mark()
+                try? FileManager.default.removeItem(at: stateURL)
+                if let state = try? DatabaseQueue(path: stateURL.path) {
+                    try? await state.write { db in
+                        try db.execute(sql: "CREATE TABLE threads (id TEXT, name TEXT, title TEXT)")
+                        try db.execute(sql: "INSERT INTO threads VALUES ('retry-id', 'Recovered name', NULL)")
+                    }
+                }
+            }
+        }
+
+        XCTAssertTrue(repaired.value)
+        XCTAssertEqual(terminal.phase, .complete)
+        XCTAssertNil(terminal.metadataWarning)
+        let title = try await database.sessions().first?.title
+        XCTAssertEqual(title, "Recovered name")
     }
 
     func testOptionalCodexTitleDatabaseFailureIsMetadataWarning() async throws {

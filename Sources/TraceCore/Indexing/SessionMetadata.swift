@@ -206,9 +206,17 @@ enum SessionMetadataReader {
 
 /// Source-specific sidecars are optional. Never open the agent's database for writing.
 enum CodexSessionNamesLoadResult: Sendable {
-    case loaded([String: String], complete: Bool, warning: String?)
+    case loaded([String: String], complete: Bool, databaseFailed: Bool, warning: String?)
     case absent
     case unavailable(String)
+
+    var needsRetry: Bool {
+        switch self {
+        case .loaded(_, let complete, _, _): !complete
+        case .unavailable: true
+        case .absent: false
+        }
+    }
 }
 
 enum CodexSessionNames {
@@ -216,9 +224,8 @@ enum CodexSessionNames {
         try Task.checkCancellation()
         let contents: [URL]
         do {
-            contents = try FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: nil
-            )
+            contents = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                .map { directory.appendingPathComponent($0) }
         } catch {
             try Task.checkCancellation()
             let fileError = error as NSError
@@ -249,6 +256,7 @@ enum CodexSessionNames {
         }
 
         var indexed: [String: (String, String)] = [:]
+        var warnings: [String] = []
         if hasSessionIndex {
             do {
                 let cursor = try JSONLineCursor(url: sessionIndex, from: 0)
@@ -267,13 +275,20 @@ enum CodexSessionNames {
                 throw CancellationError()
             } catch {
                 try Task.checkCancellation()
-                return .unavailable(error.localizedDescription)
+                indexed.removeAll()
+                warnings.append("session_index.jsonl: \(error.localizedDescription)")
             }
         }
         var names = indexed.mapValues { $0.0 }
         guard let newestDatabase = databases.first else {
             try Task.checkCancellation()
-            return .loaded(names, complete: true, warning: nil)
+            if !warnings.isEmpty && names.isEmpty {
+                return .unavailable(warnings.joined(separator: "; "))
+            }
+            return .loaded(
+                names, complete: warnings.isEmpty, databaseFailed: false,
+                warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")
+            )
         }
 
         try Task.checkCancellation()
@@ -307,14 +322,19 @@ enum CodexSessionNames {
             throw CancellationError()
         } catch {
             try Task.checkCancellation()
-            if hasSessionIndex {
+            warnings.append("\(newestDatabase.lastPathComponent): \(error.localizedDescription)")
+            if !names.isEmpty {
                 return .loaded(
-                    names, complete: false, warning: error.localizedDescription
+                    names, complete: false, databaseFailed: true,
+                    warning: warnings.joined(separator: "; ")
                 )
             }
-            return .unavailable(error.localizedDescription)
+            return .unavailable(warnings.joined(separator: "; "))
         }
         try Task.checkCancellation()
-        return .loaded(names, complete: true, warning: nil)
+        return .loaded(
+            names, complete: warnings.isEmpty, databaseFailed: false,
+            warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")
+        )
     }
 }
