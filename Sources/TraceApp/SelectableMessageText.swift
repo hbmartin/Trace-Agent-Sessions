@@ -92,6 +92,11 @@ final class MessageTextView: NSTextView {
     override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
     override func accessibilityValue() -> String? { string }
 
+    override func scrollWheel(with event: NSEvent) {
+        if let enclosingScrollView { enclosingScrollView.scrollWheel(with: event) }
+        else { super.scrollWheel(with: event) }
+    }
+
     override func mouseDown(with event: NSEvent) {
         // NSTableView otherwise has an opportunity to reclaim first responder
         // from its hosted text during row interaction, which breaks native text
