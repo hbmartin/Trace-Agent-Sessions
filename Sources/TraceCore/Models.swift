@@ -364,7 +364,7 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-struct SourceRootScope: Sendable {
+struct SourceRootScope: Hashable, Sendable {
     let scanPath: TraceFileIO.CanonicalPath
     let relativeScope: RootRelativeScope
 }

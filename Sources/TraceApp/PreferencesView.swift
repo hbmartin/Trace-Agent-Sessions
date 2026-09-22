@@ -166,12 +166,19 @@ private struct SourcesPreferences: View {
     }
 
     private func addClaudeRoot() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Add Root"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let url: URL
+        if TraceTestHooks.isUITesting,
+           let path = TraceTestHooks.environment["TRACE_TEST_PICK_CLAUDE_ROOT_PATH"] {
+            url = URL(fileURLWithPath: path)
+        } else {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Add Root"
+            guard panel.runModal() == .OK, let selected = panel.url else { return }
+            url = selected
+        }
         let defaultURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects")
         let taskID = UUID()

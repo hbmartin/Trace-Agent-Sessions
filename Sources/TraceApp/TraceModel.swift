@@ -253,31 +253,7 @@ final class TraceModel: ObservableObject {
                 }.value
                 self.database = database
                 if database.contentWasResetOnOpen { prepareForIndexReset() }
-                var sources = await makeSources()
-                _ = try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots))
-                if let counts = try? await database.unresolvedSourceFailureCounts() {
-                    progress.unresolvedFailedFiles = counts.fileFailures
-                    progress.unresolvedDiscoveryFailures = counts.discoveryFailures
-                }
-                var recoveryLoadError: Error?
-                do {
-                    if let delay = TraceTestHooks.delayMilliseconds(
-                        for: "TRACE_TEST_RECOVERY_LOAD_DELAY_MS", cappedAt: 5_000
-                    ) {
-                        TraceTestHooks.touch(pathKey: "TRACE_TEST_RECOVERY_LOAD_STARTED_PATH")
-                        try await Task.sleep(for: .milliseconds(delay))
-                    }
-                    if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_RECOVERY_LOAD_ONCE") {
-                        throw SessionSourceError.unreadableFile("synthetic recovery metadata")
-                    }
-                    let recovery = try await database.unresolvedRecoveryWork()
-                    if !recovery.isEmpty {
-                        pendingStartupRecovery = recovery
-                    }
-                } catch {
-                    recoveryLoadError = error
-                    startupError = "Could not load pending index recovery; a safe root scan was queued: \(error.localizedDescription)"
-                }
+                var sources: [any SessionSource] = []
                 var configuredRevision = sourceConfigurationRevision
                 while true {
                     let revision = sourceConfigurationRevision
@@ -285,17 +261,47 @@ final class TraceModel: ObservableObject {
                     _ = try await database.synchronizeConfiguredRoots(
                         latestSources.flatMap(\.roots)
                     )
-                    sources = latestSources
                     guard revision == sourceConfigurationRevision else { continue }
+                    var recovery = IndexRecoveryWork()
+                    var recoveryLoadError: Error?
+                    do {
+                        if let delay = TraceTestHooks.delayMilliseconds(
+                            for: "TRACE_TEST_RECOVERY_LOAD_DELAY_MS", cappedAt: 5_000
+                        ) {
+                            TraceTestHooks.touch(pathKey: "TRACE_TEST_RECOVERY_LOAD_STARTED_PATH")
+                            try await Task.sleep(for: .milliseconds(delay))
+                        }
+                        if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_RECOVERY_LOAD_ONCE") {
+                            throw SessionSourceError.unreadableFile("synthetic recovery metadata")
+                        }
+                        recovery = try await database.unresolvedRecoveryWork()
+                        if let delay = TraceTestHooks.delayMilliseconds(
+                            for: "TRACE_TEST_RECOVERY_LOADED_DELAY_MS", cappedAt: 10_000,
+                            marker: .touch(pathKey: "TRACE_TEST_RECOVERY_LOADED_PATH")
+                        ) {
+                            try await Task.sleep(for: .milliseconds(delay))
+                        }
+                    } catch {
+                        recoveryLoadError = error
+                    }
+                    guard revision == sourceConfigurationRevision else { continue }
+                    sources = latestSources
                     configuredRevision = revision
+                    if let recoveryLoadError {
+                        startupError = "Could not load pending index recovery; a safe root scan was queued: \(recoveryLoadError.localizedDescription)"
+                        pendingStartupRecovery = .init(
+                            reconciliationPaths: Set(
+                                sources.flatMap(\.roots).map { $0.scanURL.path }
+                            )
+                        )
+                    } else {
+                        pendingStartupRecovery = recovery
+                    }
                     break
                 }
-                if recoveryLoadError != nil {
-                    pendingStartupRecovery = .init(
-                        reconciliationPaths: Set(
-                            sources.flatMap(\.roots).map { $0.scanURL.path }
-                        )
-                    )
+                if let counts = try? await database.unresolvedSourceFailureCounts() {
+                    progress.unresolvedFailedFiles = counts.fileFailures
+                    progress.unresolvedDiscoveryFailures = counts.discoveryFailures
                 }
                 let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
@@ -320,6 +326,13 @@ final class TraceModel: ObservableObject {
                 }
                 loadPricing()
                 await reloadSummaries(loadCosts: false)
+                await loadCachedUsageAtStartup()
+                if let delay = TraceTestHooks.delayMilliseconds(
+                    for: "TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS", cappedAt: 10_000,
+                    marker: .touch(pathKey: "TRACE_TEST_STARTUP_FINALIZATION_PATH")
+                ) {
+                    try await Task.sleep(for: .milliseconds(delay))
+                }
                 guard configuredRevision == sourceConfigurationRevision else { return }
                 startupSetupComplete = true
                 if settings.onboardingComplete {
@@ -339,14 +352,12 @@ final class TraceModel: ObservableObject {
                     } else {
                         Task { [weak self] in
                             guard let self else { return }
-                            await self.loadCachedUsageAtStartup()
                             self.startIndexing(sources: sources)
                         }
                     }
                 } else {
                     Task { [weak self] in
                         guard let self else { return }
-                        await self.loadCachedUsageAtStartup()
                         if !self.settings.onboardingComplete {
                             await self.refreshCompletedUsage(repairIfDirty: true)
                         }
@@ -1392,7 +1403,7 @@ final class TraceModel: ObservableObject {
                         let url = URL(fileURLWithPath: canonical.path)
                         let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
                         if canonicalMetadataRoots.contains(where: { $0.comparisonKey == parent.comparisonKey }),
-                           TraceFileIO.isCodexMetadataSidecar(url) { return canonical.path }
+                           TraceFileIO.isCodexMetadataChangePath(url) { return canonical.path }
                         return nil
                     })
                     for path in changes.reconciliationPaths {
