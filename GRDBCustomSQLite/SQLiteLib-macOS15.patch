@@ -1,0 +1,8 @@
+diff --git a/SQLiteLib.xcconfig b/SQLiteLib.xcconfig
+--- a/SQLiteLib.xcconfig
++++ b/SQLiteLib.xcconfig
+@@ -10,2 +10,2 @@
+-// SQLiteLib targets OS X 10.9
+-MACOSX_DEPLOYMENT_TARGET = 10.9
++// SQLiteLib targets macOS 15.0
++MACOSX_DEPLOYMENT_TARGET = 15.0
