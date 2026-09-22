@@ -65,7 +65,7 @@ private struct StoredRecoveryRow: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 15
+    public static let schemaVersion = 16
     public static let indexFormatVersion = 6
     private static let sourceStateSelection = """
         sf.*,
@@ -93,12 +93,16 @@ public actor IndexDatabase {
         )
         var configuration = Configuration()
         configuration.busyMode = .timeout(5)
+        let supportedAgents = AgentKind.allCases.map {
+            "SELECT '\($0.rawValue.replacingOccurrences(of: "'", with: "''"))' AS agent"
+        }.joined(separator: " UNION ALL ")
         configuration.prepareDatabase { db in
             try db.execute(sql: "PRAGMA foreign_keys = ON")
             try db.execute(sql: "PRAGMA journal_mode = WAL")
             try db.execute(sql: "PRAGMA synchronous = NORMAL")
             try db.execute(sql: "PRAGMA temp_store = MEMORY")
             try db.execute(sql: "PRAGMA mmap_size = 268435456")
+            try db.execute(sql: "CREATE TEMP VIEW supported_agent(agent) AS \(supportedAgents)")
         }
         pool = try DatabasePool(path: url.path, configuration: configuration)
         try Self.migrate(pool)
@@ -421,12 +425,16 @@ public actor IndexDatabase {
                 UPDATE trace_meta SET value='14' WHERE key='schema_version';
                 """)
         }
-        migrator.registerMigration("trace-v15-supported-agent-view") { db in
+        migrator.registerMigration("trace-v15-supported-agent-view", foreignKeyChecks: .immediate) { db in
             let rows = AgentKind.allCases.map {
                 "SELECT '\($0.rawValue.replacingOccurrences(of: "'", with: "''"))' AS agent"
             }.joined(separator: " UNION ALL ")
             try db.execute(sql: "CREATE VIEW supported_agent(agent) AS \(rows)")
             try db.execute(sql: "UPDATE trace_meta SET value='15' WHERE key='schema_version'")
+        }
+        migrator.registerMigration("trace-v16-temporary-supported-agent-view", foreignKeyChecks: .immediate) { db in
+            try db.execute(sql: "DROP VIEW main.supported_agent")
+            try db.execute(sql: "UPDATE trace_meta SET value='16' WHERE key='schema_version'")
         }
         try migrator.migrate(pool)
     }

@@ -853,7 +853,8 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(
                 sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v15-supported-agent-view'"
             )
-            try db.execute(sql: "DROP VIEW supported_agent")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
+            try db.execute(sql: "DROP VIEW IF EXISTS supported_agent")
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
         }
@@ -863,7 +864,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "15")
+        XCTAssertEqual(schema, "16")
     }
 
     func testV13MigratesShippedV12SourceIdentityAndResetsDerivedContent() async throws {
@@ -926,7 +927,9 @@ final class IndexingRegressionTests: XCTestCase {
                     WHERE identifier='trace-v14-supported-agent-rollups';
                     DELETE FROM grdb_migrations
                     WHERE identifier='trace-v15-supported-agent-view';
-                    DROP VIEW supported_agent;
+                    DELETE FROM grdb_migrations
+                    WHERE identifier='trace-v16-temporary-supported-agent-view';
+                    DROP VIEW IF EXISTS supported_agent;
                     UPDATE trace_meta SET value='5' WHERE key='index_format_version';
                     UPDATE trace_meta SET value='12' WHERE key='schema_version';
                     """)
@@ -953,7 +956,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "15")
+        XCTAssertEqual(schema, "16")
         let migratedSchema = try await raw.read { db in
             let sourceFileSQL = try String.fetchOne(
                 db, sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name='source_file'"
@@ -1016,7 +1019,9 @@ final class IndexingRegressionTests: XCTestCase {
                 WHERE identifier='trace-v14-supported-agent-rollups';
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v15-supported-agent-view';
-                DROP VIEW supported_agent;
+                DELETE FROM grdb_migrations
+                WHERE identifier='trace-v16-temporary-supported-agent-view';
+                DROP VIEW IF EXISTS supported_agent;
                 UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty';
                 UPDATE trace_meta SET value='13' WHERE key='schema_version';
                 """)
@@ -1043,10 +1048,10 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertNotNil(state)
         XCTAssertEqual(migrationState.0, 0)
         XCTAssertEqual(migrationState.1, "1")
-        XCTAssertEqual(migrationState.2, "15")
+        XCTAssertEqual(migrationState.2, "16")
     }
 
-    func testV15AddsSupportedAgentViewWithoutResettingContent() async throws {
+    func testV15AndV16ReplaceSupportedAgentViewWithoutResettingContent() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")
         let url = root.appendingPathComponent("index.sqlite")
@@ -1064,17 +1069,19 @@ final class IndexingRegressionTests: XCTestCase {
         }
         try await raw.write { db in
             try db.execute(sql: """
-                DROP VIEW supported_agent;
+                DROP VIEW IF EXISTS supported_agent;
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v15-supported-agent-view';
+                DELETE FROM grdb_migrations
+                WHERE identifier='trace-v16-temporary-supported-agent-view';
                 UPDATE trace_meta SET value='14' WHERE key='schema_version';
                 """)
         }
 
         let migrated = try IndexDatabase(url: url)
         let migratedState = try await raw.read { db in
-            let agents = try String.fetchAll(
-                db, sql: "SELECT agent FROM supported_agent ORDER BY agent"
+            let storedView = try String.fetchOne(
+                db, sql: "SELECT name FROM main.sqlite_master WHERE type='view' AND name='supported_agent'"
             )
             let schema = try String.fetchOne(
                 db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"
@@ -1083,16 +1090,91 @@ final class IndexingRegressionTests: XCTestCase {
                 try Int64.fetchOne(db, sql: "SELECT id FROM session"),
                 try Int64.fetchOne(db, sql: "SELECT id FROM message")
             )
-            return (agents, schema, ids)
+            return (storedView, schema, ids)
         }
 
         XCTAssertFalse(migrated.contentWasResetOnOpen)
-        XCTAssertEqual(migratedState.0, AgentKind.allCases.map(\.rawValue).sorted())
-        XCTAssertEqual(migratedState.1, "15")
+        XCTAssertNil(migratedState.0)
+        XCTAssertEqual(migratedState.1, "16")
         XCTAssertEqual(migratedState.2.0, originalIDs.0)
         XCTAssertEqual(migratedState.2.1, originalIDs.1)
         let statistics = try await migrated.statistics()
         XCTAssertEqual(statistics.messageCount, 1)
+    }
+
+    func testV16ReplacesStaleV15AgentListOnExistingDatabase() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let url = root.appendingPathComponent("index.sqlite")
+        try Data(line(1).utf8).write(to: file)
+        let initial = try IndexDatabase(url: url)
+        await IndexCoordinator(
+            database: initial, sources: [ClaudeCodeSource(roots: [root])]
+        ).indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        let originalIDs = try await raw.write { db -> (Int64, Int64) in
+            let sessionID = try XCTUnwrap(Int64.fetchOne(db, sql: "SELECT id FROM session"))
+            let messageID = try XCTUnwrap(Int64.fetchOne(db, sql: "SELECT id FROM message"))
+            try db.execute(sql: "UPDATE source_root SET agent='codex'")
+            try db.execute(sql: "UPDATE source_file SET agent='codex'")
+            try db.execute(sql: "UPDATE session SET agent='codex'")
+            try db.execute(sql: "CREATE VIEW supported_agent(agent) AS SELECT 'claude_code'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
+            try db.execute(sql: "UPDATE trace_meta SET value='15' WHERE key='schema_version'")
+            return (sessionID, messageID)
+        }
+
+        let reopened = try IndexDatabase(url: url)
+        let statistics = try await reopened.statistics()
+        let sessions = try await reopened.sessions()
+        let search = try await reopened.search(query: "searchable")
+        let persisted = try await raw.read { db in
+            (
+                try String.fetchOne(db, sql: "SELECT name FROM main.sqlite_master WHERE type='view' AND name='supported_agent'"),
+                try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"),
+                try Int64.fetchOne(db, sql: "SELECT id FROM session"),
+                try Int64.fetchOne(db, sql: "SELECT id FROM message")
+            )
+        }
+        XCTAssertEqual(statistics.sessionCount, 1)
+        XCTAssertEqual(sessions.first?.agent, .codex)
+        XCTAssertEqual(search.results.count, 1)
+        XCTAssertNil(persisted.0)
+        XCTAssertEqual(persisted.1, "16")
+        XCTAssertEqual(persisted.2, originalIDs.0)
+        XCTAssertEqual(persisted.3, originalIDs.1)
+    }
+
+    func testV15ImmediateChecksAllowPreexistingOrphan() async throws {
+        let root = try directory()
+        let url = root.appendingPathComponent("index.sqlite")
+        _ = try IndexDatabase(url: url)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA foreign_keys=OFF")
+            try db.inTransaction {
+                try db.execute(sql: """
+                    INSERT INTO source_scan_error(root_id, relative_scope, error, updated_at_ms)
+                    VALUES (987654321, 'orphan', 'external tool', 0);
+                    DELETE FROM grdb_migrations WHERE identifier='trace-v15-supported-agent-view';
+                    DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view';
+                    UPDATE trace_meta SET value='14' WHERE key='schema_version';
+                    """)
+                return .commit
+            }
+            try db.execute(sql: "PRAGMA foreign_keys=ON")
+        }
+
+        let upgraded = try IndexDatabase(url: url)
+        XCTAssertFalse(upgraded.contentWasResetOnOpen)
+        let persisted = try await raw.read { db in
+            (
+                try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"),
+                try Int.fetchOne(db, sql: "SELECT count(*) FROM source_scan_error WHERE root_id=987654321")
+            )
+        }
+        XCTAssertEqual(persisted.0, "16")
+        XCTAssertEqual(persisted.1, 1)
     }
 
     func testConfiguredRootSynchronizationPurgesRemovedRootImmediately() async throws {
@@ -2563,6 +2645,46 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(counts.discoveryFailures, 0)
     }
 
+    func testAnchoredUnmappableDiscoveryFailurePreservesIndexedSubtree() async throws {
+        let parent = try directory()
+        let root = parent.appendingPathComponent("root")
+        let affected = root.appendingPathComponent("affected")
+        let healthy = root.appendingPathComponent("healthy")
+        try FileManager.default.createDirectory(at: affected, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: healthy, withIntermediateDirectories: true)
+        let protectedFile = affected.appendingPathComponent("protected.jsonl")
+        let removedFile = healthy.appendingPathComponent("removed.jsonl")
+        try Data(line(1).utf8).write(to: protectedFile)
+        try Data(line(2).utf8).write(to: removedFile)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(
+            database: database, sources: [ClaudeCodeSource(roots: [root])]
+        ).indexAll(scope: .proseOnly)
+        let movedPath = parent.appendingPathComponent("moved-parent/affected").path
+        let source = MultiScopeFailureSource(
+            root: root, isDefault: false,
+            explicitFailures: [.init(
+                path: movedPath, message: "permission denied",
+                requestedScopePath: affected.path
+            )]
+        )
+
+        let result = await IndexCoordinator(database: database, sources: [source])
+            .indexAllResult(scope: .proseOnly)
+        let protectedState = try await database.sourceState(
+            agent: .claudeCode, path: protectedFile.path
+        )
+        let removedState = try await database.sourceState(
+            agent: .claudeCode, path: removedFile.path
+        )
+        let recovery = try await database.unresolvedRecoveryWork()
+
+        XCTAssertEqual(result.failedFiles, 1)
+        XCTAssertNotNil(protectedState)
+        XCTAssertNil(removedState)
+        XCTAssertEqual(recovery.reconciliationPaths, [affected.path])
+    }
+
     func testRelativeFailureRecoversCurrentRootAfterSymlinkRepoint() async throws {
         let parent = try directory()
         let firstTarget = parent.appendingPathComponent("first/source")
@@ -2788,9 +2910,9 @@ final class IndexingRegressionTests: XCTestCase {
         )
         let health = try await database.sourceHealth()
         let counts = try await database.unresolvedSourceFailureCounts()
-        let supportedAgents = try await raw.read {
-            try String.fetchAll(
-                $0, sql: "SELECT agent FROM supported_agent ORDER BY agent"
+        let storedView = try await raw.read {
+            try String.fetchOne(
+                $0, sql: "SELECT name FROM main.sqlite_master WHERE type='view' AND name='supported_agent'"
             )
         }
         let unknownCounts = try await raw.read { db in
@@ -2824,7 +2946,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(health.first?.error, "claude failure")
         XCTAssertEqual(counts.discoveryFailures, 1)
         XCTAssertEqual(counts.fileFailures, 0)
-        XCTAssertEqual(supportedAgents, AgentKind.allCases.map(\.rawValue).sorted())
+        XCTAssertNil(storedView)
         XCTAssertEqual(unknownCounts.0, 1)
         XCTAssertEqual(unknownCounts.1, 1)
         XCTAssertEqual(unknownCounts.2, 1)
@@ -3325,6 +3447,8 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: "/tmp/state_5.sqlite")))
         XCTAssertFalse(TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: "/tmp/state_5.sqlite-wal")))
         XCTAssertFalse(TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: "/tmp/state_latest.sqlite")))
+        XCTAssertTrue(TraceFileIO.isCodexMetadataChangePath(URL(fileURLWithPath: "/tmp/state_5.sqlite-wal")))
+        XCTAssertFalse(TraceFileIO.isCodexMetadataChangePath(URL(fileURLWithPath: "/tmp/state_latest.sqlite-wal")))
     }
 
     func testRootRecoveryActivityOutranksStartupAndSubtreeWork() {
@@ -3802,6 +3926,7 @@ private struct SyntheticDiscoveryFailure: Sendable {
     let path: String
     let message: String
     var kind: DiscoveryFailure.Kind = .unreadable
+    var requestedScopePath: String? = nil
 }
 
 private struct MultiScopeFailureSource: SessionSource {
@@ -3827,7 +3952,15 @@ private struct MultiScopeFailureSource: SessionSource {
             )
         }
         return .init(failures: failures.map { failure in
-            .init(
+            if let requestedScopePath = failure.requestedScopePath,
+               let scope = roots[0].scope(forRawPath: requestedScopePath) {
+                return .init(
+                    agent: agent, root: roots[0].url, path: failure.path,
+                    message: failure.message, kind: failure.kind,
+                    requestedScope: scope
+                )
+            }
+            return .init(
                 agent: agent, root: roots[0].url, path: failure.path,
                 message: failure.message, kind: failure.kind
             )

@@ -139,6 +139,7 @@ public actor IndexCoordinator {
         let names: [String: String]
         let hasProvider: Bool
         let complete: Bool
+        let fillMissingOnly: Bool
         let warnings: [String]
     }
     private var codexNameCache: [String: CodexNameCacheEntry] = [:]
@@ -149,11 +150,12 @@ public actor IndexCoordinator {
     }
 
     private func codexNames(
-        directory: URL
+        directory: URL, retryIncomplete: Bool = false
     ) async throws -> CodexSessionNamesLoadResult {
         let key = directory.standardizedFileURL.path
         if let cached = codexNameCache[key],
-           cached.loadedAt.duration(to: .now) < .seconds(30) {
+           cached.loadedAt.duration(to: .now) < .seconds(30),
+           !(retryIncomplete && cached.result.needsRetry) {
             return cached.result
         }
         let result = try await Self.loadCodexNames(directory: directory)
@@ -162,32 +164,48 @@ public actor IndexCoordinator {
     }
 
     private func effectiveCodexNames(
-        for root: SourceRoot, in source: any SessionSource
+        for root: SourceRoot, in source: any SessionSource,
+        retryIncomplete: Bool = false
     ) async throws -> EffectiveCodexNames {
         guard let defaultRoot = source.roots.first(where: \.isDefault) ?? source.roots.first
         else {
             return .init(
-                names: [:], hasProvider: false, complete: true, warnings: []
+                names: [:], hasProvider: false, complete: true,
+                fillMissingOnly: false, warnings: []
             )
         }
         let defaultDirectory = Self.codexMetadataDirectory(for: defaultRoot)
         let localDirectory = Self.codexMetadataDirectory(for: root)
-        var directories = [defaultDirectory]
-        if localDirectory.standardizedFileURL.path != defaultDirectory.standardizedFileURL.path {
+        let defaultPath = defaultRoot.url.standardizedFileURL.path
+        let localPath = root.url.standardizedFileURL.path
+        let inheritsDefault = localPath == defaultPath
+            || localPath.hasPrefix(defaultPath + "/")
+        var directories = inheritsDefault ? [defaultDirectory] : []
+        if directories.isEmpty
+            || localDirectory.standardizedFileURL.path != defaultDirectory.standardizedFileURL.path {
             directories.append(localDirectory)
         }
 
         var names: [String: String] = [:]
         var foundProvider = false
         var complete = true
+        var fillMissingOnly = false
+        var localProvider = false
         var warnings: Set<String> = []
         for directory in directories {
             try Task.checkCancellation()
-            switch try await codexNames(directory: directory) {
-            case .loaded(let loaded, let providerComplete, let warning):
+            let isLocal = directory.standardizedFileURL.path
+                == localDirectory.standardizedFileURL.path
+            switch try await codexNames(
+                directory: directory, retryIncomplete: retryIncomplete
+            ) {
+            case .loaded(let loaded, let providerComplete, let databaseFailed, let warning):
                 foundProvider = true
-                names.merge(loaded) { _, local in local }
+                if isLocal { localProvider = true }
+                if names.isEmpty { names = loaded }
+                else { names.merge(loaded) { _, local in local } }
                 complete = complete && providerComplete
+                fillMissingOnly = fillMissingOnly || databaseFailed
                 if let warning {
                     warnings.insert("\(directory.path): \(warning)")
                 }
@@ -198,8 +216,13 @@ public actor IndexCoordinator {
                 warnings.insert("\(directory.path): \(warning)")
             }
         }
+        if inheritsDefault && localPath != defaultPath && !localProvider {
+            complete = false
+            fillMissingOnly = true
+        }
         return .init(
             names: names, hasProvider: foundProvider, complete: complete,
+            fillMissingOnly: fillMissingOnly,
             warnings: warnings.sorted()
         )
     }
@@ -320,8 +343,9 @@ public actor IndexCoordinator {
             var allFiles: [DiscoveredSourceFile] = []
             let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
             if oldScope != scope && !rebuild { status.activity = .scopeChange }
-            let refreshCodexNames = fullScan || satisfiesSafetyReconciliation || (paths ?? []).contains {
-                TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: $0))
+            let refreshCodexNames = fullScan || satisfiesSafetyReconciliation
+                || !reconciliationPaths.isEmpty || (paths ?? []).contains {
+                TraceFileIO.isCodexMetadataChangePath(URL(fileURLWithPath: $0))
             }
             if refreshCodexNames { codexNameCache.removeAll() }
             var missingSources: Set<MissingSourceFile> = []
@@ -508,7 +532,7 @@ public actor IndexCoordinator {
             status.totalFiles = allFiles.count
             for file in allFiles {
                 try Task.checkCancellation()
-                guard let source = source(for: file.agent),
+                guard let source = source(for: file),
                       let rootID = rootIDs["\(file.agent.rawValue):\(file.root.path)"] else { continue }
                 status.phase = .indexing
                 status.agent = file.agent
@@ -657,16 +681,21 @@ public actor IndexCoordinator {
                 }
                 updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
             }
+            if refreshCodexNames {
+                metadataWarnings.removeAll()
+                status.metadataWarning = nil
+            }
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots {
                     do {
                         let metadata = try await effectiveCodexNames(
-                            for: root, in: source
+                            for: root, in: source, retryIncomplete: true
                         )
                         recordMetadataWarnings(metadata.warnings)
                         if metadata.hasProvider {
-                            let policy: CodexNameUpdatePolicy = metadata.complete
-                                ? .replaceAll : .replaceMatches
+                            let policy: CodexNameUpdatePolicy = metadata.fillMissingOnly
+                                ? .fillMissing
+                                : (metadata.complete ? .replaceAll : .replaceMatches)
                             if try await database.updateCodexNames(
                                 metadata.names, root: root.url, policy: policy
                             ) {
@@ -1197,6 +1226,14 @@ public actor IndexCoordinator {
 
     private func source(for agent: AgentKind) -> (any SessionSource)? {
         sources.first { $0.agent == agent }
+    }
+
+    private func source(for file: DiscoveredSourceFile) -> (any SessionSource)? {
+        sources.first { source in
+            source.agent == file.agent && source.roots.contains {
+                $0.url.standardizedFileURL.path == file.root.standardizedFileURL.path
+            }
+        }
     }
 
     private func agent(for format: SourceFormat) -> AgentKind {

@@ -26,6 +26,7 @@ public struct DiscoveryFailure: Hashable, Sendable {
     public let path: String
     public let message: String
     public let kind: Kind
+    let requestedScope: SourceRootScope?
 
     public init(
         agent: AgentKind, root: URL, path: String, message: String,
@@ -36,8 +37,20 @@ public struct DiscoveryFailure: Hashable, Sendable {
         self.path = path
         self.message = message
         self.kind = kind
+        requestedScope = nil
     }
 
+    init(
+        agent: AgentKind, root: URL, path: String, message: String,
+        kind: Kind = .unreadable, requestedScope: SourceRootScope
+    ) {
+        self.agent = agent
+        self.root = root.standardized
+        self.path = path
+        self.message = message
+        self.kind = kind
+        self.requestedScope = requestedScope
+    }
 }
 
 struct NormalizedDiscoveryFailure: Sendable {
@@ -109,9 +122,16 @@ func normalizedDiscoveryFailures(
 ) -> [NormalizedDiscoveryFailure] {
     let context = capturedContext ?? root.mappingContext
     return deduplicatedNormalizedDiscoveryFailures(failures.compactMap { failure in
-        guard let scope = root.scope(
-            forRawPath: failure.path, in: context
-        ) else { return nil }
+        let mapped = root.scope(forRawPath: failure.path, in: context)
+        let scope: SourceRootScope?
+        if let requested = failure.requestedScope,
+           let mapped,
+           !requested.relativeScope.intersects(mapped.relativeScope) {
+            scope = requested
+        } else {
+            scope = mapped ?? failure.requestedScope
+        }
+        guard let scope else { return nil }
         return NormalizedDiscoveryFailure(failure: failure, scope: scope)
     })
 }
@@ -257,7 +277,7 @@ public extension SessionSource {
             catch {
                 failures.append(.init(
                     agent: agent, root: root.url, path: root.scanURL.path,
-                    message: error.localizedDescription
+                    message: error.localizedDescription, requestedScope: rootScope
                 ))
                 continue
             }
@@ -265,14 +285,15 @@ public extension SessionSource {
                 failures.append(.init(
                     agent: agent, root: root.url, path: root.scanURL.path,
                     message: "The configured source root is not currently available",
-                    kind: .missingRoot
+                    kind: .missingRoot, requestedScope: rootScope
                 ))
                 continue
             }
             guard rootItemType == .typeDirectory else {
                 failures.append(.init(
                     agent: agent, root: root.url, path: root.scanURL.path,
-                    message: "The configured source root is not a directory"
+                    message: "The configured source root is not a directory",
+                    requestedScope: rootScope
                 ))
                 continue
             }
@@ -284,7 +305,8 @@ public extension SessionSource {
                       mappedScope.relativeScope == start.scope.relativeScope else {
                     failures.append(.init(
                         agent: agent, root: root.url, path: rootScope.scanPath.path,
-                        message: "The configured source path changed while Trace was running"
+                        message: "The configured source path changed while Trace was running",
+                        requestedScope: rootScope
                     ))
                     continue
                 }
@@ -303,7 +325,7 @@ public extension SessionSource {
                 catch {
                     failures.append(.init(
                         agent: agent, root: root.url, path: start.url.path,
-                        message: error.localizedDescription
+                        message: error.localizedDescription, requestedScope: startScope
                     ))
                     continue
                 }
@@ -328,14 +350,15 @@ public extension SessionSource {
                     errorHandler: { url, error in
                         failures.append(.init(
                             agent: agent, root: root.url, path: url.path,
-                            message: error.localizedDescription
+                            message: error.localizedDescription, requestedScope: startScope
                         ))
                         return true
                     }
                 ) else {
                     failures.append(.init(
                         agent: agent, root: root.url, path: start.url.path,
-                        message: "the file-system enumerator could not be created"
+                        message: "the file-system enumerator could not be created",
+                        requestedScope: startScope
                     ))
                     continue
                 }

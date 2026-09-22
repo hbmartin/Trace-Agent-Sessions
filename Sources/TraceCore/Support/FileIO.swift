@@ -133,6 +133,16 @@ public enum TraceFileIO {
         return !generation.isEmpty && generation.allSatisfy(\.isNumber)
     }
 
+    public static func isCodexMetadataChangePath(_ url: URL) -> Bool {
+        if isCodexMetadataSidecar(url) { return true }
+        let name = url.lastPathComponent
+        guard name.hasSuffix(".sqlite-wal") else { return false }
+        let database = url.deletingLastPathComponent().appendingPathComponent(
+            String(name.dropLast("-wal".count))
+        )
+        return isCodexMetadataSidecar(database)
+    }
+
     public static func modificationMilliseconds(url: URL) -> Int64 {
         if let fingerprint = try? fingerprint(url: url) {
             return fingerprint.modificationNanoseconds / 1_000_000

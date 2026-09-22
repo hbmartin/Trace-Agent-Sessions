@@ -148,6 +148,110 @@ final class TraceUITests: XCTestCase {
         )
     }
 
+    func testRemovingRootAfterRecoveryReadDropsItsQueuedWork() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-settings"])
+        let additionalRoot = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additionalRoot, withIntermediateDirectories: true)
+        let encodedRoots = try JSONEncoder().encode([additionalRoot.path])
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(
+            decoding: encodedRoots, as: UTF8.self
+        )
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        let initialPass = directory.appendingPathComponent("initial-pass-complete")
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = initialPass.path
+        app.launch()
+        XCTAssertTrue(waitForFile(initialPass, timeout: 15))
+        app.terminate()
+
+        let database = directory.appendingPathComponent("index.sqlite")
+        let escaped = additionalRoot.path.replacingOccurrences(of: "'", with: "''")
+        let insert = Process()
+        insert.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        insert.arguments = [database.path, """
+            INSERT INTO source_scan_error(root_id, relative_scope, error, updated_at_ms)
+            SELECT id, '', 'old root failure', 0 FROM source_root
+            WHERE path='\(escaped)';
+            """]
+        try insert.run()
+        insert.waitUntilExit()
+        XCTAssertEqual(insert.terminationStatus, 0)
+        XCTAssertEqual(try sqliteInteger(database, sql: "SELECT count(*) FROM source_scan_error WHERE error='old root failure'"), 1)
+
+        let recoveryLoaded = directory.appendingPathComponent("recovery-loaded")
+        let activityAudit = directory.appendingPathComponent("startup-recovery-activity")
+        app.launchEnvironment["TRACE_TEST_RECOVERY_LOADED_DELAY_MS"] = "8000"
+        app.launchEnvironment["TRACE_TEST_RECOVERY_LOADED_PATH"] = recoveryLoaded.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activityAudit.path
+        app.launchEnvironment.removeValue(forKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
+        app.launch()
+        XCTAssertTrue(waitForFile(recoveryLoaded, timeout: 15))
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        let remove = app.buttons["removeAdditionalClaudeRoot-0"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.click()
+
+        let rootCount = pollSQLiteInteger(
+            database, sql: "SELECT count(*) FROM source_root WHERE path='\(escaped)'",
+            timeout: 15, until: { $0 == 0 }
+        )
+        XCTAssertNil(rootCount.error)
+        XCTAssertEqual(rootCount.value, 0)
+        XCTAssertEqual(try sqliteInteger(database, sql: "SELECT count(*) FROM source_scan_error WHERE error='old root failure'"), 0)
+        XCTAssertFalse(fileLines(in: activityAudit).contains("subtreeRecovery"),
+                       "removed-root recovery must not leak into startup indexing")
+    }
+
+    func testAddingEmptyRootDuringStartupKeepsCachedCostsVisible() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        func waitForCachedTokens(timeout: TimeInterval) -> Bool {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if !app.staticTexts["Estimated equivalent API spend"].exists {
+                    app.radioButtons["Costs"].click()
+                }
+                if app.staticTexts["10"].waitForExistence(timeout: 2) { return true }
+            }
+            return false
+        }
+        let usage: [String: Any] = [
+            "type": "assistant", "uuid": "cached-startup-cost", "sessionId": "cached-cost-session",
+            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
+            "message": ["id": "cached-startup-response", "model": "claude-sonnet-5",
+                        "content": "Cached cost", "usage": ["input_tokens": 10, "output_tokens": 2]],
+        ]
+        try (JSONSerialization.data(withJSONObject: usage) + Data([10])).write(
+            to: directory.appendingPathComponent("Sources/Claude/cached-cost.jsonl")
+        )
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launch()
+        XCTAssertTrue(app.radioButtons["Costs"].waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForCachedTokens(timeout: 20))
+        app.terminate()
+
+        let emptyRoot = directory.appendingPathComponent("EmptyAdditionalRoot")
+        try FileManager.default.createDirectory(at: emptyRoot, withIntermediateDirectories: true)
+        let finalizing = directory.appendingPathComponent("startup-finalizing")
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "8000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = finalizing.path
+        app.launchEnvironment["TRACE_TEST_PICK_CLAUDE_ROOT_PATH"] = emptyRoot.path
+        app.launch()
+        XCTAssertTrue(waitForFile(finalizing, timeout: 15))
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        app.buttons["Add Folder…"].click()
+        XCTAssertTrue(app.staticTexts["additionalClaudeRoot-0"].waitForExistence(timeout: 5))
+        let main = app.windows["Trace"]
+        XCTAssertTrue(main.waitForExistence(timeout: 5))
+        if main.exists { main.click() }
+        XCTAssertTrue(waitForCachedTokens(timeout: 25),
+                      "an empty root change must not prevent cached Costs from loading")
+    }
+
     func testPartialWatcherStartupFailureStillRunsInitialIndexing() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let codex = directory.appendingPathComponent("Sources/Codex")
