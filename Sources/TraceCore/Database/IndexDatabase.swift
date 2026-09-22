@@ -3,17 +3,11 @@ import GRDB
 
 public enum IndexDatabaseError: LocalizedError {
     case timestampCollisionLimit
-    case unsupportedStoredAgent(String)
-    case invalidStoredRecoveryScope(String)
 
     public var errorDescription: String? {
         switch self {
         case .timestampCollisionLimit:
             "More than 1,048,576 messages share one millisecond timestamp."
-        case .unsupportedStoredAgent(let agent):
-            "The index contains recovery work for unsupported agent \(agent)."
-        case .invalidStoredRecoveryScope(let scope):
-            "The index contains an invalid recovery scope: \(scope)"
         }
     }
 }
@@ -57,7 +51,6 @@ private struct StoredRootIdentity: Hashable {
 }
 
 private struct StoredRecoveryRow: Sendable {
-    let errorID: Int64
     let rootID: Int64
     let relativeScope: String
     let agent: String
@@ -66,8 +59,8 @@ private struct StoredRecoveryRow: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 12
-    public static let indexFormatVersion = 5
+    public static let schemaVersion = 13
+    public static let indexFormatVersion = 6
     private static let sourceStateSelection = """
         sf.*,
         (sf.last_error IS NOT NULL OR EXISTS (
@@ -359,7 +352,34 @@ public actor IndexDatabase {
                 DROP TABLE source_root;
                 ALTER TABLE source_root_v12 RENAME TO source_root;
 
-                CREATE TABLE source_file_v12 (
+                CREATE TABLE source_scan_error (
+                    id INTEGER PRIMARY KEY,
+                    root_id INTEGER NOT NULL REFERENCES source_root(id) ON DELETE CASCADE,
+                    relative_scope TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    UNIQUE(root_id, relative_scope)
+                );
+                UPDATE trace_meta SET value='12' WHERE key='schema_version';
+                """)
+        }
+        migrator.registerMigration("trace-v13-agent-source-identity") { db in
+            // source_file is derived cache data. Empty it before replacing the
+            // shipped UNIQUE(path) table so foreign-key cascades are deliberate.
+            try db.execute(sql: """
+                DELETE FROM message_fts;
+                DELETE FROM session_failure;
+                DELETE FROM message;
+                DELETE FROM usage_observation;
+                DELETE FROM session;
+                DELETE FROM adapter_health;
+                DELETE FROM usage_daily;
+                DELETE FROM source_file;
+                DELETE FROM project;
+                DELETE FROM fsevents_checkpoint;
+                UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty';
+
+                CREATE TABLE source_file_v13 (
                     id INTEGER PRIMARY KEY,
                     root_id INTEGER NOT NULL REFERENCES source_root(id) ON DELETE CASCADE,
                     agent TEXT NOT NULL,
@@ -381,32 +401,11 @@ public actor IndexDatabase {
                     is_placeholder INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(agent, path)
                 );
-                INSERT INTO source_file_v12(
-                    id, root_id, agent, format, path, dev, inode, size, mtime_ns,
-                    scanned_bytes, head_hash, head_length, adapter_version, last_error,
-                    metadata_revision, content_generation, content_session_id,
-                    metadata_session_id, is_placeholder
-                )
-                SELECT
-                    id, root_id, agent, format, path, dev, inode, size, mtime_ns,
-                    scanned_bytes, head_hash, head_length, adapter_version, last_error,
-                    metadata_revision, content_generation, content_session_id,
-                    metadata_session_id, is_placeholder
-                FROM source_file;
                 DROP TABLE source_file;
-                ALTER TABLE source_file_v12 RENAME TO source_file;
+                ALTER TABLE source_file_v13 RENAME TO source_file;
                 CREATE INDEX idx_source_inode ON source_file(dev, inode);
                 CREATE INDEX idx_source_error ON source_file(id) WHERE last_error IS NOT NULL;
-
-                CREATE TABLE source_scan_error (
-                    id INTEGER PRIMARY KEY,
-                    root_id INTEGER NOT NULL REFERENCES source_root(id) ON DELETE CASCADE,
-                    relative_scope TEXT NOT NULL,
-                    error TEXT NOT NULL,
-                    updated_at_ms INTEGER NOT NULL,
-                    UNIQUE(root_id, relative_scope)
-                );
-                UPDATE trace_meta SET value='12' WHERE key='schema_version';
+                UPDATE trace_meta SET value='13' WHERE key='schema_version';
                 """)
         }
         try migrator.migrate(pool)
@@ -530,6 +529,8 @@ public actor IndexDatabase {
                 StoredRootIdentity(agent: row["agent"], path: row["path"])
             })
             let removed = stored.compactMap { row -> Int64? in
+                let rawAgent: String = row["agent"]
+                guard AgentKind(rawValue: rawAgent) != nil else { return nil }
                 let identity = StoredRootIdentity(agent: row["agent"], path: row["path"])
                 return configured.contains(identity) ? nil : row["id"]
             }
@@ -1166,7 +1167,12 @@ public actor IndexDatabase {
             let id = try Int64.fetchOne(
                 db, sql: "SELECT id FROM source_file WHERE agent=? AND path=?",
                 arguments: [file.agent.rawValue, file.url.path]
-            )!
+            )
+            guard let id else {
+                throw SessionSourceError.malformedRecord(
+                    "could not persist source error for \(file.agent.rawValue):\(file.url.path)"
+                )
+            }
             try db.execute(
                 sql: "UPDATE source_file SET root_id=?, last_error=? WHERE id=?",
                 arguments: [rootID, error, id]
@@ -1198,28 +1204,32 @@ public actor IndexDatabase {
 
     public func unresolvedSourceFailureCounts() throws -> SourceFailureCounts {
         try pool.read { db in
-            let files = try Int.fetchOne(
-                db, sql: "SELECT count(*) FROM source_file WHERE last_error IS NOT NULL"
-            ) ?? 0
-            let discovery = try Int.fetchOne(
-                db, sql: "SELECT count(*) FROM source_scan_error"
-            ) ?? 0
+            let files = try String.fetchAll(
+                db, sql: "SELECT agent FROM source_file WHERE last_error IS NOT NULL"
+            ).count { AgentKind(rawValue: $0) != nil }
+            let discovery = try String.fetchAll(db, sql: """
+                SELECT r.agent FROM source_scan_error e
+                JOIN source_root r ON r.id=e.root_id
+                """).count { AgentKind(rawValue: $0) != nil }
             return .init(fileFailures: files, discoveryFailures: discovery)
         }
     }
 
     public func unresolvedRecoveryWork() throws -> IndexRecoveryWork {
         let snapshot = try pool.read { db -> (Set<String>, [StoredRecoveryRow]) in
-            let files = try Set(String.fetchAll(
-                db, sql: "SELECT path FROM source_file WHERE last_error IS NOT NULL"
-            ))
+            let files = try Set(Row.fetchAll(
+                db, sql: "SELECT agent, path FROM source_file WHERE last_error IS NOT NULL"
+            ).compactMap { row -> String? in
+                let rawAgent: String = row["agent"]
+                guard AgentKind(rawValue: rawAgent) != nil else { return nil }
+                return row["path"]
+            })
             let rows = try Row.fetchAll(db, sql: """
-                SELECT e.id, e.root_id, e.relative_scope, r.agent, r.path, r.is_default
+                SELECT e.root_id, e.relative_scope, r.agent, r.path, r.is_default
                 FROM source_scan_error e
                 JOIN source_root r ON r.id=e.root_id
                 """).map { row in
                 StoredRecoveryRow(
-                    errorID: row["id"],
                     rootID: row["root_id"], relativeScope: row["relative_scope"],
                     agent: row["agent"], rootPath: row["path"],
                     isDefault: row["is_default"]
@@ -1229,14 +1239,12 @@ public actor IndexDatabase {
         }
         var roots: [Int64: SourceRoot] = [:]
         var scopes: Set<String> = []
-        var invalidErrorIDs: [Int64] = []
         for row in snapshot.1 {
             let root: SourceRoot
             if let cached = roots[row.rootID] {
                 root = cached
             } else {
                 guard let agent = AgentKind(rawValue: row.agent) else {
-                    invalidErrorIDs.append(row.errorID)
                     continue
                 }
                 root = SourceRoot(
@@ -1246,19 +1254,12 @@ public actor IndexDatabase {
                 roots[row.rootID] = root
             }
             guard let scope = root.scope(forRelativePath: row.relativeScope) else {
-                invalidErrorIDs.append(row.errorID)
+                // A malformed row is recovered conservatively by scanning the
+                // whole known root. The successful replacement removes it.
+                scopes.insert(root.rootScope.scanPath.path)
                 continue
             }
             scopes.insert(scope.scanPath.path)
-        }
-        if !invalidErrorIDs.isEmpty {
-            try pool.write { db in
-                for errorID in invalidErrorIDs {
-                    try db.execute(
-                        sql: "DELETE FROM source_scan_error WHERE id=?", arguments: [errorID]
-                    )
-                }
-            }
         }
         return .init(filePaths: snapshot.0, reconciliationPaths: scopes)
     }

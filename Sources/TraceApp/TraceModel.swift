@@ -173,6 +173,8 @@ final class TraceModel: ObservableObject {
     private var watcherStartupPending = true
     private var startupReconciliationPaths: Set<String> = []
     private var startupActivity = IndexActivity.cachedLaunch
+    private var pendingStartupRecovery = IndexRecoveryWork()
+    private var pendingStartupRecoveryActivity: IndexActivity?
     private var watchedSourceRoots: [URL] = []
     private var watcherGeneration: UInt64 = 0
     private var safetyVerificationTask: Task<Void, Never>?
@@ -267,21 +269,17 @@ final class TraceModel: ObservableObject {
                     }
                     let recovery = try await database.unresolvedRecoveryWork()
                     if !recovery.isEmpty {
-                        await scheduler?.request(
-                            paths: recovery.filePaths,
-                            reconciliationPaths: recovery.reconciliationPaths,
-                            scope: settings.indexScope,
-                            activity: .subtreeRecovery
+                        pendingStartupRecovery = recovery
+                        pendingStartupRecoveryActivity = Self.recoveryActivity(
+                            for: recovery, sources: sources
                         )
                     }
                 } catch {
                     startupError = "Could not load pending index recovery; a safe root scan was queued: \(error.localizedDescription)"
-                    startupActivityObserver(.rootRecovery)
-                    await scheduler?.request(
+                    pendingStartupRecovery = .init(
                         reconciliationPaths: Set(sources.flatMap(\.roots).map { $0.scanURL.path }),
-                        scope: settings.indexScope,
-                        activity: .rootRecovery
                     )
+                    pendingStartupRecoveryActivity = .rootRecovery
                 }
                 timeZoneObserver = NotificationCenter.default.addObserver(
                     forName: Notification.Name.NSSystemTimeZoneDidChange,
@@ -602,14 +600,23 @@ final class TraceModel: ObservableObject {
             guard let self else { return }
             let buffered = self.bufferedSourceChanges
             self.bufferedSourceChanges = SourceChanges()
-            let activity = self.startupReconciliationPaths.isEmpty
+            let recovery = self.pendingStartupRecovery
+            let recoveryActivity = self.pendingStartupRecoveryActivity
+            self.pendingStartupRecovery = .init()
+            self.pendingStartupRecoveryActivity = nil
+            let baseActivity = self.startupReconciliationPaths.isEmpty
                 ? (buffered.paths.isEmpty && buffered.reconciliationPaths.isEmpty
                     ? self.startupActivity : self.activity(for: buffered))
                 : self.startupActivity
+            let activity = recoveryActivity.map {
+                IndexActivity.moreSignificant(baseActivity, $0)
+            } ?? baseActivity
             self.startupActivityObserver(activity)
             await scheduler.request(
-                paths: buffered.paths,
-                reconciliationPaths: self.startupReconciliationPaths.union(buffered.reconciliationPaths),
+                paths: buffered.paths.union(recovery.filePaths),
+                reconciliationPaths: self.startupReconciliationPaths
+                    .union(buffered.reconciliationPaths)
+                    .union(recovery.reconciliationPaths),
                 scope: self.settings.indexScope,
                 activity: activity,
                 watermarks: buffered.watermarks,
@@ -1402,6 +1409,18 @@ final class TraceModel: ObservableObject {
         guard !reconciliationPaths.isEmpty else { return .cachedLaunch }
         guard hasCachedIndex else { return .initialBuild }
         return forceRootReconciliation ? .rootRecovery : .launchReconciliation
+    }
+
+    private static func recoveryActivity(
+        for recovery: IndexRecoveryWork, sources: [any SessionSource]
+    ) -> IndexActivity {
+        let rootKeys = Set(sources.flatMap(\.roots).map {
+            TraceFileIO.canonicalPath($0.scanURL.path).comparisonKey
+        })
+        let includesRoot = recovery.reconciliationPaths.contains {
+            rootKeys.contains(TraceFileIO.canonicalPath($0).comparisonKey)
+        }
+        return includesRoot ? .rootRecovery : .subtreeRecovery
     }
 
     private func submitSourceChanges(_ changes: SourceChanges) async {

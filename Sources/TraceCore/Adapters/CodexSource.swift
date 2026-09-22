@@ -8,6 +8,12 @@ public struct CodexSource: SessionSource {
         roots = [SourceRoot(agent: .codex, url: root)]
     }
 
+    init(roots: [URL]) {
+        self.roots = SourceRoot.deduplicated(roots.enumerated().map { index, url in
+            SourceRoot(agent: .codex, url: url, isDefault: index == 0)
+        })
+    }
+
     public func discover() throws -> [DiscoveredSourceFile] {
         try discoverFiles(extensions: ["jsonl"]) { url in
             url.lastPathComponent.hasPrefix("rollout-") ? .codexJSONL : nil
