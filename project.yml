@@ -1,6 +1,7 @@
 name: Trace
 options:
   minimumXcodeGenVersion: 2.46.0
+  postGenCommand: python3 Scripts/normalize-trace-scheme.py
   deploymentTarget:
     macOS: "15.0"
   xcodeVersion: "26.3"

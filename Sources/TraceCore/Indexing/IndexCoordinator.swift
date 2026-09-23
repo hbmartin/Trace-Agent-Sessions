@@ -96,7 +96,7 @@ public struct IndexProgress: Sendable {
             || update.unresolvedDiscoveryFailures > 0
             || previous.unresolvedDiscoveryFailures > 0
             || update.metadataWarning != nil || previous.metadataWarning != nil
-            || update.rollupError != nil
+            || update.rollupError != nil || previous.rollupError != nil
     }
 }
 

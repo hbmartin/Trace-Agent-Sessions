@@ -359,6 +359,72 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertNotNil(recorder.terminal?.metadataWarning)
     }
 
+    func testPartialCodexMetadataUpdatesLegacyTitleAndRecordsProvenance() async throws {
+        let root = try directory()
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try write([
+            ["type": "session_meta", "payload": ["id": "legacy-name", "cwd": "/tmp/codex"]],
+            ["type": "response_item", "payload": [
+                "type": "message", "role": "user",
+                "content": [["type": "input_text", "text": "Fallback request"]],
+            ]],
+        ], to: sessions.appendingPathComponent("rollout-legacy-name.jsonl"))
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try write([["id": "legacy-name", "thread_name": "Original name"]], to: sidecar)
+        let databaseURL = root.appendingPathComponent("trace.sqlite")
+        let database = try IndexDatabase(url: databaseURL)
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: databaseURL.path)
+        try await raw.write { db in
+            try db.execute(sql: """
+                UPDATE session SET codex_name_origin=NULL, codex_applied_name=NULL
+                WHERE external_id='legacy-name'
+                """)
+        }
+
+        try write([["id": "legacy-name", "thread_name": "Updated name"]], to: sidecar)
+        try Data("not a database".utf8).write(to: root.appendingPathComponent("state_99.sqlite"))
+        let result = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertNotNil(result.metadataWarning)
+        let stored = try await raw.read { db -> (String?, String?, String?) in
+            let row = try XCTUnwrap(Row.fetchOne(db, sql: """
+                SELECT generated_title, codex_name_origin, codex_applied_name
+                FROM session WHERE external_id='legacy-name'
+                """))
+            return (row["generated_title"], row["codex_name_origin"], row["codex_applied_name"])
+        }
+        let indexOrigin = root.standardizedFileURL.path + "#session-index"
+        XCTAssertEqual(stored.0, "Updated name")
+        XCTAssertEqual(stored.1, indexOrigin)
+        XCTAssertEqual(stored.2, "Updated name")
+
+        try await raw.write { db in
+            try db.execute(sql: """
+                UPDATE session SET generated_title='Legacy inherited',
+                    codex_name_origin=NULL, codex_applied_name=NULL
+                WHERE external_id='legacy-name'
+                """)
+        }
+        let changed = try await database.updateCodexNames(
+            ["legacy-name": CodexName(value: "Inherited change", origin: indexOrigin)],
+            root: sessions, policy: .partial,
+            inheritedFillOnlyOrigins: [indexOrigin]
+        )
+        XCTAssertFalse(changed)
+        let preserved = try await raw.read { db -> (String?, String?, String?) in
+            let row = try XCTUnwrap(Row.fetchOne(db, sql: """
+                SELECT generated_title, codex_name_origin, codex_applied_name
+                FROM session WHERE external_id='legacy-name'
+                """))
+            return (row["generated_title"], row["codex_name_origin"], row["codex_applied_name"])
+        }
+        XCTAssertEqual(preserved.0, "Legacy inherited")
+        XCTAssertNil(preserved.1)
+        XCTAssertNil(preserved.2)
+    }
+
     func testCodexRootLocalMetadataOverridesDefaultAndSecondSidecarRefreshes() async throws {
         let parent = try directory()
         let defaultHome = parent.appendingPathComponent("default")

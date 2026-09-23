@@ -1727,15 +1727,16 @@ public actor IndexDatabase {
             case .partial:
                 guard let candidate else { return nil }
                 if existing != nil {
+                    let legacyUnownedTitle = origin == nil && applied == nil
                     let trustedHigherPriorityName = candidate.origin.hasSuffix("#state-name")
                         && origin != nil
                     let trustedLocalOverride = localOriginPrefix.map { prefix in
                         candidate.origin.hasPrefix(prefix)
                             && origin.map { !$0.hasPrefix(prefix) } == true
                     } ?? false
-                    guard (origin == candidate.origin || trustedHigherPriorityName
-                           || trustedLocalOverride),
-                          applied == existing,
+                    guard (legacyUnownedTitle || origin == candidate.origin
+                           || trustedHigherPriorityName || trustedLocalOverride),
+                          (legacyUnownedTitle || applied == existing),
                           !inheritedFillOnlyOrigins.contains(candidate.origin) else { return nil }
                 }
             case .complete:

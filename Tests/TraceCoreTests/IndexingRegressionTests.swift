@@ -3514,6 +3514,19 @@ final class IndexingRegressionTests: XCTestCase {
         ))
     }
 
+    func testShortCleanIncrementalTerminalClearsDisplayedRollupError() {
+        var previous = IndexProgress(phase: .complete)
+        previous.rollupError = "Token totals unavailable"
+        var clean = IndexProgress(phase: .complete)
+        clean.incremental = true
+        XCTAssertTrue(IndexProgress.shouldPublishIncrementalTerminal(
+            clean, after: previous, wasVisible: false
+        ))
+        XCTAssertFalse(IndexProgress.shouldPublishIncrementalTerminal(
+            clean, after: IndexProgress(phase: .complete), wasVisible: false
+        ))
+    }
+
     func testCanonicalPathResolvesNestedMissingPathThroughSymlinkedAncestor() throws {
         let root = try directory()
         let real = root.appendingPathComponent("real")
