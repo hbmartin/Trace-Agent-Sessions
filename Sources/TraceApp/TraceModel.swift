@@ -285,8 +285,23 @@ final class TraceModel: ObservableObject {
                         recoveryLoadError = error
                     }
                     guard revision == sourceConfigurationRevision else { continue }
+                    if let delay = TraceTestHooks.delayMilliseconds(
+                        for: "TRACE_TEST_FAILURE_COUNTS_HOLD_MS", cappedAt: 30_000,
+                        marker: .touch(pathKey: "TRACE_TEST_FAILURE_COUNTS_STARTED_PATH")
+                    ) {
+                        try await TraceTestHooks.waitForRelease(
+                            pathKey: "TRACE_TEST_FAILURE_COUNTS_RELEASE_PATH",
+                            timeoutMilliseconds: delay
+                        )
+                    }
+                    let counts = try? await database.unresolvedSourceFailureCounts()
+                    guard revision == sourceConfigurationRevision else { continue }
                     sources = latestSources
                     configuredRevision = revision
+                    if let counts {
+                        progress.unresolvedFailedFiles = counts.fileFailures
+                        progress.unresolvedDiscoveryFailures = counts.discoveryFailures
+                    }
                     if let recoveryLoadError {
                         startupError = "Could not load pending index recovery; a safe root scan was queued: \(recoveryLoadError.localizedDescription)"
                         pendingStartupRecovery = .init(
@@ -298,10 +313,6 @@ final class TraceModel: ObservableObject {
                         pendingStartupRecovery = recovery
                     }
                     break
-                }
-                if let counts = try? await database.unresolvedSourceFailureCounts() {
-                    progress.unresolvedFailedFiles = counts.fileFailures
-                    progress.unresolvedDiscoveryFailures = counts.discoveryFailures
                 }
                 let coordinator = IndexCoordinator(database: database, sources: sources)
                 self.coordinator = coordinator
@@ -328,10 +339,13 @@ final class TraceModel: ObservableObject {
                 await reloadSummaries(loadCosts: false)
                 await loadCachedUsageAtStartup()
                 if let delay = TraceTestHooks.delayMilliseconds(
-                    for: "TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS", cappedAt: 10_000,
+                    for: "TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS", cappedAt: 30_000,
                     marker: .touch(pathKey: "TRACE_TEST_STARTUP_FINALIZATION_PATH")
                 ) {
-                    try await Task.sleep(for: .milliseconds(delay))
+                    try await TraceTestHooks.waitForRelease(
+                        pathKey: "TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH",
+                        timeoutMilliseconds: delay
+                    )
                 }
                 guard configuredRevision == sourceConfigurationRevision else { return }
                 startupSetupComplete = true
@@ -418,12 +432,9 @@ final class TraceModel: ObservableObject {
                 incrementalProgressTask = nil
                 pendingIncrementalProgress = nil
                 if !disposition.supersededTerminal,
-                   incrementalProgressVisible || update.phase == .failed || update.failedFiles > 0
-                    || progress.phase == .failed || progress.failedFiles > 0
-                    || update.unresolvedFailedFiles > 0 || progress.unresolvedFailedFiles > 0
-                    || update.unresolvedDiscoveryFailures > 0
-                    || progress.unresolvedDiscoveryFailures > 0
-                    || update.metadataWarning != nil || update.rollupError != nil {
+                   IndexProgress.shouldPublishIncrementalTerminal(
+                    update, after: progress, wasVisible: incrementalProgressVisible
+                   ) {
                     progress = update
                 }
                 incrementalProgressVisible = false

@@ -47,8 +47,8 @@ struct IndexedSourcePath: Sendable {
 
 enum CodexNameUpdatePolicy: Equatable, Sendable {
     case fillMissing
-    case replaceMatches
-    case replaceAll
+    case partial
+    case complete
 }
 
 private struct StoredRootIdentity: Hashable {
@@ -65,7 +65,12 @@ private struct StoredRecoveryRow: Sendable {
 }
 
 public actor IndexDatabase {
-    public static let schemaVersion = 16
+    private var codexNameWriteTransactionCount = 0
+
+    func codexNameWriteTransactionCountForTesting() -> Int {
+        codexNameWriteTransactionCount
+    }
+    public static let schemaVersion = 17
     public static let indexFormatVersion = 6
     private static let sourceStateSelection = """
         sf.*,
@@ -418,7 +423,7 @@ public actor IndexDatabase {
                 UPDATE trace_meta SET value='13' WHERE key='schema_version';
                 """)
         }
-        migrator.registerMigration("trace-v14-supported-agent-rollups") { db in
+        migrator.registerMigration("trace-v14-supported-agent-rollups", foreignKeyChecks: .immediate) { db in
             try db.execute(sql: """
                 DELETE FROM usage_daily;
                 UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty';
@@ -433,8 +438,22 @@ public actor IndexDatabase {
             try db.execute(sql: "UPDATE trace_meta SET value='15' WHERE key='schema_version'")
         }
         migrator.registerMigration("trace-v16-temporary-supported-agent-view", foreignKeyChecks: .immediate) { db in
-            try db.execute(sql: "DROP VIEW main.supported_agent")
             try db.execute(sql: "UPDATE trace_meta SET value='16' WHERE key='schema_version'")
+        }
+        migrator.registerMigration("trace-v17-codex-name-provenance", foreignKeyChecks: .immediate) { db in
+            // A locally applied early v16 may have removed the stored view.
+            let rows = AgentKind.allCases.map {
+                "SELECT '\($0.rawValue.replacingOccurrences(of: "'", with: "''"))' AS agent"
+            }.joined(separator: " UNION ALL ")
+            try db.execute(sql: "CREATE VIEW IF NOT EXISTS main.supported_agent(agent) AS \(rows)")
+            let columns = try Set(db.columns(in: "session").map(\.name))
+            if !columns.contains("codex_name_origin") {
+                try db.execute(sql: "ALTER TABLE session ADD COLUMN codex_name_origin TEXT")
+            }
+            if !columns.contains("codex_applied_name") {
+                try db.execute(sql: "ALTER TABLE session ADD COLUMN codex_applied_name TEXT")
+            }
+            try db.execute(sql: "UPDATE trace_meta SET value='17' WHERE key='schema_version'")
         }
         try migrator.migrate(pool)
     }
@@ -1681,30 +1700,66 @@ public actor IndexDatabase {
     }
 
     func updateCodexNames(
-        _ names: [String: String], root: URL,
-        sourceID: Int64? = nil, policy: CodexNameUpdatePolicy = .replaceAll
+        _ names: [String: CodexName], root: URL,
+        sourceID: Int64? = nil, policy: CodexNameUpdatePolicy = .complete,
+        inheritedFillOnlyOrigins: Set<String> = [],
+        localOriginPrefix: String? = nil
     ) throws -> Bool {
-        try pool.write { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT s.id, s.external_id, s.generated_title FROM session s
+        let rows = try pool.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT s.id, s.external_id, s.generated_title,
+                       s.codex_name_origin, s.codex_applied_name FROM session s
                 JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN source_root sr ON sr.id=sf.root_id
                 WHERE s.agent=? AND sr.path=? AND (? IS NULL OR sf.id=?)
                 """, arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path, sourceID, sourceID])
+        }
+        let updates: [(Int64, String?, String?, String?, CodexName?)] = rows.compactMap { row in
+            let id: Int64 = row["id"]
+            let externalID: String = row["external_id"]
+            let existing: String? = row["generated_title"]
+            let origin: String? = row["codex_name_origin"]
+            let applied: String? = row["codex_applied_name"]
+            let candidate = names[externalID]
+            switch policy {
+            case .fillMissing:
+                guard existing == nil, candidate != nil else { return nil }
+            case .partial:
+                guard let candidate else { return nil }
+                if existing != nil {
+                    let trustedHigherPriorityName = candidate.origin.hasSuffix("#state-name")
+                        && origin != nil
+                    let trustedLocalOverride = localOriginPrefix.map { prefix in
+                        candidate.origin.hasPrefix(prefix)
+                            && origin.map { !$0.hasPrefix(prefix) } == true
+                    } ?? false
+                    guard (origin == candidate.origin || trustedHigherPriorityName
+                           || trustedLocalOverride),
+                          applied == existing,
+                          !inheritedFillOnlyOrigins.contains(candidate.origin) else { return nil }
+                }
+            case .complete:
+                break
+            }
+            guard existing != candidate?.value || origin != candidate?.origin
+                || applied != candidate?.value else { return nil }
+            return (id, existing, origin, applied, candidate)
+        }
+        guard !updates.isEmpty else { return false }
+        codexNameWriteTransactionCount += 1
+        return try pool.write { db in
             var changed = false
-            for row in rows {
-                let externalID: String = row["external_id"]
-                let id: Int64 = row["id"]
-                let existing: String? = row["generated_title"]
-                if policy == .fillMissing && existing != nil { continue }
-                let title = names[externalID]
-                if policy != .replaceAll && title == nil { continue }
-                if title == existing { continue }
+            for (id, existing, origin, applied, candidate) in updates {
                 try db.execute(
-                    sql: "UPDATE session SET generated_title=? WHERE id=?",
-                    arguments: [title, id]
+                    sql: """
+                        UPDATE session SET generated_title=?, codex_name_origin=?, codex_applied_name=?
+                        WHERE id=? AND generated_title IS ? AND codex_name_origin IS ?
+                            AND codex_applied_name IS ?
+                        """,
+                    arguments: [candidate?.value, candidate?.origin, candidate?.value,
+                                id, existing, origin, applied]
                 )
-                changed = true
+                changed = changed || db.changesCount > 0
             }
             return changed
         }

@@ -36,6 +36,26 @@ public enum TraceTestHooks {
         return maximum.map { min(delay, $0) } ?? delay
     }
 
+    public static func waitForRelease(
+        pathKey: String, timeoutMilliseconds: Int
+    ) async throws {
+        guard isUITesting, let path = environment[pathKey] else {
+            try await Task.sleep(for: .milliseconds(timeoutMilliseconds))
+            return
+        }
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(timeoutMilliseconds))
+        while !FileManager.default.fileExists(atPath: path) {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else {
+                throw NSError(
+                    domain: "TraceTestHooks", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for \(pathKey)"]
+                )
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
     public static func touch(pathKey: String) {
         guard isUITesting, let path = environment[pathKey] else { return }
         try? Data().write(to: URL(fileURLWithPath: path))
