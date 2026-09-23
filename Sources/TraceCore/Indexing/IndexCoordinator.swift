@@ -95,8 +95,8 @@ public struct IndexProgress: Sendable {
             || update.unresolvedFailedFiles > 0 || previous.unresolvedFailedFiles > 0
             || update.unresolvedDiscoveryFailures > 0
             || previous.unresolvedDiscoveryFailures > 0
-            || update.metadataWarning != nil || previous.metadataWarning != nil
-            || update.rollupError != nil
+            || update.metadataWarning != previous.metadataWarning
+            || update.rollupError != nil || previous.rollupError != nil
     }
 }
 
@@ -150,12 +150,27 @@ public actor IndexCoordinator {
     private struct EffectiveCodexNames {
         let names: [String: CodexName]
         let complete: Bool
-        let inheritedFillOnlyOrigins: Set<String>
-        let localOriginPrefix: String?
+        let fillOnlyOrigins: Set<CodexNameOrigin>
+        let localOriginDirectory: String?
         let warnings: [String]
     }
     private var codexNameCache: [String: CodexNameCacheEntry] = [:]
     private var codexNameLoadCounts: [String: Int] = [:]
+    private var codexWarningsByRoot: [String: Set<String>] = [:]
+
+    private func codexWarningMessage() -> String? {
+        let warnings = Set(codexWarningsByRoot.values.flatMap { $0 })
+        guard !warnings.isEmpty else { return nil }
+        return "Codex title lookup: " + warnings.sorted().joined(separator: "; ")
+    }
+
+    private func replaceCodexWarnings(
+        _ warnings: [String], for rootID: String, in status: inout IndexProgress
+    ) {
+        if warnings.isEmpty { codexWarningsByRoot.removeValue(forKey: rootID) }
+        else { codexWarningsByRoot[rootID] = Set(warnings) }
+        status.metadataWarning = codexWarningMessage()
+    }
 
     func codexNameLoadCountForTesting(directory: URL) -> Int {
         codexNameLoadCounts[directory.standardizedFileURL.path, default: 0]
@@ -188,9 +203,12 @@ public actor IndexCoordinator {
         else { return [] }
         let defaultDirectory = Self.codexMetadataDirectory(for: defaultRoot)
         let localDirectory = Self.codexMetadataDirectory(for: root)
-        var directories = defaultRoot.scanPath.contains(root.scanPath)
-            ? [defaultDirectory] : []
-        if !directories.contains(where: {
+        let configuredNested = root.url.path == defaultRoot.url.path
+            || root.url.path.hasPrefix(defaultRoot.url.path + "/")
+        let resolvedNested = defaultRoot.scanPath.contains(root.scanPath)
+        let aliasIntoDefault = resolvedNested && !configuredNested && root.hasSymlinkedComponent
+        var directories = configuredNested || resolvedNested ? [defaultDirectory] : []
+        if !aliasIntoDefault && !directories.contains(where: {
             $0.standardizedFileURL.path == localDirectory.standardizedFileURL.path
         }) {
             directories.append(localDirectory)
@@ -205,8 +223,8 @@ public actor IndexCoordinator {
         guard let defaultRoot = source.roots.first(where: \.isDefault) ?? source.roots.first
         else {
             return .init(
-                names: [:], complete: true, inheritedFillOnlyOrigins: [],
-                localOriginPrefix: nil, warnings: []
+                names: [:], complete: false, fillOnlyOrigins: [],
+                localOriginDirectory: nil, warnings: []
             )
         }
         let localDirectory = Self.codexMetadataDirectory(for: root)
@@ -216,7 +234,8 @@ public actor IndexCoordinator {
         var names: [String: CodexName] = [:]
         var complete = true
         var localIncomplete = false
-        var defaultOrigins: Set<String> = []
+        var defaultOrigins: Set<CodexNameOrigin> = []
+        var fillOnlyOrigins: Set<CodexNameOrigin> = []
         var warnings: Set<String> = []
         for directory in directories {
             try Task.checkCancellation()
@@ -230,11 +249,15 @@ public actor IndexCoordinator {
                 if !isLocal { defaultOrigins.formUnion(loaded.names.values.map(\.origin)) }
                 names.merge(loaded.names) { _, local in local }
                 complete = complete && loaded.complete
+                fillOnlyOrigins.formUnion(loaded.fillOnlyOrigins)
                 if let warning = loaded.warning {
                     warnings.insert("\(directory.path): \(warning)")
                 }
             case .absent:
                 break
+            case .missingDirectory:
+                complete = false
+                if isLocal && !isDefaultRoot { localIncomplete = true }
             case .unavailable(let warning):
                 complete = false
                 if isLocal && !isDefaultRoot { localIncomplete = true }
@@ -243,8 +266,8 @@ public actor IndexCoordinator {
         }
         return .init(
             names: names, complete: complete,
-            inheritedFillOnlyOrigins: localIncomplete ? defaultOrigins : [],
-            localOriginPrefix: localDirectory.standardizedFileURL.path + "#",
+            fillOnlyOrigins: fillOnlyOrigins.union(localIncomplete ? defaultOrigins : []),
+            localOriginDirectory: localDirectory.standardizedFileURL.path,
             warnings: warnings.sorted()
         )
     }
@@ -328,16 +351,10 @@ public actor IndexCoordinator {
         var status = IndexProgress(phase: .discovering)
         status.activity = activity
         status.incremental = activity == .fileChanges
+        status.metadataWarning = codexWarningMessage()
         let mutations = PassMutationTracker()
         var firstDiscoveryError: String?
         var firstFileError: String?
-        var metadataWarnings: Set<String> = []
-        func recordMetadataWarnings(_ warnings: [String]) {
-            guard !warnings.isEmpty else { return }
-            metadataWarnings.formUnion(warnings)
-            status.metadataWarning = "Codex title lookup: "
-                + metadataWarnings.sorted().joined(separator: "; ")
-        }
         if let counts = try? await database.unresolvedSourceFailureCounts() {
             status.unresolvedFailedFiles = counts.fileFailures
             status.unresolvedDiscoveryFailures = counts.discoveryFailures
@@ -374,7 +391,6 @@ public actor IndexCoordinator {
                     url.deletingLastPathComponent().path
                 ).comparisonKey
             })
-            let reconciledScopes = reconciliationPaths.map(TraceFileIO.canonicalPath)
             var codexRefreshRoots: Set<String> = []
             var invalidatedMetadataDirectories: Set<String> = []
             for source in sources where source.agent == .codex {
@@ -385,7 +401,11 @@ public actor IndexCoordinator {
                             TraceFileIO.canonicalPath($0.path).comparisonKey
                         )
                     }
-                    let reconciled = reconciledScopes.contains { $0.intersects(root.scanPath) }
+                    let reconciled = reconciliationPaths.contains {
+                        root.reconciliationScope(
+                            forRawPath: $0, in: mappingContexts[root.id] ?? root.mappingContext
+                        ) != nil
+                    }
                     guard fullScan || satisfiesSafetyReconciliation || reconciled
                         || !changed.isEmpty else { continue }
                     codexRefreshRoots.insert(root.id)
@@ -632,6 +652,7 @@ public actor IndexCoordinator {
                     )
                 }
                 if shouldRefreshMissingCodexTitle {
+                    var checkedWarnings: [String] = []
                     do {
                         if let state = try await database.sourceState(
                             agent: file.agent, path: file.url.path
@@ -641,7 +662,8 @@ public actor IndexCoordinator {
                                 let metadata = try await effectiveCodexNames(
                                     for: root, in: source
                                 )
-                                recordMetadataWarnings(metadata.warnings)
+                                checkedWarnings = metadata.warnings
+                                replaceCodexWarnings(checkedWarnings, for: root.id, in: &status)
                                 if !metadata.names.isEmpty {
                                     if try await database.updateCodexNames(
                                         metadata.names, root: file.root, sourceID: state.id,
@@ -654,7 +676,10 @@ public actor IndexCoordinator {
                         }
                     } catch is CancellationError { throw CancellationError() }
                     catch {
-                        recordMetadataWarnings([error.localizedDescription])
+                        replaceCodexWarnings(
+                            checkedWarnings + [error.localizedDescription],
+                            for: rootKey, in: &status
+                        )
                     }
                 }
                 status.completedFiles += 1
@@ -729,28 +754,33 @@ public actor IndexCoordinator {
                 }
                 updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
             }
-            if refreshCodexNames {
-                metadataWarnings.removeAll()
-                status.metadataWarning = nil
-            }
             for source in sources where source.agent == .codex && refreshCodexNames {
                 for root in source.roots where codexRefreshRoots.contains(root.id) {
+                    var checkedWarnings: [String] = []
                     do {
                         let metadata = try await effectiveCodexNames(
                             for: root, in: source, retryIncomplete: true
                         )
-                        recordMetadataWarnings(metadata.warnings)
+                        checkedWarnings = metadata.warnings
+                        replaceCodexWarnings(checkedWarnings, for: root.id, in: &status)
+                        let rootIsMissing = attemptsByRootID[rootIDs[root.id] ?? -1]?.failures.contains {
+                            $0.failure.kind == .missingRoot && $0.relativeScope.isRoot
+                        } == true
+                        guard !rootIsMissing else { continue }
                         if try await database.updateCodexNames(
                             metadata.names, root: root.url,
                             policy: metadata.complete ? .complete : .partial,
-                            inheritedFillOnlyOrigins: metadata.inheritedFillOnlyOrigins,
-                            localOriginPrefix: metadata.localOriginPrefix
+                            fillOnlyOrigins: metadata.fillOnlyOrigins,
+                            localOriginDirectory: metadata.localOriginDirectory
                         ) {
                             await mutations.markChanged()
                         }
                     } catch is CancellationError { throw CancellationError() }
                     catch {
-                        recordMetadataWarnings([error.localizedDescription])
+                        replaceCodexWarnings(
+                            checkedWarnings + [error.localizedDescription],
+                            for: root.id, in: &status
+                        )
                     }
                 }
             }

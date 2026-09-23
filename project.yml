@@ -1,6 +1,7 @@
 name: Trace
 options:
   minimumXcodeGenVersion: 2.46.0
+  postGenCommand: python3 Scripts/normalize-trace-scheme.py
   deploymentTarget:
     macOS: "15.0"
   xcodeVersion: "26.3"
@@ -85,6 +86,32 @@ targets:
     dependencies:
       - target: TraceCore
       - target: GRDBCustom/GRDBCustom
+
+  CodexRefreshBenchmark:
+    type: tool
+    platform: macOS
+    sources:
+      - Tests/Benchmarks/CodexRefreshBenchmark.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.CodexRefreshBenchmark
+        GENERATE_INFOPLIST_FILE: true
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path"
+    dependencies:
+      - target: TraceCore
+      - target: GRDBCustom/GRDBCustom
+
+  TraceExternalClientFixture:
+    type: framework
+    platform: macOS
+    sources:
+      - Tests/ExternalClientFixture/DiscoveryClient.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.ExternalClientFixture
+        GENERATE_INFOPLIST_FILE: true
+    dependencies:
+      - target: TraceCore
 
   TraceCoreTests:
     type: bundle.unit-test
@@ -172,6 +199,24 @@ schemes:
           settingsTarget: TraceBench
     run:
       config: Release
+  CodexRefreshBenchmark:
+    build:
+      targets:
+        CodexRefreshBenchmark: all
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: CodexRefreshBenchmark
+    run:
+      config: Release
+  TraceExternalClientFixture:
+    build:
+      targets:
+        TraceExternalClientFixture: all
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: TraceExternalClientFixture
 
   TracePerformance:
     build:

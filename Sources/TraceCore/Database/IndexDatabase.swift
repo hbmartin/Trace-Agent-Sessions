@@ -1702,23 +1702,30 @@ public actor IndexDatabase {
     func updateCodexNames(
         _ names: [String: CodexName], root: URL,
         sourceID: Int64? = nil, policy: CodexNameUpdatePolicy = .complete,
-        inheritedFillOnlyOrigins: Set<String> = [],
-        localOriginPrefix: String? = nil
+        fillOnlyOrigins: Set<CodexNameOrigin> = [],
+        localOriginDirectory: String? = nil
     ) throws -> Bool {
         let rows = try pool.read { db in
-            try Row.fetchAll(db, sql: """
+            let fields = """
                 SELECT s.id, s.external_id, s.generated_title,
                        s.codex_name_origin, s.codex_applied_name FROM session s
                 JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN source_root sr ON sr.id=sf.root_id
-                WHERE s.agent=? AND sr.path=? AND (? IS NULL OR sf.id=?)
-                """, arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path, sourceID, sourceID])
+                """
+            if let sourceID {
+                return try Row.fetchAll(db, sql: fields + " WHERE s.source_file_id=? AND s.agent=? AND sr.path=?",
+                                        arguments: [sourceID, AgentKind.codex.rawValue,
+                                                    root.standardizedFileURL.path])
+            }
+            return try Row.fetchAll(db, sql: fields + " WHERE s.agent=? AND sr.path=?",
+                                    arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path])
         }
         let updates: [(Int64, String?, String?, String?, CodexName?)] = rows.compactMap { row in
             let id: Int64 = row["id"]
             let externalID: String = row["external_id"]
             let existing: String? = row["generated_title"]
             let origin: String? = row["codex_name_origin"]
+            let parsedOrigin = origin.flatMap(CodexNameOrigin.init(storedValue:))
             let applied: String? = row["codex_applied_name"]
             let candidate = names[externalID]
             switch policy {
@@ -1727,21 +1734,26 @@ public actor IndexDatabase {
             case .partial:
                 guard let candidate else { return nil }
                 if existing != nil {
-                    let trustedHigherPriorityName = candidate.origin.hasSuffix("#state-name")
+                    let legacyUnownedTitle = origin == nil && applied == nil
+                    let trustedHigherPriorityName = candidate.origin.provider == .stateName
                         && origin != nil
-                    let trustedLocalOverride = localOriginPrefix.map { prefix in
-                        candidate.origin.hasPrefix(prefix)
-                            && origin.map { !$0.hasPrefix(prefix) } == true
+                    let trustedLocalOverride = localOriginDirectory.map { directory in
+                        candidate.origin.directoryPath == directory
+                            && origin != nil && parsedOrigin?.directoryPath != directory
                     } ?? false
-                    guard (origin == candidate.origin || trustedHigherPriorityName
-                           || trustedLocalOverride),
-                          applied == existing,
-                          !inheritedFillOnlyOrigins.contains(candidate.origin) else { return nil }
+                    let recoveredIndexTitle = candidate.origin.provider == .sessionIndex
+                        && parsedOrigin?.provider == .stateTitle
+                        && parsedOrigin?.directoryPath == candidate.origin.directoryPath
+                    guard !fillOnlyOrigins.contains(candidate.origin),
+                          (legacyUnownedTitle || parsedOrigin == candidate.origin
+                           || trustedHigherPriorityName || trustedLocalOverride
+                           || recoveredIndexTitle),
+                          (legacyUnownedTitle || applied == existing) else { return nil }
                 }
             case .complete:
                 break
             }
-            guard existing != candidate?.value || origin != candidate?.origin
+            guard existing != candidate?.value || origin != candidate?.origin.storedValue
                 || applied != candidate?.value else { return nil }
             return (id, existing, origin, applied, candidate)
         }
@@ -1756,7 +1768,7 @@ public actor IndexDatabase {
                         WHERE id=? AND generated_title IS ? AND codex_name_origin IS ?
                             AND codex_applied_name IS ?
                         """,
-                    arguments: [candidate?.value, candidate?.origin, candidate?.value,
+                    arguments: [candidate?.value, candidate?.origin.storedValue, candidate?.value,
                                 id, existing, origin, applied]
                 )
                 changed = changed || db.changesCount > 0

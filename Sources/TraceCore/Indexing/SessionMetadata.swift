@@ -204,34 +204,61 @@ enum SessionMetadataReader {
     }
 }
 
-/// Source-specific sidecars are optional. Never open the agent's database for writing.
+struct CodexNameOrigin: Hashable, Sendable {
+    enum Provider: String, CaseIterable, Sendable {
+        case sessionIndex = "session-index"
+        case stateName = "state-name"
+        case stateTitle = "state-title"
+    }
+
+    let directoryPath: String
+    let provider: Provider
+
+    init(directory: URL, provider: Provider) {
+        directoryPath = directory.standardizedFileURL.path
+        self.provider = provider
+    }
+
+    init?(storedValue: String) {
+        guard let provider = Provider.allCases.first(where: {
+            storedValue.hasSuffix("#" + $0.rawValue)
+        }) else { return nil }
+        directoryPath = String(storedValue.dropLast(provider.rawValue.count + 1))
+        self.provider = provider
+    }
+
+    var storedValue: String { directoryPath + "#" + provider.rawValue }
+}
+
 struct CodexName: Equatable, Sendable {
     let value: String
     /// The directory and provider that supplied this value, stable across passes.
-    let origin: String
+    let origin: CodexNameOrigin
 }
 
 struct CodexLoadedNames: Sendable {
     let names: [String: CodexName]
     let complete: Bool
-    let databaseFailed: Bool
+    let fillOnlyOrigins: Set<CodexNameOrigin>
     let warning: String?
 }
 
 enum CodexSessionNamesLoadResult: Sendable {
     case loaded(CodexLoadedNames)
     case absent
+    case missingDirectory
     case unavailable(String)
 
     var needsRetry: Bool {
         switch self {
         case .loaded(let result): !result.complete
-        case .unavailable: true
+        case .missingDirectory, .unavailable: true
         case .absent: false
         }
     }
 }
 
+/// Source-specific sidecars are optional. Never open the agent's database for writing.
 enum CodexSessionNames {
     static func load(directory: URL) throws -> CodexSessionNamesLoadResult {
         try Task.checkCancellation()
@@ -246,7 +273,7 @@ enum CodexSessionNames {
                 && fileError.code == CocoaError.Code.fileReadNoSuchFile.rawValue)
                 || (fileError.domain == NSPOSIXErrorDomain
                     && fileError.code == Int(ENOENT))
-            if isMissing { return .absent }
+            if isMissing { return .missingDirectory }
             return .unavailable(error.localizedDescription)
         }
         let sessionIndex = directory.appendingPathComponent("session_index.jsonl")
@@ -270,6 +297,7 @@ enum CodexSessionNames {
 
         var indexed: [String: (String, String)] = [:]
         var warnings: [String] = []
+        var indexReadFailed = false
         if hasSessionIndex {
             do {
                 let cursor = try JSONLineCursor(url: sessionIndex, from: 0)
@@ -289,12 +317,13 @@ enum CodexSessionNames {
             } catch {
                 try Task.checkCancellation()
                 indexed.removeAll()
+                indexReadFailed = true
                 warnings.append("session_index.jsonl: \(error.localizedDescription)")
             }
         }
-        let indexOrigin = directory.standardizedFileURL.path + "#session-index"
-        let databaseNameOrigin = directory.standardizedFileURL.path + "#state-name"
-        let databaseTitleOrigin = directory.standardizedFileURL.path + "#state-title"
+        let indexOrigin = CodexNameOrigin(directory: directory, provider: .sessionIndex)
+        let databaseNameOrigin = CodexNameOrigin(directory: directory, provider: .stateName)
+        let databaseTitleOrigin = CodexNameOrigin(directory: directory, provider: .stateTitle)
         var names = indexed.mapValues { CodexName(value: $0.0, origin: indexOrigin) }
         guard let newestDatabase = databases.first else {
             try Task.checkCancellation()
@@ -302,7 +331,7 @@ enum CodexSessionNames {
                 return .unavailable(warnings.joined(separator: "; "))
             }
             return .loaded(.init(names: names, complete: warnings.isEmpty,
-                                 databaseFailed: false,
+                                 fillOnlyOrigins: [],
                                  warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")))
         }
 
@@ -331,9 +360,9 @@ enum CodexSessionNames {
                 let title: String? = row.hasColumn("title") ? row["title"] : nil
                 if let value = SessionMetadataReader.nonempty(name) {
                     names[id] = CodexName(value: value, origin: databaseNameOrigin)
-                } else if names[id] == nil, warnings.isEmpty,
+                } else if names[id] == nil,
                           let value = SessionMetadataReader.nonempty(title) {
-                    // A failed index may contain a higher-priority thread name.
+                    // If the index could not be read, this title may only fill an empty row.
                     names[id] = CodexName(value: value, origin: databaseTitleOrigin)
                 }
             }
@@ -344,14 +373,14 @@ enum CodexSessionNames {
             warnings.append("\(newestDatabase.lastPathComponent): \(error.localizedDescription)")
             if !names.isEmpty {
                 return .loaded(.init(names: names, complete: false,
-                                     databaseFailed: true,
+                                     fillOnlyOrigins: indexReadFailed ? [databaseTitleOrigin] : [],
                                      warning: warnings.joined(separator: "; ")))
             }
             return .unavailable(warnings.joined(separator: "; "))
         }
         try Task.checkCancellation()
         return .loaded(.init(names: names, complete: warnings.isEmpty,
-                             databaseFailed: false,
+                             fillOnlyOrigins: indexReadFailed ? [databaseTitleOrigin] : [],
                              warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")))
     }
 }

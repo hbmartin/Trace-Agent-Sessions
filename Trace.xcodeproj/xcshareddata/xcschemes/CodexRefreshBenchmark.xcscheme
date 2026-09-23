@@ -4,7 +4,8 @@
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
-      buildImplicitDependencies = "YES">
+      buildImplicitDependencies = "YES"
+      runPostActionsOnFailure = "NO">
       <PreActions>
          <ExecutionAction
             ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
@@ -14,9 +15,9 @@
                <EnvironmentBuildable>
                   <BuildableReference
                      BuildableIdentifier = "primary"
-                     BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
-                     BuildableName = "Trace.app"
-                     BlueprintName = "Trace"
+                     BlueprintIdentifier = "C33360324C5C7B5256B1E698"
+                     BuildableName = "CodexRefreshBenchmark"
+                     BlueprintName = "CodexRefreshBenchmark"
                      ReferencedContainer = "container:Trace.xcodeproj">
                   </BuildableReference>
                </EnvironmentBuildable>
@@ -32,37 +33,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
-               BuildableName = "Trace.app"
-               BlueprintName = "Trace"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "73D79764B2E675471C86DD9A"
-               BuildableName = "TraceCoreTests.xctest"
-               BlueprintName = "TraceCoreTests"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B18F9DC35F50099154E66D93"
-               BuildableName = "TraceUITests.xctest"
-               BlueprintName = "TraceUITests"
+               BlueprintIdentifier = "C33360324C5C7B5256B1E698"
+               BuildableName = "CodexRefreshBenchmark"
+               BlueprintName = "CodexRefreshBenchmark"
                ReferencedContainer = "container:Trace.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -73,43 +46,21 @@
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
-      codeCoverageEnabled = "YES">
+      onlyGenerateCoverageForSpecifiedTargets = "NO">
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
-            BuildableName = "Trace.app"
-            BlueprintName = "Trace"
+            BlueprintIdentifier = "C33360324C5C7B5256B1E698"
+            BuildableName = "CodexRefreshBenchmark"
+            BlueprintName = "CodexRefreshBenchmark"
             ReferencedContainer = "container:Trace.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "YES"
-            testExecutionOrdering = "random">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "73D79764B2E675471C86DD9A"
-               BuildableName = "TraceCoreTests.xctest"
-               BlueprintName = "TraceCoreTests"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B18F9DC35F50099154E66D93"
-               BuildableName = "TraceUITests.xctest"
-               BlueprintName = "TraceUITests"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
-      buildConfiguration = "Debug"
+      buildConfiguration = "Release"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       launchStyle = "0"
@@ -122,12 +73,14 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
-            BuildableName = "Trace.app"
-            BlueprintName = "Trace"
+            BlueprintIdentifier = "C33360324C5C7B5256B1E698"
+            BuildableName = "CodexRefreshBenchmark"
+            BlueprintName = "CodexRefreshBenchmark"
             ReferencedContainer = "container:Trace.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -139,9 +92,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F18F3A38FB256F6B823CA3EF"
-            BuildableName = "Trace.app"
-            BlueprintName = "Trace"
+            BlueprintIdentifier = "C33360324C5C7B5256B1E698"
+            BuildableName = "CodexRefreshBenchmark"
+            BlueprintName = "CodexRefreshBenchmark"
             ReferencedContainer = "container:Trace.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

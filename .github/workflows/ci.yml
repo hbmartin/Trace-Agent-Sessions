@@ -46,3 +46,7 @@ jobs:
           -configuration Release
           -destination 'platform=macOS,arch=arm64'
           CODE_SIGNING_ALLOWED=NO
+      - name: Compile external client and refresh benchmark
+        run: |
+          xcodebuild build -project Trace.xcodeproj -scheme TraceExternalClientFixture -configuration Debug -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO
+          xcodebuild build -project Trace.xcodeproj -scheme CodexRefreshBenchmark -configuration Release -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO

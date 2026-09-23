@@ -3501,9 +3501,27 @@ final class IndexingRegressionTests: XCTestCase {
         )
     }
 
-    func testShortCleanIncrementalTerminalClearsDisplayedMetadataWarning() {
+    func testShortIncrementalTerminalPublishesOnlyChangedMetadataWarning() {
         var previous = IndexProgress(phase: .complete)
         previous.metadataWarning = "Codex title lookup: temporary failure"
+        var clean = IndexProgress(phase: .complete)
+        clean.incremental = true
+        XCTAssertTrue(IndexProgress.shouldPublishIncrementalTerminal(
+            clean, after: previous, wasVisible: false
+        ))
+        var unchanged = clean
+        unchanged.metadataWarning = previous.metadataWarning
+        XCTAssertFalse(IndexProgress.shouldPublishIncrementalTerminal(
+            unchanged, after: previous, wasVisible: false
+        ))
+        XCTAssertFalse(IndexProgress.shouldPublishIncrementalTerminal(
+            clean, after: IndexProgress(phase: .complete), wasVisible: false
+        ))
+    }
+
+    func testShortCleanIncrementalTerminalClearsDisplayedRollupError() {
+        var previous = IndexProgress(phase: .complete)
+        previous.rollupError = "Token totals unavailable"
         var clean = IndexProgress(phase: .complete)
         clean.incremental = true
         XCTAssertTrue(IndexProgress.shouldPublishIncrementalTerminal(
