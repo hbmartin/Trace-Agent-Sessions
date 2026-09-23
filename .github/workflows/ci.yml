@@ -19,6 +19,8 @@ jobs:
         run: Scripts/configure-grdb.sh
       - name: Verify generated project
         run: Scripts/check-project-drift.sh
+      - name: Check Debug and Release signing settings
+        run: Scripts/check-signing-settings.sh
       - name: Audit first-party network surface
         run: Scripts/check-network-surface.sh
       - name: Build and run core tests

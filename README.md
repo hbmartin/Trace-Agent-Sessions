@@ -169,11 +169,18 @@ git submodule update --init --recursive
 Scripts/configure-grdb.sh
 xcodegen generate
 xcodebuild -project Trace.xcodeproj -scheme Trace -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO build
+  -destination 'platform=macOS,arch=arm64' build
 ```
 
+For a signed local build, copy `Config/Signing.xcconfig.example` to the ignored
+`Config/Signing.xcconfig` and set `DEVELOPMENT_TEAM = MGPHJKUJSY`. Open the
+generated project in Xcode, select the `Trace` scheme and **My Mac**, then Run.
+Debug signing includes `get-task-allow` so Xcode can attach to Trace while the
+hardened runtime stays enabled. `CODE_SIGNING_ALLOWED=NO` is useful for compile
+checks but produces an app that cannot be debugged this way.
+
 The generated `Trace.xcodeproj` is committed. CI regenerates it and rejects
-drift from `project.yml`.
+drift from `project.yml`; CI also checks the Debug and Release signing settings.
 
 ### Test
 
@@ -219,6 +226,7 @@ transcript text.
 
 ### Release
 
-`Scripts/release.sh` builds an Apple-silicon archive, signs it with Developer
-ID, creates a DMG, notarizes, staples, and verifies it. Configure a signing team
-in `Config/Signing.xcconfig` and a `notarytool` keychain profile first.
+`Scripts/release.sh` builds an Apple-silicon archive, exports a Developer ID
+signed app, creates a DMG, notarizes, staples, and verifies it. Configure team
+`MGPHJKUJSY` in `Config/Signing.xcconfig`, install its Developer ID Application
+certificate, and create a `notarytool` keychain profile first.
