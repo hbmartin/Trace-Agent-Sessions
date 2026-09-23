@@ -205,14 +205,27 @@ enum SessionMetadataReader {
 }
 
 /// Source-specific sidecars are optional. Never open the agent's database for writing.
+struct CodexName: Equatable, Sendable {
+    let value: String
+    /// The directory and provider that supplied this value, stable across passes.
+    let origin: String
+}
+
+struct CodexLoadedNames: Sendable {
+    let names: [String: CodexName]
+    let complete: Bool
+    let databaseFailed: Bool
+    let warning: String?
+}
+
 enum CodexSessionNamesLoadResult: Sendable {
-    case loaded([String: String], complete: Bool, databaseFailed: Bool, warning: String?)
+    case loaded(CodexLoadedNames)
     case absent
     case unavailable(String)
 
     var needsRetry: Bool {
         switch self {
-        case .loaded(_, let complete, _, _): !complete
+        case .loaded(let result): !result.complete
         case .unavailable: true
         case .absent: false
         }
@@ -279,16 +292,18 @@ enum CodexSessionNames {
                 warnings.append("session_index.jsonl: \(error.localizedDescription)")
             }
         }
-        var names = indexed.mapValues { $0.0 }
+        let indexOrigin = directory.standardizedFileURL.path + "#session-index"
+        let databaseNameOrigin = directory.standardizedFileURL.path + "#state-name"
+        let databaseTitleOrigin = directory.standardizedFileURL.path + "#state-title"
+        var names = indexed.mapValues { CodexName(value: $0.0, origin: indexOrigin) }
         guard let newestDatabase = databases.first else {
             try Task.checkCancellation()
             if !warnings.isEmpty && names.isEmpty {
                 return .unavailable(warnings.joined(separator: "; "))
             }
-            return .loaded(
-                names, complete: warnings.isEmpty, databaseFailed: false,
-                warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")
-            )
+            return .loaded(.init(names: names, complete: warnings.isEmpty,
+                                 databaseFailed: false,
+                                 warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")))
         }
 
         try Task.checkCancellation()
@@ -314,9 +329,13 @@ enum CodexSessionNames {
                 guard let id: String = row["id"] else { continue }
                 let name: String? = row.hasColumn("name") ? row["name"] : nil
                 let title: String? = row.hasColumn("title") ? row["title"] : nil
-                names[id] = SessionMetadataReader.nonempty(name)
-                    ?? names[id]
-                    ?? SessionMetadataReader.nonempty(title)
+                if let value = SessionMetadataReader.nonempty(name) {
+                    names[id] = CodexName(value: value, origin: databaseNameOrigin)
+                } else if names[id] == nil, warnings.isEmpty,
+                          let value = SessionMetadataReader.nonempty(title) {
+                    // A failed index may contain a higher-priority thread name.
+                    names[id] = CodexName(value: value, origin: databaseTitleOrigin)
+                }
             }
         } catch is CancellationError {
             throw CancellationError()
@@ -324,17 +343,15 @@ enum CodexSessionNames {
             try Task.checkCancellation()
             warnings.append("\(newestDatabase.lastPathComponent): \(error.localizedDescription)")
             if !names.isEmpty {
-                return .loaded(
-                    names, complete: false, databaseFailed: true,
-                    warning: warnings.joined(separator: "; ")
-                )
+                return .loaded(.init(names: names, complete: false,
+                                     databaseFailed: true,
+                                     warning: warnings.joined(separator: "; ")))
             }
             return .unavailable(warnings.joined(separator: "; "))
         }
         try Task.checkCancellation()
-        return .loaded(
-            names, complete: warnings.isEmpty, databaseFailed: false,
-            warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")
-        )
+        return .loaded(.init(names: names, complete: warnings.isEmpty,
+                             databaseFailed: false,
+                             warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")))
     }
 }

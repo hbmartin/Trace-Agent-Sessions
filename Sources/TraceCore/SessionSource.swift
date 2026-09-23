@@ -26,17 +26,19 @@ public struct DiscoveryFailure: Hashable, Sendable {
     public let path: String
     public let message: String
     public let kind: Kind
+    public let requestedScopePath: String?
     let requestedScope: SourceRootScope?
 
     public init(
         agent: AgentKind, root: URL, path: String, message: String,
-        kind: Kind = .unreadable
+        kind: Kind = .unreadable, requestedScopePath: String? = nil
     ) {
         self.agent = agent
         self.root = root.standardized
         self.path = path
         self.message = message
         self.kind = kind
+        self.requestedScopePath = requestedScopePath
         requestedScope = nil
     }
 
@@ -49,6 +51,7 @@ public struct DiscoveryFailure: Hashable, Sendable {
         self.path = path
         self.message = message
         self.kind = kind
+        self.requestedScopePath = requestedScope.scanPath.path
         self.requestedScope = requestedScope
     }
 }
@@ -124,12 +127,14 @@ func normalizedDiscoveryFailures(
     return deduplicatedNormalizedDiscoveryFailures(failures.compactMap { failure in
         let mapped = root.scope(forRawPath: failure.path, in: context)
         let scope: SourceRootScope?
-        if let requested = failure.requestedScope,
+        let requested = failure.requestedScope
+            ?? failure.requestedScopePath.flatMap { root.scope(forRawPath: $0, in: context) }
+        if let requested,
            let mapped,
            !requested.relativeScope.intersects(mapped.relativeScope) {
             scope = requested
         } else {
-            scope = mapped ?? failure.requestedScope
+            scope = mapped ?? requested
         }
         guard let scope else { return nil }
         return NormalizedDiscoveryFailure(failure: failure, scope: scope)

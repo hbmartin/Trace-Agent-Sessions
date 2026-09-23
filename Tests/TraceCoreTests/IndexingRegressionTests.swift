@@ -854,6 +854,7 @@ final class IndexingRegressionTests: XCTestCase {
                 sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v15-supported-agent-view'"
             )
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
             try db.execute(sql: "DROP VIEW IF EXISTS supported_agent")
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
@@ -864,7 +865,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "16")
+        XCTAssertEqual(schema, "17")
     }
 
     func testV13MigratesShippedV12SourceIdentityAndResetsDerivedContent() async throws {
@@ -929,6 +930,8 @@ final class IndexingRegressionTests: XCTestCase {
                     WHERE identifier='trace-v15-supported-agent-view';
                     DELETE FROM grdb_migrations
                     WHERE identifier='trace-v16-temporary-supported-agent-view';
+                    DELETE FROM grdb_migrations
+                    WHERE identifier='trace-v17-codex-name-provenance';
                     DROP VIEW IF EXISTS supported_agent;
                     UPDATE trace_meta SET value='5' WHERE key='index_format_version';
                     UPDATE trace_meta SET value='12' WHERE key='schema_version';
@@ -956,7 +959,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "16")
+        XCTAssertEqual(schema, "17")
         let migratedSchema = try await raw.read { db in
             let sourceFileSQL = try String.fetchOne(
                 db, sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name='source_file'"
@@ -1021,6 +1024,8 @@ final class IndexingRegressionTests: XCTestCase {
                 WHERE identifier='trace-v15-supported-agent-view';
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v16-temporary-supported-agent-view';
+                DELETE FROM grdb_migrations
+                WHERE identifier='trace-v17-codex-name-provenance';
                 DROP VIEW IF EXISTS supported_agent;
                 UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty';
                 UPDATE trace_meta SET value='13' WHERE key='schema_version';
@@ -1048,7 +1053,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertNotNil(state)
         XCTAssertEqual(migrationState.0, 0)
         XCTAssertEqual(migrationState.1, "1")
-        XCTAssertEqual(migrationState.2, "16")
+        XCTAssertEqual(migrationState.2, "17")
     }
 
     func testV15AndV16ReplaceSupportedAgentViewWithoutResettingContent() async throws {
@@ -1074,6 +1079,8 @@ final class IndexingRegressionTests: XCTestCase {
                 WHERE identifier='trace-v15-supported-agent-view';
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v16-temporary-supported-agent-view';
+                DELETE FROM grdb_migrations
+                WHERE identifier='trace-v17-codex-name-provenance';
                 UPDATE trace_meta SET value='14' WHERE key='schema_version';
                 """)
         }
@@ -1094,12 +1101,36 @@ final class IndexingRegressionTests: XCTestCase {
         }
 
         XCTAssertFalse(migrated.contentWasResetOnOpen)
-        XCTAssertNil(migratedState.0)
-        XCTAssertEqual(migratedState.1, "16")
+        XCTAssertEqual(migratedState.0, "supported_agent")
+        XCTAssertEqual(migratedState.1, "17")
         XCTAssertEqual(migratedState.2.0, originalIDs.0)
         XCTAssertEqual(migratedState.2.1, originalIDs.1)
+        let legacyAgents = try await raw.read {
+            try String.fetchAll($0, sql: "SELECT agent FROM main.supported_agent")
+        }
+        XCTAssertTrue(legacyAgents.contains(AgentKind.claudeCode.rawValue))
         let statistics = try await migrated.statistics()
         XCTAssertEqual(statistics.messageCount, 1)
+    }
+
+    func testV17RestoresStoredViewForAlreadyAppliedEarlyV16() async throws {
+        let root = try directory()
+        let url = root.appendingPathComponent("index.sqlite")
+        _ = try IndexDatabase(url: url)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "DROP VIEW main.supported_agent")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
+            try db.execute(sql: "UPDATE trace_meta SET value='16' WHERE key='schema_version'")
+        }
+        _ = try IndexDatabase(url: url)
+        let recovered = try await raw.read { db in
+            let agent = try String.fetchOne(db, sql: "SELECT agent FROM main.supported_agent LIMIT 1")
+            let schema = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
+            return (agent, schema)
+        }
+        XCTAssertNotNil(recovered.0)
+        XCTAssertEqual(recovered.1, "17")
     }
 
     func testV16ReplacesStaleV15AgentListOnExistingDatabase() async throws {
@@ -1118,8 +1149,10 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "UPDATE source_root SET agent='codex'")
             try db.execute(sql: "UPDATE source_file SET agent='codex'")
             try db.execute(sql: "UPDATE session SET agent='codex'")
+            try db.execute(sql: "DROP VIEW supported_agent")
             try db.execute(sql: "CREATE VIEW supported_agent(agent) AS SELECT 'claude_code'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
             try db.execute(sql: "UPDATE trace_meta SET value='15' WHERE key='schema_version'")
             return (sessionID, messageID)
         }
@@ -1139,8 +1172,8 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(statistics.sessionCount, 1)
         XCTAssertEqual(sessions.first?.agent, .codex)
         XCTAssertEqual(search.results.count, 1)
-        XCTAssertNil(persisted.0)
-        XCTAssertEqual(persisted.1, "16")
+        XCTAssertEqual(persisted.0, "supported_agent")
+        XCTAssertEqual(persisted.1, "17")
         XCTAssertEqual(persisted.2, originalIDs.0)
         XCTAssertEqual(persisted.3, originalIDs.1)
     }
@@ -1156,8 +1189,10 @@ final class IndexingRegressionTests: XCTestCase {
                 try db.execute(sql: """
                     INSERT INTO source_scan_error(root_id, relative_scope, error, updated_at_ms)
                     VALUES (987654321, 'orphan', 'external tool', 0);
+                    DROP VIEW IF EXISTS supported_agent;
                     DELETE FROM grdb_migrations WHERE identifier='trace-v15-supported-agent-view';
                     DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view';
+                    DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance';
                     UPDATE trace_meta SET value='14' WHERE key='schema_version';
                     """)
                 return .commit
@@ -1173,7 +1208,7 @@ final class IndexingRegressionTests: XCTestCase {
                 try Int.fetchOne(db, sql: "SELECT count(*) FROM source_scan_error WHERE root_id=987654321")
             )
         }
-        XCTAssertEqual(persisted.0, "16")
+        XCTAssertEqual(persisted.0, "17")
         XCTAssertEqual(persisted.1, 1)
     }
 
@@ -2946,7 +2981,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(health.first?.error, "claude failure")
         XCTAssertEqual(counts.discoveryFailures, 1)
         XCTAssertEqual(counts.fileFailures, 0)
-        XCTAssertNil(storedView)
+        XCTAssertEqual(storedView, "supported_agent")
         XCTAssertEqual(unknownCounts.0, 1)
         XCTAssertEqual(unknownCounts.1, 1)
         XCTAssertEqual(unknownCounts.2, 1)
@@ -3466,6 +3501,19 @@ final class IndexingRegressionTests: XCTestCase {
         )
     }
 
+    func testShortCleanIncrementalTerminalClearsDisplayedMetadataWarning() {
+        var previous = IndexProgress(phase: .complete)
+        previous.metadataWarning = "Codex title lookup: temporary failure"
+        var clean = IndexProgress(phase: .complete)
+        clean.incremental = true
+        XCTAssertTrue(IndexProgress.shouldPublishIncrementalTerminal(
+            clean, after: previous, wasVisible: false
+        ))
+        XCTAssertFalse(IndexProgress.shouldPublishIncrementalTerminal(
+            clean, after: IndexProgress(phase: .complete), wasVisible: false
+        ))
+    }
+
     func testCanonicalPathResolvesNestedMissingPathThroughSymlinkedAncestor() throws {
         let root = try directory()
         let real = root.appendingPathComponent("real")
@@ -3952,17 +4000,10 @@ private struct MultiScopeFailureSource: SessionSource {
             )
         }
         return .init(failures: failures.map { failure in
-            if let requestedScopePath = failure.requestedScopePath,
-               let scope = roots[0].scope(forRawPath: requestedScopePath) {
-                return .init(
-                    agent: agent, root: roots[0].url, path: failure.path,
-                    message: failure.message, kind: failure.kind,
-                    requestedScope: scope
-                )
-            }
             return .init(
                 agent: agent, root: roots[0].url, path: failure.path,
-                message: failure.message, kind: failure.kind
+                message: failure.message, kind: failure.kind,
+                requestedScopePath: failure.requestedScopePath
             )
         })
     }

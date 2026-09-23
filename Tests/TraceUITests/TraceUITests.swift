@@ -148,6 +148,46 @@ final class TraceUITests: XCTestCase {
         )
     }
 
+    func testSourceRemovalDuringFailureCountLoadStillStartsIndexing() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-settings"])
+        let additionalRoot = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additionalRoot, withIntermediateDirectories: true)
+        let encodedRoots = try JSONEncoder().encode([additionalRoot.path])
+        let countsStarted = directory.appendingPathComponent("failure-counts-started")
+        let releaseCounts = directory.appendingPathComponent("release-failure-counts")
+        let passCompleted = directory.appendingPathComponent("index-pass-completed")
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(
+            decoding: encodedRoots, as: UTF8.self
+        )
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_STARTED_PATH"] = countsStarted.path
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_RELEASE_PATH"] = releaseCounts.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = passCompleted.path
+        app.launch()
+
+        XCTAssertTrue(waitForFile(countsStarted, timeout: 15))
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        let remove = app.buttons["removeAdditionalClaudeRoot-0"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.click()
+        try Data().write(to: releaseCounts)
+
+        XCTAssertTrue(waitForFile(passCompleted, timeout: 25),
+                      "startup indexing must still run after the source revision changes")
+        let escaped = additionalRoot.path.replacingOccurrences(of: "'", with: "''")
+        let persisted = pollSQLiteInteger(
+            directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT count(*) FROM source_root WHERE path='\(escaped)'",
+            timeout: 10, until: { $0 == 0 }
+        )
+        XCTAssertNil(persisted.error)
+        XCTAssertEqual(persisted.value, 0)
+    }
+
     func testRemovingRootAfterRecoveryReadDropsItsQueuedWork() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-settings"])
         let additionalRoot = directory.appendingPathComponent("AdditionalClaude")
@@ -180,10 +220,11 @@ final class TraceUITests: XCTestCase {
 
         let recoveryLoaded = directory.appendingPathComponent("recovery-loaded")
         let activityAudit = directory.appendingPathComponent("startup-recovery-activity")
+        let startupPass = directory.appendingPathComponent("recovery-startup-pass-completed")
         app.launchEnvironment["TRACE_TEST_RECOVERY_LOADED_DELAY_MS"] = "8000"
         app.launchEnvironment["TRACE_TEST_RECOVERY_LOADED_PATH"] = recoveryLoaded.path
         app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activityAudit.path
-        app.launchEnvironment.removeValue(forKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = startupPass.path
         app.launch()
         XCTAssertTrue(waitForFile(recoveryLoaded, timeout: 15))
         let settings = app.windows["Trace Settings"]
@@ -200,6 +241,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertNil(rootCount.error)
         XCTAssertEqual(rootCount.value, 0)
         XCTAssertEqual(try sqliteInteger(database, sql: "SELECT count(*) FROM source_scan_error WHERE error='old root failure'"), 0)
+        XCTAssertTrue(waitForFile(startupPass, timeout: 20),
+                      "startup indexing must settle after the root is removed")
         XCTAssertFalse(fileLines(in: activityAudit).contains("subtreeRecovery"),
                        "removed-root recovery must not leak into startup indexing")
     }
@@ -218,7 +261,8 @@ final class TraceUITests: XCTestCase {
         }
         let usage: [String: Any] = [
             "type": "assistant", "uuid": "cached-startup-cost", "sessionId": "cached-cost-session",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
+            "cwd": "/tmp/TraceUIExample",
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
             "message": ["id": "cached-startup-response", "model": "claude-sonnet-5",
                         "content": "Cached cost", "usage": ["input_tokens": 10, "output_tokens": 2]],
         ]
@@ -235,8 +279,10 @@ final class TraceUITests: XCTestCase {
         let emptyRoot = directory.appendingPathComponent("EmptyAdditionalRoot")
         try FileManager.default.createDirectory(at: emptyRoot, withIntermediateDirectories: true)
         let finalizing = directory.appendingPathComponent("startup-finalizing")
-        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "8000"
+        let releaseFinalization = directory.appendingPathComponent("release-startup-finalization")
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "30000"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = finalizing.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = releaseFinalization.path
         app.launchEnvironment["TRACE_TEST_PICK_CLAUDE_ROOT_PATH"] = emptyRoot.path
         app.launch()
         XCTAssertTrue(waitForFile(finalizing, timeout: 15))
@@ -245,6 +291,7 @@ final class TraceUITests: XCTestCase {
         app.descendants(matching: .any)["Sources"].firstMatch.click()
         app.buttons["Add Folder…"].click()
         XCTAssertTrue(app.staticTexts["additionalClaudeRoot-0"].waitForExistence(timeout: 5))
+        try Data().write(to: releaseFinalization)
         let main = app.windows["Trace"]
         XCTAssertTrue(main.waitForExistence(timeout: 5))
         if main.exists { main.click() }
