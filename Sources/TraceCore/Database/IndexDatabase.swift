@@ -1717,12 +1717,30 @@ public actor IndexDatabase {
         }
     }
 
+    struct CodexNameUpdateResult: Sendable {
+        let changed: Bool
+        let deferredLegacyCount: Int
+    }
+
     func updateCodexNames(
         _ names: [String: CodexName], root: URL,
         sourceID: Int64? = nil, policy: CodexNameUpdatePolicy = .complete,
         fillOnlyOrigins: Set<CodexNameOrigin> = [],
         localOriginDirectory: String? = nil
     ) throws -> Bool {
+        try updateCodexNamesResult(
+            names, root: root, sourceID: sourceID, policy: policy,
+            fillOnlyOrigins: fillOnlyOrigins,
+            localOriginDirectory: localOriginDirectory
+        ).changed
+    }
+
+    func updateCodexNamesResult(
+        _ names: [String: CodexName], root: URL,
+        sourceID: Int64? = nil, policy: CodexNameUpdatePolicy = .complete,
+        fillOnlyOrigins: Set<CodexNameOrigin> = [],
+        localOriginDirectory: String? = nil
+    ) throws -> CodexNameUpdateResult {
         let rows = try pool.read { db in
             let fields = """
                 SELECT s.id, s.external_id, s.generated_title,
@@ -1738,6 +1756,7 @@ public actor IndexDatabase {
             return try Row.fetchAll(db, sql: fields + " WHERE s.agent=? AND sr.path=?",
                                     arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path])
         }
+        var deferredLegacyCount = 0
         let updates: [(Int64, String?, String?, String?, CodexName?)] = rows.compactMap { row in
             let id: Int64 = row["id"]
             let externalID: String = row["external_id"]
@@ -1754,7 +1773,12 @@ public actor IndexDatabase {
                 if existing != nil {
                     // A migrated title has no trustworthy provider or applied value.
                     // Only a complete provider read may take ownership of it.
-                    guard origin != nil, applied != nil else { return nil }
+                    guard origin != nil, applied != nil else {
+                        if existing != candidate.value && !fillOnlyOrigins.contains(candidate.origin) {
+                            deferredLegacyCount += 1
+                        }
+                        return nil
+                    }
                     let trustedHigherPriorityName = candidate.origin.provider == .stateName
                     let trustedLocalOverride = localOriginDirectory.map { directory in
                         candidate.origin.directoryPath == directory
@@ -1776,9 +1800,11 @@ public actor IndexDatabase {
                 || applied != candidate?.value else { return nil }
             return (id, existing, origin, applied, candidate)
         }
-        guard !updates.isEmpty else { return false }
+        guard !updates.isEmpty else {
+            return .init(changed: false, deferredLegacyCount: deferredLegacyCount)
+        }
         codexNameWriteTransactionCount += 1
-        return try pool.write { db in
+        let changed = try pool.write { db in
             var changed = false
             for (id, existing, origin, applied, candidate) in updates {
                 try db.execute(
@@ -1794,6 +1820,7 @@ public actor IndexDatabase {
             }
             return changed
         }
+        return .init(changed: changed, deferredLegacyCount: deferredLegacyCount)
     }
 
     public func projects() throws -> [ProjectSummary] {
