@@ -17,6 +17,8 @@ jobs:
       - uses: jdx/mise-action@v2
       - name: Configure custom SQLite
         run: Scripts/configure-grdb.sh
+      - name: Test scheme normalization
+        run: python3 -m unittest discover -s Tests/Scripts
       - name: Verify generated project
         run: Scripts/check-project-drift.sh
       - name: Check Debug and Release signing settings

@@ -178,10 +178,14 @@ struct MarkdownText: View {
     let source: String
     var copyMessage: (() -> Void)?
     var heightChanged: (() -> Void)?
+    var selectionTrackingChanged: ((Bool) -> Void)?
     @State private var rendered = AttributedString()
 
     var body: some View {
-        SelectableMessageText(text: rendered, copyMessage: copyMessage)
+        SelectableMessageText(
+            text: rendered, copyMessage: copyMessage,
+            selectionTrackingChanged: selectionTrackingChanged
+        )
             .task(id: source) {
                 let value = await MarkdownRenderCache.shared.render(source)
                 guard value != rendered else { return }

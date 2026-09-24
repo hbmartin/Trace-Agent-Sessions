@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TraceCore
 
 @main
 struct TraceApplication: App {
@@ -29,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(TraceTestHooks.isUITesting ? .regular : .accessory)
         environment.model.start()
 
         let main = MainWindowController(model: environment.model)
