@@ -66,6 +66,11 @@ private struct StoredRecoveryRow: Sendable {
 
 public actor IndexDatabase {
     private var codexNameWriteTransactionCount = 0
+    private var failNextCodexTitleLookupForTesting = false
+
+    func failCodexTitleLookupOnceForTesting() {
+        failNextCodexTitleLookupForTesting = true
+    }
 
     func codexNameWriteTransactionCountForTesting() -> Int {
         codexNameWriteTransactionCount
@@ -666,8 +671,17 @@ public actor IndexDatabase {
         }
     }
 
-    func sourceState(agent: AgentKind, path: String) throws -> IndexedSourceState? {
+    func rootHasUnresolvedRootFailure(rootID: Int64) throws -> Bool {
         try pool.read { db in
+            try Bool.fetchOne(db, sql: """
+                SELECT EXISTS(SELECT 1 FROM source_scan_error
+                              WHERE root_id=? AND relative_scope='')
+                """, arguments: [rootID]) ?? false
+        }
+    }
+
+    func sourceState(agent: AgentKind, path: String) throws -> IndexedSourceState? {
+        return try pool.read { db in
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT \(Self.sourceStateSelection)
                 FROM source_file sf
@@ -1693,7 +1707,11 @@ public actor IndexDatabase {
     }
 
     func hasUntitledCodexSessions(sourceID: Int64) throws -> Bool {
-        try pool.read { db in
+        if failNextCodexTitleLookupForTesting {
+            failNextCodexTitleLookupForTesting = false
+            throw SessionSourceError.unreadableFile("synthetic Codex title lookup failure")
+        }
+        return try pool.read { db in
             try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM session WHERE source_file_id=? AND agent=? AND generated_title IS NULL)",
                               arguments: [sourceID, AgentKind.codex.rawValue]) ?? false
         }
@@ -1734,21 +1752,22 @@ public actor IndexDatabase {
             case .partial:
                 guard let candidate else { return nil }
                 if existing != nil {
-                    let legacyUnownedTitle = origin == nil && applied == nil
+                    // A migrated title has no trustworthy provider or applied value.
+                    // Only a complete provider read may take ownership of it.
+                    guard origin != nil, applied != nil else { return nil }
                     let trustedHigherPriorityName = candidate.origin.provider == .stateName
-                        && origin != nil
                     let trustedLocalOverride = localOriginDirectory.map { directory in
                         candidate.origin.directoryPath == directory
-                            && origin != nil && parsedOrigin?.directoryPath != directory
+                            && parsedOrigin?.directoryPath != directory
                     } ?? false
                     let recoveredIndexTitle = candidate.origin.provider == .sessionIndex
                         && parsedOrigin?.provider == .stateTitle
                         && parsedOrigin?.directoryPath == candidate.origin.directoryPath
                     guard !fillOnlyOrigins.contains(candidate.origin),
-                          (legacyUnownedTitle || parsedOrigin == candidate.origin
+                          (parsedOrigin == candidate.origin
                            || trustedHigherPriorityName || trustedLocalOverride
                            || recoveredIndexTitle),
-                          (legacyUnownedTitle || applied == existing) else { return nil }
+                          applied == existing else { return nil }
                 }
             case .complete:
                 break

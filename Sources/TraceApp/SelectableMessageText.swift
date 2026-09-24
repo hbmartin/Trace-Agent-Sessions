@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TraceCore
 
 /// Native text owns selection and its standard editing menu. Keeping the menu entirely in
 /// NSTextView prevents SwiftUI row gestures from cancelling a drag selection.
@@ -8,6 +9,7 @@ struct SelectableMessageText: NSViewRepresentable {
     var monospaced = false
     var secondary = false
     var copyMessage: (() -> Void)?
+    var selectionTrackingChanged: ((Bool) -> Void)?
 
     final class Coordinator {
         let measurementStorage = NSTextStorage()
@@ -39,12 +41,14 @@ struct SelectableMessageText: NSViewRepresentable {
         view.textContainer?.widthTracksTextView = true
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.copyMessage = copyMessage
+        view.selectionTrackingChanged = selectionTrackingChanged
         updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ view: MessageTextView, context: Context) {
         view.copyMessage = copyMessage
+        view.selectionTrackingChanged = selectionTrackingChanged
         guard context.coordinator.lastText != text
                 || context.coordinator.lastMonospaced != monospaced
                 || context.coordinator.lastSecondary != secondary else { return }
@@ -88,11 +92,13 @@ struct SelectableMessageText: NSViewRepresentable {
 
 final class MessageTextView: NSTextView {
     var copyMessage: (() -> Void)?
+    var selectionTrackingChanged: ((Bool) -> Void)?
 
     override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
     override func accessibilityValue() -> String? { string }
 
     override func scrollWheel(with event: NSEvent) {
+        TraceTestHooks.appendLine("text", pathKey: "TRACE_TEST_TRANSCRIPT_WHEEL_ROUTE_PATH")
         if let enclosingScrollView { enclosingScrollView.scrollWheel(with: event) }
         else { super.scrollWheel(with: event) }
     }
@@ -102,6 +108,8 @@ final class MessageTextView: NSTextView {
         // from its hosted text during row interaction, which breaks native text
         // selection and routes Copy to the row instead of the selected text.
         window?.makeFirstResponder(self)
+        selectionTrackingChanged?(true)
+        defer { selectionTrackingChanged?(false) }
         super.mouseDown(with: event)
     }
 
