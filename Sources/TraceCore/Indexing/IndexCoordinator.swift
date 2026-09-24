@@ -158,29 +158,38 @@ public actor IndexCoordinator {
         case metadata
         case metadataLoad
         case lookup
-        case write
+        case fileWrite
+        case rootWrite
+        case deferredLegacy
+    }
+    private struct CodexWarningKey: Hashable {
+        let rootID: String
+        let kind: CodexWarningKind
+        let sourcePath: String?
     }
     private var codexNameCache: [String: CodexNameCacheEntry] = [:]
     private var codexNameLoadCounts: [String: Int] = [:]
-    private var codexWarningsByRoot: [String: [CodexWarningKind: Set<String>]] = [:]
+    private var codexWarnings: [CodexWarningKey: Set<String>] = [:]
 
     private func codexWarningMessage() -> String? {
-        let warnings = Set(codexWarningsByRoot.values.flatMap { $0.values.flatMap { $0 } })
+        let warnings = Set(codexWarnings.values.flatMap { $0 })
         guard !warnings.isEmpty else { return nil }
         return "Codex title lookup: " + warnings.sorted().joined(separator: "; ")
     }
 
     private func replaceCodexWarnings(
         _ warnings: [String], kind: CodexWarningKind, for rootID: String,
-        in status: inout IndexProgress
+        sourcePath: String? = nil, in status: inout IndexProgress
     ) {
-        if warnings.isEmpty {
-            codexWarningsByRoot[rootID]?[kind] = nil
-            if codexWarningsByRoot[rootID]?.isEmpty == true {
-                codexWarningsByRoot.removeValue(forKey: rootID)
-            }
-        } else {
-            codexWarningsByRoot[rootID, default: [:]][kind] = Set(warnings)
+        let key = CodexWarningKey(rootID: rootID, kind: kind, sourcePath: sourcePath)
+        if warnings.isEmpty { codexWarnings.removeValue(forKey: key) }
+        else { codexWarnings[key] = Set(warnings) }
+        status.metadataWarning = codexWarningMessage()
+    }
+
+    private func clearFileCodexWarnings(for rootID: String, in status: inout IndexProgress) {
+        codexWarnings = codexWarnings.filter { key, _ in
+            key.rootID != rootID || (key.kind != .lookup && key.kind != .fileWrite)
         }
         status.metadataWarning = codexWarningMessage()
     }
@@ -194,11 +203,12 @@ public actor IndexCoordinator {
 
     private func hasCodexMetadataFile(in directory: URL) -> Bool {
         guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.isRegularFileKey]
+            at: directory, includingPropertiesForKeys: nil
         ) else { return false }
         return contents.contains { url in
             guard TraceFileIO.isCodexMetadataSidecar(url) else { return false }
-            return (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            let target = url.resolvingSymlinksInPath()
+            return (try? target.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
         }
     }
 
@@ -434,7 +444,10 @@ public actor IndexCoordinator {
             for source in sources where source.agent == .codex {
                 for root in source.roots {
                     let directories = codexMetadataDirectories(for: root, in: source)
-                    let changed = directories.filter {
+                    // Match the configured home even after its last sidecar disappears.
+                    // The loader still excludes an unrelated alias parent with no sidecar.
+                    let changeCandidates = directories + [Self.codexMetadataDirectory(for: root)]
+                    let changed = changeCandidates.filter {
                         changedMetadataDirectories.contains(
                             TraceFileIO.canonicalPath($0.path).comparisonKey
                         )
@@ -448,7 +461,7 @@ public actor IndexCoordinator {
                         || !changed.isEmpty else { continue }
                     codexRefreshRoots.insert(root.id)
                     invalidatedMetadataDirectories.formUnion(
-                        directories.map { $0.standardizedFileURL.path }
+                        changeCandidates.map { $0.standardizedFileURL.path }
                     )
                 }
             }
@@ -696,7 +709,8 @@ public actor IndexCoordinator {
                             agent: file.agent, path: file.url.path
                         ),
                            try await database.hasUntitledCodexSessions(sourceID: state.id) {
-                            replaceCodexWarnings([], kind: .lookup, for: rootKey, in: &status)
+                            replaceCodexWarnings([], kind: .lookup, for: rootKey,
+                                                 sourcePath: file.url.path, in: &status)
                             if let root = rootsByID[rootKey] {
                                 warningKind = .metadataLoad
                                 let metadata = try await effectiveCodexNames(
@@ -707,25 +721,30 @@ public actor IndexCoordinator {
                                 replaceCodexWarnings(metadata.warnings, kind: .metadata,
                                                      for: root.id, in: &status)
                                 if !metadata.names.isEmpty {
-                                    warningKind = .write
+                                    warningKind = .fileWrite
                                     if try await database.updateCodexNames(
                                         metadata.names, root: file.root, sourceID: state.id,
                                         policy: .fillMissing
                                     ) {
                                         await mutations.markChanged()
                                     }
-                                    replaceCodexWarnings([], kind: .write,
-                                                         for: root.id, in: &status)
+                                    replaceCodexWarnings([], kind: .fileWrite,
+                                                         for: root.id, sourcePath: file.url.path,
+                                                         in: &status)
                                 }
                             }
                         } else {
-                            replaceCodexWarnings([], kind: .lookup, for: rootKey, in: &status)
+                            replaceCodexWarnings([], kind: .lookup, for: rootKey,
+                                                 sourcePath: file.url.path, in: &status)
                         }
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         replaceCodexWarnings(
                             [error.localizedDescription], kind: warningKind,
-                            for: rootKey, in: &status
+                            for: rootKey,
+                            sourcePath: warningKind == .lookup || warningKind == .fileWrite
+                                ? file.url.path : nil,
+                            in: &status
                         )
                     }
                 }
@@ -819,16 +838,26 @@ public actor IndexCoordinator {
                               let rootID = rootIDs[root.id],
                               !(try await database.rootHasUnresolvedRootFailure(rootID: rootID))
                         else { continue }
-                        warningKind = .write
-                        if try await database.updateCodexNames(
+                        warningKind = .rootWrite
+                        let update = try await database.updateCodexNamesResult(
                             metadata.names, root: root.url,
                             policy: metadata.complete ? .complete : .partial,
                             fillOnlyOrigins: metadata.fillOnlyOrigins,
                             localOriginDirectory: metadata.localOriginDirectory
-                        ) {
-                            await mutations.markChanged()
+                        )
+                        if update.changed { await mutations.markChanged() }
+                        replaceCodexWarnings([], kind: .rootWrite, for: root.id, in: &status)
+                        if metadata.complete {
+                            clearFileCodexWarnings(for: root.id, in: &status)
                         }
-                        replaceCodexWarnings([], kind: .write, for: root.id, in: &status)
+                        if metadata.complete || update.deferredLegacyCount > 0 {
+                            let deferred = update.deferredLegacyCount
+                            let warning = deferred == 0 ? [] : [
+                                "\(root.url.path): \(deferred) legacy Codex title rename(s) deferred until metadata is complete"
+                            ]
+                            replaceCodexWarnings(warning, kind: .deferredLegacy,
+                                                 for: root.id, in: &status)
+                        }
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         replaceCodexWarnings(
