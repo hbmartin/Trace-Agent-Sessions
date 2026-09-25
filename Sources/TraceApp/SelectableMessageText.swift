@@ -18,6 +18,8 @@ struct SelectableMessageText: NSViewRepresentable {
         var lastText: AttributedString?
         var lastMonospaced = false
         var lastSecondary = false
+        var measuredWidth: CGFloat?
+        var measuredHeight: CGFloat?
 
         init() {
             measurementContainer.lineFragmentPadding = 0
@@ -74,6 +76,8 @@ struct SelectableMessageText: NSViewRepresentable {
         context.coordinator.lastText = text
         context.coordinator.lastMonospaced = monospaced
         context.coordinator.lastSecondary = secondary
+        context.coordinator.measuredWidth = nil
+        context.coordinator.measuredHeight = nil
         view.invalidateIntrinsicContentSize()
     }
 
@@ -82,11 +86,18 @@ struct SelectableMessageText: NSViewRepresentable {
         guard let width = proposal.width ?? fallbackWidth,
               width.isFinite,
               width > 0 else { return nil }
+        if context.coordinator.measuredWidth == width,
+           let height = context.coordinator.measuredHeight {
+            return CGSize(width: width, height: height)
+        }
         let container = context.coordinator.measurementContainer
         let layout = context.coordinator.measurementLayout
         container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
-        return CGSize(width: width, height: max(18, ceil(layout.usedRect(for: container).height)))
+        let height = max(18, ceil(layout.usedRect(for: container).height))
+        context.coordinator.measuredWidth = width
+        context.coordinator.measuredHeight = height
+        return CGSize(width: width, height: height)
     }
 }
 

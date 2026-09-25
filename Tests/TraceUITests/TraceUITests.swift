@@ -2897,11 +2897,13 @@ final class TraceUITests: XCTestCase {
         let bookmarkSaved = directory.appendingPathComponent("transcript-bottom-bookmark")
         let restoreAudit = directory.appendingPathComponent("transcript-bottom-restore")
         let bottomAudit = directory.appendingPathComponent("transcript-bottom-applied")
+        let positionProbe = directory.appendingPathComponent("transcript-bottom-position")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_OFFSET_PATH"] = offsets.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = restoreAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOTTOM_AUDIT_PATH"] = bottomAudit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = positionProbe.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"] = "1500"
         func appendMessage(_ index: Int, content: String) throws {
             let record: [String: Any] = [
@@ -2965,41 +2967,55 @@ final class TraceUITests: XCTestCase {
         }, "late row measurement must leave the viewport at the measured bottom")
 
         app.checkBoxes["Tools"].click()
-        app.checkBoxes["Reasoning"].click()
+        let reasoningFilter = app.checkBoxes["Reasoning"].firstMatch
+        XCTAssertTrue(reasoningFilter.waitForExistence(timeout: 10))
+        reasoningFilter.click()
         try appendMessage(72, content: "Append after changing transcript filters")
         XCTAssertTrue(transcriptMessage("Bottom follow", index: 72, in: scroll)
             .wait(for: \.isHittable, toEqual: true, timeout: 15),
             "Tools and Reasoning filters must retain live bottom follow")
 
-        let downwardPoint = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-        downwardPoint.scroll(byDeltaX: 0, deltaY: -600)
-        try appendMessage(73, content: "Append during downward wheel momentum")
-        XCTAssertTrue(transcriptMessage("Bottom follow", index: 73, in: scroll)
-            .wait(for: \.isHittable, toEqual: true, timeout: 15),
-            "downward wheel motion must keep following new messages")
-
         let window = app.windows.firstMatch
         let previousHeight = window.frame.height
+        app.buttons["testProbeTranscriptPosition"].click()
+        let beforeResize = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
+        XCTAssertEqual(String(beforeResize[2]), "true", "reader must be pinned before resize")
+        XCTAssertEqual(try XCTUnwrap(Double(beforeResize[0])),
+            try XCTUnwrap(Double(beforeResize[1])), accuracy: 2)
+        try? FileManager.default.removeItem(at: positionProbe)
         let resize = app.buttons["testResizeWindow"]
         XCTAssertTrue(resize.waitForExistence(timeout: 5))
         resize.click()
         XCTAssertLessThan(window.frame.height, previousHeight - 20,
             "the UI test must actually resize the transcript viewport")
-        try appendMessage(74, content: "Append after resizing the pinned viewport")
-        XCTAssertTrue(transcriptMessage("Bottom follow", index: 74, in: scroll)
+        app.buttons["testProbeTranscriptPosition"].click()
+        XCTAssertTrue(waitForFile(positionProbe, timeout: 10))
+        let positionFields = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
+        XCTAssertEqual(positionFields.count, 3)
+        XCTAssertEqual(String(positionFields[2]), "true",
+            "resize must preserve bottom-follow mode")
+        let resizedOrigin = try XCTUnwrap(Double(positionFields[0]))
+        let resizedMaximum = try XCTUnwrap(Double(positionFields[1]))
+        XCTAssertEqual(resizedOrigin, resizedMaximum, accuracy: 2,
+            "resize itself must leave the viewport at the new bottom")
+        try appendMessage(73, content: "Append after resizing the pinned viewport")
+        XCTAssertTrue(transcriptMessage("Bottom follow", index: 73, in: scroll)
             .wait(for: \.isHittable, toEqual: true, timeout: 15),
             "resizing the window must retain live bottom follow")
 
+        let bottomOrigin = try XCTUnwrap(numericLine(in: offsets))
         let upwardFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
         scroll.scroll(byDeltaX: 0, deltaY: 1_100)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: upwardFinishCount + 1, timeout: 10
         ))
         let readingIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
-        XCTAssertLessThan(readingIndex, 75)
+        let readingOrigin = try XCTUnwrap(numericLine(in: offsets))
+        XCTAssertLessThan(readingOrigin, bottomOrigin - 50,
+            "upward input must leave the reader above the pinned bottom after idle")
         let restoreCountBeforeAppend = fileLines(in: restoreAudit).count
-        try appendMessage(75, content: "A later message while reading above the bottom")
-        XCTAssertTrue(app.staticTexts["76 messages"].waitForExistence(timeout: 15))
+        try appendMessage(74, content: "A later message while reading above the bottom")
+        XCTAssertTrue(app.staticTexts["75 messages"].waitForExistence(timeout: 15))
         let measurement = try XCTUnwrap(poll(timeout: 10) { () -> [String]? in
             let lines = fileLines(in: restoreAudit)
             guard lines.count > restoreCountBeforeAppend,
@@ -3104,7 +3120,7 @@ final class TraceUITests: XCTestCase {
         let search = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
         search.click()
-        search.typeText("Disclosure race message 4")
+        app.typeText("Disclosure race message 4")
         let hit = app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "Disclosure race message 4"
         )).firstMatch
@@ -3147,6 +3163,75 @@ final class TraceUITests: XCTestCase {
             "a missing end notification must not keep user-scrolling state active")
         XCTAssertNotNil(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0),
             "the idle backstop must save the scrolled position")
+    }
+
+    func testExternalTranscriptScrollUnpinsAndDensityKeepsLiveViewport() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession("External scroll", project: "ScrollProject", directory: directory)
+        let idleAudit = directory.appendingPathComponent("external-scroll-idle")
+        let bookmarkSaved = directory.appendingPathComponent("external-scroll-bookmark")
+        let boundsAudit = directory.appendingPathComponent("external-scroll-bounds")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] = "external-midpoint"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = boundsAudit.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["ScrollProject"].firstMatch.waitForExistence(timeout: 20))
+        app.staticTexts["ScrollProject"].firstMatch.click()
+        app.staticTexts["External scroll"].firstMatch.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
+        let bottomIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
+        let finishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+
+        app.buttons["testSimulateTranscriptScroll"].click()
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: finishes + 1, timeout: 10),
+            "an external viewport move must be saved as reading position; "
+                + "bounds: \(fileLines(in: boundsAudit).suffix(12))")
+        let readingIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
+        XCTAssertLessThan(readingIndex, bottomIndex,
+            "external scrolling must leave bottom-follow mode")
+        let readingY = try XCTUnwrap(savedAnchorY(index: readingIndex, in: scroll, timeout: 10))
+        app.radioButtons["Compact"].click()
+        assertSavedAnchorOnScreen(index: readingIndex, in: scroll, expectedY: readingY,
+            stage: "density after external scroll")
+    }
+
+    func testSlowViewportMotionKeepsLiveScrollActiveUntilMotionStops() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession("Slow scroll", project: "ScrollProject", directory: directory)
+        let idleAudit = directory.appendingPathComponent("slow-scroll-idle")
+        let offsets = directory.appendingPathComponent("slow-scroll-offsets")
+        let simulationDone = directory.appendingPathComponent("slow-scroll-done")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] = "slow-up"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_OFFSET_PATH"] = offsets.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH"] = simulationDone.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["ScrollProject"].firstMatch.waitForExistence(timeout: 20))
+        app.staticTexts["ScrollProject"].firstMatch.click()
+        app.staticTexts["Slow scroll"].firstMatch.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
+        let bottomOrigin = try XCTUnwrap(numericLine(in: offsets))
+        try? FileManager.default.removeItem(at: idleAudit)
+
+        app.buttons["testSimulateTranscriptScroll"].click()
+        XCTAssertTrue(waitForFile(simulationDone, timeout: 5))
+        XCTAssertFalse(fileLines(in: idleAudit).contains("finished"),
+            "the live-scroll backstop must wait for the last viewport motion")
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 5))
+        let readingOrigin = try XCTUnwrap(numericLine(in: offsets))
+        XCTAssertLessThan(readingOrigin, bottomOrigin - 3,
+            "fractional upward motion must unpin instead of snapping to bottom")
     }
 
     func testRevealingTrailingRowsKeepsTheVisibilityAnchor() throws {
@@ -3344,15 +3429,17 @@ final class TraceUITests: XCTestCase {
         focusTranscript("Keyboard scroll", in: scroll)
         try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
+        app.activate()
         app.typeKey(.pageDown, modifierFlags: [])
-        _ = try XCTUnwrap(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
+        let firstBookmarkIndex = try XCTUnwrap(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
-        let afterFirstPage = scroll.staticTexts.matching(NSPredicate(
-            format: "value BEGINSWITH %@", "Keyboard scroll message "
-        ))
-        let visibleAfterFirstPage = try XCTUnwrap(firstHittable(in: afterFirstPage, timeout: 10))
+        let visibleAfterFirstPage = transcriptMessage(
+            "Keyboard scroll", index: firstBookmarkIndex, in: scroll
+        )
+        XCTAssertTrue(visibleAfterFirstPage.wait(for: \.isHittable, toEqual: true, timeout: 10))
         visibleAfterFirstPage.click()
         try? FileManager.default.removeItem(at: bookmarkSaved)
+        app.activate()
         app.typeKey(.pageDown, modifierFlags: [])
         XCTAssertNotNil(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
         let finishesBeforeWheel = fileLines(in: idleAudit).filter {
@@ -3362,12 +3449,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: finishesBeforeWheel + 1, timeout: 10
         ), "the preceding wheel scroll must be fully idle before testing the boundary")
-        let visibleMessages = scroll.staticTexts.matching(NSPredicate(
-            format: "value BEGINSWITH %@", "Keyboard scroll message "
-        ))
-        let visibleMessage = try XCTUnwrap(firstHittable(in: visibleMessages, timeout: 10))
+        let visibleMessage = transcriptMessage("Keyboard scroll", index: 69, in: scroll)
+        XCTAssertTrue(visibleMessage.wait(for: \.isHittable, toEqual: true, timeout: 10))
         let pasteboardChangeCount = preparePasteboardForCopy()
         visibleMessage.click()
+        app.activate()
         app.typeKey("a", modifierFlags: .command)
         app.typeKey("c", modifierFlags: .command)
         assertPasteboardChanged(
@@ -3376,6 +3462,7 @@ final class TraceUITests: XCTestCase {
         )
         try? FileManager.default.removeItem(at: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
+        app.activate()
         app.typeKey(.pageDown, modifierFlags: [])
         XCTAssertTrue(waitForLineCount(idleAudit, line: "started", count: 1, timeout: 3),
                       "a boundary Page Down must schedule idle completion directly")
@@ -3406,14 +3493,21 @@ final class TraceUITests: XCTestCase {
         session.click()
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
-        try? FileManager.default.removeItem(at: idleAudit)
+        app.activate()
         focusTranscript("Window lifecycle", in: scroll)
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 8),
+                      "the focusing click must finish before Page Down starts a new scroll")
+        try? FileManager.default.removeItem(at: idleAudit)
+        app.activate()
         app.typeKey(.pageDown, modifierFlags: [])
+        XCTAssertTrue(fileLines(in: keyRoute).contains { $0 == "121,true" },
+            "Page Down must reach the transcript's keyboard route")
         XCTAssertTrue(waitForLineCount(idleAudit, line: "started", count: 1, timeout: 3),
                       "the scroll-idle delay must be pending before the window closes; keys: \(fileLines(in: keyRoute))")
 
         let mainWindow = app.windows["Window lifecycle"]
         XCTAssertTrue(mainWindow.exists)
+        app.activate()
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(mainWindow.waitForNonExistence(timeout: 5))
 
