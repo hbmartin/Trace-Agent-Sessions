@@ -1358,6 +1358,7 @@ final class TraceModel: ObservableObject {
         let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
             .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
+        let sidecarMapping = CodexMetadataSidecarMapping(metadataDirectories: metadataRoots)
         let canonicalRoots = roots.map { TraceFileIO.canonicalPath($0.path) }
         let canonicalMetadataRoots = metadataRoots.map { TraceFileIO.canonicalPath($0.path) }
         var reconciliationPaths = forceRootReconciliation
@@ -1368,7 +1369,7 @@ final class TraceModel: ObservableObject {
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
         let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
         var grouped: [String: [URL]] = [:]
-        for root in roots + metadataRoots {
+        for root in roots + metadataRoots + sidecarMapping.targetDirectories {
             let volumeID = Self.volumeIdentifier(for: root)
             let groupingID = watcherGroupingPolicy.groupIdentifier(
                 for: root, volumeIdentifier: volumeID
@@ -1408,15 +1409,37 @@ final class TraceModel: ObservableObject {
                     guard let self, self.settings.onboardingComplete,
                           self.watcherGeneration == generation else { return }
                     var relevant = SourceChanges()
-                    relevant.paths = Set(changes.paths.compactMap { path -> String? in
+                    let changedPaths = changes.paths.union(changes.lexicalPaths)
+                    relevant.paths = Set(changedPaths.flatMap { path -> Set<String> in
                         let canonical = TraceFileIO.canonicalPath(path)
-                        if canonicalRoots.contains(where: { $0.contains(canonical) }) { return canonical.path }
+                        var mapped = sidecarMapping.configuredChangePaths(for: canonical.path)
+                        if canonicalRoots.contains(where: { $0.contains(canonical) }) {
+                            mapped.insert(canonical.path)
+                        }
                         let url = URL(fileURLWithPath: canonical.path)
                         let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
                         if canonicalMetadataRoots.contains(where: { $0.comparisonKey == parent.comparisonKey }),
-                           TraceFileIO.isCodexMetadataChangePath(url) { return canonical.path }
-                        return nil
+                           TraceFileIO.isCodexMetadataChangePath(url) {
+                            mapped.insert(canonical.path)
+                        }
+                        let lexical = URL(fileURLWithPath: path).standardizedFileURL
+                        let lexicalParent = TraceFileIO.canonicalPath(
+                            lexical.deletingLastPathComponent().path
+                        )
+                        if canonicalMetadataRoots.contains(where: {
+                            $0.comparisonKey == lexicalParent.comparisonKey
+                        }), TraceFileIO.isCodexMetadataChangePath(lexical) {
+                            mapped.insert(lexical.path)
+                        }
+                        return mapped
                     })
+                    let sidecarLinkChanged = changedPaths.contains { path in
+                        let url = URL(fileURLWithPath: path).standardizedFileURL
+                        let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
+                        return canonicalMetadataRoots.contains {
+                            $0.comparisonKey == parent.comparisonKey
+                        } && TraceFileIO.isCodexMetadataSidecar(url)
+                    }
                     for path in changes.reconciliationPaths {
                         let changed = TraceFileIO.canonicalPath(path)
                         for root in canonicalRoots where root.intersects(changed) {
@@ -1429,6 +1452,20 @@ final class TraceModel: ObservableObject {
                     relevant.watermarks = changes.watermarks
                     relevant.streamRoots = changes.streamRoots
                     relevant.historyDone = changes.historyDone
+                    if sidecarLinkChanged,
+                       CodexMetadataSidecarMapping(metadataDirectories: metadataRoots)
+                        != sidecarMapping {
+                        guard await self.startWatching(
+                            sources, forceRootReconciliation: true
+                        ) else { return }
+                        relevant.reconciliationPaths.formUnion(self.startupReconciliationPaths)
+                        relevant.recoveryReasons.insert(.rootChanged)
+                        relevant.merge(self.bufferedSourceChanges)
+                        self.bufferedSourceChanges = SourceChanges()
+                        self.watcherStartupPending = false
+                        await self.submitSourceChanges(relevant)
+                        return
+                    }
                     guard !relevant.paths.isEmpty || relevant.requiresReconciliation
                         || !relevant.watermarks.isEmpty else { return }
                     if self.watcherStartupPending { self.bufferedSourceChanges.merge(relevant) }

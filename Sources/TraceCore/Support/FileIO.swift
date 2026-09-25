@@ -188,6 +188,48 @@ public enum TraceFileIO {
     }
 }
 
+/// Relates changes to a symlinked Codex sidecar's target back to the metadata
+/// directory whose cached names were loaded through that sidecar.
+public struct CodexMetadataSidecarMapping: Equatable, Sendable {
+    private let sidecarsByTarget: [String: Set<String>]
+    public let targetDirectories: [URL]
+
+    public init(metadataDirectories: [URL]) {
+        var sidecarsByTarget: [String: Set<String>] = [:]
+        var targetDirectories: [String: URL] = [:]
+        for directory in metadataDirectories {
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil
+            ) else { continue }
+            for sidecar in entries where TraceFileIO.isCodexMetadataSidecar(sidecar) {
+                guard let destination = try? FileManager.default.destinationOfSymbolicLink(
+                    atPath: sidecar.path
+                ) else { continue }
+                let targetURL = destination.hasPrefix("/")
+                    ? URL(fileURLWithPath: destination)
+                    : directory.appendingPathComponent(destination)
+                let target = TraceFileIO.canonicalPath(targetURL.path)
+                let configuredPath = sidecar.standardizedFileURL.path
+                sidecarsByTarget[target.comparisonKey, default: []].insert(configuredPath)
+                let parent = TraceFileIO.canonicalPath(
+                    URL(fileURLWithPath: target.path).deletingLastPathComponent().path
+                )
+                targetDirectories[parent.comparisonKey] = URL(fileURLWithPath: parent.path)
+                if sidecar.pathExtension == "sqlite" {
+                    let wal = TraceFileIO.canonicalPath(target.path + "-wal")
+                    sidecarsByTarget[wal.comparisonKey, default: []].insert(configuredPath)
+                }
+            }
+        }
+        self.sidecarsByTarget = sidecarsByTarget
+        self.targetDirectories = targetDirectories.values.sorted { $0.path < $1.path }
+    }
+
+    public func configuredChangePaths(for path: String) -> Set<String> {
+        sidecarsByTarget[TraceFileIO.canonicalPath(path).comparisonKey] ?? []
+    }
+}
+
 public struct JSONLineRecord: Sendable {
     public let offset: Int64
     public let data: Data

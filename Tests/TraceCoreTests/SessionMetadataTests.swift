@@ -1197,8 +1197,9 @@ final class SessionMetadataTests: XCTestCase {
                   to: defaultHome.appendingPathComponent("session_index.jsonl"))
         let target = sidecarStore.appendingPathComponent("names.jsonl")
         try write([["id": "symlink-sidecar", "thread_name": "Linked local name"]], to: target)
+        let linkedSidecar = configuredHome.appendingPathComponent("session_index.jsonl")
         try FileManager.default.createSymbolicLink(
-            at: configuredHome.appendingPathComponent("session_index.jsonl"),
+            at: linkedSidecar,
             withDestinationURL: target
         )
         let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
@@ -1208,6 +1209,18 @@ final class SessionMetadataTests: XCTestCase {
         await coordinator.indexAll(scope: .proseOnly)
         let title = try await database.sessions().first?.title
         XCTAssertEqual(title, "Linked local name")
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [configuredHome])
+        XCTAssertEqual(mapping.configuredChangePaths(for: target.path), [linkedSidecar.path])
+        XCTAssertTrue(mapping.targetDirectories.contains { $0.path == sidecarStore.path })
+        let loadsBefore = await coordinator.codexNameLoadCountForTesting(directory: configuredHome)
+
+        try write([["id": "symlink-sidecar", "thread_name": "Updated linked name"]], to: target)
+        await coordinator.refresh(paths: [target.path], scope: .proseOnly)
+        let updatedTitle = try await database.sessions().first?.title
+        XCTAssertEqual(updatedTitle, "Updated linked name")
+        let loadsAfter = await coordinator.codexNameLoadCountForTesting(directory: configuredHome)
+        XCTAssertGreaterThan(loadsAfter, loadsBefore,
+            "an external target change must invalidate the configured directory cache")
     }
 
     func testRepointedAliasReconciliationRefreshesFrozenRootsCodexNames() async throws {

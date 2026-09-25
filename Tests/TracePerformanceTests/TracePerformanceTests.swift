@@ -154,11 +154,12 @@ final class TracePerformanceTests: XCTestCase {
                     "message": ["content": "Streaming benchmark message \(messageIndex) "
                         + String(repeating: "Changing transcript height. ", count: 18)],
                 ]
-                let data = try! JSONSerialization.data(withJSONObject: record) + Data([10])
-                let handle = try! FileHandle(forWritingTo: source)
-                try! handle.seekToEnd()
-                try! handle.write(contentsOf: data)
-                try! handle.close()
+                do {
+                    try appendBenchmarkRecord(record, to: source)
+                } catch {
+                    XCTFail("Could not append streaming benchmark message: \(error)")
+                    return
+                }
                 messageIndex += 1
             }
             let count = app.staticTexts["\(messageIndex) messages"].firstMatch
@@ -183,6 +184,19 @@ final class TracePerformanceTests: XCTestCase {
     private func lineCount(in file: URL) -> Int {
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { return 0 }
         return text.split(separator: "\n").count
+    }
+
+    private func appendBenchmarkRecord(_ record: [String: Any], to source: URL) throws {
+        let data = try JSONSerialization.data(withJSONObject: record) + Data([10])
+        let handle = try FileHandle(forWritingTo: source)
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
     }
 
     private func waitForFile(_ file: URL, timeout: TimeInterval) -> Bool {

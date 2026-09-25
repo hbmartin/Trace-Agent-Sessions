@@ -10,6 +10,9 @@ public enum FSEventsRecoveryReason: String, Hashable, Sendable {
 
 public struct SourceChanges: Sendable {
     public var paths: Set<String> = []
+    /// Preserve symlink paths so a sidecar link change can be mapped even if
+    /// its new target is outside the watcher roots.
+    public var lexicalPaths: Set<String> = []
     public var reconciliationPaths: Set<String> = []
     public var recoveryReasons: Set<FSEventsRecoveryReason> = []
     public var watermarks: [String: UInt64] = [:]
@@ -44,11 +47,16 @@ public struct SourceChanges: Sendable {
             reconciliationPaths.insert(canonical)
             recoveryReasons.insert(.subtreeInvalidated)
         }
-        if !directory { paths.insert(canonical) }
+        if !directory {
+            paths.insert(canonical)
+            let lexical = URL(fileURLWithPath: path).standardizedFileURL.path
+            if lexical != canonical { lexicalPaths.insert(lexical) }
+        }
     }
 
     public mutating func merge(_ other: SourceChanges) {
         paths.formUnion(other.paths)
+        lexicalPaths.formUnion(other.lexicalPaths)
         reconciliationPaths.formUnion(other.reconciliationPaths)
         recoveryReasons.formUnion(other.recoveryReasons)
         historyDone = historyDone || other.historyDone

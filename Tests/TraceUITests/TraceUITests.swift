@@ -373,6 +373,74 @@ final class TraceUITests: XCTestCase {
         ), "a failed sibling watcher must not downgrade forced root recovery")
     }
 
+    func testExternalCodexSidecarTargetChangeRefreshesTitle() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let codex = directory.appendingPathComponent("Sources/Codex")
+        let targets = directory.appendingPathComponent("SidecarTargets")
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: targets, withIntermediateDirectories: true)
+        let rollout = [
+            #"{"type":"session_meta","payload":{"id":"linked-sidecar-live","cwd":"/tmp/LinkedSidecar"}}"#,
+            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Linked sidecar request"}]}}"#,
+        ].joined(separator: "\n") + "\n"
+        try Data(rollout.utf8).write(to: codex.appendingPathComponent("rollout-linked.jsonl"))
+        let target = targets.appendingPathComponent("arbitrary-name.jsonl")
+        try Data(#"{"id":"linked-sidecar-live","thread_name":"Initial linked title"}"#.utf8
+            + Data([10])).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("Sources/session_index.jsonl"),
+            withDestinationURL: target
+        )
+
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let database = directory.appendingPathComponent("index.sqlite")
+        let initial = pollSQLiteInteger(database, sql: """
+            SELECT count(*) FROM session WHERE external_id='linked-sidecar-live'
+            AND generated_title='Initial linked title'
+            """, timeout: 20, until: { $0 == 1 })
+        XCTAssertNil(initial.error)
+        XCTAssertEqual(initial.value, 1)
+
+        try Data(#"{"id":"linked-sidecar-live","thread_name":"Updated linked title"}"#.utf8
+            + Data([10])).write(to: target)
+        let updated = pollSQLiteInteger(database, sql: """
+            SELECT count(*) FROM session WHERE external_id='linked-sidecar-live'
+            AND generated_title='Updated linked title'
+            """, timeout: 20, until: { $0 == 1 })
+        XCTAssertNil(updated.error)
+        XCTAssertEqual(updated.value, 1,
+            "the external target's watcher event must refresh the configured sidecar cache")
+
+        let replacementDirectory = directory.appendingPathComponent("ReplacementTargets")
+        try FileManager.default.createDirectory(
+            at: replacementDirectory, withIntermediateDirectories: true
+        )
+        let replacement = replacementDirectory.appendingPathComponent("new-name.jsonl")
+        try Data(#"{"id":"linked-sidecar-live","thread_name":"Repointed linked title"}"#.utf8
+            + Data([10])).write(to: replacement)
+        let sidecar = directory.appendingPathComponent("Sources/session_index.jsonl")
+        try FileManager.default.removeItem(at: sidecar)
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: replacement)
+        let repointed = pollSQLiteInteger(database, sql: """
+            SELECT count(*) FROM session WHERE external_id='linked-sidecar-live'
+            AND generated_title='Repointed linked title'
+            """, timeout: 20, until: { $0 == 1 })
+        XCTAssertNil(repointed.error)
+        XCTAssertEqual(repointed.value, 1)
+
+        try Data(#"{"id":"linked-sidecar-live","thread_name":"Updated repointed title"}"#.utf8
+            + Data([10])).write(to: replacement)
+        let afterRepoint = pollSQLiteInteger(database, sql: """
+            SELECT count(*) FROM session WHERE external_id='linked-sidecar-live'
+            AND generated_title='Updated repointed title'
+            """, timeout: 20, until: { $0 == 1 })
+        XCTAssertNil(afterRepoint.error)
+        XCTAssertEqual(afterRepoint.value, 1,
+            "repointing must register the replacement target's directory")
+    }
+
     func testRecoveryLoadFailureQueuesRootFallbackAndStartupContinues() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let activityAudit = directory.appendingPathComponent("startup-activity-audit")

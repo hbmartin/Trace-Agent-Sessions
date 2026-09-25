@@ -453,7 +453,14 @@ public actor IndexCoordinator {
             var allFiles: [DiscoveredSourceFile] = []
             let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
             if oldScope != scope && !rebuild { status.activity = .scopeChange }
-            let changedMetadataDirectories = Set((paths ?? []).compactMap { path -> String? in
+            let sidecarMapping = CodexMetadataSidecarMapping(metadataDirectories:
+                sources.filter { $0.agent == .codex }
+                    .flatMap(\.roots).map { Self.codexMetadataDirectory(for: $0) }
+            )
+            let metadataChangePaths = (paths ?? []).flatMap { path in
+                [path] + sidecarMapping.configuredChangePaths(for: path)
+            }
+            let changedMetadataDirectories = Set(metadataChangePaths.compactMap { path -> String? in
                 let url = URL(fileURLWithPath: path)
                 guard TraceFileIO.isCodexMetadataChangePath(url) else { return nil }
                 return TraceFileIO.canonicalPath(
