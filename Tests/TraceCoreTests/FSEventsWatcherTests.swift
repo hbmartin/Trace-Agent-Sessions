@@ -2,6 +2,34 @@ import XCTest
 @testable import TraceCore
 
 final class FSEventsWatcherTests: XCTestCase {
+    func testMergedChangesKeepLexicalSidecarPathAcrossRepointing() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TraceSidecarEvents-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = directory.appendingPathComponent("original.jsonl")
+        let replacement = directory.appendingPathComponent("replacement.jsonl")
+        let link = directory.appendingPathComponent("session_index.jsonl")
+        try Data().write(to: original)
+        try Data().write(to: replacement)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: original)
+        var changes = SourceChanges()
+        changes.include(path: link.path, flags: UInt32(kFSEventStreamEventFlagItemModified),
+                        eventID: 10, streamIdentifier: "sidecars")
+
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: replacement)
+        var repointed = SourceChanges()
+        repointed.include(path: link.path, flags: UInt32(kFSEventStreamEventFlagItemCreated),
+                          eventID: 11, streamIdentifier: "sidecars")
+        changes.merge(repointed)
+
+        XCTAssertEqual(changes.paths, [TraceFileIO.canonicalPath(original.path).path,
+                                      TraceFileIO.canonicalPath(replacement.path).path])
+        XCTAssertEqual(changes.lexicalPaths, [link.standardizedFileURL.path])
+        XCTAssertEqual(changes.watermarks["sidecars"], 11)
+    }
+
     func testWatcherReportsEmptyRootStartupFailure() {
         let watcher = FSEventsWatcher(roots: []) { _ in }
         XCTAssertFalse(watcher.start())

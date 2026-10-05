@@ -1223,6 +1223,75 @@ final class SessionMetadataTests: XCTestCase {
             "an external target change must invalidate the configured directory cache")
     }
 
+    func testSymlinkedSQLiteWALRefreshesOnlyConfiguredHome() async throws {
+        let parent = try directory()
+        let home = parent.appendingPathComponent("configured")
+        let sessions = home.appendingPathComponent("sessions")
+        let otherHome = parent.appendingPathComponent("other")
+        let otherSessions = otherHome.appendingPathComponent("sessions")
+        let store = parent.appendingPathComponent("external")
+        for path in [sessions, otherSessions, store] {
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        }
+        let rollout = sessions.appendingPathComponent("rollout-linked-wal.jsonl")
+        try write(codexRollout(id: "linked-wal"), to: rollout)
+        try write(codexRollout(id: "other-wal"),
+                  to: otherSessions.appendingPathComponent("rollout-other.jsonl"))
+        try write([["id": "other-wal", "thread_name": "Other title"]],
+                  to: otherHome.appendingPathComponent("session_index.jsonl"))
+        let target = store.appendingPathComponent("threads.sqlite")
+        let writer = try DatabaseQueue(path: target.path)
+        try await writer.writeWithoutTransaction {
+            try $0.execute(sql: "PRAGMA journal_mode=WAL")
+            try $0.execute(sql: "PRAGMA wal_autocheckpoint=0")
+        }
+        try await writer.write {
+            try $0.execute(sql: "CREATE TABLE threads (id TEXT, name TEXT, title TEXT)")
+            try $0.execute(sql: "INSERT INTO threads VALUES ('linked-wal', 'Initial title', NULL)")
+        }
+        let sidecar = home.appendingPathComponent("state_7.sqlite")
+        try FileManager.default.createSymbolicLink(
+            atPath: sidecar.path, withDestinationPath: "../external/threads.sqlite"
+        )
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [home, otherHome])
+        XCTAssertEqual(mapping.configuredChangePaths(for: target.path), [sidecar.path])
+        XCTAssertEqual(mapping.configuredChangePaths(for: target.path + "-wal"), [sidecar.path])
+        XCTAssertTrue(mapping.configuredChangePaths(for: target.path + "-shm").isEmpty)
+        XCTAssertTrue(mapping.configuredChangePaths(for: store
+            .appendingPathComponent("unrelated.sqlite-wal").path).isEmpty)
+        XCTAssertEqual(mapping.targetDirectories.map(\.path),
+                       [TraceFileIO.canonicalPath(store.path).path])
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database,
+            sources: [CodexSource(roots: [sessions, otherSessions])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let initialSessions = try await database.sessions()
+        let initial = try XCTUnwrap(initialSessions.first { $0.title == "Initial title" })
+        let messageIDs = try await database.messages(sessionID: initial.id).map(\.id)
+        let checkpoint = try await database.sourceState(agent: .codex, path: rollout.path)
+        let loadsBefore = await coordinator.codexNameLoadCountForTesting(directory: home)
+        let otherLoads = await coordinator.codexNameLoadCountForTesting(directory: otherHome)
+
+        try await writer.write { try $0.execute(sql: "UPDATE threads SET name='Title from external WAL'") }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path + "-wal"))
+        await coordinator.refresh(paths: [target.path + "-wal"], scope: .proseOnly)
+        let refreshed = try await database.session(id: initial.id)
+        let refreshedIDs = try await database.messages(sessionID: initial.id).map(\.id)
+        let refreshedCheckpoint = try await database.sourceState(agent: .codex, path: rollout.path)
+        let loadsAfter = await coordinator.codexNameLoadCountForTesting(directory: home)
+        let otherLoadsAfter = await coordinator.codexNameLoadCountForTesting(directory: otherHome)
+        XCTAssertEqual(refreshed?.title, "Title from external WAL")
+        XCTAssertEqual(refreshedIDs, messageIDs)
+        XCTAssertEqual(refreshedCheckpoint?.scannedBytes, checkpoint?.scannedBytes)
+        XCTAssertEqual(loadsAfter, loadsBefore + 1)
+        XCTAssertEqual(otherLoadsAfter, otherLoads)
+
+        await coordinator.refresh(paths: [target.path + "-shm",
+            store.appendingPathComponent("unrelated.sqlite-wal").path], scope: .proseOnly)
+        let loadsAfterUnrelated = await coordinator.codexNameLoadCountForTesting(directory: home)
+        XCTAssertEqual(loadsAfterUnrelated, loadsAfter)
+    }
+
     func testRepointedAliasReconciliationRefreshesFrozenRootsCodexNames() async throws {
         let parent = try directory()
         let configured = parent.appendingPathComponent("configured")
