@@ -2912,7 +2912,10 @@ final class TraceUITests: XCTestCase {
         let initialOffset = numericLine(in: offsets) ?? 0
 
         let firstFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
-        first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+        // The accessibility frame spans the proposed text width, including blank
+        // space. Aim at the visible glyphs so this exercises NSTextView routing.
+        first.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 12, dy: 9))
             .scroll(byDeltaX: 0, deltaY: -600)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: firstFinishCount + 1, timeout: 10
@@ -2962,9 +2965,14 @@ final class TraceUITests: XCTestCase {
         let visible = scroll.staticTexts.matching(NSPredicate(
             format: "value BEGINSWITH %@", "Wheel routing message "
         ))
-        let message = try XCTUnwrap(firstHittable(in: visible, timeout: 10))
+        let message = try XCTUnwrap(poll(timeout: 10) {
+            visible.allElementsBoundByIndex.first {
+                $0.isHittable && scroll.frame.contains($0.frame)
+            }
+        }, "Copy needs a fully visible text line after scrolling")
         let pasteboardChangeCount = preparePasteboardForCopy()
-        message.click()
+        message.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 12, dy: 9)).click()
         app.typeKey("a", modifierFlags: .command)
         app.typeKey("c", modifierFlags: .command)
         assertPasteboardChanged(
