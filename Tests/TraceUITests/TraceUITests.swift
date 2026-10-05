@@ -3049,7 +3049,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["testProbeTranscriptPosition"].click()
         let upwardPosition = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
         XCTAssertEqual(String(upwardPosition[2]), "false", "upward wheel input must unpin")
-        XCTAssertGreaterThan(try XCTUnwrap(Double(upwardPosition[1])) - try XCTUnwrap(Double(upwardPosition[0])), 50,
+        XCTAssertGreaterThan(try XCTUnwrap(Double(upwardPosition[1])) - XCTUnwrap(Double(upwardPosition[0])), 50,
             "upward wheel input must move above the current measured bottom")
 
         let settledFinishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
@@ -3339,7 +3339,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["testProbeTranscriptPosition"].click()
         let position = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
         XCTAssertEqual(String(position[2]), "false", "fractional upward motion must unpin")
-        XCTAssertGreaterThan(try XCTUnwrap(Double(position[1])) - try XCTUnwrap(Double(position[0])), 3,
+        XCTAssertGreaterThan(try XCTUnwrap(Double(position[1])) - XCTUnwrap(Double(position[0])), 3,
             "fractional upward motion must leave the reader above the current bottom")
     }
 

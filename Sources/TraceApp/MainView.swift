@@ -626,6 +626,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var attemptsRemaining: Int
             var stableChecks = 0
             var refreshedRowHeights = false
+            var refreshedTargetRowHeight = false
             var revealedTargetRow = false
             var lastDocumentHeight: CGFloat?
 
@@ -1337,9 +1338,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
             // Invalidating automatic heights can replace the anchor's measured
             // height with an estimate. Materialize and lay out just this row before
             // restoring a negative offset, which may exceed that estimate.
-            table.view(atColumn: 0, row: row, makeIfNecessary: true)?.layoutSubtreeIfNeeded()
-            table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
-            table.layoutSubtreeIfNeeded()
+            if !request.refreshedTargetRowHeight
+                || table.rect(ofRow: row).height + bookmark.offset <= 0 {
+                table.view(atColumn: 0, row: row, makeIfNecessary: true)?.layoutSubtreeIfNeeded()
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+                table.layoutSubtreeIfNeeded()
+                request.refreshedTargetRowHeight = true
+            }
             var rowRect = table.rect(ofRow: row)
             var origin = constrainedOrigin(
                 for: rowRect.minY - bookmark.offset, table: table, scrollView: scrollView
