@@ -26,10 +26,11 @@ final class TraceUITests: XCTestCase {
             ]]]
         ]
         var data = Data()
+        let fixtureTimestamp = Int64(Date().addingTimeInterval(-60).timeIntervalSince1970 * 1_000)
         for (index, var object) in records.enumerated() {
             object["sessionId"] = "test-session"
             object["cwd"] = "/tmp/TraceUIExample"
-            object["timestamp"] = "2026-09-14T10:00:0\(index)Z"
+            object["timestamp"] = fixtureTimestamp + Int64(index) * 1_000
             data.append(try JSONSerialization.data(withJSONObject: object))
             data.append(0x0A)
         }
@@ -869,7 +870,9 @@ final class TraceUITests: XCTestCase {
         popoverSearch.typeKey(.return, modifierFlags: [])
         let query = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(query.waitForExistence(timeout: 15))
-        app.popUpButtons["Any time"].click()
+        let dateMenu = app.descendants(matching: .any)["searchDateFilter"].firstMatch
+        XCTAssertTrue(dateMenu.waitForExistence(timeout: 10))
+        dateMenu.click()
         app.menuItems["7 days"].click()
         let scroll = app.scrollViews["searchResultsScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 15))
@@ -1732,9 +1735,13 @@ final class TraceUITests: XCTestCase {
         popoverSearch.typeKey(.return, modifierFlags: [])
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
-        app.popUpButtons["All projects"].click()
+        let projectMenu = app.descendants(matching: .any)["searchProjectFilter"].firstMatch
+        XCTAssertTrue(projectMenu.waitForExistence(timeout: 10))
+        projectMenu.click()
         app.menuItems["TraceUIExample"].click()
-        app.popUpButtons["Any time"].click()
+        let dateMenu = app.descendants(matching: .any)["searchDateFilter"].firstMatch
+        XCTAssertTrue(dateMenu.waitForExistence(timeout: 10))
+        dateMenu.click()
         app.menuItems["7 days"].click()
         app.buttons["Claude Code"].click()
         XCTAssertTrue(app.buttons.containing(NSPredicate(
@@ -1780,8 +1787,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(reconciliationStarted, timeout: 20))
         XCTAssertTrue(waitForFile(completed, timeout: 20))
 
-        XCTAssertTrue(app.popUpButtons["7 days"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.popUpButtons["TraceUIExample"].exists,
+        XCTAssertTrue(dateMenu.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.menuButtons["7 days"].exists || app.popUpButtons["7 days"].exists)
+        XCTAssertTrue(app.menuButtons["TraceUIExample"].exists || app.popUpButtons["TraceUIExample"].exists,
                       "the project filter must retain its canonical identity through rebuild")
         XCTAssertEqual(launcherSearch.value as? String, "Find")
         XCTAssertTrue(app.buttons.containing(NSPredicate(
@@ -1800,13 +1808,13 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.exists, "7 days must exclude the old result")
 
         app.buttons["Claude Code"].click()
-        app.popUpButtons["7 days"].click()
+        dateMenu.click()
         app.menuItems["Any time"].click()
         XCTAssertTrue(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "Find ancient date boundary"
         )).firstMatch.waitForExistence(timeout: 10),
         "Any time must remove both date bounds before the launcher closes")
-        app.popUpButtons["TraceUIExample"].click()
+        projectMenu.click()
         app.menuItems["All projects"].click()
         XCTAssertFalse(app.staticTexts["Search filters active"].exists)
         launcherSearch.typeKey(.escape, modifierFlags: [])
