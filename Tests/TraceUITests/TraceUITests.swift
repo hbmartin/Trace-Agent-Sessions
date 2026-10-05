@@ -3,6 +3,14 @@ import AppKit
 
 @MainActor
 final class TraceUITests: XCTestCase {
+    private func nativeMenu(titled title: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "elementType == %ld OR elementType == %ld",
+            Int(XCUIElement.ElementType.menuButton.rawValue),
+            Int(XCUIElement.ElementType.popUpButton.rawValue)
+        )).matching(identifier: title).firstMatch
+    }
+
     private func makeApp(extra: [String] = []) throws -> (XCUIApplication, URL) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceUI-\(UUID())")
         let sources = directory.appendingPathComponent("Sources/Claude")
@@ -1203,7 +1211,7 @@ final class TraceUITests: XCTestCase {
         popoverSearch.typeKey(.return, modifierFlags: [])
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
-        app.popUpButtons["All projects"].click()
+        app.descendants(matching: .any)["searchProjectFilter"].firstMatch.click()
         app.menuItems["TraceUIExample"].click()
         app.buttons["Claude Code"].click()
         XCTAssertTrue(app.buttons.containing(NSPredicate(
@@ -1789,7 +1797,7 @@ final class TraceUITests: XCTestCase {
 
         XCTAssertTrue(dateMenu.waitForExistence(timeout: 10))
         XCTAssertTrue(app.menuButtons["7 days"].exists || app.popUpButtons["7 days"].exists)
-        XCTAssertTrue(app.menuButtons["TraceUIExample"].exists || app.popUpButtons["TraceUIExample"].exists,
+        XCTAssertTrue(app.menuButtons["TraceUIExample"].exists || nativeMenu(titled: "TraceUIExample", in: app).exists,
                       "the project filter must retain its canonical identity through rebuild")
         XCTAssertEqual(launcherSearch.value as? String, "Find")
         XCTAssertTrue(app.buttons.containing(NSPredicate(
@@ -1848,7 +1856,7 @@ final class TraceUITests: XCTestCase {
         search.typeKey(.return, modifierFlags: [])
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
-        app.popUpButtons["All projects"].click()
+        app.descendants(matching: .any)["searchProjectFilter"].firstMatch.click()
         app.menuItems["TraceUIExample"].click()
         XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 10))
 
@@ -1872,7 +1880,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [failureLabel], timeout: 15), .completed)
         XCTAssertTrue(resolving.waitForNonExistence(timeout: 10),
                       "a failed rebuild must finish project-filter resolution")
-        XCTAssertTrue(app.popUpButtons["TraceUIExample"].exists,
+        XCTAssertTrue(nativeMenu(titled: "TraceUIExample", in: app).exists,
                       "the failed rebuild must retain the canonical project filter")
         XCTAssertEqual(launcherSearch.value as? String, "FailedRebuildNeedle")
         XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 10))
@@ -1994,7 +2002,7 @@ final class TraceUITests: XCTestCase {
         popoverSearch.typeKey(.return, modifierFlags: [])
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
-        app.popUpButtons["All projects"].click()
+        app.descendants(matching: .any)["searchProjectFilter"].firstMatch.click()
         app.menuItems["TraceUIExample"].click()
         XCTAssertTrue(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "from selected project"
@@ -2023,13 +2031,13 @@ final class TraceUITests: XCTestCase {
         )
         try otherHandle.close()
         XCTAssertTrue(waitForFile(completed, timeout: 15))
-        XCTAssertTrue(app.popUpButtons["Renamed Trace Project"].waitForExistence(timeout: 10),
+        XCTAssertTrue(nativeMenu(titled: "Renamed Trace Project", in: app).waitForExistence(timeout: 10),
                       "final reconciliation must refresh the filter's displayed project name")
 
         try? FileManager.default.removeItem(at: completed)
         try FileManager.default.removeItem(at: selectedSource)
         XCTAssertTrue(waitForFile(completed, timeout: 15))
-        XCTAssertTrue(app.popUpButtons["All projects"].waitForExistence(timeout: 15),
+        XCTAssertTrue(nativeMenu(titled: "All projects", in: app).waitForExistence(timeout: 15),
                       "a vanished launcher project filter must clear to All projects")
         XCTAssertTrue(app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "from other project"

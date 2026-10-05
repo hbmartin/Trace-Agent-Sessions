@@ -349,6 +349,7 @@ struct TranscriptView: View {
                     density: settings.transcriptDensity
                 )
                     .id(session.id)
+                    .accessibilityIdentifier("transcriptScroll")
             } else {
                 ContentUnavailableView("Search your agent history", systemImage: "text.magnifyingglass",
                     description: Text("Search above or select a session in the sidebar."))
