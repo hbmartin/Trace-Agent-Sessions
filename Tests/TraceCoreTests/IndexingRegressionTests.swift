@@ -1326,8 +1326,11 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(failedPhases.last, .failed)
         XCTAssertEqual(failedCompletions.last?.watermarks["volume"], 1)
 
-        try await Task.sleep(for: .milliseconds(100))
-        await scheduler.waitUntilIdle()
+        let retryDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while await progress.terminalPhases.count < 2, ContinuousClock.now < retryDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+            await scheduler.waitUntilIdle()
+        }
         let automaticallyRetriedPhases = await progress.terminalPhases
         XCTAssertEqual(Array(automaticallyRetriedPhases.suffix(2)), [.failed, .failed])
 
