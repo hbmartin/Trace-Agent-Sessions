@@ -1661,6 +1661,22 @@ final class TraceUITests: XCTestCase {
         first.click()
     }
 
+    private func openSidebarSession(_ title: String, in app: XCUIApplication) {
+        let viewport = app.scrollViews.containing(.outline, identifier: "sessionSidebarList").firstMatch
+        let label = viewport.staticTexts[title].firstMatch
+        XCTAssertTrue(label.waitForExistence(timeout: 10))
+        for _ in 0..<10 {
+            let frame = label.frame
+            let visible = viewport.frame
+            if visible.contains(frame) && label.isHittable {
+                label.click()
+                return
+            }
+            viewport.scroll(byDeltaX: 0, deltaY: frame.minY < visible.minY ? 100 : -100)
+        }
+        XCTFail("Session \(title) must be visible inside the sidebar before clicking")
+    }
+
     func testGlobalSearchClearsAfterLauncherCloseButSurvivesHandoff() throws {
         let (app, _) = try makeApp(extra: ["--ui-show-popover"])
         app.launch()
@@ -2904,7 +2920,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["WheelProject"].firstMatch.waitForExistence(timeout: 30))
         app.staticTexts["WheelProject"].firstMatch.click()
-        app.staticTexts["Wheel routing"].firstMatch.click()
+        openSidebarSession("Wheel routing", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let first = transcriptMessage("Wheel routing", index: 0, in: scroll)
@@ -3016,7 +3032,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["BottomProject"].firstMatch.waitForExistence(timeout: 30))
         app.staticTexts["BottomProject"].firstMatch.click()
-        app.staticTexts["Bottom follow"].firstMatch.click()
+        openSidebarSession("Bottom follow", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let first = transcriptMessage("Bottom follow", index: 0, in: scroll)
@@ -3026,17 +3042,15 @@ final class TraceUITests: XCTestCase {
 
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
-        let bottomOffset = try XCTUnwrap(numericLine(in: offsets))
         let transcriptPoint = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         transcriptPoint.scroll(byDeltaX: 0, deltaY: -600)
         transcriptPoint.scroll(byDeltaX: 0, deltaY: -600)
         transcriptPoint.scroll(byDeltaX: 0, deltaY: 700)
-        XCTAssertNotNil(poll(timeout: 10) {
-            guard let offset = self.numericLine(in: offsets), offset < bottomOffset - 50 else {
-                return nil
-            }
-            return offset
-        }, "upward wheel input must move immediately after reaching the bottom")
+        app.buttons["testProbeTranscriptPosition"].click()
+        let upwardPosition = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
+        XCTAssertEqual(String(upwardPosition[2]), "false", "upward wheel input must unpin")
+        XCTAssertGreaterThan(try XCTUnwrap(Double(upwardPosition[1])) - try XCTUnwrap(Double(upwardPosition[0])), 50,
+            "upward wheel input must move above the current measured bottom")
 
         let settledFinishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
@@ -3149,7 +3163,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["ReasoningProject"].firstMatch.waitForExistence(timeout: 30))
         app.staticTexts["ReasoningProject"].firstMatch.click()
-        app.staticTexts["Reasoning growth"].firstMatch.click()
+        openSidebarSession("Reasoning growth", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
@@ -3197,7 +3211,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["DisclosureProject"].firstMatch.waitForExistence(timeout: 30))
         app.staticTexts["DisclosureProject"].firstMatch.click()
-        app.staticTexts["Disclosure race"].firstMatch.click()
+        openSidebarSession("Disclosure race", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
@@ -3244,7 +3258,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["ScrollProject"].firstMatch.waitForExistence(timeout: 30))
         app.staticTexts["ScrollProject"].firstMatch.click()
-        app.staticTexts["Lost scroll end"].firstMatch.click()
+        openSidebarSession("Lost scroll end", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         try? FileManager.default.removeItem(at: idleAudit)
@@ -3272,7 +3286,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["ScrollProject"].firstMatch.waitForExistence(timeout: 20))
         app.staticTexts["ScrollProject"].firstMatch.click()
-        app.staticTexts["External scroll"].firstMatch.click()
+        openSidebarSession("External scroll", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
@@ -3299,6 +3313,8 @@ final class TraceUITests: XCTestCase {
         let idleAudit = directory.appendingPathComponent("slow-scroll-idle")
         let offsets = directory.appendingPathComponent("slow-scroll-offsets")
         let simulationDone = directory.appendingPathComponent("slow-scroll-done")
+        let positionProbe = directory.appendingPathComponent("slow-scroll-position")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = positionProbe.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] = "slow-up"
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_OFFSET_PATH"] = offsets.path
@@ -3308,12 +3324,11 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["ScrollProject"].firstMatch.waitForExistence(timeout: 20))
         app.staticTexts["ScrollProject"].firstMatch.click()
-        app.staticTexts["Slow scroll"].firstMatch.click()
+        openSidebarSession("Slow scroll", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
-        let bottomOrigin = try XCTUnwrap(numericLine(in: offsets))
         try? FileManager.default.removeItem(at: idleAudit)
 
         app.buttons["testSimulateTranscriptScroll"].click()
@@ -3321,9 +3336,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(fileLines(in: idleAudit).contains("finished"),
             "the live-scroll backstop must wait for the last viewport motion")
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 5))
-        let readingOrigin = try XCTUnwrap(numericLine(in: offsets))
-        XCTAssertLessThan(readingOrigin, bottomOrigin - 3,
-            "fractional upward motion must unpin instead of snapping to bottom")
+        app.buttons["testProbeTranscriptPosition"].click()
+        let position = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
+        XCTAssertEqual(String(position[2]), "false", "fractional upward motion must unpin")
+        XCTAssertGreaterThan(try XCTUnwrap(Double(position[1])) - try XCTUnwrap(Double(position[0])), 3,
+            "fractional upward motion must leave the reader above the current bottom")
     }
 
     func testRevealingTrailingRowsKeepsTheVisibilityAnchor() throws {
@@ -3354,7 +3371,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         XCTAssertTrue(app.staticTexts["TrailingProject"].firstMatch.waitForExistence(timeout: 30))
         app.staticTexts["TrailingProject"].firstMatch.click()
-        app.staticTexts["Trailing visibility"].firstMatch.click()
+        openSidebarSession("Trailing visibility", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let first = transcriptMessage("Trailing visibility", index: 0, in: scroll)
@@ -3396,7 +3413,7 @@ final class TraceUITests: XCTestCase {
         app.radioButtons["Costs"].click()
         let alphaAfterSectionChange = sidebarSession(named: "Alpha session")
         XCTAssertTrue(alphaAfterSectionChange.wait(for: \.isHittable, toEqual: true, timeout: 10))
-        alphaAfterSectionChange.click()
+        openSidebarSession("Alpha session", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         XCTAssertFalse(app.textFields["mainSearch"].exists)
@@ -3445,7 +3462,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.windows["ProjectBeta"].exists)
         let beta = sidebarSession(named: "Beta session")
         XCTAssertTrue(beta.wait(for: \.isHittable, toEqual: true, timeout: 10))
-        beta.click()
+        openSidebarSession("Beta session", in: app)
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let betaFirst = transcriptMessage("Beta session", index: 0, in: scroll)
         XCTAssertTrue(betaFirst.waitForExistence(timeout: 10))
@@ -3454,7 +3471,7 @@ final class TraceUITests: XCTestCase {
         let returningAlpha = sidebarSession(named: "Alpha session")
         XCTAssertTrue(returningAlpha.wait(for: \.isHittable, toEqual: true, timeout: 10))
         let restoreCountBeforeReturn = fileLines(in: restoreAudit).count
-        returningAlpha.click()
+        openSidebarSession("Alpha session", in: app)
         let restoredScroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(restoredScroll.waitForExistence(timeout: 10))
         assertSavedAnchorOnScreen(index: bookmarkIndex, in: restoredScroll, expectedY: anchorY,
@@ -3483,7 +3500,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(scroll.exists, "an index refresh must not reopen the last session")
         let alphaAfterRefresh = sidebarSession(named: "Alpha session")
         XCTAssertTrue(alphaAfterRefresh.wait(for: \.isHittable, toEqual: true, timeout: 10))
-        alphaAfterRefresh.click()
+        openSidebarSession("Alpha session", in: app)
         app.terminate()
         app.launch()
         let relaunchedScroll = app.scrollViews["transcriptScroll"]
@@ -3514,7 +3531,7 @@ final class TraceUITests: XCTestCase {
         project.click()
         let session = app.staticTexts["Keyboard scroll"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 10))
-        session.click()
+        openSidebarSession("Keyboard scroll", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         try? FileManager.default.removeItem(at: bookmarkSaved)
@@ -3582,7 +3599,7 @@ final class TraceUITests: XCTestCase {
         project.click()
         let session = app.staticTexts["Window lifecycle"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 10))
-        session.click()
+        openSidebarSession("Window lifecycle", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         app.activate()
@@ -3645,7 +3662,7 @@ final class TraceUITests: XCTestCase {
             .staticText, identifier: "Alpha session"
         ).firstMatch
         XCTAssertTrue(alpha.waitForExistence(timeout: 10))
-        alpha.click()
+        openSidebarSession("Alpha session", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         try? FileManager.default.removeItem(at: bookmarkSaved)
@@ -3662,7 +3679,7 @@ final class TraceUITests: XCTestCase {
             .staticText, identifier: "Alpha session"
         ).firstMatch
         XCTAssertTrue(returningAlpha.wait(for: \.isHittable, toEqual: true, timeout: 10))
-        returningAlpha.click()
+        openSidebarSession("Alpha session", in: app)
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         XCTAssertTrue(waitForFile(restorationStarted), "bookmark restoration must be pending")
         try? FileManager.default.removeItem(at: bookmarkSaved)
@@ -3727,7 +3744,7 @@ final class TraceUITests: XCTestCase {
         project.click()
         let session = app.staticTexts["Forced restore"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 10))
-        session.click()
+        openSidebarSession("Forced restore", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         try? FileManager.default.removeItem(at: bookmarkSaved)
@@ -3736,7 +3753,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["backToProject"].click()
         try? FileManager.default.removeItem(at: restorationStarted)
         try? FileManager.default.removeItem(at: restorationCancelled)
-        session.click()
+        openSidebarSession("Forced restore", in: app)
         XCTAssertTrue(waitForFile(restorationStarted), "bookmark restoration must be pending")
         scroll.scroll(byDeltaX: 0, deltaY: -350)
         XCTAssertTrue(waitForFile(restorationCancelled), "real scrolling must cancel restoration")
@@ -3763,7 +3780,7 @@ final class TraceUITests: XCTestCase {
         project.click()
         let session = app.staticTexts["Saved restore"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 10))
-        session.click()
+        openSidebarSession("Saved restore", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let first = scroll.staticTexts.matching(NSPredicate(

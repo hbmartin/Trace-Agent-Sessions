@@ -34,6 +34,17 @@ jobs:
           -destination 'platform=macOS,arch=arm64'
           -only-testing:TraceCoreTests
           CODE_SIGNING_ALLOWED=NO
+      - name: Run recovery UI smoke checks
+        run: >-
+          xcodebuild test
+          -project Trace.xcodeproj -scheme Trace -configuration Debug
+          -destination 'platform=macOS,arch=arm64'
+          -only-testing:TraceUITests/TraceUITests/testExternalTranscriptScrollUnpinsAndDensityKeepsLiveViewport
+          -only-testing:TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart
+          -only-testing:TraceUITests/TraceUITests/testSlowViewportMotionKeepsLiveScrollActiveUntilMotionStops
+          -only-testing:TraceUITests/TraceUITests/testTranscriptBottomFollowsLiveAppendOnlyWhilePinned
+          -only-testing:TraceUITests/TraceUITests/testGlobalSearchOpenRevealsOffscreenProjectAndSessionSelections
+          -resultBundlePath build/TraceUISmoke.xcresult
       - name: Run UI tests
         run: >-
           xcodebuild test
@@ -48,7 +59,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: trace-ui-results
-          path: build/TraceUITests.xcresult
+          path: |
+            build/TraceUISmoke.xcresult
+            build/TraceUITests.xcresult
           if-no-files-found: ignore
           retention-days: 7
       - name: Build benchmark CLI
