@@ -22,6 +22,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.3"
