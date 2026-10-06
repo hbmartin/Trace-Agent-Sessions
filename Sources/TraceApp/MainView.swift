@@ -1863,7 +1863,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 abs($0.width - viewportSize.width) > 0.5
                     || abs($0.height - viewportSize.height) > 0.5
             } ?? false
-            if viewportResized, let previousViewportSize {
+            if viewportResized, !isUserInteracting, let previousViewportSize {
                 resizeTransaction = ResizeTransaction(
                     initiallyFollowing: followsBottom,
                     viewportDelta: viewportSize.height - previousViewportSize.height,
@@ -2031,7 +2031,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 let rect = table.rect(ofRow: row)
                 let viewport = scrollView.documentVisibleRect
                 TraceTestHooks.appendLine(
-                    "\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(positionEstablished && pendingRestore?.reason.reportsHooks != true),\(sessionID)",
+                    "\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(positionEstablished && pendingRestore == nil && pendingHeightMessageIDs.isEmpty && !extentNeedsRefresh && !pendingAnchorCorrection),\(sessionID)",
                     pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"
                 )
             }
@@ -2177,7 +2177,18 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 resizeTransaction = ResizeTransaction(initiallyFollowing: true, viewportDelta: -80,
                     expires: .now.advanced(by: .milliseconds(simulation == "expired-resize" ? -1 : 500)),
                     inputGeneration: userInputGeneration)
-                if simulation == "interrupted-resize" { beginUserScrolling() }
+                if simulation == "interrupted-resize" {
+                    beginUserScrolling()
+                    // A queued resize callback after physical input must not
+                    // rearm the transaction and suppress the next upward move.
+                    let size = scrollView.contentView.bounds.size
+                    lastObservedViewportSize = NSSize(width: size.width, height: size.height + 80)
+                    lastObservedOrigin = scrollView.contentView.bounds.origin
+                    expectedProgrammaticOrigin = nil
+                    boundsDidChange()
+                    TraceTestHooks.appendLine("resize-rearmed-after-input=\(resizeTransaction != nil)",
+                        pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                }
                 expectedProgrammaticOrigin = nil
                 lastObservedOrigin = scrollView.contentView.bounds.origin
                 var origin = scrollView.contentView.bounds.origin

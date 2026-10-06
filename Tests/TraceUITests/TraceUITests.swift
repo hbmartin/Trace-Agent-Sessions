@@ -12,6 +12,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_INDEX_PATH"] = input.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"] = output.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH"] = directory.appendingPathComponent("native-anchor-samples").path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_COMPLETED_PATH"] = directory.appendingPathComponent("native-restore-completed").path
         nativeAnchorProbe = (app, input, output)
     }
     private func nativeMenu(titled title: String, in app: XCUIApplication) -> XCUIElement {
@@ -3535,6 +3536,15 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = boundsAudit.path
+        defer {
+            for (name, path) in [("external-bounds", boundsAudit), ("external-idle", idleAudit),
+                                 ("external-bookmark", bookmarkSaved)] {
+                let attachment = XCTAttachment(string: fileLines(in: path).joined(separator: "\n"))
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
@@ -3543,9 +3553,12 @@ final class TraceUITests: XCTestCase {
         openSidebarSession("External scroll", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("native-restore-completed"), timeout: 10))
+        let initialFinishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
-        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: initialFinishes + 1, timeout: 10))
         let bottomIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
+        XCTAssertGreaterThan(bottomIndex, 50, "the initial wheel must reach the end of the 70-message transcript")
         let finishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
 
         app.buttons["testSimulateTranscriptScroll"].click()
@@ -3641,6 +3654,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(jump, timeout: 10))
         app.buttons["testSimulateTranscriptScroll"].click()
         XCTAssertTrue(waitForFile(done, timeout: 5))
+        if simulation == "interrupted-resize" {
+            XCTAssertTrue(fileLines(in: audit).contains("resize-rearmed-after-input=false"))
+        }
         if simulation == "cached-extent" {
             let line = try XCTUnwrap(fileLines(in: audit).last { $0.hasPrefix("cache=") })
             let fields = line.dropFirst(6).split(separator: ",").compactMap { Int($0) }
