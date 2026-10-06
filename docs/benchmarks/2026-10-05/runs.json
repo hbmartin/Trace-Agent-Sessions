@@ -1,0 +1,130 @@
+[
+  {
+    "name": "baseline-initial",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791243713.498,
+    "finish_time": 1791243869.95,
+    "files": {
+      "metrics": {
+        "path": "baseline-initial-metrics.json",
+        "sha256": "f19a917c85d00ea0f3ad0780b7126491920b73aa6c51efdebc8cb510052ba97b"
+      },
+      "summary": {
+        "path": "baseline-initial-summary.json",
+        "sha256": "5bae6f6d95dfda1394af87b1ad8d38bad02ec2a627952d5a1acc2bca0507fc88"
+      }
+    }
+  },
+  {
+    "name": "candidate-before-anchor-optimization",
+    "source_commit": "03c6e8a088a00136045ddc23760da11bce6795c3",
+    "start_time": 1791243939.027,
+    "finish_time": 1791244127.281,
+    "files": {
+      "metrics": {
+        "path": "candidate-before-anchor-optimization-metrics.json",
+        "sha256": "57be18851535eba76d77a91c23259119299002dd6469751e9fd8acb35809394b"
+      },
+      "summary": {
+        "path": "candidate-before-anchor-optimization-summary.json",
+        "sha256": "f8731809ada9139ae873607ab38280543fb1c682a0699e1ff716e60a6828b7d8"
+      }
+    }
+  },
+  {
+    "name": "baseline-after-anchor-optimization",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791244592.893,
+    "finish_time": 1791244718.55,
+    "files": {
+      "metrics": {
+        "path": "baseline-after-anchor-optimization-metrics.json",
+        "sha256": "de6753ce0b81fc099a0b71d9e6c96cac9cf077604039fe17d560bda16c0cd51f"
+      },
+      "summary": {
+        "path": "baseline-after-anchor-optimization-summary.json",
+        "sha256": "72af32b27953e2e347234fe7523254d3f0402d13b39ce467c06c52145c120f31"
+      }
+    }
+  },
+  {
+    "name": "candidate-after-anchor-optimization",
+    "source_commit": "8a80280bb8581d9a73f0147af97b2db66251d62c",
+    "start_time": 1791244743.625,
+    "finish_time": 1791244895.428,
+    "files": {
+      "metrics": {
+        "path": "candidate-after-anchor-optimization-metrics.json",
+        "sha256": "4a31afb2bc8fade59e84952b52b7ad391c3a1c79af09014ecc39d3000e6f8228"
+      },
+      "summary": {
+        "path": "candidate-after-anchor-optimization-summary.json",
+        "sha256": "e3aa581999ab4fa63baa3feeeea9f50cd4d202e2a412a5d85e6f7ba7f12b1fdb"
+      }
+    }
+  },
+  {
+    "name": "baseline-publication",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791245346.961,
+    "finish_time": 1791245474.006,
+    "files": {
+      "metrics": {
+        "path": "baseline-publication-metrics.json",
+        "sha256": "d2c7c6384249ad6061262a0082e0858e5dce0b52dffb13e5c3d516050989a20e"
+      },
+      "summary": {
+        "path": "baseline-publication-summary.json",
+        "sha256": "0d6a3e453b360801febfa86cb475c185be164f81feecc6b45f8a6c382a53014b"
+      }
+    }
+  },
+  {
+    "name": "candidate-publication",
+    "source_commit": "3034725497d6942fb3d586ae034f834dc038c75c",
+    "start_time": 1791245619.135,
+    "finish_time": 1791245768.643,
+    "files": {
+      "metrics": {
+        "path": "candidate-publication-metrics.json",
+        "sha256": "3c376641b1d6555109b8eb142b1efa521877d3033e3c85d467530087757ae4d5"
+      },
+      "summary": {
+        "path": "candidate-publication-summary.json",
+        "sha256": "57fcf68da92b3cd582613d455718339cf7886d23efd20d40056081f6b047bcae"
+      }
+    }
+  },
+  {
+    "name": "baseline-streaming-confirmation",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791244992.349,
+    "finish_time": 1791245027.063,
+    "files": {
+      "metrics": {
+        "path": "baseline-streaming-confirmation-metrics.json",
+        "sha256": "5ffbdfe91006254b0785bab5e60586a761849240bc71a217a230966ec8c7c6ba"
+      },
+      "summary": {
+        "path": "baseline-streaming-confirmation-summary.json",
+        "sha256": "a98946b28a82d2b7e31fd5fbfd06d2ed9beeb4be070e2c1e7f791ed7ec7f606c"
+      }
+    }
+  },
+  {
+    "name": "candidate-streaming-confirmation",
+    "source_commit": "8a80280bb8581d9a73f0147af97b2db66251d62c",
+    "start_time": 1791245078.584,
+    "finish_time": 1791245118.496,
+    "files": {
+      "metrics": {
+        "path": "candidate-streaming-confirmation-metrics.json",
+        "sha256": "62e5d67582fdd231150296a59d1cab5bc1ec88a079743e61a582de0055d909ec"
+      },
+      "summary": {
+        "path": "candidate-streaming-confirmation-summary.json",
+        "sha256": "eb2cacda638871f09642a329b280ee523d1b9d47c59aa2c456887a90977da879"
+      }
+    }
+  }
+]
