@@ -182,7 +182,7 @@ private struct SessionSidebar: View {
                                 try? await Task.sleep(for: .milliseconds(100))
                                 guard !Task.isCancelled,
                                       model.sidebarRevealRequest?.token == reveal.token else { return }
-                                proxy.scrollTo(projectID, anchor: .center)
+                                proxy.scrollTo(projectID, anchor: .top)
                             }
                             handledProjectRevealToken = reveal.token
                             if TraceTestHooks.isUITesting,
