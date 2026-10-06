@@ -1350,10 +1350,11 @@ final class TraceModel: ObservableObject {
     }
 
     private func startWatching(
-        _ sources: [any SessionSource], forceRootReconciliation: Bool = false
+        _ sources: [any SessionSource], forceRootReconciliation: Bool = false,
+        reconfigureWatchers: Bool = false
     ) async -> Bool {
         guard settings.onboardingComplete, let database else { return false }
-        if !forceRootReconciliation, !watchers.isEmpty { return true }
+        if !forceRootReconciliation, !reconfigureWatchers, !watchers.isEmpty { return true }
         let generation = beginWatcherConfiguration()
         let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
@@ -1455,15 +1456,20 @@ final class TraceModel: ObservableObject {
                     if sidecarLinkChanged,
                        CodexMetadataSidecarMapping(metadataDirectories: metadataRoots)
                         != sidecarMapping {
+                        let buffered = self.bufferedSourceChanges
                         guard await self.startWatching(
-                            sources, forceRootReconciliation: true
+                            sources, reconfigureWatchers: true
                         ) else { return }
                         relevant.reconciliationPaths.formUnion(self.startupReconciliationPaths)
-                        relevant.recoveryReasons.insert(.rootChanged)
+                        if !self.startupReconciliationPaths.isEmpty {
+                            relevant.recoveryReasons.insert(.rootChanged)
+                        }
+                        relevant.merge(buffered)
                         relevant.merge(self.bufferedSourceChanges)
                         self.bufferedSourceChanges = SourceChanges()
                         self.watcherStartupPending = false
                         await self.submitSourceChanges(relevant)
+                        self.startSafetyVerificationLoop()
                         return
                     }
                     guard !relevant.paths.isEmpty || relevant.requiresReconciliation

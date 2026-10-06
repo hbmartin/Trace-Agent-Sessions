@@ -1223,6 +1223,33 @@ final class SessionMetadataTests: XCTestCase {
             "an external target change must invalidate the configured directory cache")
     }
 
+    func testRelativeSidecarTargetThroughSymlinkedAncestor() throws {
+        let parent = try directory()
+        let actualParent = parent.appendingPathComponent("real/deep")
+        let actualHome = actualParent.appendingPathComponent("codex")
+        let store = actualParent.appendingPathComponent("external")
+        for path in [actualHome, store] {
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        }
+        let alias = parent.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actualParent)
+        let configuredHome = alias.appendingPathComponent("codex")
+        let target = store.appendingPathComponent("threads.sqlite")
+        try Data().write(to: target)
+        let sidecar = configuredHome.appendingPathComponent("state_7.sqlite")
+        try FileManager.default.createSymbolicLink(
+            atPath: sidecar.path, withDestinationPath: "../external/threads.sqlite"
+        )
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [configuredHome])
+        let configuredPath = actualHome.appendingPathComponent("state_7.sqlite").standardizedFileURL.path
+        XCTAssertEqual(mapping.configuredChangePaths(for: target.path), [configuredPath])
+        XCTAssertEqual(mapping.configuredChangePaths(for: target.path + "-wal"), [configuredPath])
+        XCTAssertTrue(mapping.configuredChangePaths(for: parent
+            .appendingPathComponent("external/threads.sqlite").path).isEmpty)
+        XCTAssertEqual(mapping.targetDirectories.map(\.path),
+                       [TraceFileIO.canonicalPath(store.path).path])
+    }
+
     func testSymlinkedSQLiteWALRefreshesOnlyConfiguredHome() async throws {
         let parent = try directory()
         let home = parent.appendingPathComponent("configured")

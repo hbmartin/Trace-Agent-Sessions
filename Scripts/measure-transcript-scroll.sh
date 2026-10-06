@@ -4,8 +4,10 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date +%Y%m%d-%H%M%S)"
 output_dir="${TRACE_SCROLL_BENCHMARK_OUTPUT_DIR:-$repo_dir/build/transcript-scroll/$timestamp}"
+if [[ "$output_dir" != /* ]]; then output_dir="$PWD/$output_dir"; fi
 result_bundle="$output_dir/TranscriptScroll.xcresult"
 derived_data="${TRACE_SCROLL_DERIVED_DATA_PATH:-$repo_dir/build/transcript-scroll-derived-data}"
+if [[ "$derived_data" != /* ]]; then derived_data="$PWD/$derived_data"; fi
 
 mkdir -p "$output_dir"
 cd "$repo_dir"

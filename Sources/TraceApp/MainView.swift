@@ -1631,10 +1631,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 documentHeight.map { abs(before - $0) > 0.5 }
             } ?? false
             let layoutChanged = viewportResized || documentResized || scrollView.inLiveResize
-            let originTravel = abs(actual.y - (previous?.y ?? actual.y))
-            let documentTravel = abs((documentHeight ?? 0) - (previousDocumentHeight ?? 0))
+            let originDelta = actual.y - (previous?.y ?? actual.y)
+            let documentDelta = (documentHeight ?? 0) - (previousDocumentHeight ?? 0)
+            let originTravel = abs(originDelta)
+            let documentTravel = abs(documentDelta)
             var passiveLayoutMotion = viewportResized || scrollView.inLiveResize
-                || (documentResized && originTravel <= documentTravel + 2)
+                || (documentResized && originTravel <= documentTravel + 2
+                    && originDelta * documentDelta >= 0)
             if !ignored, !viewportResized, !documentResized,
                let pending = pendingViewportResizeShift, let previous {
                 pendingViewportResizeShift = nil
@@ -1765,6 +1768,25 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     "simulate-after=\(scrollView.contentView.bounds.origin.y)",
                     pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"
                 )
+            case "growing-up":
+                guard let table else { return }
+                beginUserScrolling()
+                // Coalesce document growth and reader movement into one bounds
+                // notification, as can happen during a streaming layout pass.
+                let origin = scrollView.contentView.bounds.origin
+                scrollView.contentView.postsBoundsChangedNotifications = false
+                table.setFrameSize(NSSize(width: table.frame.width, height: table.frame.height + 100))
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y - 4))
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                NotificationCenter.default.post(
+                    name: NSView.boundsDidChangeNotification, object: scrollView.contentView
+                )
+                TraceTestHooks.appendLine(
+                    "simulation-classified-bottom=\(followsBottom)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"
+                )
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
             case "slow-up":
                 beginUserScrolling()
                 liveScrolling = true

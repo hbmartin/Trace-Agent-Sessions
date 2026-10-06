@@ -207,7 +207,7 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
                 ) else { continue }
                 let targetURL = destination.hasPrefix("/")
                     ? URL(fileURLWithPath: destination)
-                    : directory.appendingPathComponent(destination)
+                    : directory.resolvingSymlinksInPath().appendingPathComponent(destination)
                 let target = TraceFileIO.canonicalPath(targetURL.path)
                 let configuredPath = sidecar.standardizedFileURL.path
                 sidecarsByTarget[target.comparisonKey, default: []].insert(configuredPath)

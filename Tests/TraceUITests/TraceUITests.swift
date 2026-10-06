@@ -384,6 +384,8 @@ final class TraceUITests: XCTestCase {
 
     func testExternalCodexSidecarTargetChangeRefreshesTitle() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let activityAudit = directory.appendingPathComponent("sidecar-index-activity")
+        app.launchEnvironment["TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"] = activityAudit.path
         let codex = directory.appendingPathComponent("Sources/Codex")
         let targets = directory.appendingPathComponent("SidecarTargets")
         try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
@@ -421,6 +423,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertNil(updated.error)
         XCTAssertEqual(updated.value, 1,
             "the external target's watcher event must refresh the configured sidecar cache")
+        XCTAssertTrue(waitForLineCount(activityAudit, line: "fileChanges", count: 1, timeout: 10))
+        let rootRecoveries = fileLines(in: activityAudit).filter { $0 == "rootRecovery" }.count
 
         let replacementDirectory = directory.appendingPathComponent("ReplacementTargets")
         try FileManager.default.createDirectory(
@@ -448,6 +452,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertNil(afterRepoint.error)
         XCTAssertEqual(afterRepoint.value, 1,
             "repointing must register the replacement target's directory")
+        XCTAssertEqual(fileLines(in: activityAudit).filter { $0 == "rootRecovery" }.count,
+                       rootRecoveries, "sidecar repointing must not reconcile all transcript roots")
     }
 
     func testRecoveryLoadFailureQueuesRootFallbackAndStartupContinues() throws {
@@ -3305,6 +3311,48 @@ final class TraceUITests: XCTestCase {
         app.radioButtons["Compact"].click()
         assertSavedAnchorOnScreen(index: readingIndex, in: scroll, expectedY: readingY,
             stage: "density after external scroll")
+    }
+
+    func testUpwardReaderMotionDuringDocumentGrowthUnpins() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession("Growing scroll", project: "ScrollProject", directory: directory)
+        let idleAudit = directory.appendingPathComponent("growth-scroll-idle")
+        let simulationDone = directory.appendingPathComponent("growth-scroll-done")
+        let positionProbe = directory.appendingPathComponent("growth-scroll-position")
+        let jumpDone = directory.appendingPathComponent("growth-scroll-jump-done")
+        let boundsAudit = directory.appendingPathComponent("growth-scroll-bounds")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_JUMP_DONE_PATH"] = jumpDone.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = boundsAudit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = positionProbe.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] = "growing-up"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH"] = simulationDone.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["ScrollProject"].firstMatch.waitForExistence(timeout: 20))
+        app.staticTexts["ScrollProject"].firstMatch.click()
+        openSidebarSession("Growing scroll", in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
+        app.buttons["testJumpTranscriptBottom"].click()
+        XCTAssertTrue(waitForFile(jumpDone, timeout: 5))
+        let initialPosition = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
+        XCTAssertEqual(String(initialPosition[2]), "true")
+        try? FileManager.default.removeItem(at: positionProbe)
+        try? FileManager.default.removeItem(at: idleAudit)
+        app.buttons["testSimulateTranscriptScroll"].click()
+        XCTAssertTrue(waitForFile(simulationDone, timeout: 5))
+        XCTAssertTrue(fileLines(in: boundsAudit).contains("simulation-classified-bottom=false"),
+            "coalesced upward motion must unpin before any later layout; \(fileLines(in: boundsAudit).suffix(8))")
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 5))
+        app.buttons["testProbeTranscriptPosition"].click()
+        XCTAssertTrue(waitForFile(positionProbe, timeout: 5))
+        let position = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
+        XCTAssertEqual(String(position[2]), "false",
+            "document growth must not suppress simultaneous upward reader motion")
     }
 
     func testSlowViewportMotionKeepsLiveScrollActiveUntilMotionStops() throws {

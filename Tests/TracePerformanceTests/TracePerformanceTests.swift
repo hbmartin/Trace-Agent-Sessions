@@ -121,6 +121,11 @@ final class TracePerformanceTests: XCTestCase {
         session.click()
         let transcript = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
+        let loadedMessage = transcript.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@", "PerformanceNeedle commonterm session 1 message "
+        )).firstMatch
+        XCTAssertTrue(loadedMessage.waitForExistence(timeout: 10),
+            "streaming must start after the initial transcript is loaded")
         let jumpDone = directory.appendingPathComponent("jump-done")
         let positionProbe = directory.appendingPathComponent("position-probe")
         app.buttons["testJumpTranscriptBottom"].click()

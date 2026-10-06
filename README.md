@@ -226,7 +226,8 @@ clock measurements with
 The CPU metric targets `Trace.app`. The scroll benchmark drives the same
 5,000-point viewport sweep on every iteration through a test-only app trigger,
 so XCTest's accessibility hierarchy snapshots are outside the measured block.
-The streaming measurement excludes fixed sleeps and audit file reads. Inspect
+The streaming measurement excludes audit file reads, but includes completion-marker
+polling sleeps and XCTest's message-count wait. Inspect
 the individual samples alongside the median. The measurements for this scroll
 change are in [docs/transcript-scroll-performance.md](docs/transcript-scroll-performance.md).
 

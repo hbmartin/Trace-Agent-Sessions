@@ -30,7 +30,13 @@ def main() -> None:
     args = parser.parse_args()
     before = metrics_for(args.baseline, args.test)
     after = metrics_for(args.candidate, args.test)
-    shared = before.keys() & after.keys()
+    if before.keys() != after.keys():
+        raise SystemExit(
+            "Metric identifiers differ: "
+            f"baseline only={sorted(before.keys() - after.keys())}; "
+            f"candidate only={sorted(after.keys() - before.keys())}"
+        )
+    shared = before.keys()
     if not shared:
         raise SystemExit("No matching metrics were found")
     for identifier in sorted(shared):
