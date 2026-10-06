@@ -1533,6 +1533,10 @@ final class TraceModel: ObservableObject {
             watermarks: changes.watermarks,
             streamRoots: changes.streamRoots
         )
+        TraceTestHooks.appendLine(
+            changes.paths.sorted().joined(separator: "\n"),
+            pathKey: "TRACE_TEST_SOURCE_CHANGES_AUDIT_PATH"
+        )
     }
 
     private func activity(for changes: SourceChanges) -> IndexActivity {

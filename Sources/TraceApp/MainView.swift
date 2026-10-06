@@ -617,6 +617,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     case .navigation, .visibility, .search: true
                     }
                 }
+
+                var isInteraction: Bool {
+                    if case .interaction = self { return true }
+                    return false
+                }
             }
 
             let token = UUID()
@@ -660,6 +665,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var bookmarkWorkItem: DispatchWorkItem?
         private var bookmarkSnapshotWorkItem: DispatchWorkItem?
         private var restoreWorkItem: DispatchWorkItem?
+        private var restoreGateTask: Task<Void, Never>?
         private var heightWorkItem: DispatchWorkItem?
         private var pendingHeightMessageIDs: Set<Int64> = []
         private var deferredHeightMessageIDs: Set<Int64> = []
@@ -730,7 +736,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     if event.type == .scrollWheel {
                         // Only UI tests monitor wheel events; windowed input uses AppKit.
                         guard event.window == nil else { return false }
-                        scrollView.scrollWheel(with: event)
+                        guard let parent = scrollView.superview else { return false }
+                        let windowPoint = transcriptWindow.convertPoint(fromScreen: NSEvent.mouseLocation)
+                        let point = parent.convert(windowPoint, from: nil)
+                        guard let hit = scrollView.hitTest(point) else { return false }
+                        hit.scrollWheel(with: event)
                         return true
                     }
                     let scrollingKeys: Set<UInt16> = [49, 115, 116, 119, 121, 123, 124, 125, 126]
@@ -823,6 +833,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
             bookmarkSnapshotWorkItem = nil
             restoreWorkItem?.cancel()
             restoreWorkItem = nil
+            restoreGateTask?.cancel()
+            restoreGateTask = nil
             heightWorkItem?.cancel()
             heightWorkItem = nil
             cancelBottomFollowWork()
@@ -1289,7 +1301,34 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     ? TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS") ?? 0
                     : 0
             }
-            scheduleRestore(token: request.token, delayMilliseconds: delay)
+            let releaseKey: String?
+            switch request.reason {
+            case .navigation, .visibility:
+                releaseKey = "TRACE_TEST_TRANSCRIPT_RESTORE_RELEASE_PATH"
+            case .interaction:
+                releaseKey = "TRACE_TEST_TRANSCRIPT_INTERACTION_RESTORE_RELEASE_PATH"
+            case .passive, .search:
+                releaseKey = nil
+            }
+            if TraceTestHooks.isUITesting, let releaseKey,
+               TraceTestHooks.environment[releaseKey] != nil {
+                restoreGateTask = Task { [weak self] in
+                    do {
+                        try await TraceTestHooks.waitForRelease(
+                            pathKey: releaseKey, timeoutMilliseconds: 30_000
+                        )
+                        guard !Task.isCancelled else { return }
+                        self?.restoreGateTask = nil
+                        self?.applyRestore(token: request.token)
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_GATE_ERROR_PATH")
+                        self?.cancelPendingRestore(reportCancellation: false)
+                    }
+                }
+            } else {
+                scheduleRestore(token: request.token, delayMilliseconds: delay)
+            }
         }
 
         private func scheduleRestore(token: UUID, delayMilliseconds: Int) {
@@ -1338,7 +1377,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             // Invalidating automatic heights can replace the anchor's measured
             // height with an estimate. Materialize and lay out just this row before
             // restoring a negative offset, which may exceed that estimate.
+            // Disclosure content can settle over several layout passes, so refresh
+            // its anchor on interaction retries without invalidating passive restores.
             if !request.refreshedTargetRowHeight
+                || request.reason.isInteraction
                 || table.rect(ofRow: row).height + bookmark.offset <= 0 {
                 table.view(atColumn: 0, row: row, makeIfNecessary: true)?.layoutSubtreeIfNeeded()
                 table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
@@ -1430,6 +1472,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
 
         private func cancelPendingRestore(reportCancellation: Bool) {
             let reportsHooks = pendingRestore?.reason.reportsHooks == true
+            restoreGateTask?.cancel()
+            restoreGateTask = nil
             restoreWorkItem?.cancel()
             restoreWorkItem = nil
             pendingRestore = nil

@@ -2503,8 +2503,12 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(sqlite.terminationStatus, 0)
 
         let rebuilding = directory.appendingPathComponent("startup-rollup-started")
-        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"] = "3000"
+        let rebuildRelease = directory.appendingPathComponent("startup-rollup-release")
+        let sourceChanges = directory.appendingPathComponent("startup-watcher-changes")
+        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"] = "30000"
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH"] = rebuilding.path
+        app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_RELEASE_PATH"] = rebuildRelease.path
+        app.launchEnvironment["TRACE_TEST_SOURCE_CHANGES_AUDIT_PATH"] = sourceChanges.path
         app.launch()
         XCTAssertTrue(waitForFile(rebuilding, timeout: 15), "initial indexing must repair dirty rollups")
         app.radioButtons["Costs"].click()
@@ -2519,6 +2523,10 @@ final class TraceUITests: XCTestCase {
             "message": ["content": "StartupWatchNeedle arrived during repair"],
         ]
         try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(to: watched)
+        XCTAssertNotNil(poll(timeout: 10) {
+            fileLines(in: sourceChanges).first { $0.hasSuffix("/startup-watched.jsonl") }
+        }, "the watcher must queue this file while rollup repair is gated")
+        try Data().write(to: rebuildRelease)
         app.radioButtons["Transcript"].click()
         let query = app.textFields["mainSearch"]
         XCTAssertTrue(query.waitForExistence(timeout: 10))
@@ -2931,6 +2939,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let first = transcriptMessage("Wheel routing", index: 0, in: scroll)
         XCTAssertTrue(first.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        app.activate()
         let initialOffset = numericLine(in: offsets) ?? 0
 
         let firstFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
@@ -2987,11 +2996,15 @@ final class TraceUITests: XCTestCase {
         let visible = scroll.staticTexts.matching(NSPredicate(
             format: "value BEGINSWITH %@", "Wheel routing message "
         ))
-        let message = try XCTUnwrap(poll(timeout: 10) {
+        let messageValue = try XCTUnwrap(poll(timeout: 10) {
             visible.allElementsBoundByIndex.first {
                 $0.isHittable && scroll.frame.contains($0.frame)
-            }
+            }?.value as? String
         }, "Copy needs a fully visible text line after scrolling")
+        let message = scroll.staticTexts.matching(NSPredicate(
+            format: "value == %@", messageValue
+        )).firstMatch
+        app.activate()
         let pasteboardChangeCount = preparePasteboardForCopy()
         message.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 12, dy: 9)).click()
@@ -3115,16 +3128,20 @@ final class TraceUITests: XCTestCase {
             .wait(for: \.isHittable, toEqual: true, timeout: 15),
             "resizing the window must retain live bottom follow")
 
-        let bottomOrigin = try XCTUnwrap(numericLine(in: offsets))
         let upwardFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
         scroll.scroll(byDeltaX: 0, deltaY: 1_100)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: upwardFinishCount + 1, timeout: 10
         ))
         let readingIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
-        let readingOrigin = try XCTUnwrap(numericLine(in: offsets))
-        XCTAssertLessThan(readingOrigin, bottomOrigin - 50,
-            "upward input must leave the reader above the pinned bottom after idle")
+        try? FileManager.default.removeItem(at: positionProbe)
+        app.buttons["testProbeTranscriptPosition"].click()
+        XCTAssertTrue(waitForFile(positionProbe, timeout: 10))
+        let readingPosition = try XCTUnwrap(fileLines(in: positionProbe).last?.split(separator: ","))
+        XCTAssertEqual(String(readingPosition[2]), "false", "upward input must unpin after idle")
+        XCTAssertGreaterThan(try XCTUnwrap(Double(readingPosition[1]))
+            - XCTUnwrap(Double(readingPosition[0])), 50,
+            "upward input must leave the reader above the current document bottom")
         let restoreCountBeforeAppend = fileLines(in: restoreAudit).count
         try appendMessage(74, content: "A later message while reading above the bottom")
         XCTAssertTrue(app.staticTexts["75 messages"].waitForExistence(timeout: 15))
@@ -3208,8 +3225,10 @@ final class TraceUITests: XCTestCase {
         try handle.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
         try handle.close()
         let interactionStarted = directory.appendingPathComponent("interaction-started")
+        let interactionRelease = directory.appendingPathComponent("interaction-release")
         let restoreAudit = directory.appendingPathComponent("disclosure-search-restores")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_INTERACTION_RESTORE_DELAY_MS"] = "8000"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_INTERACTION_RESTORE_RELEASE_PATH"] = interactionRelease.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_INTERACTION_STARTED_PATH"] = interactionStarted.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = restoreAudit.path
         app.launch()
@@ -3241,7 +3260,7 @@ final class TraceUITests: XCTestCase {
         let target = transcriptMessage("Disclosure race", index: 4, in: scroll)
         XCTAssertTrue(target.wait(for: \.isHittable, toEqual: true, timeout: 20),
             "explicit search must replace the pending disclosure restore")
-        Thread.sleep(forTimeInterval: 9)
+        try Data().write(to: interactionRelease)
         XCTAssertTrue(target.isHittable,
             "the cancelled disclosure restore must not replay after the message list clears")
         XCTAssertTrue(fileLines(in: restoreAudit).contains { $0.hasPrefix("4,") },
@@ -3691,8 +3710,10 @@ final class TraceUITests: XCTestCase {
         try addLongSession("Alpha session", project: "ProjectAlpha", directory: directory)
         let restorationStarted = directory.appendingPathComponent("restoration-started")
         let restorationCancelled = directory.appendingPathComponent("restoration-cancelled")
+        let restorationRelease = directory.appendingPathComponent("restoration-release")
         let bookmarkSaved = directory.appendingPathComponent("bookmark-saved")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"] = "5000"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RELEASE_PATH"] = restorationRelease.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"] = "15000"
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] = restorationStarted.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"] = restorationCancelled.path
