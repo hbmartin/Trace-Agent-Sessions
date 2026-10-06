@@ -1721,7 +1721,10 @@ public actor IndexDatabase {
 
     struct CodexNameUpdateResult: Sendable {
         let changed: Bool
-        let deferredLegacyCount: Int
+        let deferredSessionIDs: Set<Int64>
+        let resolvedSessionIDs: Set<Int64>
+        let existingSessionIDs: Set<Int64>
+        var deferredLegacyCount: Int { deferredSessionIDs.count }
     }
 
     func updateCodexNames(
@@ -1758,7 +1761,9 @@ public actor IndexDatabase {
             return try Row.fetchAll(db, sql: fields + " WHERE s.agent=? AND sr.path=?",
                                     arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path])
         }
-        var deferredLegacyCount = 0
+        var deferredSessionIDs: Set<Int64> = []
+        var resolvedSessionIDs: Set<Int64> = []
+        let existingSessionIDs = Set(rows.map { row -> Int64 in row["id"] })
         let updates: [(Int64, String?, String?, String?, CodexName?)] = rows.compactMap { row in
             let id: Int64 = row["id"]
             let externalID: String = row["external_id"]
@@ -1777,7 +1782,9 @@ public actor IndexDatabase {
                     // Only a complete provider read may take ownership of it.
                     guard origin != nil, applied != nil else {
                         if existing != candidate.value && !fillOnlyOrigins.contains(candidate.origin) {
-                            deferredLegacyCount += 1
+                            deferredSessionIDs.insert(id)
+                        } else if existing == candidate.value && !fillOnlyOrigins.contains(candidate.origin) {
+                            resolvedSessionIDs.insert(id)
                         }
                         return nil
                     }
@@ -1798,12 +1805,14 @@ public actor IndexDatabase {
             case .complete:
                 break
             }
+            if candidate != nil { resolvedSessionIDs.insert(id) }
             guard existing != candidate?.value || origin != candidate?.origin.storedValue
                 || applied != candidate?.value else { return nil }
             return (id, existing, origin, applied, candidate)
         }
         guard !updates.isEmpty else {
-            return .init(changed: false, deferredLegacyCount: deferredLegacyCount)
+            return .init(changed: false, deferredSessionIDs: deferredSessionIDs,
+                         resolvedSessionIDs: resolvedSessionIDs, existingSessionIDs: existingSessionIDs)
         }
         codexNameWriteTransactionCount += 1
         let changed = try pool.write { db in
@@ -1822,7 +1831,8 @@ public actor IndexDatabase {
             }
             return changed
         }
-        return .init(changed: changed, deferredLegacyCount: deferredLegacyCount)
+        return .init(changed: changed, deferredSessionIDs: deferredSessionIDs,
+                         resolvedSessionIDs: resolvedSessionIDs, existingSessionIDs: existingSessionIDs)
     }
 
     public func projects() throws -> [ProjectSummary] {

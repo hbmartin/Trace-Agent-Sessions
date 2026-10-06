@@ -171,6 +171,7 @@ public actor IndexCoordinator {
     private var cachedSidecarMapping: (directories: [String], mapping: CodexMetadataSidecarMapping)?
     private var codexNameLoadCounts: [String: Int] = [:]
     private var codexWarnings: [CodexWarningKey: Set<String>] = [:]
+    private var deferredCodexSessionIDs: [String: Set<Int64>] = [:]
 
     private func codexWarningMessage() -> String? {
         let warnings = Set(codexWarnings.values.flatMap { $0 })
@@ -892,7 +893,12 @@ public actor IndexCoordinator {
                         } else {
                             await clearResolvedFileCodexWarnings(for: root.id, in: &status)
                         }
-                        let deferred = update.deferredLegacyCount
+                        var pending = metadata.complete ? Set<Int64>() : (deferredCodexSessionIDs[root.id] ?? [])
+                        pending.formIntersection(update.existingSessionIDs)
+                        pending.subtract(update.resolvedSessionIDs)
+                        pending.formUnion(update.deferredSessionIDs)
+                        deferredCodexSessionIDs[root.id] = pending
+                        let deferred = pending.count
                         let warning = deferred == 0 ? [] : [
                             "\(root.url.path): \(deferred) legacy Codex title rename(s) deferred until metadata is complete"
                         ]
