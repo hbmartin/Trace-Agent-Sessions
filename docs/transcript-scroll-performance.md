@@ -1,8 +1,71 @@
-# Transcript scrolling and streaming measurements, 2026-10-05
+# Transcript scrolling and streaming measurements, 2026-10-05/06
+
+The final production candidate is `be01db9c55029454a716fe044840111013251cd5`.
+The captured main baseline is `115d9fa905d6f19fbff4e01c2786f43f2d74ac67`, plus only the
+[recorded test-instrumentation patch](benchmarks/2026-10-05/baseline-harness.patch).
+The [final run metadata](benchmarks/2026-10-05/ci-macos15-final-metadata.json) records the
+patch hash, both commits, toolchain, and identical harness-file hashes.
+
+[CI run 37406085593](https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/37406085593)
+ran baseline first, then candidate, in Release on the same Apple M1 virtual runner
+with 7 GiB RAM, macOS 15.7.9 (24G830), Xcode 26.3 (17C529), and Swift 6.2.4.
+No other Trace build or UI suite ran on that runner during the pair. The local
+Mac was locked, so this final pair uses CI; the earlier local measurements below
+remain separate. Results from different machines are not combined.
+
+Both apps use the existing synthetic 2,000-message corpus, an explicit warm-up,
+five 5,000-point scroll sweeps, identical completion/error checks, and the same
+streaming test. All four benchmark tests in the pair pass, including their
+streaming bottom-position assertions. The measured block avoids accessibility
+queries; `XCTCPUMetric(application: app)` measures Trace CPU time. Completion
+polling and the streaming message-count wait remain included in wall time.
+
+| Median of all five scroll samples | Main baseline | Candidate | Change |
+| --- | ---: | ---: | ---: |
+| Trace CPU time | 4.122 s | 1.464 s | 64.5% less |
+| Wall time | 4.193 s | 1.774 s | 57.7% less |
+
+Scroll CPU samples in seconds, in measurement order:
+
+- Baseline: `3.972698, 3.968858, 4.122360, 4.334432, 4.592107`.
+- Candidate: `1.564087, 1.464124, 1.116296, 1.601762, 1.433739`.
+
+Instruction and cycle counters export zeros on this virtual runner. This report treats those
+counters as unavailable; they cannot establish zero CPU work or an improvement.
+The [baseline export](benchmarks/2026-10-05/baseline-ci-macos15-final-metrics.json) and
+[candidate export](benchmarks/2026-10-05/candidate-ci-macos15-final-metrics.json)
+retain them alongside CPU time, wall time, and signposts.
+
+Streaming CPU samples in seconds:
+
+- Baseline: `0.551335, 0.549790, 0.641335`; median `0.551335`.
+- Candidate: `0.501078, 0.503521, 0.470000`; median `0.501078`.
+
+The final streaming median is 9.1% lower and wall time is
+0.8% higher.
+Earlier pairs vary in direction, including 1.4% more streaming CPU in the
+preceding macOS 15 pair. No repeatable streaming performance improvement is claimed.
+
+The preceding macOS 15 pair measured scroll CPU medians of 5.219 versus 2.921
+seconds (44.0% less) before the final hosting-constraint refresh. It ran on a
+different virtual runner; these two CI pairs are not a controlled attribution
+of the additional difference to that refresh. The same-machine final pair
+supports the table above. Virtual-runner timing and the slower samples discussed
+below limit generalization. Every sample from all 16 runs is retained in the
+[run manifest](benchmarks/2026-10-05/runs.json); no samples were dropped.
+
+`Scripts/benchmark-transcript-comparison.sh` recreates the captured baseline
+with the recorded patch, verifies identical harness files, records toolchain
+metadata, and runs baseline then candidate. It retains its separate clone and
+raw results under the output directory for inspection. Set
+`TRACE_SCROLL_COMPARISON_OUTPUT_DIR` to a fresh directory for another run.
+The `Transcript scroll benchmark` workflow runs the same script on one runner.
+
+## Earlier local comparisons, 2026-10-05
 
 The captured main baseline is `115d9fa905d6f19fbff4e01c2786f43f2d74ac67`. Baseline harness commit `5bff37720c974a4b5953bf29b9260bf77fac1e51`
 adds only test instrumentation; its production scrolling and indexing behavior
-is unchanged. The measured candidate is `755db6924f1712edc49b11b9dff4944f09f2ba43`. The
+is unchanged. The candidate for this earlier pair is `755db6924f1712edc49b11b9dff4944f09f2ba43`. The
 [baseline patch](benchmarks/2026-10-05/baseline-harness.patch),
 [harness hashes and toolchain](benchmarks/2026-10-05/harness.json), and
 [run manifest](benchmarks/2026-10-05/runs.json) make the comparison reproducible.
