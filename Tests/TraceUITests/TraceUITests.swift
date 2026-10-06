@@ -3607,13 +3607,15 @@ final class TraceUITests: XCTestCase {
     func testMultiStageResizePreservesBottomFollowDuringAppend() throws { try runViewportRegression("multi-stage-resize") }
     func testExpiredResizeDoesNotSuppressUpwardMotion() throws { try runViewportRegression("expired-resize") }
     func testUserInputInvalidatesResizeTransaction() throws { try runViewportRegression("interrupted-resize") }
+    func testUnchangedGeometryScrollingUsesCachedExtentAndLazyRows() throws { try runViewportRegression("cached-extent") }
     func testLastRowRemainsReachableBeyondDocumentFrame() throws { try runViewportRegression("row-extent") }
     func testRubberBandReturnKeepsFollowDuringAppend() throws { try runViewportRegression("rubber-band-return") }
 
     private func runViewportRegression(_ simulation: String) throws {
         let expectedFollowing = simulation != "expired-resize" && simulation != "interrupted-resize"
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        try addLongSession("Viewport regression", project: "ViewportProject", directory: directory)
+        try addLongSession("Viewport regression", project: "ViewportProject", directory: directory,
+            count: simulation == "cached-extent" ? 2_000 : 70)
         let audit = directory.appendingPathComponent("viewport-audit")
         let done = directory.appendingPathComponent("viewport-done")
         let jump = directory.appendingPathComponent("viewport-jump")
@@ -3639,7 +3641,18 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(jump, timeout: 10))
         app.buttons["testSimulateTranscriptScroll"].click()
         XCTAssertTrue(waitForFile(done, timeout: 5))
-        if simulation == "row-extent" {
+        if simulation == "cached-extent" {
+            let line = try XCTUnwrap(fileLines(in: audit).last { $0.hasPrefix("cache=") })
+            let fields = line.dropFirst(6).split(separator: ",").compactMap { Int($0) }
+            XCTAssertEqual(fields.count, 8)
+            guard fields.count == 8 else { return }
+            XCTAssertEqual(fields[0], fields[1], "scroll-only bounds checks must not query the last row")
+            XCTAssertEqual(fields[2], fields[3], "origin changes must not invalidate row geometry")
+            XCTAssertLessThan(fields[4], fields[5], "the table must retain lazy row materialization")
+            XCTAssertEqual(fields[6], fields[1], "invalidation must defer the extent query")
+            XCTAssertEqual(fields[7], fields[6] + 1, "multiple invalidations must flush in one query")
+            return
+        } else if simulation == "row-extent" {
             let line = try XCTUnwrap(fileLines(in: audit).last { $0.hasPrefix("extent=") })
             let fields = line.split(separator: ",").map { $0.split(separator: "=").last! }
             XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 1)
