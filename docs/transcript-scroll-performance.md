@@ -1,74 +1,76 @@
 # Verified transcript scrolling and streaming measurements, 2026-10-05/06
 
-The measured candidate is `54e9a7a1c64e60284dddf9575662d147e77a6905`. Captured main is
-`115d9fa905d6f19fbff4e01c2786f43f2d74ac67`, with only the [test-instrumentation patch](benchmarks/2026-10-05/baseline-harness.patch)
-(SHA-256 `4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12`). Its production implementation receives no recovered fixes.
-[Run metadata](benchmarks/2026-10-05/ci-macos15-exact-sessions-final-metadata.json) records both commits and
-identical test/script hashes. The baseline's MainView instrumentation is unchanged
-from the original instrumentation-only baseline; only its test session selection was strengthened.
+Measured candidate: `0e9b3b013317e51ae95ee9a90853e23ea879039e`. Captured main:
+`115d9fa905d6f19fbff4e01c2786f43f2d74ac67` plus only the [test-instrumentation patch](benchmarks/2026-10-05/baseline-harness.patch),
+SHA-256 `4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12`. The baseline receives no recovered production fixes.
+Its MainView instrumentation is byte-identical to the original instrumentation-only
+baseline; only exact-session selection and content assertions were strengthened.
+[Metadata](benchmarks/2026-10-05/ci-macos15-anchor-restoration-metadata.json) records full commits,
+toolchain versions, order, and the three identical test/script hashes.
 
-[CI run 37412715604](https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/37412715604) runs
-baseline first, then candidate, sequentially on one `Apple M1 (Virtual)` runner with
-7 GiB RAM. Toolchain: ProductName:		macOS; ProductVersion:		15.7.9; BuildVersion:		24G830; Xcode 26.3; Build version 17C529; Apple Swift version 6.2.4 (swiftlang-6.2.4.1.4 clang-1700.6.4.2); Target: arm64-apple-macosx15.0.
-No other Trace build or UI suite runs on that machine during the pair.
+[CI run 37416160092](https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/37416160092)
+runs baseline then candidate sequentially on one `Apple M1 (Virtual)` runner with
+7 GiB RAM, macOS 15.7.9
+(24G830); Xcode 26.3; Build version 17C529; Apple Swift version 6.2.4 (swiftlang-6.2.4.1.4 clang-1700.6.4.2); Target: arm64-apple-macosx15.0. No other Trace build or UI suite runs on that
+machine during the pair.
 
-Both revisions explicitly select the exact session, verify its loaded message prefix,
-and verify the **2,000-message** scroll transcript before warm-up and five 5,000-point
-scroll sweeps. Each uses the existing synthetic corpus and the same instrumentation.
-Both scrolling and streaming tests pass on both revisions, including completion,
-pinned-start, and final-bottom assertions. `XCTCPUMetric(application: app)` measures
-Trace CPU time. Scroll measurement uses notifications and completion polling; the
-streaming wall time also includes file-marker polling and accessibility message-count waits.
-Session selection and initial-content checks occur before measurement.
+Both revisions select the exact session and verify its loaded content and the
+**2,000-message** transcript before warm-up and five 5,000-point scroll sweeps.
+The existing corpus and instrumentation are identical. Both scroll and streaming
+tests pass on both revisions, including completion, pinned-start, and final-bottom
+assertions. `XCTCPUMetric(application: app)` measures Trace CPU. Wall time includes
+completion polling; streaming also includes accessibility message-count waits.
+Session selection and initial-content assertions occur before measurement.
 
 | Median of five scroll samples | Main baseline | Candidate | Change |
 | --- | ---: | ---: | ---: |
-| Trace CPU time | 66.438959 s | 32.121951 s | 51.7% less |
-| Wall time | 66.951683 s | 32.262029 s | 51.8% less |
+| Trace CPU time | 37.482158 s | 1.278245 s | 96.6% less |
+| Wall time | 37.548303 s | 1.706548 s | 95.5% less |
 
-Scroll CPU samples in measurement order, in seconds:
+Samples in measurement order, in seconds:
 
-- Baseline: `62.306407721, 66.438959302, 65.572529754, 79.679870967, 89.362271600`.
-- Candidate: `32.121951143, 26.098414823, 33.483905010, 30.981824168, 33.793122541`.
+- Scroll CPU baseline: `37.482157852, 36.317397175, 43.787310093, 32.430671262, 47.786125414`.
+- Scroll CPU candidate: `1.371475420, 1.246318533, 2.091414674, 1.122412105, 1.278245315`.
+- Scroll wall baseline: `37.548302824, 36.382144908, 43.895923439, 32.474439336, 47.905105774`.
+- Scroll wall candidate: `1.601111090, 1.706547510, 2.430672946, 1.646703459, 1.707076943`.
+- Streaming CPU baseline: `0.504483106, 0.521291384, 0.509812245`; median `0.509812245`.
+- Streaming CPU candidate: `0.412395425, 0.358418474, 0.389584870`; median `0.389584870`.
+- Streaming wall baseline: `1.037089301, 1.038939467, 1.043147215`.
+- Streaming wall candidate: `1.076097152, 1.062148542, 1.070818853`.
 
-Streaming CPU samples in seconds:
+Streaming CPU is 23.6% less and wall
+time is 3.1% more. No repeatable
+streaming-speed improvement is claimed. Virtual instruction/cycle counters export
+zeros, which are unavailable measurements and support no improvement claim.
+The streaming wall-time increase is
+0.031879 seconds.
+Inspection confirmed completed append batches and final bottom position, while CPU
+time decreased. This end-to-end interval includes polling and accessibility waits;
+the exports do not isolate the cause of the small wall-time increase.
 
-- Baseline: `0.832006235, 0.980386301, 0.821525282`; median `0.832006235`.
-- Candidate: `0.715804445, 0.754981011, 0.720953512`; median `0.720953512`.
+The [preceding verified report](transcript-scroll-performance-54e9a7a.md) retains
+both earlier exact-session pairs: scroll CPU medians 60.402384→2.762558 seconds
+at 253877f (95.4% less), and 66.438959→32.121951 seconds at 54e9a7a (51.7% less).
+Inspection found identical scrolling code and instrumentation between those
+candidates; only project-row reveal changed. Their logs passed, but the exports
+do not establish the cause of the substantial candidate timing variation.
 
-Streaming CPU is 13.3% less; wall time is
-0.8% less. No repeatable streaming-speed
-improvement is claimed. Instruction and cycle counters exported as zero on virtual
-runners are unavailable measurements and are excluded from improvement claims.
+The current candidate also fixes a density-restoration edge case: an automatic
+height estimate can hide a partially clipped anchor, so it is revealed and measured
+before restoring its offset. This report uses a fresh comparison after that fix.
+Separate machines and source revisions are not combined or used to attribute a
+performance effect to the fix. The improvement claim applies only to this workload
+and this pair; cross-run variation limits generalization.
 
-The preceding verified pair at `253877f` measured scroll CPU medians
-`60.402384` and `2.762558` seconds
-(95.4% less). It uses the same exact-session
-harness on its own runner. The intervening fix corrects project reveal; differences
-between separate virtual machines are not attributed to that change or combined.
+The [manifest](benchmarks/2026-10-05/runs.json) retains all 22 published
+run exports, including individual samples, summaries, commits, and hashes. Six
+exports use exact-session/corpus assertions. The preceding 16 exports and their
+investigated regressions are in the [historical report](transcript-scroll-performance-historical.md);
+they support no final improvement claim. Failed and canceled attempts, raw
+xcresults, logs, and completion diagnostics are saved in the recovery records.
 
-The candidate median varies substantially between these two verified pairs
-(`2.762558` versus `32.121951` seconds).
-Inspection confirmed identical scrolling implementation and benchmark instrumentation
-between the candidates; their only source difference is native project-row reveal.
-Both test logs complete without failures, and every final candidate scroll sample is
-below every final baseline sample. The exports do not establish the cause of the
-cross-run variation. No performance effect is attributed to the project-row change;
-the final claim uses this pair's 51.7% less CPU result,
-with the larger preceding gain retained as a separate observation.
-
-The [run manifest](benchmarks/2026-10-05/runs.json) retains all 20 published
-run exports, including individual samples, summary results, source commits, and file
-hashes. Earlier timing and investigated regressions are in the
-[historical report](transcript-scroll-performance-historical.md), with their original
-harness patch preserved separately. Failed/canceled attempts are retained with their
-diagnostics in the worktree recovery records; incomplete runs support no performance claim.
-
-`Scripts/benchmark-transcript-comparison.sh` recreates captured main with the recorded
-patch, verifies identical harness files, records toolchain metadata, and runs the two
-revisions sequentially. Set `TRACE_SCROLL_COMPARISON_OUTPUT_DIR` to a fresh directory.
-The benchmark workflow runs the same script with read-only permissions and checkout
-credential persistence disabled. Raw xcresults, logs, and metrics are retained.
-
-The scroll reduction applies to this workload and these runs. Virtual-runner timing,
-hardware variation, and the historical slower samples limit generalization.
+`Scripts/benchmark-transcript-comparison.sh` recreates captured main with the
+recorded patch, checks identical harness files, records metadata, and measures the
+two revisions sequentially. Set `TRACE_SCROLL_COMPARISON_OUTPUT_DIR` to a fresh
+directory. The workflow uses read-only permissions and disables checkout credential
+persistence.

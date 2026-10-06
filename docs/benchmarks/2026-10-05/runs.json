@@ -354,5 +354,43 @@
     },
     "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
     "exact_session_validation": true
+  },
+  {
+    "name": "baseline-ci-macos15-anchor-restoration",
+    "source_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+    "start_time": 1791262696.101,
+    "finish_time": 1791263178.916,
+    "metadata": "ci-macos15-anchor-restoration-metadata.json",
+    "files": {
+      "summary": {
+        "path": "baseline-ci-macos15-anchor-restoration-summary.json",
+        "sha256": "ed6684b0f3b5af1dac41ce2a86b77600122a563ded6104f49ea0fe7aeba63690"
+      },
+      "metrics": {
+        "path": "baseline-ci-macos15-anchor-restoration-metrics.json",
+        "sha256": "245d8265655361a5825600bcd29431dd2bf3f9740968d9bc5b53b66bf6a49802"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
+  },
+  {
+    "name": "candidate-ci-macos15-anchor-restoration",
+    "source_commit": "0e9b3b013317e51ae95ee9a90853e23ea879039e",
+    "start_time": 1791263193.458,
+    "finish_time": 1791263378.764,
+    "metadata": "ci-macos15-anchor-restoration-metadata.json",
+    "files": {
+      "summary": {
+        "path": "candidate-ci-macos15-anchor-restoration-summary.json",
+        "sha256": "bfc81904e64a29a00b873e8cf0425a17a5f906e99be9c4f877703a1a2c36dc5c"
+      },
+      "metrics": {
+        "path": "candidate-ci-macos15-anchor-restoration-metrics.json",
+        "sha256": "62abb43eeaa026a9645ffaf225fd5411c231d6f35aeba760eac83e7ddaff7399"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
   }
 ]
