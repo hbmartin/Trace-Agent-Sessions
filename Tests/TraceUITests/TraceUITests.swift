@@ -2941,7 +2941,10 @@ final class TraceUITests: XCTestCase {
     ) {
         let project = app.descendants(matching: .any)["projectSidebarRow-\(projectID)"].firstMatch
         let session = app.descendants(matching: .any)["sessionSidebarRow-\(sessionID)"].firstMatch
-        XCTAssertTrue(project.wait(for: \.isHittable, toEqual: true, timeout: 10),
+        // SwiftUI can expose the selected container as unhittable even when its
+        // text is fully visible. Check the leaf's hit target and the row's state.
+        let projectText = project.staticTexts[projectName].firstMatch
+        XCTAssertTrue(projectText.wait(for: \.isHittable, toEqual: true, timeout: 10),
                       "\(projectName) must be revealed in the project pane")
         XCTAssertTrue(project.isSelected, "\(projectName) must be selected")
         XCTAssertTrue(session.wait(for: \.isHittable, toEqual: true, timeout: 10),
