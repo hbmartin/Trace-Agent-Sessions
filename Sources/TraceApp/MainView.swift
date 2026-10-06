@@ -113,32 +113,67 @@ private struct SidebarRowReveal: NSViewRepresentable {
     let token: UUID?
     let row: Int?
     let revealed: (UUID) -> Void
+    let interrupted: (UUID) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.update(view: view, token: token, row: row, revealed: revealed)
+        context.coordinator.update(view: view, token: token, row: row, revealed: revealed, interrupted: interrupted)
     }
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
-        coordinator.task?.cancel()
+        coordinator.stop()
     }
 
     @MainActor final class Coordinator {
         var task: Task<Void, Never>?
         private var token: UUID?
         private var row: Int?
-        func update(view: NSView, token: UUID?, row: Int?, revealed: @escaping (UUID) -> Void) {
-            guard self.token != token || self.row != row else { return }
+        private var inputMonitor: Any?
+        func stop() {
+            task?.cancel()
+            task = nil
+            if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
+            inputMonitor = nil
+        }
+        func update(view: NSView, token: UUID?, row: Int?, revealed: @escaping (UUID) -> Void,
+                    interrupted: @escaping (UUID) -> Void) {
+            let tokenChanged = self.token != token
             self.token = token
             self.row = row
-            task?.cancel()
-            guard let token, let row else { return }
-            task = Task { @MainActor [weak view] in
-                var stableChecks = 0
-                for attempt in 0..<60 {
+            // An index change updates the live target without extending the deadline.
+            guard tokenChanged else { return }
+            stop()
+            guard let token else { return }
+            inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .keyDown]) {
+                [weak self, weak view] event in
+                MainActor.assumeIsolated {
+                    guard let self, self.token == token, let view, let window = view.window,
+                          (event.window ?? NSApp.keyWindow) === window,
+                          let scroll = view.enclosingScrollView else { return }
+                    let column = scroll.convert(scroll.bounds, to: nil)
+                    let relevant: Bool
+                    if event.type == .keyDown {
+                        relevant = (window.firstResponder as? NSView).map {
+                            column.minX <= $0.convert($0.bounds, to: nil).midX
+                                && $0.convert($0.bounds, to: nil).midX <= column.maxX
+                        } ?? false
+                    } else {
+                        let point = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+                        relevant = column.minX <= point.x && point.x <= column.maxX
+                    }
+                    if relevant { self.stop(); interrupted(token) }
+                }
+                return event
+            }
+            task = Task { @MainActor [weak self, weak view] in
+                var progress = SidebarRevealProgress()
+                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                var attempt = 0
+                while ContinuousClock.now < deadline {
+                    defer { attempt += 1 }
                     do { try await Task.sleep(for: .milliseconds(50)) }
                     catch { return }
-                    guard let view, !Task.isCancelled else { return }
+                    guard let self, let view, !Task.isCancelled, self.token == token else { return }
                     var ancestor = view.superview
                     while let candidate = ancestor, !(candidate is NSTableView) {
                         ancestor = candidate.superview
@@ -147,8 +182,11 @@ private struct SidebarRowReveal: NSViewRepresentable {
                     table.layoutSubtreeIfNeeded()
                     // A List background can retain a recycled view's geometry.
                     // Its model index remains the authoritative native row.
-                    guard row >= 0, row < table.numberOfRows else { continue }
-                    table.scrollRowToVisible(row)
+                    guard let row = self.row, row >= 0, row < table.numberOfRows else { continue }
+                    let before = table.rect(ofRow: row)
+                    if table.visibleRect.intersection(before).height < before.height - 1 {
+                        table.scrollRowToVisible(row)
+                    }
                     table.layoutSubtreeIfNeeded()
                     let rect = table.rect(ofRow: row)
                     let visible = table.visibleRect.intersection(rect)
@@ -156,11 +194,11 @@ private struct SidebarRowReveal: NSViewRepresentable {
                         "attempt=\(attempt),row=\(row),rect=\(rect),visible=\(table.visibleRect),rowVisible=\(visible)",
                         pathKey: "TRACE_TEST_SIDEBAR_PROJECT_REVEAL_AUDIT_PATH"
                     )
-                    if visible.height >= rect.height - 1 { stableChecks += 1 }
-                    else { stableChecks = 0 }
-                    // Let the proxy's materialization requests finish before
-                    // acknowledging the native position they can still change.
-                    if stableChecks >= 5, attempt >= 20 {
+                    if TraceTestHooks.isUITesting,
+                       let gate = TraceTestHooks.environment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"],
+                       !FileManager.default.fileExists(atPath: gate) { continue }
+                    if progress.observe(row: row, rect: rect, viewport: table.visibleRect) {
+                        self.stop()
                         revealed(token)
                         return
                     }
@@ -221,7 +259,10 @@ private struct SessionSidebar: View {
                         .accessibilityIdentifier("projectFilter")
                         .padding(.horizontal, 12).padding(.bottom, 8)
                     ScrollViewReader { proxy in
-                        List(selection: Binding(get: { selectedProjectID }, set: { model.selectProject($0) })) {
+                        List(selection: Binding(get: { selectedProjectID }, set: {
+                            if let token = model.sidebarRevealRequest?.token { model.cancelSidebarReveal(token: token) }
+                            model.selectProject($0)
+                        })) {
                             ForEach(filteredProjects) { project in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(project.displayName).lineLimit(1)
@@ -237,30 +278,27 @@ private struct SessionSidebar: View {
                                 .background(SidebarRowReveal(
                                     token: projectRevealTaskID.rowID == project.id ? reveal?.token : nil,
                                     row: projectRevealTaskID.rowID == project.id
-                                        ? filteredProjects.firstIndex(where: { $0.id == project.id }) : nil
-                                ) { token in
+                                        ? filteredProjects.firstIndex(where: { $0.id == project.id }) : nil,
+                                    revealed: { token in
                                     handledProjectRevealToken = token
                                     if TraceTestHooks.isUITesting,
                                        TraceTestHooks.environment["TRACE_TEST_SKIP_SIDEBAR_PROJECT_REVEAL_ACK"] != nil {
                                         return
                                     }
                                     model.acknowledgeSidebarProjectReveal(token: token)
-                                })
+                                }, interrupted: { token in
+                                    model.cancelSidebarReveal(token: token)
+                                }))
                             }
                         }
-                        .task(id: projectRevealTaskID) {
+                        .task(id: projectRevealTaskID.token) {
                             guard let reveal = model.sidebarRevealRequest,
                                   handledProjectRevealToken != reveal.token,
                                   let projectID = projectRevealTaskID.rowID else {
                                 return
                             }
-                            for _ in 0..<8 {
-                                try? await Task.sleep(for: .milliseconds(100))
-                                guard !Task.isCancelled,
-                                      handledProjectRevealToken != reveal.token,
-                                      model.sidebarRevealRequest?.token == reveal.token else { return }
-                                proxy.scrollTo(projectID, anchor: .top)
-                            }
+                            guard model.claimSidebarProjectMaterialization(token: reveal.token) else { return }
+                            proxy.scrollTo(projectID, anchor: .top)
                         }
                     }
                 }.frame(height: height)
@@ -303,6 +341,7 @@ private struct SessionSidebar: View {
                     }.padding(12)
                     ScrollViewReader { proxy in
                         List(selection: Binding(get: { model.selectedSessionID }, set: { id in
+                            if let token = model.sidebarRevealRequest?.token { model.cancelSidebarReveal(token: token) }
                             if let id { model.selectSession(id) }
                         })) {
                             ForEach(sessions) { session in

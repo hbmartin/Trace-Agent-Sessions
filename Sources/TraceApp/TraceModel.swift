@@ -221,6 +221,7 @@ final class TraceModel: ObservableObject {
     private var started = false
     private var initialIndexRequested = false
     private var sidebarProjectRevealAcknowledged = false
+    private var sidebarProjectMaterializedToken: UUID?
     private var sidebarSessionRevealAcknowledged = false
     private var sidebarRevealFallbackTask: Task<Void, Never>?
     private let watcherGroupingPolicy: WatcherGroupingPolicy
@@ -1075,13 +1076,27 @@ final class TraceModel: ObservableObject {
         sidebarRevealFallbackTask = nil
         sidebarRevealRequest = nil
         sidebarProjectRevealAcknowledged = false
+        sidebarProjectMaterializedToken = nil
         sidebarSessionRevealAcknowledged = false
+    }
+
+    func claimSidebarProjectMaterialization(token: UUID) -> Bool {
+        guard sidebarRevealRequest?.token == token, sidebarProjectMaterializedToken != token else { return false }
+        sidebarProjectMaterializedToken = token
+        return true
     }
 
     func acknowledgeSidebarProjectReveal(token: UUID) {
         guard sidebarRevealRequest?.token == token else { return }
         sidebarProjectRevealAcknowledged = true
+        TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH")
         finishSidebarRevealIfAcknowledged()
+    }
+
+    func cancelSidebarReveal(token: UUID) {
+        guard sidebarRevealRequest?.token == token else { return }
+        TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH")
+        invalidateSidebarRevealRequest(token: token)
     }
 
     func acknowledgeSidebarSessionReveal(token: UUID) {

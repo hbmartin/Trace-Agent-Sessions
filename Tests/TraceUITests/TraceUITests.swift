@@ -2791,6 +2791,52 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testSidebarRevealUpdatesItsRowIndexDuringMaterialization() throws { try runSidebarRevealMutation(userInterrupt: false) }
+    func testUserScrollCancelsOutstandingSidebarReveal() throws { try runSidebarRevealMutation(userInterrupt: true) }
+
+    private func runSidebarRevealMutation(userInterrupt: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let gate = directory.appendingPathComponent("sidebar-gate")
+        let ack = directory.appendingPathComponent("sidebar-ack")
+        let cancel = directory.appendingPathComponent("sidebar-cancel")
+        let audit = directory.appendingPathComponent("sidebar-index-audit")
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"] = gate.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH"] = cancel.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_AUDIT_PATH"] = audit.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15))
+        search.click()
+        search.typeText("Find the sample answer")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        result.click()
+        let project = app.staticTexts["TraceUIExample"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+        if userInterrupt {
+            let point = project.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: -100)
+            XCTAssertTrue(waitForFile(cancel, timeout: 3), "wheel input must cancel even at a scroll boundary")
+            try Data().write(to: gate)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+        } else {
+            try addSession(id: "newer-sidebar", title: "New sidebar session", project: "NewerSidebarProject",
+                timestamp: 2_000_000_000_000, content: "A newly indexed sidebar row", directory: directory)
+            XCTAssertTrue(app.staticTexts["NewerSidebarProject"].firstMatch.waitForExistence(timeout: 3))
+            try Data().write(to: gate)
+            XCTAssertTrue(waitForFile(ack, timeout: 3))
+            let rows = Set(fileLines(in: audit).compactMap { line in
+                line.split(separator: ",").first { $0.hasPrefix("row=") }.map(String.init)
+            })
+            XCTAssertGreaterThan(rows.count, 1, "the same reveal token must track the new native index")
+        }
+    }
+
     func testSidebarRevealRequestFallsBackWhenAnAcknowledgementNeverArrives() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let fallback = directory.appendingPathComponent("sidebar-reveal-fallback")
