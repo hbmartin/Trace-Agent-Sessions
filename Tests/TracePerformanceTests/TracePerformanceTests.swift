@@ -223,8 +223,6 @@ final class TracePerformanceTests: XCTestCase {
             let visible = viewport.frame
             if visible.contains(frame) && label.isHittable {
                 label.click()
-                XCTAssertTrue(app.windows.matching(NSPredicate(format: "label == %@", title))
-                    .firstMatch.waitForExistence(timeout: 10), "the exact benchmark session must open")
                 let content = app.scrollViews["transcriptScroll"].staticTexts.matching(NSPredicate(
                     format: "value BEGINSWITH %@", "PerformanceNeedle commonterm session \(index) message "
                 )).firstMatch

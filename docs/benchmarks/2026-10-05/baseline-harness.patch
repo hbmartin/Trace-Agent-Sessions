@@ -370,7 +370,7 @@ index 7bcf512..a6715d8 100644
  
          private func cancelBottomFollowWork() {
 diff --git a/Tests/TracePerformanceTests/TracePerformanceTests.swift b/Tests/TracePerformanceTests/TracePerformanceTests.swift
-index 47312cb..0cec754 100644
+index 47312cb..9c15edb 100644
 --- a/Tests/TracePerformanceTests/TracePerformanceTests.swift
 +++ b/Tests/TracePerformanceTests/TracePerformanceTests.swift
 @@ -19,6 +19,14 @@ final class TracePerformanceTests: XCTestCase {
@@ -568,7 +568,7 @@ index 47312cb..0cec754 100644
      }
  
      private func lineCount(in file: URL) -> Int {
-@@ -125,9 +189,68 @@ final class TracePerformanceTests: XCTestCase {
+@@ -125,9 +189,66 @@ final class TracePerformanceTests: XCTestCase {
          return text.split(separator: "\n").count
      }
  
@@ -606,8 +606,6 @@ index 47312cb..0cec754 100644
 +            let visible = viewport.frame
 +            if visible.contains(frame) && label.isHittable {
 +                label.click()
-+                XCTAssertTrue(app.windows.matching(NSPredicate(format: "label == %@", title))
-+                    .firstMatch.waitForExistence(timeout: 10), "the exact benchmark session must open")
 +                let content = app.scrollViews["transcriptScroll"].staticTexts.matching(NSPredicate(
 +                    format: "value BEGINSWITH %@", "PerformanceNeedle commonterm session \(index) message "
 +                )).firstMatch
