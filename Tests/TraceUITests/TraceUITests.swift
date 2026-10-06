@@ -2945,9 +2945,11 @@ final class TraceUITests: XCTestCase {
         let firstFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
         // The accessibility frame spans the proposed text width, including blank
         // space. Aim at the visible glyphs so this exercises NSTextView routing.
-        first.coordinate(withNormalizedOffset: .zero)
+        let textPoint = first.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 12, dy: 9))
-            .scroll(byDeltaX: 0, deltaY: -600)
+        // Finish moving the pointer before XCTest synthesizes the wheel gesture.
+        textPoint.hover()
+        textPoint.scroll(byDeltaX: 0, deltaY: -600)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: firstFinishCount + 1, timeout: 10
         ), "wheel input over selectable message text must reach the transcript")
