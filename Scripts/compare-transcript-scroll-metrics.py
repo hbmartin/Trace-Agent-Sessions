@@ -2,6 +2,7 @@
 """Validate and compare CPU, clock, app memory growth, timings, and footprints."""
 import argparse
 import json
+import math
 import statistics
 from pathlib import Path
 
@@ -16,7 +17,7 @@ def metrics_for(path, test_name):
     report = json.loads(path.read_text())
     for test in report:
         if test['testIdentifier'].endswith(test_name):
-            return {metric['identifier']: (metric['displayName'], metric['measurements'])
+            return {metric['identifier']: (metric['displayName'], metric['measurements'], metric.get('unitOfMeasurement'))
                     for run in test['testRuns'] for metric in run['metrics']}
     raise SystemExit(f'{test_name} was not found in {path}')
 
@@ -37,7 +38,7 @@ def app_samples(path, workload, count):
               'retainedFootprintBytes', 'footprintSampleCount']
     for sample in samples:
         for field in fields:
-            if not isinstance(sample.get(field), (float, int)) or sample[field] < 0:
+            if not isinstance(sample.get(field), (float, int)) or not math.isfinite(sample[field]) or sample[field] < 0:
                 raise SystemExit(f'Missing/invalid {field} in {sample.get("id")}')
         if min(sample[f] for f in fields[3:7]) <= 0 or sample['footprintSampleCount'] <= 1:
             raise SystemExit(f'Missing footprint samples in {sample["id"]}')
@@ -70,17 +71,29 @@ def main():
                 f'candidate only={sorted(after.keys() - before.keys())}')
         if not before:
             raise SystemExit('No matching metrics were found')
-        names = ' '.join(k + ' ' + v[0] for k, v in before.items()).lower()
-        for required in ['cpu', 'clock', 'memory']:
-            if required not in names:
-                raise SystemExit(f'Missing required {required} metric for {test}')
+        required = {
+            'CPU time': ('XCTMetric_CPU-', '.time', 's'),
+            'clock time': ('XCTMetric_Clock.', '.time.monotonic', 's'),
+            'memory growth': ('XCTMetric_Memory-', '.physical', 'kB'),
+        }
+        for name, (prefix, suffix, unit) in required.items():
+            matches = [key for key in before if prefix in key and key.endswith(suffix)]
+            if len(matches) != 1:
+                raise SystemExit(f'Missing required {name} metric for {test}')
+            key = matches[0]
+            if before[key][2] != unit or after[key][2] != unit:
+                raise SystemExit(f'Unexpected unit for {name} in {test}: expected {unit}')
         print(test)
         count = WORKLOADS[test][1]
         for identifier in sorted(before):
-            name, old = before[identifier]
+            name, old, old_unit = before[identifier]
             new = after[identifier][1]
+            if old_unit != after[identifier][2]:
+                raise SystemExit(f'Metric units differ for {test}: {name}')
             if len(old) != count or len(new) != count:
                 raise SystemExit(f'Missing metric iterations for {test}: {name}')
+            if any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in old + new):
+                raise SystemExit(f'Invalid metric value for {test}: {name}')
             compare(name, old, new)
         workload = WORKLOADS[test][0]
         old, new = app_samples(args.baseline, workload, count), app_samples(args.candidate, workload, count)

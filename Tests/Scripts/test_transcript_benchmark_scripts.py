@@ -36,8 +36,12 @@ class TranscriptBenchmarkScriptTests(unittest.TestCase):
         metrics, samples = [], []
         for method, workload, count in methods:
             metrics.append({"testIdentifier": method, "testRuns": [{"metrics": [
-                {"identifier": name, "displayName": name, "measurements": [1] * count}
-                for name in ["cpu", "clock", "memory"]]}]})
+                {"identifier": name, "displayName": name, "measurements": [1] * count,
+                 "unitOfMeasurement": unit}
+                for name, unit in [
+                    ("com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.time", "s"),
+                    ("com.apple.dt.XCTMetric_Clock.time.monotonic", "s"),
+                    ("com.apple.dt.XCTMetric_Memory-me.haroldmartin.Trace.physical", "kB")]]}]})
             for index in range(count):
                 samples.append(dict(id=f"{workload}-{index}", updateCount=3,
                     totalUpdateNanoseconds=400, maximumUpdateNanoseconds=200,
@@ -46,6 +50,38 @@ class TranscriptBenchmarkScriptTests(unittest.TestCase):
         (root / "metrics.json").write_text(json.dumps(metrics))
         (root / "app-samples.json").write_text(json.dumps(samples))
         return samples
+
+    def test_counters_and_peak_memory_cannot_replace_required_measurements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.complete_reports(root)
+            path = root / "metrics.json"
+            reports = json.loads(path.read_text())
+            command = [sys.executable, str(SCRIPTS / "compare-transcript-scroll-metrics.py"),
+                       str(path), str(path)]
+            reports[0]["testRuns"][0]["metrics"][2]["measurements"][0] = -1
+            path.write_text(json.dumps(reports))
+            signed = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(signed.returncode, 0, signed.stderr)
+            self.assertIn("baseline=[-1,", signed.stdout)
+            for original, replacement, expected in [
+                (".time", ".instructions_retired", "CPU time"),
+                (".time.monotonic", ".time.other", "clock time"),
+                (".physical", ".physical_peak", "memory growth"),
+            ]:
+                damaged = json.loads(json.dumps(reports))
+                metrics = damaged[0]["testRuns"][0]["metrics"]
+                metric = next(m for m in metrics if m["identifier"].endswith(original))
+                metric["identifier"] = metric["identifier"][:-len(original)] + replacement
+                path.write_text(json.dumps(damaged))
+                failed = subprocess.run(command, capture_output=True, text=True)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn("Missing required " + expected, failed.stderr)
+            reports[0]["testRuns"][0]["metrics"][0]["unitOfMeasurement"] = "ms"
+            path.write_text(json.dumps(reports))
+            failed = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("Unexpected unit for CPU time", failed.stderr)
 
     def test_all_workloads_are_summarized_and_missing_memory_or_timings_fail(self):
         with tempfile.TemporaryDirectory() as directory:
