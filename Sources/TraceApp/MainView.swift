@@ -1882,9 +1882,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func probeTranscriptPositionForUITest() {
-            guard TraceTestHooks.isUITesting, let scrollView,
-                  let maximumScrollY = exactMaximumScrollY else { return }
+            guard TraceTestHooks.isUITesting, let scrollView else { return }
             table?.layoutSubtreeIfNeeded()
+            guard let maximumScrollY = exactMaximumScrollY else { return }
             recordVisibleGapForUITest()
             TraceTestHooks.appendLine(
                 "\(Double(scrollView.contentView.bounds.origin.y)),\(Double(maximumScrollY)),\(followsBottom)",

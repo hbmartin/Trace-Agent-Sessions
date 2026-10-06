@@ -103,7 +103,7 @@ index 0000000..94239ef
 +printf 'Transcript scrolling benchmark: %s\n' "$output_dir"
 +exit "$test_status"
 diff --git a/Sources/TraceApp/MainView.swift b/Sources/TraceApp/MainView.swift
-index 7bcf512..c41e5a1 100644
+index 7bcf512..a6715d8 100644
 --- a/Sources/TraceApp/MainView.swift
 +++ b/Sources/TraceApp/MainView.swift
 @@ -2,6 +2,14 @@ import AppKit
@@ -205,7 +205,7 @@ index 7bcf512..c41e5a1 100644
          }
  
          func update(
-@@ -1542,6 +1597,151 @@ private struct TranscriptRenderer: NSViewRepresentable {
+@@ -1542,6 +1597,150 @@ private struct TranscriptRenderer: NSViewRepresentable {
              }
          }
  
@@ -239,9 +239,8 @@ index 7bcf512..c41e5a1 100644
 +        }
 +
 +        private func probeTranscriptPositionForUITest() {
-+            guard TraceTestHooks.isUITesting, let scrollView else { return }
-+            table?.layoutSubtreeIfNeeded()
-+            guard let maximumScrollY = exactMaximumScrollY else { return }
++            guard TraceTestHooks.isUITesting, let scrollView,
++                  let maximumScrollY = exactMaximumScrollY else { return }
 +            TraceTestHooks.appendLine(
 +                "\(Double(scrollView.contentView.bounds.origin.y)),\(Double(maximumScrollY)),\(followsBottom)",
 +                pathKey: "TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"
@@ -357,7 +356,7 @@ index 7bcf512..c41e5a1 100644
          private func rememberProgrammaticOrigin() {
              let origin = scrollView?.contentView.bounds.origin
              expectedProgrammaticOrigin = origin
-@@ -1637,6 +1837,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
+@@ -1637,6 +1836,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
                      pathKey: "TRACE_TEST_TRANSCRIPT_BOTTOM_AUDIT_PATH"
                  )
              }

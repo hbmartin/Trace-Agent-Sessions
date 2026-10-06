@@ -1,7 +1,7 @@
 # Verified transcript scrolling and streaming measurements, 2026-10-05/06
 
 Measured candidate: `0e9b3b013317e51ae95ee9a90853e23ea879039e`. Captured main:
-`115d9fa905d6f19fbff4e01c2786f43f2d74ac67` plus only the [test-instrumentation patch](benchmarks/2026-10-05/baseline-harness.patch),
+`115d9fa905d6f19fbff4e01c2786f43f2d74ac67` plus only the [test-instrumentation patch](benchmarks/2026-10-05/baseline-harness-before-probe-layout.patch),
 SHA-256 `4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12`. The baseline receives no recovered production fixes.
 Its MainView instrumentation is byte-identical to the original instrumentation-only
 baseline; only exact-session selection and content assertions were strengthened.

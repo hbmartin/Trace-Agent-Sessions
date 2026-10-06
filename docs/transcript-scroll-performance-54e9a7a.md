@@ -1,7 +1,7 @@
 # Verified transcript scrolling and streaming measurements, 2026-10-05/06
 
 The measured candidate is `54e9a7a1c64e60284dddf9575662d147e77a6905`. Captured main is
-`115d9fa905d6f19fbff4e01c2786f43f2d74ac67`, with only the [test-instrumentation patch](benchmarks/2026-10-05/baseline-harness.patch)
+`115d9fa905d6f19fbff4e01c2786f43f2d74ac67`, with only the [test-instrumentation patch](benchmarks/2026-10-05/baseline-harness-before-probe-layout.patch)
 (SHA-256 `4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12`). Its production implementation receives no recovered fixes.
 [Run metadata](benchmarks/2026-10-05/ci-macos15-exact-sessions-final-metadata.json) records both commits and
 identical test/script hashes. The baseline's MainView instrumentation is unchanged
