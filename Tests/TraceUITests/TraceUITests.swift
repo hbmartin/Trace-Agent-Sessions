@@ -3604,10 +3604,14 @@ final class TraceUITests: XCTestCase {
     }
 
     func testDelayedResizePreservesBottomFollow() throws { try runViewportRegression("delayed-resize") }
+    func testMultiStageResizePreservesBottomFollowDuringAppend() throws { try runViewportRegression("multi-stage-resize") }
+    func testExpiredResizeDoesNotSuppressUpwardMotion() throws { try runViewportRegression("expired-resize") }
+    func testUserInputInvalidatesResizeTransaction() throws { try runViewportRegression("interrupted-resize") }
     func testLastRowRemainsReachableBeyondDocumentFrame() throws { try runViewportRegression("row-extent") }
     func testRubberBandReturnKeepsFollowDuringAppend() throws { try runViewportRegression("rubber-band-return") }
 
     private func runViewportRegression(_ simulation: String) throws {
+        let expectedFollowing = simulation != "expired-resize" && simulation != "interrupted-resize"
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         try addLongSession("Viewport regression", project: "ViewportProject", directory: directory)
         let audit = directory.appendingPathComponent("viewport-audit")
@@ -3640,24 +3644,30 @@ final class TraceUITests: XCTestCase {
             let fields = line.split(separator: ",").map { $0.split(separator: "=").last! }
             XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 1)
         } else {
-            XCTAssertTrue(fileLines(in: audit).contains("simulation-classified-bottom=true"))
+            XCTAssertTrue(fileLines(in: audit).contains("simulation-classified-bottom=\(expectedFollowing)"))
         }
-        if simulation == "rubber-band-return" {
+        if simulation == "rubber-band-return" || simulation == "multi-stage-resize" {
             let source = directory.appendingPathComponent("Sources/Claude/Viewport regression.jsonl")
             let record: [String: Any] = ["type": "assistant", "uuid": "viewport-append", "sessionId": "Viewport regression",
-                "cwd": "/tmp/ViewportProject", "message": ["content": "Append during rubber band return"]]
+                "cwd": "/tmp/ViewportProject", "message": ["content": "Viewport regression message 70\nAppend after viewport adjustment"]]
             let handle = try FileHandle(forWritingTo: source)
             try handle.seekToEnd()
             try handle.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
             try handle.close()
             XCTAssertTrue(app.staticTexts["71 messages"].waitForExistence(timeout: 15))
+            XCTAssertTrue(transcriptMessage("Viewport regression", index: 70, in: app.scrollViews["transcriptScroll"])
+                .wait(for: \.isHittable, toEqual: true, timeout: 15))
         }
         try? FileManager.default.removeItem(at: probe)
         app.buttons["testProbeTranscriptPosition"].click()
         XCTAssertTrue(waitForFile(probe, timeout: 5))
         let fields = try XCTUnwrap(fileLines(in: probe).last?.split(separator: ","))
-        XCTAssertEqual(String(fields[2]), "true")
-        XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 2)
+        XCTAssertEqual(String(fields[2]), String(expectedFollowing))
+        if expectedFollowing {
+            XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 2)
+        } else {
+            XCTAssertGreaterThan(try XCTUnwrap(Double(fields[1])) - XCTUnwrap(Double(fields[0])), 2)
+        }
     }
 
     func testUpArrowInSelectableTextCancelsGatedRestore() throws { try runArrowRestoreCancellation(.upArrow) }

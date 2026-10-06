@@ -796,7 +796,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var lastObservedOrigin: NSPoint?
         private var lastObservedViewportSize: NSSize?
         private var lastObservedDocumentHeight: CGFloat?
-        private var pendingViewportResizeShift: (delta: CGFloat, expires: ContinuousClock.Instant)?
+        private struct ResizeTransaction {
+            let initiallyFollowing: Bool
+            let viewportDelta: CGFloat
+            let expires: ContinuousClock.Instant
+            let inputGeneration: UInt64
+        }
+        private var resizeTransaction: ResizeTransaction?
+        private var userInputGeneration: UInt64 = 0
         private var pendingDocumentBottomShift: (origin: CGFloat, expires: ContinuousClock.Instant)?
         private var userScrolling = false
         private var liveScrolling = false
@@ -981,7 +988,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             lastObservedOrigin = nil
             lastObservedViewportSize = nil
             lastObservedDocumentHeight = nil
-            pendingViewportResizeShift = nil
+            resizeTransaction = nil
             pendingDocumentBottomShift = nil
             lastUserScrollInput = nil
             lastUserScrollMotion = nil
@@ -1661,7 +1668,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 upwardScrollTravel = 0
             }
             lastUserScrollInput = .now
-            pendingViewportResizeShift = nil
+            userInputGeneration &+= 1
+            resizeTransaction = nil
             pendingDocumentBottomShift = nil
             establishedBookmark = nil
             cancelBottomFollowWork()
@@ -1837,10 +1845,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 abs($0.width - viewportSize.width) > 0.5
                     || abs($0.height - viewportSize.height) > 0.5
             } ?? false
-            if viewportResized, followsBottom, let previousViewportSize {
-                pendingViewportResizeShift = (
-                    viewportSize.height - previousViewportSize.height,
-                    .now.advanced(by: .milliseconds(500))
+            if viewportResized, let previousViewportSize {
+                resizeTransaction = ResizeTransaction(
+                    initiallyFollowing: followsBottom,
+                    viewportDelta: viewportSize.height - previousViewportSize.height,
+                    expires: .now.advanced(by: .milliseconds(500)),
+                    inputGeneration: userInputGeneration
                 )
             }
             let documentResized = previousDocumentHeight.flatMap { before in
@@ -1863,12 +1873,22 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var passiveLayoutMotion = viewportResized || scrollView.inLiveResize
                 || (documentResized && originTravel <= documentTravel + 2
                     && originDelta * documentDelta >= 0)
-            if !ignored, !viewportResized, !documentResized,
-               let pending = pendingViewportResizeShift, let previous {
-                pendingViewportResizeShift = nil
-                if ContinuousClock.now < pending.expires,
-                   TranscriptViewportPolicy.matchesResizeShift(actual: actual.y, previous: previous.y, viewportDelta: pending.delta) {
+            if let transaction = resizeTransaction {
+                if ContinuousClock.now >= transaction.expires
+                    || transaction.inputGeneration != userInputGeneration {
+                    resizeTransaction = nil
+                } else if transaction.initiallyFollowing, !scrollerTracking, !selectionTracking {
+                    // A resize can change estimated row heights and then deliver
+                    // multiple origin-only adjustments, including another upward
+                    // adjustment. Physical input invalidates this transaction
+                    // before AppKit moves the viewport.
+                    let oppositeShift = previous.map {
+                        TranscriptViewportPolicy.matchesResizeShift(actual: actual.y, previous: $0.y,
+                            viewportDelta: transaction.viewportDelta)
+                    } ?? false
                     passiveLayoutMotion = true
+                    TraceTestHooks.appendLine(oppositeShift ? "resize-motion=opposite" : "resize-motion=native",
+                        pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
                 }
             }
             if !ignored, !viewportResized, !documentResized,
@@ -2041,7 +2061,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"
             )
             guard TraceTestHooks.isUITesting, let scrollView, let maximumScrollY else { return }
-            switch TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] {
+            let simulation = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"]
+            switch simulation {
             case "external-midpoint":
                 TraceTestHooks.appendLine(
                     "simulate-before=\(scrollView.contentView.bounds.origin.y),max=\(maximumScrollY)",
@@ -2090,7 +2111,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 // phase separately, with a real changed viewport extent.
                 lastObservedViewportSize = resized
                 lastObservedDocumentHeight = table?.frame.height
-                pendingViewportResizeShift = (delta, .now.advanced(by: .milliseconds(500)))
+                resizeTransaction = ResizeTransaction(initiallyFollowing: followsBottom, viewportDelta: delta,
+                    expires: .now.advanced(by: .milliseconds(500)), inputGeneration: userInputGeneration)
                 expectedProgrammaticOrigin = nil
                 lastObservedOrigin = origin
                 scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y - delta))
@@ -2102,6 +2124,45 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
                 window.setFrame(originalFrame, display: true)
                 window.contentView?.layoutSubtreeIfNeeded()
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
+            case "multi-stage-resize":
+                guard let window = scrollView.window, let table else { return }
+                let origin = scrollView.contentView.bounds.origin
+                let oldSize = scrollView.contentView.bounds.size
+                let oldHeight = table.frame.height
+                scrollView.contentView.postsBoundsChangedNotifications = false
+                var frame = window.frame
+                frame.size.height -= 80
+                window.setFrame(frame, display: true)
+                window.contentView?.layoutSubtreeIfNeeded()
+                table.setFrameSize(NSSize(width: table.frame.width, height: max(0, oldHeight - 264)))
+                lastObservedOrigin = origin
+                lastObservedViewportSize = oldSize
+                lastObservedDocumentHeight = oldHeight
+                expectedProgrammaticOrigin = nil
+                let viewportDelta = scrollView.contentView.bounds.height - oldSize.height
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y - 264 - viewportDelta))
+                boundsDidChange()
+                let intermediate = scrollView.contentView.bounds.origin
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: intermediate.x, y: intermediate.y + viewportDelta))
+                boundsDidChange()
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                TraceTestHooks.appendLine("simulation-classified-bottom=\(followsBottom)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
+            case "expired-resize", "interrupted-resize":
+                resizeTransaction = ResizeTransaction(initiallyFollowing: true, viewportDelta: -80,
+                    expires: .now.advanced(by: .milliseconds(simulation == "expired-resize" ? -1 : 500)),
+                    inputGeneration: userInputGeneration)
+                if simulation == "interrupted-resize" { beginUserScrolling() }
+                expectedProgrammaticOrigin = nil
+                lastObservedOrigin = scrollView.contentView.bounds.origin
+                var origin = scrollView.contentView.bounds.origin
+                origin.y -= 24
+                scrollView.contentView.setBoundsOrigin(origin)
+                boundsDidChange()
+                TraceTestHooks.appendLine("simulation-classified-bottom=\(followsBottom)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
                 TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
             case "row-extent":
                 guard let table else { return }
