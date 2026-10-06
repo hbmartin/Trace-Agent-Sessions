@@ -737,7 +737,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
                         // Only UI tests monitor wheel events; windowed input uses AppKit.
                         guard event.window == nil else { return false }
                         guard let parent = scrollView.superview else { return false }
-                        let windowPoint = transcriptWindow.convertPoint(fromScreen: NSEvent.mouseLocation)
+                        // A windowless mouse event carries screen coordinates. Its
+                        // location can differ from the current pointer for synthetic input.
+                        let windowPoint = transcriptWindow.convertPoint(fromScreen: event.locationInWindow)
                         let point = parent.convert(windowPoint, from: nil)
                         guard let hit = scrollView.hitTest(point) else { return false }
                         hit.scrollWheel(with: event)

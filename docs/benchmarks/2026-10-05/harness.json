@@ -1,7 +1,7 @@
 {
   "baseline_main": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
   "baseline_harness": "5bff37720c974a4b5953bf29b9260bf77fac1e51",
-  "candidate": "58c87ebcdfc43fe9caaadf80e26db8b5ab622726",
+  "candidate": "755db6924f1712edc49b11b9dff4944f09f2ba43",
   "identical_harness_files": [
     {
       "path": "Tests/TracePerformanceTests/TracePerformanceTests.swift",
