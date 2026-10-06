@@ -1,5 +1,37 @@
 [
   {
+    "name": "baseline-review-final",
+    "source_commit": "5bff37720c974a4b5953bf29b9260bf77fac1e51",
+    "start_time": 1791247849.084,
+    "finish_time": 1791247986.035,
+    "files": {
+      "metrics": {
+        "path": "baseline-review-final-metrics.json",
+        "sha256": "c52f9825f5c802d2b51e731a9d30ad64d3735f8ad70955f3d9cda8165f7d848b"
+      },
+      "summary": {
+        "path": "baseline-review-final-summary.json",
+        "sha256": "89023f16be22a257bde68de1d62eef9521633feaa262ef168a7689e4cb4041d9"
+      }
+    }
+  },
+  {
+    "name": "candidate-review-final",
+    "source_commit": "58c87ebcdfc43fe9caaadf80e26db8b5ab622726",
+    "start_time": 1791248031.168,
+    "finish_time": 1791248178.733,
+    "files": {
+      "metrics": {
+        "path": "candidate-review-final-metrics.json",
+        "sha256": "7b8f0a0f00f62e109eb9d5d074a18ab326e1ab61c0054578a9cd0319317883e9"
+      },
+      "summary": {
+        "path": "candidate-review-final-summary.json",
+        "sha256": "7dd8cdedd60e5481dc58813edccb6859350887be48a4356001b007f2c3778e3f"
+      }
+    }
+  },
+  {
     "name": "baseline-initial",
     "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
     "start_time": 1791243713.498,

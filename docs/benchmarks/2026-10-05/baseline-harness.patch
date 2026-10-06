@@ -1,9 +1,9 @@
 diff --git a/Scripts/compare-transcript-scroll-metrics.py b/Scripts/compare-transcript-scroll-metrics.py
 new file mode 100755
-index 0000000..67583f2
+index 0000000..cf47d16
 --- /dev/null
 +++ b/Scripts/compare-transcript-scroll-metrics.py
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,54 @@
 +#!/usr/bin/env python3
 +"""Compare identical TracePerformance xcresult metric exports."""
 +
@@ -36,7 +36,13 @@ index 0000000..67583f2
 +    args = parser.parse_args()
 +    before = metrics_for(args.baseline, args.test)
 +    after = metrics_for(args.candidate, args.test)
-+    shared = before.keys() & after.keys()
++    if before.keys() != after.keys():
++        raise SystemExit(
++            "Metric identifiers differ: "
++            f"baseline only={sorted(before.keys() - after.keys())}; "
++            f"candidate only={sorted(after.keys() - before.keys())}"
++        )
++    shared = before.keys()
 +    if not shared:
 +        raise SystemExit("No matching metrics were found")
 +    for identifier in sorted(shared):
@@ -54,18 +60,20 @@ index 0000000..67583f2
 +    main()
 diff --git a/Scripts/measure-transcript-scroll.sh b/Scripts/measure-transcript-scroll.sh
 new file mode 100755
-index 0000000..802088e
+index 0000000..94239ef
 --- /dev/null
 +++ b/Scripts/measure-transcript-scroll.sh
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,38 @@
 +#!/usr/bin/env bash
 +set -euo pipefail
 +
 +repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 +timestamp="$(date +%Y%m%d-%H%M%S)"
 +output_dir="${TRACE_SCROLL_BENCHMARK_OUTPUT_DIR:-$repo_dir/build/transcript-scroll/$timestamp}"
++if [[ "$output_dir" != /* ]]; then output_dir="$PWD/$output_dir"; fi
 +result_bundle="$output_dir/TranscriptScroll.xcresult"
 +derived_data="${TRACE_SCROLL_DERIVED_DATA_PATH:-$repo_dir/build/transcript-scroll-derived-data}"
++if [[ "$derived_data" != /* ]]; then derived_data="$PWD/$derived_data"; fi
 +
 +mkdir -p "$output_dir"
 +cd "$repo_dir"
@@ -362,7 +370,7 @@ index 7bcf512..a6715d8 100644
  
          private func cancelBottomFollowWork() {
 diff --git a/Tests/TracePerformanceTests/TracePerformanceTests.swift b/Tests/TracePerformanceTests/TracePerformanceTests.swift
-index 47312cb..5eac263 100644
+index 47312cb..62d6d22 100644
 --- a/Tests/TracePerformanceTests/TracePerformanceTests.swift
 +++ b/Tests/TracePerformanceTests/TracePerformanceTests.swift
 @@ -19,6 +19,14 @@ final class TracePerformanceTests: XCTestCase {
@@ -389,7 +397,7 @@ index 47312cb..5eac263 100644
              options: options
          ) {
              search.click()
-@@ -51,73 +59,126 @@ final class TracePerformanceTests: XCTestCase {
+@@ -51,73 +59,131 @@ final class TracePerformanceTests: XCTestCase {
      }
  
      func testTranscriptScrollPerformance() throws {
@@ -464,6 +472,11 @@ index 47312cb..5eac263 100644
          XCTAssertTrue(transcript.waitForExistence(timeout: 10))
 -        transcript.scroll(byDeltaX: 0, deltaY: -100_000)
 -        let source = directory.appendingPathComponent("Sources/Claude/performance-0.jsonl")
++        let loadedMessage = transcript.staticTexts.matching(NSPredicate(
++            format: "value BEGINSWITH %@", "PerformanceNeedle commonterm session 1 message "
++        )).firstMatch
++        XCTAssertTrue(loadedMessage.waitForExistence(timeout: 10),
++            "streaming must start after the initial transcript is loaded")
 +        let jumpDone = directory.appendingPathComponent("jump-done")
 +        let positionProbe = directory.appendingPathComponent("position-probe")
 +        app.buttons["testJumpTranscriptBottom"].click()
@@ -552,7 +565,7 @@ index 47312cb..5eac263 100644
      }
  
      private func lineCount(in file: URL) -> Int {
-@@ -125,9 +186,40 @@ final class TracePerformanceTests: XCTestCase {
+@@ -125,9 +191,40 @@ final class TracePerformanceTests: XCTestCase {
          return text.split(separator: "\n").count
      }
  

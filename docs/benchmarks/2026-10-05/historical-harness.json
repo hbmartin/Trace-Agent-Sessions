@@ -1,19 +1,19 @@
 {
   "baseline_main": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
-  "baseline_harness": "5bff37720c974a4b5953bf29b9260bf77fac1e51",
-  "candidate": "58c87ebcdfc43fe9caaadf80e26db8b5ab622726",
+  "baseline_harness": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+  "candidate": "3034725497d6942fb3d586ae034f834dc038c75c",
   "identical_harness_files": [
     {
       "path": "Tests/TracePerformanceTests/TracePerformanceTests.swift",
-      "sha256": "b006cb0ea59003db4a1ef641c2ca1d001acc62b1ba6601cdce471848b59c18c4"
+      "sha256": "411fe12c9ee649ee3e8abd61d006a4afa7712a63c62bca062f56f00d1cb84654"
     },
     {
       "path": "Scripts/measure-transcript-scroll.sh",
-      "sha256": "2fb6a8f429c31f0216a10ba7e7eed0b6830530e41b4db3b5c449fb87b6b6b8b6"
+      "sha256": "1aaa93870c4f8a27dbc227c94b8792de4b9ad37833c2bea6cb859be359340a62"
     },
     {
       "path": "Scripts/compare-transcript-scroll-metrics.py",
-      "sha256": "37d490bf38625179158838b16d6796443eb720602ec6718ac4a2016536b03f53"
+      "sha256": "b5cea1855229f4c41ea2bcb3a42518500c903ebd8b887ff4c1ecdaca73c3d4ac"
     }
   ],
   "date": "2026-10-05",
