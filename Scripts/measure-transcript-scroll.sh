@@ -23,15 +23,27 @@ xcodebuild test \
   -derivedDataPath "$derived_data" \
   -only-testing:TracePerformanceTests/TracePerformanceTests/testTranscriptScrollPerformance \
   -only-testing:TracePerformanceTests/TracePerformanceTests/testStreamingTranscriptFollowPerformance \
+  -only-testing:TracePerformanceTests/TracePerformanceTests/testExternalSidecarTrafficPerformance \
   -resultBundlePath "$result_bundle" \
   CODE_SIGNING_ALLOWED=NO \
   >"$output_dir/xcodebuild.log" 2>&1 || test_status=$?
 
+export_status=0
 if [[ -d "$result_bundle" ]]; then
   xcrun xcresulttool get test-results summary --path "$result_bundle" \
-    >"$output_dir/summary.json"
+    >"$output_dir/summary.json" || export_status=$?
   xcrun xcresulttool get test-results metrics --path "$result_bundle" \
-    >"$output_dir/metrics.json"
+    >"$output_dir/metrics.json" || export_status=$?
+  xcrun xcresulttool export attachments --path "$result_bundle" --output-path "$output_dir/attachments" \
+    >"$output_dir/attachment-export.log" 2>&1 || export_status=$?
+else
+  export_status=1
+  echo "Missing benchmark result bundle: $result_bundle" >&2
+fi
+if [[ "$test_status" == 0 ]]; then
+  [[ "$export_status" == 0 ]] || exit "$export_status"
+  python3 "$repo_dir/Scripts/export-benchmark-samples.py" "$output_dir/attachments" "$output_dir/app-samples.json"
+  python3 "$repo_dir/Scripts/compare-transcript-scroll-metrics.py" "$output_dir/metrics.json" "$output_dir/metrics.json" > "$output_dir/validation.txt"
 fi
 
 printf 'Transcript scrolling benchmark: %s\n' "$output_dir"

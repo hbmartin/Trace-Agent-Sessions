@@ -1,17 +1,36 @@
 import XCTest
+import Darwin
 
 @MainActor
 final class TracePerformanceTests: XCTestCase {
-    private func makeApp() throws -> (XCUIApplication, URL) {
+    private func makeApp(sidecarTraffic: Bool = false) throws -> (XCUIApplication, URL) {
         continueAfterFailure = false
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("TracePerformance-\(UUID())")
         let claude = directory.appendingPathComponent("Sources/Claude")
         try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
         try makeCorpus(in: claude)
+        let codex = directory.appendingPathComponent("Sources/Codex")
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("Sources/Gemini"), withIntermediateDirectories: true)
+        try Data((#"{"type":"session_meta","payload":{"id":"benchmark-sidecar","cwd":"/tmp/PerformanceProject"}}"# + "\n" +
+            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Watcher benchmark"}]}}"# + "\n").utf8)
+            .write(to: codex.appendingPathComponent("rollout-watcher.jsonl"))
+        if sidecarTraffic {
+            let store = directory.appendingPathComponent("external-metadata")
+            for name in ["one", "two"] {
+                let targetDirectory = store.appendingPathComponent(name)
+                try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
+                try Data().write(to: targetDirectory.appendingPathComponent("names.jsonl"))
+            }
+            // Both revisions must discover the external dependency at startup.
+            try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("Sources/session_index.jsonl"),
+                withDestinationURL: store.appendingPathComponent("one/names.jsonl"))
+        }
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--ui-show-main"]
+        app.launchArguments = ["--ui-testing", "--ui-show-main", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["TRACE_BENCHMARK_EXPORT_DIRECTORY"] = directory.appendingPathComponent("measurements").path
         app.launchEnvironment["TRACE_TEST_DIRECTORY"] = directory.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOTTOM_AUDIT_PATH"] = directory
             .appendingPathComponent("bottom-audit").path
@@ -44,7 +63,7 @@ final class TracePerformanceTests: XCTestCase {
         let options = XCTMeasureOptions()
         options.iterationCount = 5
         measure(
-            metrics: [XCTClockMetric(), XCTCPUMetric(application: app), XCTMemoryMetric()],
+            metrics: [XCTClockMetric(), XCTCPUMetric(application: app), XCTMemoryMetric(application: app)],
             options: options
         ) {
             search.click()
@@ -89,17 +108,15 @@ final class TracePerformanceTests: XCTestCase {
         var sweep = 1
         let options = XCTMeasureOptions()
         options.iterationCount = 5
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
         measure(
-            metrics: [
-                XCTClockMetric(), XCTCPUMetric(application: app),
-                XCTOSSignpostMetric(
-                    subsystem: "me.haroldmartin.Trace", category: "PointsOfInterest",
-                    name: "Transcript Update"
-                ),
-            ],
+            metrics: [XCTClockMetric(), XCTCPUMetric(application: app), XCTMemoryMetric(application: app)],
             options: options
         ) {
             sweep += 1
+            let sample = "scroll-\(sweep)"
+            benchmarkControl("begin", id: sample, directory: directory)
+            startMeasuring()
             let done = URL(fileURLWithPath: "\(donePrefix)-\(sweep)")
             var completed = false
             for _ in 0..<60 {
@@ -109,6 +126,8 @@ final class TracePerformanceTests: XCTestCase {
                     break
                 }
             }
+            stopMeasuring()
+            benchmarkControl("end", id: sample, directory: directory)
             XCTAssertTrue(completed,
                 "the app must complete every 5,000-point scroll sweep")
         }
@@ -142,13 +161,11 @@ final class TracePerformanceTests: XCTestCase {
         var messageIndex = 70
         let options = XCTMeasureOptions()
         options.iterationCount = 3
-        measure(metrics: [
-            XCTClockMetric(), XCTCPUMetric(application: app),
-            XCTOSSignpostMetric(
-                subsystem: "me.haroldmartin.Trace", category: "PointsOfInterest",
-                name: "Transcript Update"
-            ),
-        ], options: options) {
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+        measure(metrics: [XCTClockMetric(), XCTCPUMetric(application: app), XCTMemoryMetric(application: app)], options: options) {
+            let sample = "streaming-\(messageIndex)"
+            benchmarkControl("begin", id: sample, directory: directory)
+            startMeasuring()
             for _ in 0..<10 {
                 let record: [String: Any] = [
                     "type": "assistant", "uuid": "performance-1-\(messageIndex)",
@@ -171,6 +188,8 @@ final class TracePerformanceTests: XCTestCase {
             XCTAssertTrue(waitForFile(
                 URL(fileURLWithPath: "\(followMarkerPrefix)-\(messageIndex)"), timeout: 15
             ), "the measured batch must finish bottom following")
+            stopMeasuring()
+            benchmarkControl("end", id: sample, directory: directory)
         }
         let bottomCount = lineCount(in: bottomAudit) - startBottom
         let followCount = lineCount(in: followAudit) - startFollow
@@ -182,6 +201,69 @@ final class TracePerformanceTests: XCTestCase {
         let finalPosition = try XCTUnwrap(probedPosition(in: positionProbe))
         XCTAssertTrue(finalPosition.pinned && finalPosition.distance <= 2,
             "the measured append batch must end at the pinned bottom")
+    }
+
+    private func benchmarkControl(_ action: String, id: String, directory: URL) {
+        let exports = directory.appendingPathComponent("measurements")
+        let output = exports.appendingPathComponent(action == "begin" ? "\(id)-begun" : "\(id).json")
+        for _ in 0..<15 {
+            DistributedNotificationCenter.default().post(name: Notification.Name("traceBenchmarkControl"),
+                object: nil, userInfo: ["action": action, "id": id])
+            if waitForFile(output, timeout: 1) { break }
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.path), "missing acknowledged \(action) for \(id)")
+        if action == "end", let data = try? Data(contentsOf: output) {
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            attachment.name = "benchmark-\(id).json"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    func testExternalSidecarTrafficPerformance() throws {
+        let (app, directory) = try makeApp(sidecarTraffic: true)
+        openSession(1, in: app)
+        let home = directory.appendingPathComponent("Sources")
+        let store = directory.appendingPathComponent("external-metadata")
+        let targets = [store.appendingPathComponent("one/names.jsonl"), store.appendingPathComponent("two/names.jsonl")]
+        let sidecar = home.appendingPathComponent("session_index.jsonl")
+        // Materialize the initial dependency outside measurement.
+        Thread.sleep(forTimeInterval: 2)
+        var iteration = 0
+        let options = XCTMeasureOptions()
+        options.iterationCount = 5
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+        measure(metrics: [XCTClockMetric(), XCTCPUMetric(application: app), XCTMemoryMetric(application: app)], options: options) {
+            iteration += 1
+            let sample = "watcher-\(iteration)"
+            benchmarkControl("begin", id: sample, directory: directory)
+            startMeasuring()
+            do {
+                for index in 0..<10_000 {
+                    try Data([1]).write(to: store.appendingPathComponent("one/unrelated-\(index)"))
+                }
+                for index in 0..<100 {
+                    try Data("{\"id\":\"benchmark-sidecar\",\"thread_name\":\"Target \(iteration)-\(index)\"}\n".utf8).write(to: targets[index % 2])
+                    Thread.sleep(forTimeInterval: 0.005)
+                }
+                for index in 0..<50 {
+                    let temporary = home.appendingPathComponent("next-link")
+                    try FileManager.default.createSymbolicLink(at: temporary, withDestinationURL: targets[index % 2])
+                    // rename atomically replaces the link, avoiding an artificial gap.
+                    XCTAssertEqual(rename(temporary.path, sidecar.path), 0)
+                    Thread.sleep(forTimeInterval: 0.06)
+                }
+                // An append provides a common indexed completion barrier on both revisions.
+                let source = directory.appendingPathComponent("Sources/Claude/performance-1.jsonl")
+                try appendBenchmarkRecord(["type": "assistant", "uuid": "watcher-barrier-\(iteration)",
+                    "sessionId": "performance-1", "message": ["content": "Watcher barrier \(iteration)"]], to: source)
+                XCTAssertTrue(app.staticTexts["\(70 + iteration) messages"].waitForExistence(timeout: 15))
+                XCTAssertTrue(app.staticTexts["Target \(iteration)-99"].firstMatch.waitForExistence(timeout: 15),
+                    "the final retargeted sidecar must be refreshed before measurement ends")
+            } catch { XCTFail("watcher workload failed: \(error)") }
+            stopMeasuring()
+            benchmarkControl("end", id: sample, directory: directory)
+        }
     }
 
     private func lineCount(in file: URL) -> Int {

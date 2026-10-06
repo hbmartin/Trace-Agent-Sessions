@@ -10,6 +10,12 @@ on:
       - Scripts/compare-transcript-scroll-metrics.py
       - Tests/TracePerformanceTests/**
       - Sources/TraceApp/**
+      - Sources/TraceCore/**
+      - Scripts/export-benchmark-samples.py
+
+concurrency:
+  group: transcript-benchmark-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
