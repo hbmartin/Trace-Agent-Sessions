@@ -1042,6 +1042,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var refreshesRowHeights = false
             var visibilityChanged = false
             if sessionChanged {
+                cachedTrailingDocumentPadding = nil
                 cancelPendingRestore(reportCancellation: false)
                 expansionStates.removeAll()
                 pendingHeightMessageIDs.removeAll()
@@ -1875,11 +1876,16 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 documentHeight.map { abs(before - $0) > 0.5 }
             } ?? false
             if documentResized, followsBottom, let table, !items.isEmpty {
-                if let bottom = cachedRowExtent {
-                    // AppKit can anchor to the last row before applying trailing
-                    // document padding in a later origin-only update.
+                // A synchronous native resize can deliver its padding adjustment
+                // before our coalesced row-extent refresh runs. Preserve the last
+                // measured trailing padding, rather than using a stale row bottom.
+                let bottom = cachedTrailingDocumentPadding.map { max(0, table.frame.height - $0) }
+                    ?? cachedRowExtent
+                if let bottom {
                     pendingDocumentBottomShift = (max(0, bottom - viewportSize.height),
                         .now.advanced(by: .milliseconds(500)))
+                    TraceTestHooks.appendLine("document-shift=\(max(0, bottom - viewportSize.height)),padding=\(cachedTrailingDocumentPadding ?? -1)",
+                        pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
                 }
             }
             let layoutChanged = viewportResized || documentResized || scrollView.inLiveResize
@@ -2443,6 +2449,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var extentRefreshWorkItem: DispatchWorkItem?
         private var cachedRowExtent: CGFloat?
         private var cachedDocumentHeight: CGFloat = 0
+        private var cachedTrailingDocumentPadding: CGFloat?
         private var pendingAnchorCorrection = false
         private var extentQueryCount = 0
         private var materializedMessageIDs: Set<Int64> = []
@@ -2487,6 +2494,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
             extentQueryCount += 1
             cachedRowExtent = items.isEmpty ? 0 : table.rect(ofRow: items.count - 1).maxY
             cachedDocumentHeight = table.frame.height
+            if !items.isEmpty, let bottom = cachedRowExtent, cachedDocumentHeight >= bottom {
+                cachedTrailingDocumentPadding = cachedDocumentHeight - bottom
+            }
             extentGeometry = ExtentGeometry(frameSize: table.frame.size, boundsSize: table.bounds.size,
                                             spacing: table.intercellSpacing, rows: items.count)
             extentNeedsRefresh = generation != extentGeneration
