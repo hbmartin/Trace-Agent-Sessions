@@ -1,0 +1,44 @@
+name: Transcript scroll benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/transcript-scroll-benchmark.yml
+      - Scripts/benchmark-transcript-comparison.sh
+      - Scripts/measure-transcript-scroll.sh
+      - Scripts/compare-transcript-scroll-metrics.py
+      - Tests/TracePerformanceTests/**
+      - Sources/TraceApp/**
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+      - uses: jdx/mise-action@v2
+      - name: Configure custom SQLite
+        run: Scripts/configure-grdb.sh
+      - name: Benchmark baseline then candidate on this runner
+        run: Scripts/benchmark-transcript-comparison.sh
+      - name: Save samples and completion diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: transcript-scroll-comparison
+          path: |
+            build/transcript-comparison/metadata.json
+            build/transcript-comparison/comparison.txt
+            build/transcript-comparison/baseline
+            build/transcript-comparison/candidate
+          if-no-files-found: error
+          retention-days: 7
