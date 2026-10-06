@@ -111,12 +111,13 @@ private struct SidebarRevealTaskID: Equatable {
 // before acknowledging navigation.
 private struct SidebarRowReveal: NSViewRepresentable {
     let token: UUID?
+    let row: Int?
     let revealed: (UUID) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.update(view: view, token: token, revealed: revealed)
+        context.coordinator.update(view: view, token: token, row: row, revealed: revealed)
     }
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
         coordinator.task?.cancel()
@@ -125,11 +126,13 @@ private struct SidebarRowReveal: NSViewRepresentable {
     @MainActor final class Coordinator {
         var task: Task<Void, Never>?
         private var token: UUID?
-        func update(view: NSView, token: UUID?, revealed: @escaping (UUID) -> Void) {
-            guard self.token != token else { return }
+        private var row: Int?
+        func update(view: NSView, token: UUID?, row: Int?, revealed: @escaping (UUID) -> Void) {
+            guard self.token != token || self.row != row else { return }
             self.token = token
+            self.row = row
             task?.cancel()
-            guard let token else { return }
+            guard let token, let row else { return }
             task = Task { @MainActor [weak view] in
                 var stableChecks = 0
                 for attempt in 0..<60 {
@@ -142,7 +145,8 @@ private struct SidebarRowReveal: NSViewRepresentable {
                     }
                     guard let table = ancestor as? NSTableView else { continue }
                     table.layoutSubtreeIfNeeded()
-                    let row = table.row(for: view)
+                    // A List background can retain a recycled view's geometry.
+                    // Its model index remains the authoritative native row.
                     guard row >= 0, row < table.numberOfRows else { continue }
                     table.scrollRowToVisible(row)
                     table.layoutSubtreeIfNeeded()
@@ -231,7 +235,9 @@ private struct SessionSidebar: View {
                                 .id(project.id)
                                 .tag(Optional(project.id))
                                 .background(SidebarRowReveal(
-                                    token: projectRevealTaskID.rowID == project.id ? reveal?.token : nil
+                                    token: projectRevealTaskID.rowID == project.id ? reveal?.token : nil,
+                                    row: projectRevealTaskID.rowID == project.id
+                                        ? filteredProjects.firstIndex(where: { $0.id == project.id }) : nil
                                 ) { token in
                                     handledProjectRevealToken = token
                                     if TraceTestHooks.isUITesting,
