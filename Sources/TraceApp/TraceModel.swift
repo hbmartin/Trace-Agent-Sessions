@@ -176,6 +176,9 @@ final class TraceModel: ObservableObject {
     private var pendingStartupRecovery = IndexRecoveryWork()
     private var watchedSourceRoots: [URL] = []
     private var watcherGeneration: UInt64 = 0
+    // The first delivered watermark is a conservative replay point while the
+    // scheduler is still committing its persisted checkpoint.
+    private var liveWatcherReplayStarts: [String: UInt64] = [:]
     private var safetyVerificationTask: Task<Void, Never>?
     private var hydrationOrder: [Int64] = []
     private var hydratingMessageIDs: Set<Int64> = []
@@ -1355,6 +1358,7 @@ final class TraceModel: ObservableObject {
     ) async -> Bool {
         guard settings.onboardingComplete, let database else { return false }
         if !forceRootReconciliation, !reconfigureWatchers, !watchers.isEmpty { return true }
+        if !reconfigureWatchers { liveWatcherReplayStarts = [:] }
         let generation = beginWatcherConfiguration()
         let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
@@ -1379,7 +1383,8 @@ final class TraceModel: ObservableObject {
         }
         var configurations: [(id: String, roots: [URL], checkpoint: UInt64?)] = []
         for (groupingID, groupRoots) in grouped.sorted(by: { $0.key < $1.key }) {
-            let checkpoint = try? await database.eventCheckpoint(volumeID: groupingID)
+            let persistedCheckpoint = try? await database.eventCheckpoint(volumeID: groupingID)
+            let checkpoint = persistedCheckpoint ?? liveWatcherReplayStarts[groupingID]
             guard generation == watcherGeneration, !Task.isCancelled else { return false }
             if checkpoint == nil {
                 let sourcePaths = groupRoots.map { TraceFileIO.canonicalPath($0.path) }
@@ -1387,6 +1392,10 @@ final class TraceModel: ObservableObject {
                     .map(\.path)
                 reconciliationPaths.formUnion(sourcePaths)
             }
+            TraceTestHooks.appendLine(
+                "\(groupingID),persisted=\(String(describing: persistedCheckpoint)),replay=\(String(describing: checkpoint)),reconcile=\(reconciliationPaths.sorted())",
+                pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"
+            )
             configurations.append((groupingID, groupRoots, checkpoint))
         }
 
@@ -1409,6 +1418,10 @@ final class TraceModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self, self.settings.onboardingComplete,
                           self.watcherGeneration == generation else { return }
+                    for (identifier, eventID) in changes.watermarks
+                        where self.liveWatcherReplayStarts[identifier] == nil {
+                        self.liveWatcherReplayStarts[identifier] = eventID
+                    }
                     var relevant = SourceChanges()
                     let changedPaths = changes.paths.union(changes.lexicalPaths)
                     relevant.paths = Set(changedPaths.flatMap { path -> Set<String> in
@@ -1525,6 +1538,10 @@ final class TraceModel: ObservableObject {
 
     private func submitSourceChanges(_ changes: SourceChanges) async {
         guard let scheduler else { return }
+        TraceTestHooks.appendLine(
+            "paths=\(changes.paths.sorted()),reconcile=\(changes.reconciliationPaths.sorted()),reasons=\(changes.recoveryReasons.map(\.rawValue).sorted())",
+            pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"
+        )
         await scheduler.request(
             paths: changes.paths,
             reconciliationPaths: changes.reconciliationPaths,
@@ -1540,6 +1557,9 @@ final class TraceModel: ObservableObject {
     }
 
     private func activity(for changes: SourceChanges) -> IndexActivity {
+        guard changes.requiresReconciliation else {
+            return changes.historyDone ? .launchCatchUp : .fileChanges
+        }
         if changes.recoveryReasons.contains(.eventsDropped)
             || changes.recoveryReasons.contains(.eventIDsWrapped) { return .eventStreamRecovery }
         if changes.recoveryReasons.contains(.rootChanged) { return .rootRecovery }
@@ -1559,6 +1579,7 @@ final class TraceModel: ObservableObject {
     private func invalidateWatchers() {
         _ = beginWatcherConfiguration()
         watchedSourceRoots = []
+        liveWatcherReplayStarts = [:]
         watcherStartupPending = true
         bufferedSourceChanges = SourceChanges()
     }

@@ -106,6 +106,60 @@ private struct SidebarRevealTaskID: Equatable {
     let rowID: Int64?
 }
 
+// SwiftUI's List proxy can leave the selected row outside the native clip view
+// while its rows are being replaced. Confirm and reveal the actual AppKit row
+// before acknowledging navigation.
+private struct SidebarRowReveal: NSViewRepresentable {
+    let token: UUID?
+    let revealed: (UUID) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.update(view: view, token: token, revealed: revealed)
+    }
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.task?.cancel()
+    }
+
+    @MainActor final class Coordinator {
+        var task: Task<Void, Never>?
+        private var token: UUID?
+        func update(view: NSView, token: UUID?, revealed: @escaping (UUID) -> Void) {
+            guard self.token != token else { return }
+            self.token = token
+            task?.cancel()
+            guard let token else { return }
+            task = Task { @MainActor [weak view] in
+                var stableChecks = 0
+                for _ in 0..<40 {
+                    do { try await Task.sleep(for: .milliseconds(50)) }
+                    catch { return }
+                    guard let view, !Task.isCancelled else { return }
+                    var ancestor = view.superview
+                    while let candidate = ancestor, !(candidate is NSTableView) {
+                        ancestor = candidate.superview
+                    }
+                    guard let table = ancestor as? NSTableView else { continue }
+                    table.layoutSubtreeIfNeeded()
+                    let row = table.row(for: view)
+                    guard row >= 0, row < table.numberOfRows else { continue }
+                    table.scrollRowToVisible(row)
+                    table.layoutSubtreeIfNeeded()
+                    let rect = table.rect(ofRow: row)
+                    let visible = table.visibleRect.intersection(rect)
+                    if visible.height >= rect.height - 1 { stableChecks += 1 }
+                    else { stableChecks = 0 }
+                    if stableChecks >= 3 {
+                        revealed(token)
+                        return
+                    }
+                }
+            }
+        }
+    }
+}
+
 private struct SessionSidebar: View {
     @ObservedObject var model: TraceModel
     @ObservedObject private var settings: AppSettings
@@ -170,6 +224,16 @@ private struct SessionSidebar: View {
                                 )
                                 .id(project.id)
                                 .tag(Optional(project.id))
+                                .background(SidebarRowReveal(
+                                    token: projectRevealTaskID.rowID == project.id ? reveal?.token : nil
+                                ) { token in
+                                    handledProjectRevealToken = token
+                                    if TraceTestHooks.isUITesting,
+                                       TraceTestHooks.environment["TRACE_TEST_SKIP_SIDEBAR_PROJECT_REVEAL_ACK"] != nil {
+                                        return
+                                    }
+                                    model.acknowledgeSidebarProjectReveal(token: token)
+                                })
                             }
                         }
                         .task(id: projectRevealTaskID) {
@@ -184,12 +248,6 @@ private struct SessionSidebar: View {
                                       model.sidebarRevealRequest?.token == reveal.token else { return }
                                 proxy.scrollTo(projectID, anchor: .top)
                             }
-                            handledProjectRevealToken = reveal.token
-                            if TraceTestHooks.isUITesting,
-                               TraceTestHooks.environment["TRACE_TEST_SKIP_SIDEBAR_PROJECT_REVEAL_ACK"] != nil {
-                                return
-                            }
-                            model.acknowledgeSidebarProjectReveal(token: reveal.token)
                         }
                     }
                 }.frame(height: height)
@@ -1412,6 +1470,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 && visible.intersects(rowRect)
             let documentHeight = table.frame.height
             TraceTestHooks.appendLine(
+                "row=\(row),rect=\(rowRect),cell=\((table.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptHostingCell)?.layoutDescription ?? "unmaterialized")",
+                pathKey: "TRACE_TEST_TRANSCRIPT_ROW_LAYOUT_AUDIT_PATH"
+            )
+            TraceTestHooks.appendLine(
                 "\(bookmark.index),\(bookmark.offset),\(achievedOffset),\(origin.y),\(documentHeight)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"
             )
@@ -2098,6 +2160,10 @@ private final class TranscriptHostingCell: NSTableCellView {
         super.init(frame: .zero)
         self.identifier = identifier
         host.translatesAutoresizingMaskIntoConstraints = false
+        // Each row owns its padding and the table owns viewport clipping. Window
+        // safe-area insets must not resize or shift a partially visible row.
+        host.safeAreaRegions = []
+        host.sizingOptions = .intrinsicContentSize
         addSubview(host)
         leadingConstraint = host.leadingAnchor.constraint(equalTo: leadingAnchor)
         trailingConstraint = host.trailingAnchor.constraint(equalTo: trailingAnchor)
@@ -2132,6 +2198,11 @@ private final class TranscriptHostingCell: NSTableCellView {
         guard self.configuration != configuration else { return }
         self.configuration = configuration
         host.rootView = rootView
+        host.invalidateIntrinsicContentSize()
+    }
+
+    var layoutDescription: String {
+        "\(frame),host=\(host.frame),ideal=\(host.intrinsicContentSize),safeArea=\(host.safeAreaInsets)"
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

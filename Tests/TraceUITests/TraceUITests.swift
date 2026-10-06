@@ -387,6 +387,14 @@ final class TraceUITests: XCTestCase {
         let activityAudit = directory.appendingPathComponent("sidecar-index-activity")
         app.launchEnvironment["TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"] = activityAudit.path
         let codex = directory.appendingPathComponent("Sources/Codex")
+        let watcherAudit = directory.appendingPathComponent("watcher-reconfiguration-audit")
+        app.launchEnvironment["TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"] = watcherAudit.path
+        defer {
+            let diagnostic = XCTAttachment(string: fileLines(in: watcherAudit).joined(separator: "\n"))
+            diagnostic.name = "Watcher reconfiguration"
+            diagnostic.lifetime = .keepAlways
+            add(diagnostic)
+        }
         let targets = directory.appendingPathComponent("SidecarTargets")
         try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: targets, withIntermediateDirectories: true)
@@ -425,6 +433,7 @@ final class TraceUITests: XCTestCase {
             "the external target's watcher event must refresh the configured sidecar cache")
         XCTAssertTrue(waitForLineCount(activityAudit, line: "fileChanges", count: 1, timeout: 10))
         let rootRecoveries = fileLines(in: activityAudit).filter { $0 == "rootRecovery" }.count
+        let auditCountBeforeRepoint = fileLines(in: watcherAudit).count
 
         let replacementDirectory = directory.appendingPathComponent("ReplacementTargets")
         try FileManager.default.createDirectory(
@@ -454,6 +463,11 @@ final class TraceUITests: XCTestCase {
             "repointing must register the replacement target's directory")
         XCTAssertEqual(fileLines(in: activityAudit).filter { $0 == "rootRecovery" }.count,
                        rootRecoveries, "sidecar repointing must not reconcile all transcript roots")
+        let repointChanges = fileLines(in: watcherAudit).dropFirst(auditCountBeforeRepoint)
+            .filter { $0.hasPrefix("paths=") }
+        XCTAssertFalse(repointChanges.isEmpty)
+        XCTAssertTrue(repointChanges.allSatisfy { $0.contains("reconcile=[]") },
+                      "sidecar repointing must request only file refreshes: \(repointChanges)")
     }
 
     func testRecoveryLoadFailureQueuesRootFallbackAndStartupContinues() throws {
@@ -2594,7 +2608,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertLessThanOrEqual(search.frame.width, 480)
         let list = app.scrollViews.firstMatch
         try? FileManager.default.removeItem(at: offsets)
-        list.scroll(byDeltaX: 0, deltaY: -300)
+        let recentPoint = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        recentPoint.hover()
+        recentPoint.scroll(byDeltaX: 0, deltaY: -300)
         XCTAssertNotNil(waitForNumericLine(offsets, greaterThan: 20),
                         "the recent-session list must make a meaningful native scroll")
         let lowerRecentSession = app.buttons.containing(NSPredicate(
@@ -2610,7 +2626,10 @@ final class TraceUITests: XCTestCase {
         )).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 10))
         try? FileManager.default.removeItem(at: offsets)
-        app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -250)
+        let resultPoint = app.scrollViews.firstMatch
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        resultPoint.hover()
+        resultPoint.scroll(byDeltaX: 0, deltaY: -250)
         XCTAssertNotNil(waitForNumericLine(offsets, greaterThan: 20),
                         "the filtered-result list must make a meaningful native scroll")
         let lowerResult = app.buttons.containing(NSPredicate(
@@ -2924,10 +2943,12 @@ final class TraceUITests: XCTestCase {
         let idleAudit = directory.appendingPathComponent("transcript-wheel-idle")
         let gapOffsets = directory.appendingPathComponent("transcript-wheel-gap-offsets")
         let wheelRoute = directory.appendingPathComponent("transcript-wheel-route")
+        let bookmark = directory.appendingPathComponent("transcript-wheel-bookmark")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_OFFSET_PATH"] = offsets.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GAP_OFFSET_PATH"] = gapOffsets.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_WHEEL_ROUTE_PATH"] = wheelRoute.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmark.path
         app.launch()
         app.activate()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
@@ -2995,17 +3016,14 @@ final class TraceUITests: XCTestCase {
         let afterGutter = try XCTUnwrap(numericLine(in: offsets))
         XCTAssertGreaterThan(afterGutter, afterPadding + 30)
 
-        let visible = scroll.staticTexts.matching(NSPredicate(
-            format: "value BEGINSWITH %@", "Wheel routing message "
-        ))
-        let messageValue = try XCTUnwrap(poll(timeout: 10) {
-            visible.allElementsBoundByIndex.first {
-                $0.isHittable && scroll.frame.contains($0.frame)
-            }?.value as? String
-        }, "Copy needs a fully visible text line after scrolling")
-        let message = scroll.staticTexts.matching(NSPredicate(
-            format: "value == %@", messageValue
-        )).firstMatch
+        let readingIndex = try XCTUnwrap(poll(timeout: 10) {
+            fileLines(in: bookmark).last.flatMap(Int.init)
+        })
+        // Re-query by logical message identity: index-bound AX elements can be
+        // recycled between the geometry check and reading their text value.
+        let message = transcriptMessage("Wheel routing", index: readingIndex + 2, in: scroll)
+        XCTAssertTrue(message.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        XCTAssertTrue(scroll.frame.contains(message.frame), "Copy needs a fully visible line")
         app.activate()
         let pasteboardChangeCount = preparePasteboardForCopy()
         message.coordinate(withNormalizedOffset: .zero)
@@ -3166,6 +3184,14 @@ final class TraceUITests: XCTestCase {
             "Reasoning growth", project: "ReasoningProject", directory: directory,
             count: 24, contentRepeats: 0
         )
+        let layoutAudit = directory.appendingPathComponent("disclosure-row-layout-audit")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ROW_LAYOUT_AUDIT_PATH"] = layoutAudit.path
+        defer {
+            let diagnostic = XCTAttachment(string: fileLines(in: layoutAudit).joined(separator: "\n"))
+            diagnostic.name = "Disclosure row layout"
+            diagnostic.lifetime = .keepAlways
+            add(diagnostic)
+        }
         let file = directory.appendingPathComponent("Sources/Claude/Reasoning growth.jsonl")
         func append(_ id: String, content: Any) throws {
             let record: [String: Any] = [
