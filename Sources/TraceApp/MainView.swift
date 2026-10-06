@@ -1452,6 +1452,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
             // restoring a negative offset, which may exceed that estimate.
             // Disclosure content can settle over several layout passes, so refresh
             // its anchor on interaction retries without invalidating passive restores.
+            if table.rect(ofRow: row).height + bookmark.offset <= 0 {
+                // An offscreen cell can keep its automatic-height estimate even
+                // after makeIfNecessary. Reveal it so AppKit attaches and measures
+                // the hosted content before restoring the partially clipped row.
+                table.scrollRowToVisible(row)
+                table.layoutSubtreeIfNeeded()
+            }
             if !request.refreshedTargetRowHeight
                 || request.reason.isInteraction
                 || table.rect(ofRow: row).height + bookmark.offset <= 0 {
