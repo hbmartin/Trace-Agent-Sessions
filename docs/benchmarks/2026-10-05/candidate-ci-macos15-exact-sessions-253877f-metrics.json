@@ -1,0 +1,180 @@
+[
+  {
+    "testIdentifier": "TracePerformanceTests/testStreamingTranscriptFollowPerformance()",
+    "testIdentifierURL": "test://com.apple.xcode/Trace/TracePerformanceTests/TracePerformanceTests/testStreamingTranscriptFollowPerformance",
+    "testRuns": [
+      {
+        "device": {
+          "deviceName": "My Mac"
+        },
+        "metrics": [
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "Clock Monotonic Time",
+            "identifier": "com.apple.dt.XCTMetric_Clock.time.monotonic",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              1.0483370360000002,
+              1.048650112,
+              1.054951074
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "s"
+          },
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "CPU Time (Trace)",
+            "identifier": "com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.time",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              0.641348445,
+              0.6840782350000001,
+              0.591792606
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "s"
+          },
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "CPU Instructions Retired (Trace)",
+            "identifier": "com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.instructions_retired",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              0,
+              0,
+              0
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "kI"
+          },
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "CPU Cycles (Trace)",
+            "identifier": "com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.cycles",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              0,
+              0,
+              0
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "kC"
+          }
+        ],
+        "testPlanConfiguration": {
+          "configurationId": "1",
+          "configurationName": "Test Scheme Action"
+        }
+      }
+    ]
+  },
+  {
+    "testIdentifier": "TracePerformanceTests/testTranscriptScrollPerformance()",
+    "testIdentifierURL": "test://com.apple.xcode/Trace/TracePerformanceTests/TracePerformanceTests/testTranscriptScrollPerformance",
+    "testRuns": [
+      {
+        "device": {
+          "deviceName": "My Mac"
+        },
+        "metrics": [
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "Clock Monotonic Time",
+            "identifier": "com.apple.dt.XCTMetric_Clock.time.monotonic",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              2.844917102,
+              2.745470987,
+              2.441796779,
+              2.8620134050000003,
+              2.434483609
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "s"
+          },
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "CPU Time (Trace)",
+            "identifier": "com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.time",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              2.856008012,
+              2.7625577370000003,
+              2.4540165010000003,
+              2.880979103,
+              2.445007038
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "s"
+          },
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "CPU Instructions Retired (Trace)",
+            "identifier": "com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.instructions_retired",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "kI"
+          },
+          {
+            "baselineAverage": 0,
+            "baselineName": "",
+            "displayName": "CPU Cycles (Trace)",
+            "identifier": "com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.cycles",
+            "maxPercentRegression": 10,
+            "maxPercentRelativeStandardDeviation": 10,
+            "maxRegression": 0,
+            "maxStandardDeviation": 10,
+            "measurements": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "polarity": "prefers smaller",
+            "unitOfMeasurement": "kC"
+          }
+        ],
+        "testPlanConfiguration": {
+          "configurationId": "1",
+          "configurationName": "Test Scheme Action"
+        }
+      }
+    ]
+  }
+]
