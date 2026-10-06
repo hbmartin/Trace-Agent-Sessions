@@ -1811,7 +1811,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
             if delta < 0 { upwardScrollTravel -= delta }
             else { upwardScrollTravel = max(0, upwardScrollTravel - delta) }
             let viewport = viewportStatus
-            if upwardScrollTravel > 0.5, viewport.withinBounds {
+            if delta > 0, viewport.atBottom {
+                // Row remeasurement can shorten a downward return relative to
+                // the earlier upward travel. Reaching the bottom still pins,
+                // even when that accumulated travel has not balanced to zero.
+                upwardScrollTravel = 0
+                followsBottom = true
+                pendingBottomFollow = false
+            } else if upwardScrollTravel > 0.5, viewport.withinBounds {
                 followsBottom = false
                 pendingBottomFollow = false
                 cancelBottomFollowWork()

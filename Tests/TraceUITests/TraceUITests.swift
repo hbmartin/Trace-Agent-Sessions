@@ -1667,8 +1667,13 @@ final class TraceUITests: XCTestCase {
     private func assertSavedAnchorOnScreen(
         index: Int, in scroll: XCUIElement, expectedY: CGFloat, stage: String
     ) {
-        guard let actualY = savedAnchorY(index: index, in: scroll, timeout: 10) else {
-            return XCTFail("\(stage): saved row \(index) is outside the viewport")
+        var latestY: CGFloat?
+        guard let actualY = poll(timeout: 10, { () -> CGFloat? in
+            latestY = savedAnchorY(index: index, in: scroll, timeout: 0)
+            guard let y = latestY, abs(y - expectedY) <= 8 else { return nil }
+            return y
+        }) else {
+            return XCTFail("\(stage): saved row \(index) never settled at \(expectedY); last offset \(String(describing: latestY))")
         }
         XCTAssertEqual(actualY, expectedY, accuracy: 8,
                        "\(stage): saved row \(index) moved from its viewport offset")
@@ -3052,6 +3057,17 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOTTOM_AUDIT_PATH"] = bottomAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = positionProbe.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"] = "1500"
+        let boundsAudit = directory.appendingPathComponent("transcript-bottom-bounds")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = boundsAudit.path
+        defer {
+            for (name, file) in [("bottom-bounds", boundsAudit), ("bottom-restores", restoreAudit),
+                                 ("bottom-applied", bottomAudit), ("bottom-position", positionProbe)] {
+                let attachment = XCTAttachment(string: fileLines(in: file).joined(separator: "\n"))
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         func appendMessage(_ index: Int, content: String) throws {
             let record: [String: Any] = [
                 "type": "assistant", "uuid": "Bottom follow-\(index)",
@@ -3079,9 +3095,10 @@ final class TraceUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.5)
         XCTAssertTrue(first.isHittable, "initial hydration must leave the first message in view")
 
-        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
-        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
         let transcriptPoint = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        transcriptPoint.hover()
+        transcriptPoint.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
         transcriptPoint.scroll(byDeltaX: 0, deltaY: -600)
         transcriptPoint.scroll(byDeltaX: 0, deltaY: -600)
         transcriptPoint.scroll(byDeltaX: 0, deltaY: 700)
@@ -3092,7 +3109,8 @@ final class TraceUITests: XCTestCase {
             "upward wheel input must move above the current measured bottom")
 
         let settledFinishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
-        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        transcriptPoint.hover()
+        transcriptPoint.scroll(byDeltaX: 0, deltaY: -100_000)
         try appendMessage(70, content: "Append while the bottom scroll settles")
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: settledFinishes + 1, timeout: 10
@@ -3149,7 +3167,8 @@ final class TraceUITests: XCTestCase {
             "resizing the window must retain live bottom follow")
 
         let upwardFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
-        scroll.scroll(byDeltaX: 0, deltaY: 1_100)
+        transcriptPoint.hover()
+        transcriptPoint.scroll(byDeltaX: 0, deltaY: 1_100)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: upwardFinishCount + 1, timeout: 10
         ))

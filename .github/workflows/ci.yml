@@ -46,6 +46,8 @@ jobs:
           -only-testing:TraceUITests/TraceUITests/testGlobalSearchOpenRevealsOffscreenProjectAndSessionSelections
           -only-testing:TraceUITests/TraceUITests/testPopoverKeepsSearchAndFooterVisibleWithTenSessions
           -only-testing:TraceUITests/TraceUITests/testWheelOverTranscriptTextAndGutterScrollsWithoutBreakingCopy
+          -only-testing:TraceUITests/TraceUITests/testTranscriptBottomFollowsLiveAppendOnlyWhilePinned
+          -only-testing:TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart
           -resultBundlePath build/TraceUITests-regressions.xcresult
       - name: Run UI tests
         run: >-
@@ -60,6 +62,8 @@ jobs:
           -skip-testing:TraceUITests/TraceUITests/testGlobalSearchOpenRevealsOffscreenProjectAndSessionSelections
           -skip-testing:TraceUITests/TraceUITests/testPopoverKeepsSearchAndFooterVisibleWithTenSessions
           -skip-testing:TraceUITests/TraceUITests/testWheelOverTranscriptTextAndGutterScrollsWithoutBreakingCopy
+          -skip-testing:TraceUITests/TraceUITests/testTranscriptBottomFollowsLiveAppendOnlyWhilePinned
+          -skip-testing:TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart
           -resultBundlePath build/TraceUITests.xcresult
       - name: Save UI test diagnostics
         if: always()
