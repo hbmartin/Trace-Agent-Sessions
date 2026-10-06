@@ -34,6 +34,21 @@ jobs:
           -destination 'platform=macOS,arch=arm64'
           -only-testing:TraceCoreTests
           CODE_SIGNING_ALLOWED=NO
+      - name: Run UI regression tests
+        run: >-
+          xcodebuild test
+          -project Trace.xcodeproj
+          -scheme Trace
+          -configuration Debug
+          -destination 'platform=macOS,arch=arm64'
+          -only-testing:TraceUITests/TraceUITests/testExpandingReasoningAtBottomKeepsTheClickedHeaderVisible
+          -only-testing:TraceUITests/TraceUITests/testExternalCodexSidecarTargetChangeRefreshesTitle
+          -only-testing:TraceUITests/TraceUITests/testGlobalSearchOpenRevealsOffscreenProjectAndSessionSelections
+          -only-testing:TraceUITests/TraceUITests/testPopoverKeepsSearchAndFooterVisibleWithTenSessions
+          -only-testing:TraceUITests/TraceUITests/testWheelOverTranscriptTextAndGutterScrollsWithoutBreakingCopy
+          -only-testing:TraceUITests/TraceUITests/testTranscriptBottomFollowsLiveAppendOnlyWhilePinned
+          -only-testing:TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart
+          -resultBundlePath build/TraceUITests-regressions.xcresult
       - name: Run UI tests
         run: >-
           xcodebuild test
@@ -42,6 +57,22 @@ jobs:
           -configuration Debug
           -destination 'platform=macOS,arch=arm64'
           -only-testing:TraceUITests
+          -skip-testing:TraceUITests/TraceUITests/testExpandingReasoningAtBottomKeepsTheClickedHeaderVisible
+          -skip-testing:TraceUITests/TraceUITests/testExternalCodexSidecarTargetChangeRefreshesTitle
+          -skip-testing:TraceUITests/TraceUITests/testGlobalSearchOpenRevealsOffscreenProjectAndSessionSelections
+          -skip-testing:TraceUITests/TraceUITests/testPopoverKeepsSearchAndFooterVisibleWithTenSessions
+          -skip-testing:TraceUITests/TraceUITests/testWheelOverTranscriptTextAndGutterScrollsWithoutBreakingCopy
+          -skip-testing:TraceUITests/TraceUITests/testTranscriptBottomFollowsLiveAppendOnlyWhilePinned
+          -skip-testing:TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart
+          -resultBundlePath build/TraceUITests.xcresult
+      - name: Save UI test diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: trace-ui-results
+          path: build/TraceUITests*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Build benchmark CLI
         run: >-
           xcodebuild build

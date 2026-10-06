@@ -1,0 +1,434 @@
+[
+  {
+    "name": "baseline-ci-final",
+    "source_commit": "5bff37720c974a4b5953bf29b9260bf77fac1e51",
+    "start_time": 1791249953.528,
+    "finish_time": 1791250086.575,
+    "files": {
+      "metrics": {
+        "path": "baseline-ci-final-metrics.json",
+        "sha256": "c312b099dcea571d6ecf16f246df5e7cb65878dc22c50205b65af013676b09c4"
+      },
+      "summary": {
+        "path": "baseline-ci-final-summary.json",
+        "sha256": "0b013e488541bf5ea0cfd5687e01348145e64fd79c9bc587f102c53ef7b91c97"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-ci-final",
+    "source_commit": "755db6924f1712edc49b11b9dff4944f09f2ba43",
+    "start_time": 1791250096.348,
+    "finish_time": 1791250257.591,
+    "files": {
+      "metrics": {
+        "path": "candidate-ci-final-metrics.json",
+        "sha256": "922ccce17d5f4e4bd7317d0e472c08bfdefd316fbbdd42e0bc21352ebeea48c0"
+      },
+      "summary": {
+        "path": "candidate-ci-final-summary.json",
+        "sha256": "7aa677e9d35ef17458865df1b09ca71217a47b28b59f193baaa88757c5511bc9"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-review-final",
+    "source_commit": "5bff37720c974a4b5953bf29b9260bf77fac1e51",
+    "start_time": 1791247849.084,
+    "finish_time": 1791247986.035,
+    "files": {
+      "metrics": {
+        "path": "baseline-review-final-metrics.json",
+        "sha256": "c52f9825f5c802d2b51e731a9d30ad64d3735f8ad70955f3d9cda8165f7d848b"
+      },
+      "summary": {
+        "path": "baseline-review-final-summary.json",
+        "sha256": "89023f16be22a257bde68de1d62eef9521633feaa262ef168a7689e4cb4041d9"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-review-final",
+    "source_commit": "58c87ebcdfc43fe9caaadf80e26db8b5ab622726",
+    "start_time": 1791248031.168,
+    "finish_time": 1791248178.733,
+    "files": {
+      "metrics": {
+        "path": "candidate-review-final-metrics.json",
+        "sha256": "7b8f0a0f00f62e109eb9d5d074a18ab326e1ab61c0054578a9cd0319317883e9"
+      },
+      "summary": {
+        "path": "candidate-review-final-summary.json",
+        "sha256": "7dd8cdedd60e5481dc58813edccb6859350887be48a4356001b007f2c3778e3f"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-initial",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791243713.498,
+    "finish_time": 1791243869.95,
+    "files": {
+      "metrics": {
+        "path": "baseline-initial-metrics.json",
+        "sha256": "f19a917c85d00ea0f3ad0780b7126491920b73aa6c51efdebc8cb510052ba97b"
+      },
+      "summary": {
+        "path": "baseline-initial-summary.json",
+        "sha256": "5bae6f6d95dfda1394af87b1ad8d38bad02ec2a627952d5a1acc2bca0507fc88"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-before-anchor-optimization",
+    "source_commit": "03c6e8a088a00136045ddc23760da11bce6795c3",
+    "start_time": 1791243939.027,
+    "finish_time": 1791244127.281,
+    "files": {
+      "metrics": {
+        "path": "candidate-before-anchor-optimization-metrics.json",
+        "sha256": "57be18851535eba76d77a91c23259119299002dd6469751e9fd8acb35809394b"
+      },
+      "summary": {
+        "path": "candidate-before-anchor-optimization-summary.json",
+        "sha256": "f8731809ada9139ae873607ab38280543fb1c682a0699e1ff716e60a6828b7d8"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-after-anchor-optimization",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791244592.893,
+    "finish_time": 1791244718.55,
+    "files": {
+      "metrics": {
+        "path": "baseline-after-anchor-optimization-metrics.json",
+        "sha256": "de6753ce0b81fc099a0b71d9e6c96cac9cf077604039fe17d560bda16c0cd51f"
+      },
+      "summary": {
+        "path": "baseline-after-anchor-optimization-summary.json",
+        "sha256": "72af32b27953e2e347234fe7523254d3f0402d13b39ce467c06c52145c120f31"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-after-anchor-optimization",
+    "source_commit": "8a80280bb8581d9a73f0147af97b2db66251d62c",
+    "start_time": 1791244743.625,
+    "finish_time": 1791244895.428,
+    "files": {
+      "metrics": {
+        "path": "candidate-after-anchor-optimization-metrics.json",
+        "sha256": "4a31afb2bc8fade59e84952b52b7ad391c3a1c79af09014ecc39d3000e6f8228"
+      },
+      "summary": {
+        "path": "candidate-after-anchor-optimization-summary.json",
+        "sha256": "e3aa581999ab4fa63baa3feeeea9f50cd4d202e2a412a5d85e6f7ba7f12b1fdb"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-publication",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791245346.961,
+    "finish_time": 1791245474.006,
+    "files": {
+      "metrics": {
+        "path": "baseline-publication-metrics.json",
+        "sha256": "d2c7c6384249ad6061262a0082e0858e5dce0b52dffb13e5c3d516050989a20e"
+      },
+      "summary": {
+        "path": "baseline-publication-summary.json",
+        "sha256": "0d6a3e453b360801febfa86cb475c185be164f81feecc6b45f8a6c382a53014b"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-publication",
+    "source_commit": "3034725497d6942fb3d586ae034f834dc038c75c",
+    "start_time": 1791245619.135,
+    "finish_time": 1791245768.643,
+    "files": {
+      "metrics": {
+        "path": "candidate-publication-metrics.json",
+        "sha256": "3c376641b1d6555109b8eb142b1efa521877d3033e3c85d467530087757ae4d5"
+      },
+      "summary": {
+        "path": "candidate-publication-summary.json",
+        "sha256": "57fcf68da92b3cd582613d455718339cf7886d23efd20d40056081f6b047bcae"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-streaming-confirmation",
+    "source_commit": "b31df2aed3e7cf1b658a352870777e8fe56742c2",
+    "start_time": 1791244992.349,
+    "finish_time": 1791245027.063,
+    "files": {
+      "metrics": {
+        "path": "baseline-streaming-confirmation-metrics.json",
+        "sha256": "5ffbdfe91006254b0785bab5e60586a761849240bc71a217a230966ec8c7c6ba"
+      },
+      "summary": {
+        "path": "baseline-streaming-confirmation-summary.json",
+        "sha256": "a98946b28a82d2b7e31fd5fbfd06d2ed9beeb4be070e2c1e7f791ed7ec7f606c"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-streaming-confirmation",
+    "source_commit": "8a80280bb8581d9a73f0147af97b2db66251d62c",
+    "start_time": 1791245078.584,
+    "finish_time": 1791245118.496,
+    "files": {
+      "metrics": {
+        "path": "candidate-streaming-confirmation-metrics.json",
+        "sha256": "62e5d67582fdd231150296a59d1cab5bc1ec88a079743e61a582de0055d909ec"
+      },
+      "summary": {
+        "path": "candidate-streaming-confirmation-summary.json",
+        "sha256": "eb2cacda638871f09642a329b280ee523d1b9d47c59aa2c456887a90977da879"
+      }
+    },
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-ci-macos15-before-hosting-refresh",
+    "source_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+    "start_time": 1791254825.8,
+    "finish_time": 1791255152.05,
+    "metadata": "ci-macos15-before-hosting-refresh-metadata.json",
+    "files": {
+      "summary": {
+        "path": "baseline-ci-macos15-before-hosting-refresh-summary.json",
+        "sha256": "0954ee6e4dd52013f1a5ca5e74dbff37b235c09cfbb134e6ddd58b247f91d187"
+      },
+      "metrics": {
+        "path": "baseline-ci-macos15-before-hosting-refresh-metrics.json",
+        "sha256": "a332f8157dcde9a212745bfa0f04f0df4fbb702cd1c45dd3a5bb41a5e832c103"
+      }
+    },
+    "baseline_harness_patch_sha256": "758565ba167dfed3741803ceb635f1fa5ea626fa7062177d28afbb5a132b0765",
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-ci-macos15-before-hosting-refresh",
+    "source_commit": "8238ae72b14f0bfd1e2372bc7e6143fb5c86d034",
+    "start_time": 1791255166.47,
+    "finish_time": 1791255399.389,
+    "metadata": "ci-macos15-before-hosting-refresh-metadata.json",
+    "files": {
+      "summary": {
+        "path": "candidate-ci-macos15-before-hosting-refresh-summary.json",
+        "sha256": "dd5dde91eaeae37b1a9b7d12b52e22e9bf9ef377b42ebd4b502d414e8f6bcc7a"
+      },
+      "metrics": {
+        "path": "candidate-ci-macos15-before-hosting-refresh-metrics.json",
+        "sha256": "aa551e0e186d96c9017c4303d7d18d0711f7198d1b88bff7a75af9681478d525"
+      }
+    },
+    "baseline_harness_patch_sha256": "758565ba167dfed3741803ceb635f1fa5ea626fa7062177d28afbb5a132b0765",
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-ci-macos15-final",
+    "source_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+    "start_time": 1791255080.675,
+    "finish_time": 1791255340.214,
+    "metadata": "ci-macos15-final-metadata.json",
+    "files": {
+      "summary": {
+        "path": "baseline-ci-macos15-final-summary.json",
+        "sha256": "c66d594af661e271898c774dc88d84de185ab74d9b80dcf7fe11bf92bc25d91b"
+      },
+      "metrics": {
+        "path": "baseline-ci-macos15-final-metrics.json",
+        "sha256": "790da6a9b421a1a87aafeb83876515e5465aac6d80f48e151c4541d6e7c15248"
+      }
+    },
+    "baseline_harness_patch_sha256": "758565ba167dfed3741803ceb635f1fa5ea626fa7062177d28afbb5a132b0765",
+    "exact_session_validation": false
+  },
+  {
+    "name": "candidate-ci-macos15-final",
+    "source_commit": "be01db9c55029454a716fe044840111013251cd5",
+    "start_time": 1791255357.267,
+    "finish_time": 1791255547.879,
+    "metadata": "ci-macos15-final-metadata.json",
+    "files": {
+      "summary": {
+        "path": "candidate-ci-macos15-final-summary.json",
+        "sha256": "5f45a1a807cafcc8d1d79fa8d5a5f563583fe6a441caef93ae85b49d093bf1c3"
+      },
+      "metrics": {
+        "path": "candidate-ci-macos15-final-metrics.json",
+        "sha256": "4de29280e49267446d918f889b69b3bd0701c954714ad3db0b72e065e2022dfe"
+      }
+    },
+    "baseline_harness_patch_sha256": "758565ba167dfed3741803ceb635f1fa5ea626fa7062177d28afbb5a132b0765",
+    "exact_session_validation": false
+  },
+  {
+    "name": "baseline-ci-macos15-exact-sessions-253877f",
+    "source_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+    "start_time": 1791259321.084,
+    "finish_time": 1791260013.308,
+    "metadata": "ci-macos15-exact-sessions-253877f-metadata.json",
+    "files": {
+      "summary": {
+        "path": "baseline-ci-macos15-exact-sessions-253877f-summary.json",
+        "sha256": "b65889ed19c925e1392f11f0bb876e0f2c3cf2b6d51b9ecfa4f2c96a6f8865f2"
+      },
+      "metrics": {
+        "path": "baseline-ci-macos15-exact-sessions-253877f-metrics.json",
+        "sha256": "24e9f645d63397b32e340a8d30f09f62080af2ff28048542534397a85394b7d8"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
+  },
+  {
+    "name": "candidate-ci-macos15-exact-sessions-253877f",
+    "source_commit": "253877f23678a468670c3231e69fa1115c707103",
+    "start_time": 1791260027.949,
+    "finish_time": 1791260271.267,
+    "metadata": "ci-macos15-exact-sessions-253877f-metadata.json",
+    "files": {
+      "summary": {
+        "path": "candidate-ci-macos15-exact-sessions-253877f-summary.json",
+        "sha256": "10a0dceb73d2073d551e5fb1e90184371104d06b66eea4430a2508bf4f3235c1"
+      },
+      "metrics": {
+        "path": "candidate-ci-macos15-exact-sessions-253877f-metrics.json",
+        "sha256": "85b9e47f629a2da9ba6ab98cdc5b21957f31b800e9108f64959080d84a109986"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
+  },
+  {
+    "name": "baseline-ci-macos15-exact-sessions-final",
+    "source_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+    "start_time": 1791260099.332,
+    "finish_time": 1791260903.87,
+    "metadata": "ci-macos15-exact-sessions-final-metadata.json",
+    "files": {
+      "summary": {
+        "path": "baseline-ci-macos15-exact-sessions-final-summary.json",
+        "sha256": "7e29d39b7cdc846ea384964a9054f70e00eba125133d3c8604d40d597cf06346"
+      },
+      "metrics": {
+        "path": "baseline-ci-macos15-exact-sessions-final-metrics.json",
+        "sha256": "4abee7cba4e590f39b77d6401df5a9bbfabfd419fe7746079da939c6b76e8a5d"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
+  },
+  {
+    "name": "candidate-ci-macos15-exact-sessions-final",
+    "source_commit": "54e9a7a1c64e60284dddf9575662d147e77a6905",
+    "start_time": 1791260921.433,
+    "finish_time": 1791261433.009,
+    "metadata": "ci-macos15-exact-sessions-final-metadata.json",
+    "files": {
+      "summary": {
+        "path": "candidate-ci-macos15-exact-sessions-final-summary.json",
+        "sha256": "9d3b926a81f83751c98bad85713322561df30fd1962a57d0a13b751c6ada3f4a"
+      },
+      "metrics": {
+        "path": "candidate-ci-macos15-exact-sessions-final-metrics.json",
+        "sha256": "5fec8a9ca88c82ff7764c26c90b015b8e8db3bd8ca19e330341453a447f0aab9"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
+  },
+  {
+    "name": "baseline-ci-macos15-anchor-restoration",
+    "source_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+    "start_time": 1791262696.101,
+    "finish_time": 1791263178.916,
+    "metadata": "ci-macos15-anchor-restoration-metadata.json",
+    "files": {
+      "summary": {
+        "path": "baseline-ci-macos15-anchor-restoration-summary.json",
+        "sha256": "ed6684b0f3b5af1dac41ce2a86b77600122a563ded6104f49ea0fe7aeba63690"
+      },
+      "metrics": {
+        "path": "baseline-ci-macos15-anchor-restoration-metrics.json",
+        "sha256": "245d8265655361a5825600bcd29431dd2bf3f9740968d9bc5b53b66bf6a49802"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
+  },
+  {
+    "name": "candidate-ci-macos15-anchor-restoration",
+    "source_commit": "0e9b3b013317e51ae95ee9a90853e23ea879039e",
+    "start_time": 1791263193.458,
+    "finish_time": 1791263378.764,
+    "metadata": "ci-macos15-anchor-restoration-metadata.json",
+    "files": {
+      "summary": {
+        "path": "candidate-ci-macos15-anchor-restoration-summary.json",
+        "sha256": "bfc81904e64a29a00b873e8cf0425a17a5f906e99be9c4f877703a1a2c36dc5c"
+      },
+      "metrics": {
+        "path": "candidate-ci-macos15-anchor-restoration-metrics.json",
+        "sha256": "62abb43eeaa026a9645ffaf225fd5411c231d6f35aeba760eac83e7ddaff7399"
+      }
+    },
+    "baseline_harness_patch_sha256": "4cc8f49a9eed570f25e745ade3d251db22b3dd2f7e1a79868b0b1cb2360f0f12",
+    "exact_session_validation": true
+  },
+  {
+    "name": "baseline-ci-macos15-probe-layout",
+    "source_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+    "start_time": 1791264615.925,
+    "finish_time": 1791265213.771,
+    "metadata": "ci-macos15-probe-layout-metadata.json",
+    "files": {
+      "summary": {
+        "path": "baseline-ci-macos15-probe-layout-summary.json",
+        "sha256": "f8247aff681a341bed789f75b16c9360360661e05d62db6aac46b872c45ae037"
+      },
+      "metrics": {
+        "path": "baseline-ci-macos15-probe-layout-metrics.json",
+        "sha256": "b42eb9dc875f79b9fb773b53123bd3b669126a2c7e68020a8e3eb3b31f03fc60"
+      }
+    },
+    "baseline_harness_patch_sha256": "0dbdf798f1f475de533e0d0a9da926d6e0199b7013f1ab4e376d7391e3d11c6e",
+    "exact_session_validation": true
+  },
+  {
+    "name": "candidate-ci-macos15-probe-layout",
+    "source_commit": "0e7b4d272eb0bb56c87a8f9569b6d198b551e01b",
+    "start_time": 1791265230.66,
+    "finish_time": 1791265670.031,
+    "metadata": "ci-macos15-probe-layout-metadata.json",
+    "files": {
+      "summary": {
+        "path": "candidate-ci-macos15-probe-layout-summary.json",
+        "sha256": "83218e9e3808a950132ce7a1742bf908bc770fe94ca7d312f997601d1a132e93"
+      },
+      "metrics": {
+        "path": "candidate-ci-macos15-probe-layout-metrics.json",
+        "sha256": "bcc820a55ee3745b4565fc23a9cb452618ba78909b3e42b1251cf4009ecc643a"
+      }
+    },
+    "baseline_harness_patch_sha256": "0dbdf798f1f475de533e0d0a9da926d6e0199b7013f1ab4e376d7391e3d11c6e",
+    "exact_session_validation": true
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "candidate_commit": "8238ae72b14f0bfd1e2372bc7e6143fb5c86d034",
+  "baseline_commit": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+  "baseline_harness_patch_sha256": "758565ba167dfed3741803ceb635f1fa5ea626fa7062177d28afbb5a132b0765",
+  "toolchain": {
+    "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t15.7.9\nBuildVersion:\t\t24G830",
+    "xcode": "Xcode 26.3\nBuild version 17C529",
+    "swift": "Apple Swift version 6.2.4 (swiftlang-6.2.4.1.4 clang-1700.6.4.2)\nTarget: arm64-apple-macosx15.0",
+    "architecture": "arm64",
+    "cpu": "Apple M1 (Virtual)",
+    "memory_bytes": "7516192768"
+  },
+  "identical_harness_files": {
+    "Tests/TracePerformanceTests/TracePerformanceTests.swift": "b006cb0ea59003db4a1ef641c2ca1d001acc62b1ba6601cdce471848b59c18c4",
+    "Scripts/measure-transcript-scroll.sh": "2fb6a8f429c31f0216a10ba7e7eed0b6830530e41b4db3b5c449fb87b6b6b8b6",
+    "Scripts/compare-transcript-scroll-metrics.py": "37d490bf38625179158838b16d6796443eb720602ec6718ac4a2016536b03f53"
+  },
+  "order": [
+    "baseline",
+    "candidate"
+  ],
+  "workflow_run": 37405738471
+}

@@ -1416,10 +1416,12 @@ public actor IndexDatabase {
     private func delayUsageRollupRebuildForTesting() async throws {
         if let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_ROLLUP_REBUILD_DELAY_MS",
-            cappedAt: 5_000,
+            cappedAt: 30_000,
             marker: .line("started", pathKey: "TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH")
         ) {
-            try await Task.sleep(for: .milliseconds(delay))
+            try await TraceTestHooks.waitForRelease(
+                pathKey: "TRACE_TEST_ROLLUP_REBUILD_RELEASE_PATH", timeoutMilliseconds: delay
+            )
         }
     }
 

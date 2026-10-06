@@ -1,0 +1,609 @@
+diff --git a/Scripts/compare-transcript-scroll-metrics.py b/Scripts/compare-transcript-scroll-metrics.py
+new file mode 100755
+index 0000000..cf47d16
+--- /dev/null
++++ b/Scripts/compare-transcript-scroll-metrics.py
+@@ -0,0 +1,54 @@
++#!/usr/bin/env python3
++"""Compare identical TracePerformance xcresult metric exports."""
++
++import argparse
++import json
++import statistics
++from pathlib import Path
++
++
++def metrics_for(path: Path, test_name: str) -> dict[str, tuple[str, list[float]]]:
++    report = json.loads(path.read_text())
++    for test in report:
++        if test["testIdentifier"].endswith(test_name):
++            return {
++                metric["identifier"]: (metric["displayName"], metric["measurements"])
++                for run in test["testRuns"]
++                for metric in run["metrics"]
++            }
++    raise SystemExit(f"{test_name} was not found in {path}")
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("baseline", type=Path, help="baseline metrics.json")
++    parser.add_argument("candidate", type=Path, help="candidate metrics.json")
++    parser.add_argument(
++        "--test", default="testTranscriptScrollPerformance()",
++        help="performance test method to compare",
++    )
++    args = parser.parse_args()
++    before = metrics_for(args.baseline, args.test)
++    after = metrics_for(args.candidate, args.test)
++    if before.keys() != after.keys():
++        raise SystemExit(
++            "Metric identifiers differ: "
++            f"baseline only={sorted(before.keys() - after.keys())}; "
++            f"candidate only={sorted(after.keys() - before.keys())}"
++        )
++    shared = before.keys()
++    if not shared:
++        raise SystemExit("No matching metrics were found")
++    for identifier in sorted(shared):
++        name, baseline_values = before[identifier]
++        _, candidate_values = after[identifier]
++        baseline = statistics.median(baseline_values)
++        candidate = statistics.median(candidate_values)
++        lift = (baseline - candidate) / baseline * 100 if baseline else 0
++        print(f"{name}: {baseline:.3f} -> {candidate:.3f} ({lift:+.1f}% improvement)")
++        print(f"  baseline={baseline_values}")
++        print(f"  candidate={candidate_values}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/Scripts/measure-transcript-scroll.sh b/Scripts/measure-transcript-scroll.sh
+new file mode 100755
+index 0000000..94239ef
+--- /dev/null
++++ b/Scripts/measure-transcript-scroll.sh
+@@ -0,0 +1,38 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++timestamp="$(date +%Y%m%d-%H%M%S)"
++output_dir="${TRACE_SCROLL_BENCHMARK_OUTPUT_DIR:-$repo_dir/build/transcript-scroll/$timestamp}"
++if [[ "$output_dir" != /* ]]; then output_dir="$PWD/$output_dir"; fi
++result_bundle="$output_dir/TranscriptScroll.xcresult"
++derived_data="${TRACE_SCROLL_DERIVED_DATA_PATH:-$repo_dir/build/transcript-scroll-derived-data}"
++if [[ "$derived_data" != /* ]]; then derived_data="$PWD/$derived_data"; fi
++
++mkdir -p "$output_dir"
++cd "$repo_dir"
++
++# Keep the same Release test and corpus for before/after runs. CPU metrics in
++# this test target Trace.app, while signposts report the app's update intervals.
++test_status=0
++xcodebuild test \
++  -project Trace.xcodeproj \
++  -scheme TracePerformance \
++  -configuration Release \
++  -destination 'platform=macOS,arch=arm64' \
++  -derivedDataPath "$derived_data" \
++  -only-testing:TracePerformanceTests/TracePerformanceTests/testTranscriptScrollPerformance \
++  -only-testing:TracePerformanceTests/TracePerformanceTests/testStreamingTranscriptFollowPerformance \
++  -resultBundlePath "$result_bundle" \
++  CODE_SIGNING_ALLOWED=NO \
++  >"$output_dir/xcodebuild.log" 2>&1 || test_status=$?
++
++if [[ -d "$result_bundle" ]]; then
++  xcrun xcresulttool get test-results summary --path "$result_bundle" \
++    >"$output_dir/summary.json"
++  xcrun xcresulttool get test-results metrics --path "$result_bundle" \
++    >"$output_dir/metrics.json"
++fi
++
++printf 'Transcript scrolling benchmark: %s\n' "$output_dir"
++exit "$test_status"
+diff --git a/Sources/TraceApp/MainView.swift b/Sources/TraceApp/MainView.swift
+index 7bcf512..a6715d8 100644
+--- a/Sources/TraceApp/MainView.swift
++++ b/Sources/TraceApp/MainView.swift
+@@ -2,6 +2,14 @@ import AppKit
+ import SwiftUI
+ import TraceCore
+ 
++private extension Notification.Name {
++    static let traceTestTranscriptBenchmark = Notification.Name("traceTestTranscriptBenchmark")
++    static let traceTestTranscriptScroll = Notification.Name("traceTestTranscriptScroll")
++    static let traceTestTranscriptJumpBottom = Notification.Name("traceTestTranscriptJumpBottom")
++    static let traceTestTranscriptProbe = Notification.Name("traceTestTranscriptProbe")
++}
++
++
+ struct MainView: View {
+     @ObservedObject var model: TraceModel
+     @State private var section: MainSection = .transcript
+@@ -30,6 +38,24 @@ struct MainView: View {
+                                 ), display: true)
+                             }
+                             .accessibilityIdentifier("testResizeWindow")
++                            Button("Simulate transcript scroll", systemImage: "arrow.up.and.down") {
++                                NotificationCenter.default.post(
++                                    name: .traceTestTranscriptScroll, object: nil
++                                )
++                            }
++                            .accessibilityIdentifier("testSimulateTranscriptScroll")
++                            Button("Jump transcript to bottom", systemImage: "arrow.down.to.line") {
++                                NotificationCenter.default.post(
++                                    name: .traceTestTranscriptJumpBottom, object: nil
++                                )
++                            }
++                            .accessibilityIdentifier("testJumpTranscriptBottom")
++                            Button("Probe transcript position", systemImage: "scope") {
++                                NotificationCenter.default.post(
++                                    name: .traceTestTranscriptProbe, object: nil
++                                )
++                            }
++                            .accessibilityIdentifier("testProbeTranscriptPosition")
+                         }
+                     } else {
+                         Picker("Section", selection: $section) {
+@@ -324,6 +350,7 @@ struct TranscriptView: View {
+                     density: settings.transcriptDensity
+                 )
+                     .id(session.id)
++                    .accessibilityIdentifier("transcriptScroll")
+             } else {
+                 ContentUnavailableView("Search your agent history", systemImage: "text.magnifyingglass",
+                     description: Text("Search above or select a session in the sidebar."))
+@@ -638,6 +665,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
+         private var userHeightMessageIDs: Set<Int64> = []
+         private var pendingInteractionBookmark: TranscriptBookmark?
+         private var bottomFollowWorkItem: DispatchWorkItem?
++        private var benchmarkObserver: NSObjectProtocol?
++        private var benchmarkSweepIndex = 0
++        private var benchmarkSweepRunning = false
+         private var lastUserScrollInput: ContinuousClock.Instant?
+         private var pendingRestore: RestoreRequest?
+         private var explicitPositionBookmark: TranscriptBookmark?
+@@ -753,8 +783,27 @@ private struct TranscriptRenderer: NSViewRepresentable {
+                 ) { [weak self] _ in
+                     MainActor.assumeIsolated { self?.scheduleBottomFollow() }
+                 },
++                NotificationCenter.default.addObserver(
++                    forName: .traceTestTranscriptScroll,
++                    object: nil, queue: .main
++                ) { [weak self] _ in
++                    MainActor.assumeIsolated { self?.simulateTranscriptScrollForUITest() }
++                },
++                NotificationCenter.default.addObserver(
++                    forName: .traceTestTranscriptJumpBottom,
++                    object: nil, queue: .main
++                ) { [weak self] _ in
++                    MainActor.assumeIsolated { self?.jumpToBottomForUITest() }
++                },
++                NotificationCenter.default.addObserver(
++                    forName: .traceTestTranscriptProbe,
++                    object: nil, queue: .main
++                ) { [weak self] _ in
++                    MainActor.assumeIsolated { self?.probeTranscriptPositionForUITest() }
++                },
+             ])
+             table.postsFrameChangedNotifications = true
++            attachBenchmarkObserverForUITest()
+         }
+ 
+         func detach() {
+@@ -793,6 +842,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
+             pendingInteractionBookmark = nil
+             pendingIdleSaveAfterRestore = false
+             observers.removeAll()
++            if let benchmarkObserver {
++                DistributedNotificationCenter.default().removeObserver(benchmarkObserver)
++                self.benchmarkObserver = nil
++            }
++            benchmarkSweepRunning = false
++            benchmarkSweepIndex = 0
+         }
+ 
+         func update(
+@@ -1542,6 +1597,150 @@ private struct TranscriptRenderer: NSViewRepresentable {
+             }
+         }
+ 
++        private func jumpToBottomForUITest() {
++            guard TraceTestHooks.isUITesting else { return }
++            cancelPendingRestore(reportCancellation: false)
++            cancelBottomFollowWork()
++            pendingAnchorRestore = nil
++            for step in 0..<3 {
++                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(step * 100)) {
++                    [weak self] in
++                    MainActor.assumeIsolated {
++                        guard let self, let table = self.table else { return }
++                        self.applyingProgrammaticScroll = true
++                        table.layoutSubtreeIfNeeded()
++                        self.scrollToBottom()
++                        self.rememberProgrammaticOrigin()
++                        self.applyingProgrammaticScroll = false
++                        self.followsBottom = true
++                        self.pendingBottomFollow = false
++                        self.positionEstablished = true
++                        if step == 2 {
++                            self.probeTranscriptPositionForUITest()
++                            TraceTestHooks.touch(
++                                pathKey: "TRACE_TEST_TRANSCRIPT_JUMP_DONE_PATH"
++                            )
++                        }
++                    }
++                }
++            }
++        }
++
++        private func probeTranscriptPositionForUITest() {
++            guard TraceTestHooks.isUITesting, let scrollView,
++                  let maximumScrollY = exactMaximumScrollY else { return }
++            TraceTestHooks.appendLine(
++                "\(Double(scrollView.contentView.bounds.origin.y)),\(Double(maximumScrollY)),\(followsBottom)",
++                pathKey: "TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"
++            )
++        }
++
++        private func simulateTranscriptScrollForUITest() {
++            TraceTestHooks.appendLine(
++                "simulation-received,items=\(items.count),scroll=\(scrollView != nil)",
++                pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"
++            )
++            guard TraceTestHooks.isUITesting, let scrollView, let maximumScrollY else { return }
++            switch TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] {
++            case "external-midpoint":
++                TraceTestHooks.appendLine(
++                    "simulate-before=\(scrollView.contentView.bounds.origin.y),max=\(maximumScrollY)",
++                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"
++                )
++                var origin = scrollView.contentView.bounds.origin
++                origin.y = maximumScrollY / 2
++                scrollView.contentView.setBoundsOrigin(origin)
++                scrollView.reflectScrolledClipView(scrollView.contentView)
++                TraceTestHooks.appendLine(
++                    "simulate-after=\(scrollView.contentView.bounds.origin.y)",
++                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"
++                )
++            case "slow-up":
++                beginUserScrolling()
++                liveScrolling = true
++                for step in 1...12 {
++                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(step * 100)) {
++                        [weak self] in
++                        MainActor.assumeIsolated {
++                            guard let self, let scrollView = self.scrollView else { return }
++                            var origin = scrollView.contentView.bounds.origin
++                            origin.y = max(0, origin.y - 0.5)
++                            scrollView.contentView.setBoundsOrigin(origin)
++                            scrollView.reflectScrolledClipView(scrollView.contentView)
++                            if step == 12 {
++                                TraceTestHooks.touch(
++                                    pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH"
++                                )
++                            }
++                        }
++                    }
++                }
++            default:
++                break
++            }
++        }
++
++        private func attachBenchmarkObserverForUITest() {
++            guard TraceTestHooks.isUITesting else { return }
++            benchmarkObserver = DistributedNotificationCenter.default().addObserver(
++                forName: .traceTestTranscriptBenchmark, object: nil, queue: .main
++            ) { [weak self] notification in
++                let requested = notification.userInfo?["sweep"] as? Int
++                MainActor.assumeIsolated {
++                    guard let self, !self.benchmarkSweepRunning,
++                          let requested,
++                          requested > self.benchmarkSweepIndex else { return }
++                    self.startBenchmarkScrollSweep(requested)
++                }
++            }
++        }
++
++        private func startBenchmarkScrollSweep(_ sweep: Int) {
++            guard let table, let scrollView, !items.isEmpty else { return }
++            benchmarkSweepRunning = true
++            benchmarkSweepIndex = sweep
++            beginUserScrolling()
++            table.layoutSubtreeIfNeeded()
++            let distance = min(5_000, max(0,
++                table.frame.height - scrollView.contentView.bounds.height))
++            benchmarkScrollStep(0, sweep: sweep, distance: distance)
++        }
++
++        private func benchmarkScrollStep(_ step: Int, sweep: Int, distance: CGFloat) {
++            guard let table, let scrollView else { benchmarkSweepRunning = false; return }
++            let progress = step <= 20 ? step : 40 - step
++            var origin = scrollView.contentView.bounds.origin
++            origin.y = distance * CGFloat(progress) / 20
++            scrollView.contentView.setBoundsOrigin(origin)
++            scrollView.reflectScrolledClipView(scrollView.contentView)
++            table.layoutSubtreeIfNeeded()
++            if step < 40 {
++                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self] in
++                    MainActor.assumeIsolated {
++                        self?.benchmarkScrollStep(step + 1, sweep: sweep, distance: distance)
++                    }
++                }
++            } else {
++                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
++                    MainActor.assumeIsolated {
++                        guard let self else { return }
++                        self.finishUserScrolling()
++                        self.benchmarkSweepRunning = false
++                        if let prefix = TraceTestHooks.environment[
++                            "TRACE_TEST_TRANSCRIPT_SCROLL_SWEEP_DONE_PREFIX"
++                        ] {
++                            try? String(Double(distance)).write(
++                                to: URL(fileURLWithPath: "\(prefix)-\(sweep)"),
++                                atomically: true, encoding: .utf8
++                            )
++                        }
++                    }
++                }
++            }
++        }
++
++        private var exactMaximumScrollY: CGFloat? { maximumScrollY }
++
+         private func rememberProgrammaticOrigin() {
+             let origin = scrollView?.contentView.bounds.origin
+             expectedProgrammaticOrigin = origin
+@@ -1637,6 +1836,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
+                     pathKey: "TRACE_TEST_TRANSCRIPT_BOTTOM_AUDIT_PATH"
+                 )
+             }
++            if TraceTestHooks.isUITesting,
++               let prefix = TraceTestHooks.environment[
++                   "TRACE_TEST_TRANSCRIPT_FOLLOW_MARKER_PREFIX"
++               ] {
++                try? Data().write(to: URL(fileURLWithPath: "\(prefix)-\(items.count)"))
++            }
+         }
+ 
+         private func cancelBottomFollowWork() {
+diff --git a/Tests/TracePerformanceTests/TracePerformanceTests.swift b/Tests/TracePerformanceTests/TracePerformanceTests.swift
+index 47312cb..62d6d22 100644
+--- a/Tests/TracePerformanceTests/TracePerformanceTests.swift
++++ b/Tests/TracePerformanceTests/TracePerformanceTests.swift
+@@ -19,6 +19,14 @@ final class TracePerformanceTests: XCTestCase {
+             .appendingPathComponent("follow-audit").path
+         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_LAYOUT_AUDIT_PATH"] = directory
+             .appendingPathComponent("layout-audit").path
++        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_JUMP_DONE_PATH"] = directory
++            .appendingPathComponent("jump-done").path
++        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = directory
++            .appendingPathComponent("position-probe").path
++        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_FOLLOW_MARKER_PREFIX"] = directory
++            .appendingPathComponent("follow-marker").path
++        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SWEEP_DONE_PREFIX"] = directory
++            .appendingPathComponent("scroll-sweep-done").path
+         app.launch()
+         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+         app.buttons["Build Index"].click()
+@@ -36,7 +44,7 @@ final class TracePerformanceTests: XCTestCase {
+         let options = XCTMeasureOptions()
+         options.iterationCount = 5
+         measure(
+-            metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()],
++            metrics: [XCTClockMetric(), XCTCPUMetric(application: app), XCTMemoryMetric()],
+             options: options
+         ) {
+             search.click()
+@@ -51,73 +59,131 @@ final class TracePerformanceTests: XCTestCase {
+     }
+ 
+     func testTranscriptScrollPerformance() throws {
+-        let (app, _) = try makeApp()
++        let (app, directory) = try makeApp()
+         let session = app.staticTexts["Performance session 0"].firstMatch
+         XCTAssertTrue(session.waitForExistence(timeout: 10))
+         session.click()
+-        let transcript = app.scrollViews["transcriptScroll"]
+-        XCTAssertTrue(transcript.waitForExistence(timeout: 10))
++        let donePrefix = directory.appendingPathComponent("scroll-sweep-done").path
++        func requestSweep(_ number: Int) {
++            DistributedNotificationCenter.default().post(
++                name: Notification.Name("traceTestTranscriptBenchmark"), object: nil,
++                userInfo: ["sweep": number]
++            )
++        }
++        let warmupDone = URL(fileURLWithPath: "\(donePrefix)-1")
++        var warmedUp = false
++        for _ in 0..<60 {
++            requestSweep(1)
++            if waitForFile(warmupDone, timeout: 2) {
++                warmedUp = true
++                break
++            }
++        }
++        XCTAssertTrue(warmedUp,
++            "the warm-up scroll sweep must complete")
++        let firstDistance = try XCTUnwrap(Double(String(
++            contentsOfFile: "\(donePrefix)-1", encoding: .utf8
++        )))
++        XCTAssertGreaterThan(firstDistance, 4_000,
++            "the measured session must have enough content for the full scroll sweep")
++        var sweep = 1
+         let options = XCTMeasureOptions()
+         options.iterationCount = 5
+         measure(
+-            metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()],
++            metrics: [
++                XCTClockMetric(), XCTCPUMetric(application: app),
++                XCTOSSignpostMetric(
++                    subsystem: "me.haroldmartin.Trace", category: "PointsOfInterest",
++                    name: "Transcript Update"
++                ),
++            ],
+             options: options
+         ) {
+-            transcript.scroll(byDeltaX: 0, deltaY: -2_500)
+-            transcript.scroll(byDeltaX: 0, deltaY: 2_500)
++            sweep += 1
++            let done = URL(fileURLWithPath: "\(donePrefix)-\(sweep)")
++            var completed = false
++            for _ in 0..<60 {
++                requestSweep(sweep)
++                if waitForFile(done, timeout: 2) {
++                    completed = true
++                    break
++                }
++            }
++            XCTAssertTrue(completed,
++                "the app must complete every 5,000-point scroll sweep")
+         }
+     }
+ 
+     func testStreamingTranscriptFollowPerformance() throws {
+         let (app, directory) = try makeApp()
+-        let session = app.staticTexts["Performance session 0"].firstMatch
++        let session = app.staticTexts["Performance session 1"].firstMatch
+         XCTAssertTrue(session.waitForExistence(timeout: 10))
+         session.click()
+         let transcript = app.scrollViews["transcriptScroll"]
+         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
+-        transcript.scroll(byDeltaX: 0, deltaY: -100_000)
+-        let source = directory.appendingPathComponent("Sources/Claude/performance-0.jsonl")
++        let loadedMessage = transcript.staticTexts.matching(NSPredicate(
++            format: "value BEGINSWITH %@", "PerformanceNeedle commonterm session 1 message "
++        )).firstMatch
++        XCTAssertTrue(loadedMessage.waitForExistence(timeout: 10),
++            "streaming must start after the initial transcript is loaded")
++        let jumpDone = directory.appendingPathComponent("jump-done")
++        let positionProbe = directory.appendingPathComponent("position-probe")
++        app.buttons["testJumpTranscriptBottom"].click()
++        XCTAssertTrue(waitForFile(jumpDone, timeout: 10))
++        let startPosition = try XCTUnwrap(probedPosition(in: positionProbe))
++        XCTAssertTrue(startPosition.pinned && startPosition.distance <= 2,
++            "streaming must start at a pinned bottom")
++        let source = directory.appendingPathComponent("Sources/Claude/performance-1.jsonl")
+         let bottomAudit = directory.appendingPathComponent("bottom-audit")
+         let followAudit = directory.appendingPathComponent("follow-audit")
+         let layoutAudit = directory.appendingPathComponent("layout-audit")
+-        var messageIndex = 400
++        let followMarkerPrefix = directory.appendingPathComponent("follow-marker").path
++        let startBottom = lineCount(in: bottomAudit)
++        let startFollow = lineCount(in: followAudit)
++        let startLayout = lineCount(in: layoutAudit)
++        var messageIndex = 70
+         let options = XCTMeasureOptions()
+         options.iterationCount = 3
+-        measure(metrics: [XCTClockMetric(), XCTCPUMetric()], options: options) {
+-            let startBottom = lineCount(in: bottomAudit)
+-            let startFollow = lineCount(in: followAudit)
+-            let startLayout = lineCount(in: layoutAudit)
++        measure(metrics: [
++            XCTClockMetric(), XCTCPUMetric(application: app),
++            XCTOSSignpostMetric(
++                subsystem: "me.haroldmartin.Trace", category: "PointsOfInterest",
++                name: "Transcript Update"
++            ),
++        ], options: options) {
+             for _ in 0..<10 {
+                 let record: [String: Any] = [
+-                    "type": "assistant", "uuid": "performance-0-\(messageIndex)",
+-                    "sessionId": "performance-0", "cwd": "/tmp/PerformanceProject",
++                    "type": "assistant", "uuid": "performance-1-\(messageIndex)",
++                    "sessionId": "performance-1", "cwd": "/tmp/PerformanceProject",
+                     "timestamp": "2026-09-18T12:01:00Z",
+                     "message": ["content": "Streaming benchmark message \(messageIndex) "
+                         + String(repeating: "Changing transcript height. ", count: 18)],
+                 ]
+-                let data = try! JSONSerialization.data(withJSONObject: record) + Data([10])
+-                let handle = try! FileHandle(forWritingTo: source)
+-                try! handle.seekToEnd()
+-                try! handle.write(contentsOf: data)
+-                try! handle.close()
++                do {
++                    try appendBenchmarkRecord(record, to: source)
++                } catch {
++                    XCTFail("Could not append streaming benchmark message: \(error)")
++                    return
++                }
+                 messageIndex += 1
+-                Thread.sleep(forTimeInterval: 0.06)
+             }
+-            let finalIndex = messageIndex - 1
+-            let visible = transcript.staticTexts.matching(NSPredicate(
+-                format: "value CONTAINS %@", "Streaming benchmark message \(finalIndex)"
+-            )).firstMatch
+-            XCTAssertTrue(visible.wait(for: \.isHittable, toEqual: true, timeout: 15))
+-            Thread.sleep(forTimeInterval: 0.8)
+-            let bottomCount = lineCount(in: bottomAudit) - startBottom
+-            let followCount = lineCount(in: followAudit) - startFollow
+-            let layoutCount = lineCount(in: layoutAudit) - startLayout
+-            print("STREAMING_BENCHMARK bottom=\(bottomCount) follow=\(followCount) layout=\(layoutCount)")
+-            let settledCount = lineCount(in: bottomAudit)
+-            Thread.sleep(forTimeInterval: 0.5)
+-            XCTAssertEqual(lineCount(in: bottomAudit), settledCount,
+-                "bottom follow must stop after layout settles")
++            let count = app.staticTexts["\(messageIndex) messages"].firstMatch
++            XCTAssertTrue(count.waitForExistence(timeout: 15),
++                "the app must index the appended batch before the measurement ends")
++            XCTAssertTrue(waitForFile(
++                URL(fileURLWithPath: "\(followMarkerPrefix)-\(messageIndex)"), timeout: 15
++            ), "the measured batch must finish bottom following")
+         }
++        let bottomCount = lineCount(in: bottomAudit) - startBottom
++        let followCount = lineCount(in: followAudit) - startFollow
++        let layoutCount = lineCount(in: layoutAudit) - startLayout
++        print("STREAMING_BENCHMARK bottom=\(bottomCount) follow=\(followCount) layout=\(layoutCount)")
++        try? FileManager.default.removeItem(at: positionProbe)
++        app.buttons["testProbeTranscriptPosition"].click()
++        XCTAssertTrue(waitForFile(positionProbe, timeout: 10))
++        let finalPosition = try XCTUnwrap(probedPosition(in: positionProbe))
++        XCTAssertTrue(finalPosition.pinned && finalPosition.distance <= 2,
++            "the measured append batch must end at the pinned bottom")
+     }
+ 
+     private func lineCount(in file: URL) -> Int {
+@@ -125,9 +191,40 @@ final class TracePerformanceTests: XCTestCase {
+         return text.split(separator: "\n").count
+     }
+ 
++    private func appendBenchmarkRecord(_ record: [String: Any], to source: URL) throws {
++        let data = try JSONSerialization.data(withJSONObject: record) + Data([10])
++        let handle = try FileHandle(forWritingTo: source)
++        do {
++            try handle.seekToEnd()
++            try handle.write(contentsOf: data)
++            try handle.close()
++        } catch {
++            try? handle.close()
++            throw error
++        }
++    }
++
++    private func waitForFile(_ file: URL, timeout: TimeInterval) -> Bool {
++        let deadline = Date().addingTimeInterval(timeout)
++        repeat {
++            if FileManager.default.fileExists(atPath: file.path) { return true }
++            Thread.sleep(forTimeInterval: 0.05)
++        } while Date() < deadline
++        return false
++    }
++
++    private func probedPosition(in file: URL) -> (distance: Double, pinned: Bool)? {
++        guard let text = try? String(contentsOf: file, encoding: .utf8),
++              let line = text.split(separator: "\n").last else { return nil }
++        let fields = line.split(separator: ",")
++        guard fields.count == 3, let origin = Double(fields[0]),
++              let maximum = Double(fields[1]) else { return nil }
++        return (maximum - origin, fields[2] == "true")
++    }
++
+     private func makeCorpus(in directory: URL) throws {
+         for session in 0..<20 {
+-            let count = session == 0 ? 400 : 80
++            let count = session == 0 ? 2_000 : session == 1 ? 70 : 80
+             var data = Data()
+             let title: [String: Any] = [
+                 "type": "custom-title", "customTitle": "Performance session \(session)",

@@ -217,6 +217,20 @@ search and transcript-scroll XCTest measurements for wall time, CPU, and
 memory. Results are written below `build/performance/<timestamp>/`, including
 an `.xcresult` bundle suitable for comparisons in Xcode.
 
+For focused transcript scrolling and live follow work, run
+`Scripts/measure-transcript-scroll.sh` on both revisions with the same Mac and
+test corpus. It writes a Release `.xcresult`, `metrics.json`, and the build log
+under `build/transcript-scroll/<timestamp>/`. Compare the exported app CPU and
+clock measurements with
+`Scripts/compare-transcript-scroll-metrics.py baseline/metrics.json candidate/metrics.json`.
+The CPU metric targets `Trace.app`. The scroll benchmark drives the same
+5,000-point viewport sweep on every iteration through a test-only app trigger,
+so XCTest's accessibility hierarchy snapshots are outside the measured block.
+The streaming measurement excludes audit file reads, but includes completion-marker
+polling sleeps and XCTest's message-count wait. Inspect
+the individual samples alongside the median. The measurements for this scroll
+change are in [docs/transcript-scroll-performance.md](docs/transcript-scroll-performance.md).
+
 Trace also emits privacy-safe Points of Interest signposts named `Database
 Search`, `Interactive Search`, `Search Results Scroll Event`, `Transcript
 Update`, `Transcript Restore`, and `Transcript Scroll Event`. Use the

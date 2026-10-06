@@ -194,6 +194,27 @@ public actor IndexCoordinator {
         status.metadataWarning = codexWarningMessage()
     }
 
+    private func clearResolvedFileCodexWarnings(
+        for rootID: String, in status: inout IndexProgress
+    ) async {
+        let keys = codexWarnings.keys.filter {
+            $0.rootID == rootID && ($0.kind == .lookup || $0.kind == .fileWrite)
+        }
+        for key in keys {
+            guard let path = key.sourcePath else { continue }
+            do {
+                if let state = try await database.sourceState(agent: .codex, path: path),
+                   try await database.hasUntitledCodexSessions(sourceID: state.id) {
+                    continue
+                }
+                codexWarnings.removeValue(forKey: key)
+            } catch {
+                // Keep the warning when we cannot verify that its source recovered.
+            }
+        }
+        status.metadataWarning = codexWarningMessage()
+    }
+
     private func rootIsAvailableForCodexNames(_ root: SourceRoot) -> Bool {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.url.path, isDirectory: &isDirectory),
@@ -432,7 +453,14 @@ public actor IndexCoordinator {
             var allFiles: [DiscoveredSourceFile] = []
             let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
             if oldScope != scope && !rebuild { status.activity = .scopeChange }
-            let changedMetadataDirectories = Set((paths ?? []).compactMap { path -> String? in
+            let sidecarMapping = CodexMetadataSidecarMapping(metadataDirectories:
+                sources.filter { $0.agent == .codex }
+                    .flatMap(\.roots).map { Self.codexMetadataDirectory(for: $0) }
+            )
+            let metadataChangePaths = (paths ?? []).flatMap { path in
+                [path] + sidecarMapping.configuredChangePaths(for: path)
+            }
+            let changedMetadataDirectories = Set(metadataChangePaths.compactMap { path -> String? in
                 let url = URL(fileURLWithPath: path)
                 guard TraceFileIO.isCodexMetadataChangePath(url) else { return nil }
                 return TraceFileIO.canonicalPath(
@@ -736,6 +764,8 @@ public actor IndexCoordinator {
                         } else {
                             replaceCodexWarnings([], kind: .lookup, for: rootKey,
                                                  sourcePath: file.url.path, in: &status)
+                            replaceCodexWarnings([], kind: .fileWrite, for: rootKey,
+                                                 sourcePath: file.url.path, in: &status)
                         }
                     } catch is CancellationError { throw CancellationError() }
                     catch {
@@ -849,15 +879,15 @@ public actor IndexCoordinator {
                         replaceCodexWarnings([], kind: .rootWrite, for: root.id, in: &status)
                         if metadata.complete {
                             clearFileCodexWarnings(for: root.id, in: &status)
+                        } else {
+                            await clearResolvedFileCodexWarnings(for: root.id, in: &status)
                         }
-                        if metadata.complete || update.deferredLegacyCount > 0 {
-                            let deferred = update.deferredLegacyCount
-                            let warning = deferred == 0 ? [] : [
-                                "\(root.url.path): \(deferred) legacy Codex title rename(s) deferred until metadata is complete"
-                            ]
-                            replaceCodexWarnings(warning, kind: .deferredLegacy,
-                                                 for: root.id, in: &status)
-                        }
+                        let deferred = update.deferredLegacyCount
+                        let warning = deferred == 0 ? [] : [
+                            "\(root.url.path): \(deferred) legacy Codex title rename(s) deferred until metadata is complete"
+                        ]
+                        replaceCodexWarnings(warning, kind: .deferredLegacy,
+                                             for: root.id, in: &status)
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         replaceCodexWarnings(

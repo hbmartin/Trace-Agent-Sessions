@@ -156,6 +156,7 @@ struct LauncherView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .accessibilityIdentifier("searchProjectFilter")
 
                 Menu {
                     ForEach(SearchDatePreset.allCases) { preset in
@@ -166,6 +167,7 @@ struct LauncherView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .accessibilityIdentifier("searchDateFilter")
                 Spacer()
                 Picker("Sort", selection: $settings.searchSort) {
                     Text("Recent").tag(SearchSort.recency)

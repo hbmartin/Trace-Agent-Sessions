@@ -1,0 +1,28 @@
+{
+  "baseline_main": "115d9fa905d6f19fbff4e01c2786f43f2d74ac67",
+  "baseline_harness": "5bff37720c974a4b5953bf29b9260bf77fac1e51",
+  "candidate": "755db6924f1712edc49b11b9dff4944f09f2ba43",
+  "identical_harness_files": [
+    {
+      "path": "Tests/TracePerformanceTests/TracePerformanceTests.swift",
+      "sha256": "b006cb0ea59003db4a1ef641c2ca1d001acc62b1ba6601cdce471848b59c18c4"
+    },
+    {
+      "path": "Scripts/measure-transcript-scroll.sh",
+      "sha256": "2fb6a8f429c31f0216a10ba7e7eed0b6830530e41b4db3b5c449fb87b6b6b8b6"
+    },
+    {
+      "path": "Scripts/compare-transcript-scroll-metrics.py",
+      "sha256": "37d490bf38625179158838b16d6796443eb720602ec6718ac4a2016536b03f53"
+    }
+  ],
+  "date": "2026-10-05",
+  "toolchain": {
+    "xcode": "27.0 (27A266a)",
+    "swift": "6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "macOS": "27.0 (26A428)",
+    "hardware": "Mac mini, Apple M2 Pro, 32 GiB RAM",
+    "architecture": "arm64",
+    "configuration": "Release"
+  }
+}
