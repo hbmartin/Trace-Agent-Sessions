@@ -1877,6 +1877,17 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 "\(Double(scrollView.contentView.bounds.origin.y)),\(Double(maximumScrollY)),\(followsBottom)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"
             )
+            if let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_ANCHOR_INDEX_PATH"],
+               let text = try? String(contentsOfFile: path, encoding: .utf8),
+               let index = Int(text), let table,
+               let row = items.firstIndex(where: { $0.sourceIndex == index }) {
+                let rect = table.rect(ofRow: row)
+                let viewport = scrollView.documentVisibleRect
+                TraceTestHooks.appendLine(
+                    "\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport))",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"
+                )
+            }
         }
 
         private func simulateTranscriptScrollForUITest() {

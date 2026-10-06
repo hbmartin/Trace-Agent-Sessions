@@ -3,6 +3,15 @@ import AppKit
 
 @MainActor
 final class TraceUITests: XCTestCase {
+    private var nativeAnchorProbe: (app: XCUIApplication, input: URL, output: URL)?
+
+    private func installNativeAnchorProbe(app: XCUIApplication, directory: URL) {
+        let input = directory.appendingPathComponent("native-anchor-index")
+        let output = directory.appendingPathComponent("native-anchor-offset")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_INDEX_PATH"] = input.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"] = output.path
+        nativeAnchorProbe = (app, input, output)
+    }
     private func nativeMenu(titled title: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(
             format: "elementType == %ld OR elementType == %ld",
@@ -1652,6 +1661,18 @@ final class TraceUITests: XCTestCase {
     private func savedAnchorY(
         index: Int, in scroll: XCUIElement, timeout: TimeInterval = 5
     ) -> CGFloat? {
+        if let probe = nativeAnchorProbe {
+            return poll(timeout: timeout) {
+                try? String(index).write(to: probe.input, atomically: true, encoding: .utf8)
+                try? FileManager.default.removeItem(at: probe.output)
+                probe.app.buttons["testProbeTranscriptPosition"].click()
+                guard waitForFile(probe.output, timeout: 2),
+                      let fields = fileLines(in: probe.output).last?.split(separator: ","),
+                      fields.count == 3, fields[0] == String(index), fields[2] == "true",
+                      let offset = Double(fields[1]) else { return nil }
+                return CGFloat(offset)
+            }
+        }
         return poll(timeout: timeout) { () -> CGFloat? in
             guard scroll.exists else { return nil }
             let viewport = scroll.frame
@@ -3367,6 +3388,7 @@ final class TraceUITests: XCTestCase {
 
     func testExternalTranscriptScrollUnpinsAndDensityKeepsLiveViewport() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
         try addLongSession("External scroll", project: "ScrollProject", directory: directory)
         let idleAudit = directory.appendingPathComponent("external-scroll-idle")
         let bookmarkSaved = directory.appendingPathComponent("external-scroll-bookmark")
@@ -3524,6 +3546,7 @@ final class TraceUITests: XCTestCase {
 
     func testSessionNavigationScrollRestorationAndRestart() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
         func sidebarSession(named title: String) -> XCUIElement {
             app.descendants(matching: .any)
                 .matching(identifier: "sessionSidebarList").firstMatch
@@ -3537,6 +3560,12 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = restoreAudit.path
+        defer {
+            let attachment = XCTAttachment(string: fileLines(in: restoreAudit).joined(separator: "\n"))
+            attachment.name = "navigation-native-restores"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
