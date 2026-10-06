@@ -3821,15 +3821,17 @@ final class TraceUITests: XCTestCase {
         let bookmarkSaved = directory.appendingPathComponent("navigation-bookmark-saved")
         let idleAudit = directory.appendingPathComponent("navigation-scroll-idle-audit")
         let restoreAudit = directory.appendingPathComponent("navigation-restore-audit")
+        let rowAudit = directory.appendingPathComponent("navigation-row-audit")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = restoreAudit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ROW_LAYOUT_AUDIT_PATH"] = rowAudit.path
         defer {
             let attachment = XCTAttachment(string: fileLines(in: restoreAudit).joined(separator: "\n"))
             attachment.name = "navigation-native-restores"
             attachment.lifetime = .keepAlways
             add(attachment)
-            for name in ["native-anchor-offset", "native-anchor-samples"] {
+            for name in ["native-anchor-offset", "native-anchor-samples", "navigation-row-audit"] {
                 let data = XCTAttachment(string: fileLines(in: directory.appendingPathComponent(name)).joined(separator: "\n"))
                 data.name = name
                 data.lifetime = .keepAlways

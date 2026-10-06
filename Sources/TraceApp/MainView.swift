@@ -1531,6 +1531,23 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 }
                 request.revealedTargetRow = true
             }
+            let target = items[row].summary
+            if table.rect(ofRow: row).height + bookmark.offset <= 0,
+               model?.hydratedMessages[target.id] == nil,
+               model?.hydrationFailures.contains(target.id) != true,
+               request.attemptsRemaining > 1 {
+                // A clipped bookmark can exceed the preview row's height. Keep
+                // the row revealed until its content loads; clipping it now can
+                // remove the SwiftUI task before it starts hydration.
+                model?.hydrate(target)
+                request.attemptsRemaining -= 1
+                request.stableChecks = 0
+                pendingRestore = request
+                rememberProgrammaticOrigin()
+                applyingProgrammaticScroll = false
+                scheduleRestore(token: token, delayMilliseconds: 75)
+                return
+            }
             // Invalidating automatic heights can replace the anchor's measured
             // height with an estimate. Materialize and lay out just this row before
             // restoring a negative offset, which may exceed that estimate.
@@ -2036,6 +2053,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
                let row = items.firstIndex(where: { $0.sourceIndex == index }) {
                 let rect = table.rect(ofRow: row)
                 let viewport = scrollView.documentVisibleRect
+                TraceTestHooks.appendLine(
+                    "probe=\(index),rowHeight=\(rect.height),established=\(positionEstablished),restore=\(pendingRestore != nil),heights=\(pendingHeightMessageIDs.count),extent=\(extentNeedsRefresh),correction=\(pendingAnchorCorrection),interacting=\(isUserInteracting)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_ROW_LAYOUT_AUDIT_PATH"
+                )
                 TraceTestHooks.appendLine(
                     "\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(positionEstablished && pendingRestore == nil && pendingHeightMessageIDs.isEmpty && !extentNeedsRefresh && !pendingAnchorCorrection),\(sessionID)",
                     pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"
