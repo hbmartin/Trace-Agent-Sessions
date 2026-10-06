@@ -13,6 +13,7 @@ public struct SourceChanges: Sendable {
     /// Preserve symlink paths so a sidecar link change can be mapped even if
     /// its new target is outside the watcher roots.
     public var lexicalPaths: Set<String> = []
+    public var structuralPaths: Set<String> = []
     public var reconciliationPaths: Set<String> = []
     public var recoveryReasons: Set<FSEventsRecoveryReason> = []
     public var watermarks: [String: UInt64] = [:]
@@ -32,9 +33,12 @@ public struct SourceChanges: Sendable {
         watermarks[streamIdentifier] = max(watermarks[streamIdentifier] ?? 0, eventID)
         self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
         if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
+        let structuralFlags = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
+            | kFSEventStreamEventFlagItemRenamed | kFSEventStreamEventFlagItemIsSymlink)
+        if flags & structuralFlags != 0 { structuralPaths.insert(path) }
         let canonical = TraceFileIO.canonicalPath(path).path
         let directory = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
-        let structural = flags & UInt32(kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
+        let structural = flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
         let dropped = flags & UInt32(kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0
         let wrapped = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
         if dropped || wrapped {
@@ -57,6 +61,7 @@ public struct SourceChanges: Sendable {
     public mutating func merge(_ other: SourceChanges) {
         paths.formUnion(other.paths)
         lexicalPaths.formUnion(other.lexicalPaths)
+        structuralPaths.formUnion(other.structuralPaths)
         reconciliationPaths.formUnion(other.reconciliationPaths)
         recoveryReasons.formUnion(other.recoveryReasons)
         historyDone = historyDone || other.historyDone
@@ -70,12 +75,19 @@ public struct SourceChanges: Sendable {
 }
 
 public final class FSEventsWatcher: @unchecked Sendable {
+    private final class StreamContext {
+        weak var watcher: FSEventsWatcher?
+        init(_ watcher: FSEventsWatcher) { self.watcher = watcher }
+    }
     private let roots: [String]
     private let identifier: String
     private let sinceWhen: FSEventStreamEventId
     private let latency: CFTimeInterval
     private let callback: @Sendable (SourceChanges) -> Void
+    private let eventFilter: (@Sendable (String, FSEventStreamEventFlags) -> Bool)?
+    private let tracksWatermarks: Bool
     private let queue = DispatchQueue(label: "me.haroldmartin.Trace.fsevents", qos: .utility)
+    private let queueKey = DispatchSpecificKey<Bool>()
     private var stream: FSEventStreamRef?
     private let lock = NSLock()
     private var pending = SourceChanges()
@@ -89,12 +101,17 @@ public final class FSEventsWatcher: @unchecked Sendable {
 
     public init(roots: [URL], identifier: String = "host",
                 sinceWhen: UInt64? = nil, latency: CFTimeInterval = 0.02,
+                eventFilter: (@Sendable (String, FSEventStreamEventFlags) -> Bool)? = nil,
+                tracksWatermarks: Bool = true,
                 onChange: @escaping @Sendable (SourceChanges) -> Void) {
         self.roots = roots.map { TraceFileIO.canonicalPath($0.path).path }
         self.identifier = identifier
         self.sinceWhen = sinceWhen ?? FSEventStreamEventId(kFSEventStreamEventIdSinceNow)
         self.latency = latency
         self.callback = onChange
+        self.eventFilter = eventFilter
+        self.tracksWatermarks = tracksWatermarks
+        queue.setSpecific(key: queueKey, value: true)
     }
 
     deinit { stop() }
@@ -108,25 +125,39 @@ public final class FSEventsWatcher: @unchecked Sendable {
            roots.contains(where: { $0.contains(fragment) }) {
             return false
         }
+        let owner = StreamContext(self)
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil,
-            release: nil,
+            info: Unmanaged.passUnretained(owner).toOpaque(),
+            retain: { info in
+                guard let info else { return nil }
+                return UnsafeRawPointer(Unmanaged<StreamContext>.fromOpaque(info).retain().toOpaque())
+            },
+            release: { info in
+                if let info { Unmanaged<StreamContext>.fromOpaque(info).release() }
+            },
             copyDescription: nil
         )
         let eventCallback: FSEventStreamCallback = { _, info, count, paths, flags, eventIDs in
             guard let info else { return }
-            let watcher = Unmanaged<FSEventsWatcher>.fromOpaque(info).takeUnretainedValue()
+            let owner = Unmanaged<StreamContext>.fromOpaque(info).takeUnretainedValue()
+            guard let watcher = owner.watcher else { return }
             let pathArray = unsafeBitCast(paths, to: NSArray.self) as? [String] ?? []
             var changes = SourceChanges()
             for (index, path) in pathArray.prefix(count).enumerated() {
+                guard watcher.eventFilter?(path, flags[index]) != false else { continue }
                 changes.include(
                     path: path, flags: flags[index], eventID: eventIDs[index],
                     streamIdentifier: watcher.identifier, streamRoots: watcher.roots
                 )
             }
-            watcher.enqueue(changes)
+            if !watcher.tracksWatermarks {
+                changes.watermarks = [:]
+                changes.streamRoots = [:]
+            }
+            if changes.hasIndexWork || !changes.watermarks.isEmpty || changes.historyDone {
+                watcher.enqueue(changes)
+            }
         }
         stream = FSEventStreamCreate(
             kCFAllocatorDefault,
@@ -150,7 +181,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
             self.stream = nil
             return false
         }
-        if sinceWhen == FSEventStreamEventId(kFSEventStreamEventIdSinceNow) {
+        if tracksWatermarks, sinceWhen == FSEventStreamEventId(kFSEventStreamEventIdSinceNow) {
             var initial = SourceChanges()
             initial.watermarks[identifier] = FSEventsGetCurrentEventId()
             initial.streamRoots[identifier] = Set(roots)
@@ -159,17 +190,22 @@ public final class FSEventsWatcher: @unchecked Sendable {
         return true
     }
 
-    public func stop() {
+    public func stop(flushPending: Bool = false) {
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
+        // Callbacks already queued before invalidation must finish before their
+        // context is released and before a replacement drains the pending batch.
+        if DispatchQueue.getSpecific(key: queueKey) == nil { queue.sync {} }
         FSEventStreamRelease(stream)
         self.stream = nil
         lock.lock()
         flushWorkItem?.cancel()
         flushWorkItem = nil
+        let remaining = pending
         pending = SourceChanges()
         lock.unlock()
+        if flushPending, remaining.hasIndexWork { callback(remaining) }
     }
 
     private func enqueue(_ changes: SourceChanges) {

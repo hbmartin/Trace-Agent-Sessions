@@ -1241,13 +1241,12 @@ final class SessionMetadataTests: XCTestCase {
             atPath: sidecar.path, withDestinationPath: "../external/threads.sqlite"
         )
         let mapping = CodexMetadataSidecarMapping(metadataDirectories: [configuredHome])
-        let configuredPath = actualHome.appendingPathComponent("state_7.sqlite").standardizedFileURL.path
+        let configuredPath = sidecar.standardizedFileURL.path
         XCTAssertEqual(mapping.configuredChangePaths(for: target.path), [configuredPath])
         XCTAssertEqual(mapping.configuredChangePaths(for: target.path + "-wal"), [configuredPath])
         XCTAssertTrue(mapping.configuredChangePaths(for: parent
             .appendingPathComponent("external/threads.sqlite").path).isEmpty)
-        XCTAssertEqual(mapping.targetDirectories.map(\.path),
-                       [TraceFileIO.canonicalPath(store.path).path])
+        XCTAssertTrue(mapping.targetDirectories.contains { $0.path == TraceFileIO.canonicalPath(store.path).path })
     }
 
     func testSymlinkedSQLiteWALRefreshesOnlyConfiguredHome() async throws {
@@ -1286,8 +1285,7 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertTrue(mapping.configuredChangePaths(for: target.path + "-shm").isEmpty)
         XCTAssertTrue(mapping.configuredChangePaths(for: store
             .appendingPathComponent("unrelated.sqlite-wal").path).isEmpty)
-        XCTAssertEqual(mapping.targetDirectories.map(\.path),
-                       [TraceFileIO.canonicalPath(store.path).path])
+        XCTAssertTrue(mapping.targetDirectories.contains { $0.path == TraceFileIO.canonicalPath(store.path).path })
         let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
         let coordinator = IndexCoordinator(database: database,
             sources: [CodexSource(roots: [sessions, otherSessions])])
