@@ -2698,6 +2698,14 @@ final class TraceUITests: XCTestCase {
 
     func testGlobalSearchOpenRevealsOffscreenProjectAndSessionSelections() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let revealAudit = directory.appendingPathComponent("native-project-reveal-audit")
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_AUDIT_PATH"] = revealAudit.path
+        defer {
+            let attachment = XCTAttachment(string: fileLines(in: revealAudit).joined(separator: "\n"))
+            attachment.name = "native-project-reveal"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         for index in 0..<30 {
             try addSession(
                 id: "global-project-decoy-\(index)", title: "Global project decoy \(index)",
@@ -2954,6 +2962,15 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GAP_OFFSET_PATH"] = gapOffsets.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_WHEEL_ROUTE_PATH"] = wheelRoute.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmark.path
+        defer {
+            for (name, file) in [("wheel-routes", wheelRoute), ("wheel-gap-offsets", gapOffsets),
+                                 ("wheel-viewport-offsets", offsets)] {
+                let attachment = XCTAttachment(string: fileLines(in: file).joined(separator: "\n"))
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         app.launch()
         app.activate()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
@@ -2986,13 +3003,16 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(fileLines(in: wheelRoute).contains("scroll"),
                       "the responder must forward the wheel to the transcript scroll view")
 
+        try? FileManager.default.removeItem(at: gapOffsets)
+        app.buttons["testProbeTranscriptPosition"].click()
         let gapOffset = try XCTUnwrap(poll(timeout: 5) {
             numericLine(in: gapOffsets)
         }, "the table must expose a visible gap between messages")
         let gapFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
-        scroll.coordinate(withNormalizedOffset: .zero)
+        let gapPoint = scroll.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: scroll.frame.width / 2, dy: gapOffset))
-            .scroll(byDeltaX: 0, deltaY: -350)
+        gapPoint.hover()
+        gapPoint.scroll(byDeltaX: 0, deltaY: -350)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: gapFinishCount + 1, timeout: 10
         ), "wheel input in a table gap must reach the transcript")
@@ -3002,9 +3022,10 @@ final class TraceUITests: XCTestCase {
                       "wheel input in a row gap must traverse the table responder")
 
         let paddingFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
-        scroll.coordinate(withNormalizedOffset: .zero)
+        let paddingPoint = scroll.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 14, dy: scroll.frame.height / 2))
-            .scroll(byDeltaX: 0, deltaY: -350)
+        paddingPoint.hover()
+        paddingPoint.scroll(byDeltaX: 0, deltaY: -350)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: paddingFinishCount + 1, timeout: 10
         ), "wheel input in row padding must reach the transcript")
@@ -3012,9 +3033,10 @@ final class TraceUITests: XCTestCase {
         XCTAssertGreaterThan(afterPadding, afterGap + 30)
 
         let secondFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
-        scroll.coordinate(withNormalizedOffset: .zero)
+        let gutterPoint = scroll.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 4, dy: scroll.frame.height / 2))
-            .scroll(byDeltaX: 0, deltaY: -450)
+        gutterPoint.hover()
+        gutterPoint.scroll(byDeltaX: 0, deltaY: -450)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: secondFinishCount + 1, timeout: 10
         ), "wheel input in the table gutter must reach the transcript")

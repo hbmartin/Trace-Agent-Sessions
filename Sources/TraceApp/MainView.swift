@@ -132,7 +132,7 @@ private struct SidebarRowReveal: NSViewRepresentable {
             guard let token else { return }
             task = Task { @MainActor [weak view] in
                 var stableChecks = 0
-                for _ in 0..<40 {
+                for attempt in 0..<60 {
                     do { try await Task.sleep(for: .milliseconds(50)) }
                     catch { return }
                     guard let view, !Task.isCancelled else { return }
@@ -148,9 +148,15 @@ private struct SidebarRowReveal: NSViewRepresentable {
                     table.layoutSubtreeIfNeeded()
                     let rect = table.rect(ofRow: row)
                     let visible = table.visibleRect.intersection(rect)
+                    TraceTestHooks.appendLine(
+                        "attempt=\(attempt),row=\(row),rect=\(rect),visible=\(table.visibleRect),rowVisible=\(visible)",
+                        pathKey: "TRACE_TEST_SIDEBAR_PROJECT_REVEAL_AUDIT_PATH"
+                    )
                     if visible.height >= rect.height - 1 { stableChecks += 1 }
                     else { stableChecks = 0 }
-                    if stableChecks >= 3 {
+                    // Let the proxy's materialization requests finish before
+                    // acknowledging the native position they can still change.
+                    if stableChecks >= 5, attempt >= 20 {
                         revealed(token)
                         return
                     }
@@ -245,6 +251,7 @@ private struct SessionSidebar: View {
                             for _ in 0..<8 {
                                 try? await Task.sleep(for: .milliseconds(100))
                                 guard !Task.isCancelled,
+                                      handledProjectRevealToken != reveal.token,
                                       model.sidebarRevealRequest?.token == reveal.token else { return }
                                 proxy.scrollTo(projectID, anchor: .top)
                             }
@@ -1864,6 +1871,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private func probeTranscriptPositionForUITest() {
             guard TraceTestHooks.isUITesting, let scrollView,
                   let maximumScrollY = exactMaximumScrollY else { return }
+            table?.layoutSubtreeIfNeeded()
+            recordVisibleGapForUITest()
             TraceTestHooks.appendLine(
                 "\(Double(scrollView.contentView.bounds.origin.y)),\(Double(maximumScrollY)),\(followsBottom)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"
