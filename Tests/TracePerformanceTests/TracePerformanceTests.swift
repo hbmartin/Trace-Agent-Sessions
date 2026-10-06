@@ -60,9 +60,9 @@ final class TracePerformanceTests: XCTestCase {
 
     func testTranscriptScrollPerformance() throws {
         let (app, directory) = try makeApp()
-        let session = app.staticTexts["Performance session 0"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 10))
-        session.click()
+        openSession(0, in: app)
+        XCTAssertTrue(app.staticTexts["2,000 messages"].waitForExistence(timeout: 10),
+            "scroll measurements must use the complete 2,000-message transcript")
         let donePrefix = directory.appendingPathComponent("scroll-sweep-done").path
         func requestSweep(_ number: Int) {
             DistributedNotificationCenter.default().post(
@@ -116,9 +116,7 @@ final class TracePerformanceTests: XCTestCase {
 
     func testStreamingTranscriptFollowPerformance() throws {
         let (app, directory) = try makeApp()
-        let session = app.staticTexts["Performance session 1"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 10))
-        session.click()
+        openSession(1, in: app)
         let transcript = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
         let loadedMessage = transcript.staticTexts.matching(NSPredicate(
@@ -211,6 +209,34 @@ final class TracePerformanceTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.05)
         } while Date() < deadline
         return false
+    }
+
+    private func openSession(_ index: Int, in app: XCUIApplication) {
+        app.activate()
+        let title = "Performance session \(index)"
+        let viewport = app.scrollViews.containing(.outline, identifier: "sessionSidebarList").firstMatch
+        XCTAssertTrue(viewport.waitForExistence(timeout: 10))
+        let label = viewport.staticTexts.matching(NSPredicate(format: "value == %@", title)).firstMatch
+        XCTAssertTrue(label.waitForExistence(timeout: 10))
+        for _ in 0..<30 {
+            let frame = label.frame
+            let visible = viewport.frame
+            if visible.contains(frame) && label.isHittable {
+                label.click()
+                XCTAssertTrue(app.windows.matching(NSPredicate(format: "label == %@", title))
+                    .firstMatch.waitForExistence(timeout: 10), "the exact benchmark session must open")
+                let content = app.scrollViews["transcriptScroll"].staticTexts.matching(NSPredicate(
+                    format: "value BEGINSWITH %@", "PerformanceNeedle commonterm session \(index) message "
+                )).firstMatch
+                XCTAssertTrue(content.waitForExistence(timeout: 10),
+                    "the selected benchmark transcript must load before measurement")
+                return
+            }
+            let point = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: frame.minY < visible.minY ? 100 : -100)
+        }
+        XCTFail("Benchmark session \(title) must be visible before clicking")
     }
 
     private func probedPosition(in file: URL) -> (distance: Double, pinned: Bool)? {
