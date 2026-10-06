@@ -1442,9 +1442,16 @@ private struct TranscriptRenderer: NSViewRepresentable {
             if !request.refreshedTargetRowHeight
                 || request.reason.isInteraction
                 || table.rect(ofRow: row).height + bookmark.offset <= 0 {
-                table.view(atColumn: 0, row: row, makeIfNecessary: true)?.layoutSubtreeIfNeeded()
-                table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
-                table.layoutSubtreeIfNeeded()
+                if let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true)
+                    as? TranscriptHostingCell {
+                    cell.refreshHostedSize()
+                }
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0
+                    context.allowsImplicitAnimation = false
+                    table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+                    table.layoutSubtreeIfNeeded()
+                }
                 request.refreshedTargetRowHeight = true
             }
             var rowRect = table.rect(ofRow: row)
@@ -2164,6 +2171,7 @@ private final class TranscriptHostingCell: NSTableCellView {
         // safe-area insets must not resize or shift a partially visible row.
         host.safeAreaRegions = []
         host.sizingOptions = .intrinsicContentSize
+        host.setContentCompressionResistancePriority(.required, for: .vertical)
         addSubview(host)
         leadingConstraint = host.leadingAnchor.constraint(equalTo: leadingAnchor)
         trailingConstraint = host.trailingAnchor.constraint(equalTo: trailingAnchor)
@@ -2201,8 +2209,18 @@ private final class TranscriptHostingCell: NSTableCellView {
         host.invalidateIntrinsicContentSize()
     }
 
+    func refreshHostedSize() {
+        // A disclosure can update SwiftUI's ideal height before its hosting
+        // constraints have caught up. Refresh those before AppKit fits the row.
+        host.invalidateIntrinsicContentSize()
+        host.needsUpdateConstraints = true
+        host.updateConstraintsForSubtreeIfNeeded()
+        host.needsLayout = true
+        host.layoutSubtreeIfNeeded()
+    }
+
     var layoutDescription: String {
-        "\(frame),host=\(host.frame),ideal=\(host.intrinsicContentSize),safeArea=\(host.safeAreaInsets)"
+        "\(frame),host=\(host.frame),ideal=\(host.intrinsicContentSize),fitting=\(fittingSize),safeArea=\(host.safeAreaInsets)"
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
