@@ -162,6 +162,9 @@ final class TraceModel: ObservableObject {
         didSet { transcriptContentRevision &+= 1 }
     }
     @Published var startupError: String?
+    @Published private(set) var monitoringWarnings: [String] = []
+    private var metadataMonitoringWarnings: [String] = []
+    private var sourceMonitoringWarnings: [String] = []
     private(set) var transcriptMessageRevision = 0
     private(set) var transcriptContentRevision = 0
 
@@ -169,6 +172,7 @@ final class TraceModel: ObservableObject {
     private var coordinator: IndexCoordinator?
     private var watchers: [FSEventsWatcher] = []
     private var metadataWatcher: CodexMetadataWatcher?
+    private var watcherTeardownTask: Task<Void, Never>?
     private var scheduler: IndexScheduler?
     private var bufferedSourceChanges = SourceChanges()
     private var watcherStartupPending = true
@@ -242,6 +246,9 @@ final class TraceModel: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        if TraceTestHooks.isUITesting, let error = TraceTestHooks.environment["TRACE_TEST_SEED_STARTUP_ERROR"] {
+            startupError = error
+        }
         Task {
             do {
                 try await diagnostics.markLaunchStarted()
@@ -263,6 +270,7 @@ final class TraceModel: ObservableObject {
                 while true {
                     let revision = sourceConfigurationRevision
                     let latestSources = await makeSources()
+                    guard revision == sourceConfigurationRevision else { continue }
                     _ = try await database.synchronizeConfiguredRoots(
                         latestSources.flatMap(\.roots)
                     )
@@ -371,7 +379,7 @@ final class TraceModel: ObservableObject {
                     } else {
                         Task { [weak self] in
                             guard let self else { return }
-                            self.startIndexing(sources: sources)
+                            self.startIndexing(sources: sources, configurationRevision: configuredRevision)
                         }
                     }
                 } else {
@@ -399,9 +407,12 @@ final class TraceModel: ObservableObject {
         if startupSetupComplete, coordinator != nil {
             Task { [weak self] in
                 guard let self else { return }
+                let revision = self.sourceConfigurationRevision
                 let sources = await self.makeSources()
+                guard revision == self.sourceConfigurationRevision else { return }
                 guard await self.startWatching(sources) else { return }
-                self.startIndexing(sources: sources)
+                guard revision == self.sourceConfigurationRevision else { return }
+                self.startIndexing(sources: sources, configurationRevision: revision)
             }
         }
     }
@@ -641,11 +652,15 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    func startIndexing(sources: [any SessionSource]) {
-        guard settings.onboardingComplete, !initialIndexRequested, let scheduler else { return }
+    func startIndexing(sources: [any SessionSource], configurationRevision: UInt64? = nil) {
+        let revision = configurationRevision ?? sourceConfigurationRevision
+        guard revision == sourceConfigurationRevision, settings.onboardingComplete,
+              !initialIndexRequested, let scheduler else { return }
+        let generation = watcherGeneration
         initialIndexRequested = true
         Task { [weak self] in
-            guard let self else { return }
+            guard let self, !Task.isCancelled, revision == self.sourceConfigurationRevision,
+                  generation == self.watcherGeneration else { return }
             let buffered = self.bufferedSourceChanges
             self.bufferedSourceChanges = SourceChanges()
             let recovery = self.pendingStartupRecovery
@@ -674,6 +689,8 @@ final class TraceModel: ObservableObject {
                 watermarks: buffered.watermarks,
                 streamRoots: buffered.streamRoots
             )
+            guard !Task.isCancelled, revision == self.sourceConfigurationRevision,
+                  generation == self.watcherGeneration else { return }
             self.watcherStartupPending = false
             let arrivedDuringSubmission = self.bufferedSourceChanges
             self.bufferedSourceChanges = SourceChanges()
@@ -682,6 +699,8 @@ final class TraceModel: ObservableObject {
                 || !arrivedDuringSubmission.watermarks.isEmpty {
                 await self.submitSourceChanges(arrivedDuringSubmission)
             }
+            guard !Task.isCancelled, revision == self.sourceConfigurationRevision,
+                  generation == self.watcherGeneration else { return }
             self.startSafetyVerificationLoop()
         }
     }
@@ -704,6 +723,7 @@ final class TraceModel: ObservableObject {
             await previousScheduler.stop()
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             let sources = await makeSources()
+            guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             do {
                 if try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots)) {
                     await reloadSummaries(
@@ -711,6 +731,7 @@ final class TraceModel: ObservableObject {
                     )
                 }
             } catch {
+                guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
                 startupError = "Could not update source folders: \(error.localizedDescription)"
                 return
             }
@@ -725,7 +746,7 @@ final class TraceModel: ObservableObject {
             guard await startWatching(sources, forceRootReconciliation: true) else { return }
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             // Root changes reconcile existing files; unchanged sources retain their index.
-            startIndexing(sources: sources)
+            startIndexing(sources: sources, configurationRevision: revision)
         }
     }
 
@@ -746,6 +767,11 @@ final class TraceModel: ObservableObject {
         )
     }
     var filteredProjects: [ProjectSummary] {
+        if TraceTestHooks.isUITesting, let reveal = sidebarRevealRequest,
+           let gate = TraceTestHooks.environment["TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH"],
+           !FileManager.default.fileExists(atPath: gate) {
+            return projects.filter { $0.canonicalKey != reveal.projectCanonicalKey }
+        }
         let query = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty ? projects : projects.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
     }
@@ -1062,8 +1088,24 @@ final class TraceModel: ObservableObject {
         let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_DELAY_MS", cappedAt: 5_000
         ) ?? 5_000
+        if TraceTestHooks.isUITesting, TraceTestHooks.environment["TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH"] != nil {
+            TraceTestHooks.touch(pathKey: "TRACE_TEST_PROJECT_AVAILABILITY_ENTERED_PATH")
+            Task { @MainActor [weak self] in
+                try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH", timeoutMilliseconds: 15_000)
+                guard let self, self.sidebarRevealRequest?.token == request.token else { return }
+                self.objectWillChange.send()
+            }
+        }
         sidebarRevealFallbackTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(delay)) }
+            do {
+                if TraceTestHooks.isUITesting {
+                    for key in ["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH", "TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH"]
+                        where TraceTestHooks.environment[key] != nil {
+                        try await TraceTestHooks.waitForRelease(pathKey: key, timeoutMilliseconds: 15_000)
+                    }
+                }
+                try await Task.sleep(for: .milliseconds(delay))
+            }
             catch { return }
             guard let self, self.sidebarRevealRequest?.token == request.token else { return }
             TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_PATH")
@@ -1340,6 +1382,7 @@ final class TraceModel: ObservableObject {
             NotificationCenter.default.removeObserver(timeZoneObserver)
             self.timeZoneObserver = nil
         }
+        await watcherTeardownTask?.value
         await scheduler?.stop()
         try? await diagnostics.markCleanShutdown()
     }
@@ -1376,6 +1419,8 @@ final class TraceModel: ObservableObject {
         if !forceRootReconciliation, !reconfigureWatchers, !watchers.isEmpty { return true }
         if !reconfigureWatchers { liveWatcherReplayStarts = [:] }
         let generation = beginWatcherConfiguration()
+        await watcherTeardownTask?.value
+        guard generation == watcherGeneration, !Task.isCancelled else { return false }
         let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
             .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
@@ -1473,19 +1518,29 @@ final class TraceModel: ObservableObject {
             [weak self] changes, diagnostics in
             Task { @MainActor [weak self] in
                 guard let self, self.watcherGeneration == generation else { return }
-                if !diagnostics.isEmpty { self.startupError = diagnostics.joined(separator: "\n") }
+                self.metadataMonitoringWarnings = diagnostics
+                self.updateMonitoringWarnings()
                 if self.watcherStartupPending { self.bufferedSourceChanges.merge(changes) }
                 else if changes.hasIndexWork { await self.submitSourceChanges(changes) }
             }
         }
         self.metadataWatcher = metadataWatcher
+        TraceTestHooks.appendLine("enter,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
+        if let delay = TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_METADATA_START_DELAY_MS", cappedAt: 30_000,
+            marker: .touch(pathKey: "TRACE_TEST_METADATA_START_ENTERED_PATH")) {
+            try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_METADATA_START_RELEASE_PATH", timeoutMilliseconds: delay)
+        }
+        guard generation == watcherGeneration, !Task.isCancelled else { return false }
         await metadataWatcher.start()
+        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        TraceTestHooks.appendLine("started,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
         if !failedRoots.isEmpty {
             let failedCanonical = failedRoots.map { TraceFileIO.canonicalPath($0.path) }
             startupReconciliationPaths.formUnion(canonicalRoots.compactMap { root in
                 failedCanonical.contains(where: { $0.intersects(root) }) ? root.path : nil
             })
-            startupError = "Some source folders could not be monitored; periodic reconciliation remains active."
+            sourceMonitoringWarnings = ["Some source folders could not be monitored; periodic reconciliation remains active."]
+            updateMonitoringWarnings()
             startupActivity = Self.startupActivity(
                 hasCachedIndex: hasCachedIndex,
                 forceRootReconciliation: forceRootReconciliation,
@@ -1549,13 +1604,27 @@ final class TraceModel: ObservableObject {
 
     private func beginWatcherConfiguration() -> UInt64 {
         watcherGeneration &+= 1
-        watchers.forEach { $0.stop() }
+        let retiring = watchers
+        let retiringMetadata = metadataWatcher
+        let previousTeardown = watcherTeardownTask
         watchers = []
-        metadataWatcher?.stop()
         metadataWatcher = nil
+        monitoringWarnings = []
+        metadataMonitoringWarnings = []
+        sourceMonitoringWarnings = []
+        watcherTeardownTask = Task.detached(priority: .utility) {
+            await previousTeardown?.value
+            retiring.forEach { $0.stop() }
+            retiringMetadata?.stop()
+        }
         safetyVerificationTask?.cancel()
         safetyVerificationTask = nil
         return watcherGeneration
+    }
+
+    private func updateMonitoringWarnings() {
+        let warnings = Array(Set(metadataMonitoringWarnings + sourceMonitoringWarnings)).sorted()
+        if monitoringWarnings != warnings { monitoringWarnings = warnings }
     }
 
     private func invalidateWatchers() {

@@ -3452,6 +3452,18 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(fullState?.rootID, nestedRootID)
     }
 
+    func testRoutineDirectoryCreationPreservesStructuralEventWithoutRecovery() {
+        var changes = SourceChanges()
+        changes.include(path: "/root/sessions/2026/10/06",
+            flags: UInt32(kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemCreated))
+        XCTAssertFalse(changes.hasIndexWork)
+        XCTAssertTrue(changes.reconciliationPaths.isEmpty)
+        XCTAssertEqual(changes.structuralPaths, ["/root/sessions/2026/10/06"])
+        changes.include(path: "/root/sessions/2026/10/06",
+            flags: UInt32(kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemRenamed))
+        XCTAssertTrue(changes.requiresReconciliation)
+    }
+
     func testWatcherFlagsDistinguishFileChangesFromRecovery() {
         var changes = SourceChanges()
         XCTAssertFalse(changes.hasIndexWork)

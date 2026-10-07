@@ -90,6 +90,38 @@ final class FSEventsWatcherTests: XCTestCase {
         XCTAssertEqual(checkpoint, 123)
     }
 
+    @MainActor func testMainActorStopReturnsWhileFilesystemCallbackIsBlocked() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceMainStop-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entered = OSAllocatedUnfairLock(initialState: false)
+        let released = OSAllocatedUnfairLock(initialState: false)
+        let release = DispatchSemaphore(value: 0)
+        var watcher: FSEventsWatcher? = FSEventsWatcher(roots: [directory], eventFilter: { path, _ in
+            guard path.hasSuffix("/session.jsonl") else { return false }
+            if !entered.withLock({ value in let old = value; value = true; return old }) {
+                _ = release.wait(timeout: .now() + 5)
+            }
+            return true
+        }, tracksWatermarks: false) { _ in released.withLock { $0 = true } }
+        XCTAssertTrue(watcher!.start())
+        defer { release.signal() }
+        try Data("{}\n".utf8).write(to: directory.appendingPathComponent("session.jsonl"))
+        for _ in 0..<100 where !entered.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertTrue(entered.withLock { $0 })
+        weak var retiring = watcher
+        watcher?.stop(flushPending: true)
+        watcher = nil
+        // This actor turn completes before releasing the filesystem queue.
+        await Task.yield()
+        XCTAssertFalse(released.withLock { $0 })
+        XCTAssertNotNil(retiring, "stop retains the watcher while its callback drains")
+        release.signal()
+        for _ in 0..<100 where retiring != nil { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertNil(retiring)
+        XCTAssertTrue(released.withLock { $0 })
+    }
+
     func testDroppedEventsRecoverOnlyWatcherRootsAndCarryCheckpoint() {
         let root = "/tmp/TraceWatcherRoot"
         var changes = SourceChanges()
