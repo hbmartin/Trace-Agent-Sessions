@@ -65,7 +65,7 @@ struct MainView: View {
                         .frame(width: 220)
                     }
                     Spacer()
-                    IndexProgressLabel(progress: model.progress)
+                    IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
@@ -153,13 +153,13 @@ private struct SidebarRowReveal: NSViewRepresentable {
                     let column = scroll.convert(scroll.bounds, to: nil)
                     let relevant: Bool
                     if event.type == .keyDown {
-                        relevant = (window.firstResponder as? NSView).map {
-                            column.minX <= $0.convert($0.bounds, to: nil).midX
-                                && $0.convert($0.bounds, to: nil).midX <= column.maxX
-                        } ?? false
+                        let navigationKeys: Set<UInt16> = [115, 116, 119, 121, 123, 124, 125, 126]
+                        relevant = navigationKeys.contains(event.keyCode) && ((window.firstResponder as? NSView).map {
+                            $0 === scroll || $0.isDescendant(of: scroll)
+                        } ?? false)
                     } else {
                         let point = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-                        relevant = column.minX <= point.x && point.x <= column.maxX
+                        relevant = column.contains(point)
                     }
                     if relevant { self.stop(); interrupted(token) }
                 }
@@ -167,13 +167,34 @@ private struct SidebarRowReveal: NSViewRepresentable {
             }
             task = Task { @MainActor [weak self, weak view] in
                 var progress = SidebarRevealProgress()
-                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                let deadlineSeconds = 3.0
+                var deadline = ContinuousClock.now.advanced(by: .seconds(deadlineSeconds))
+                let testClockPath = TraceTestHooks.isUITesting
+                    ? TraceTestHooks.environment["TRACE_TEST_SIDEBAR_REVEAL_CLOCK_PATH"] : nil
+                let testClockStart = testClockPath.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }.flatMap(Double.init)
+                let testBackstop = ContinuousClock.now.advanced(by: .seconds(15))
+                var previousCheck = ContinuousClock.now
                 var attempt = 0
                 while ContinuousClock.now < deadline {
                     defer { attempt += 1 }
                     do { try await Task.sleep(for: .milliseconds(50)) }
                     catch { return }
                     guard let self, let view, !Task.isCancelled, self.token == token else { return }
+                    let now = ContinuousClock.now
+                    if let clockPath = testClockPath, let testClockStart,
+                       let raw = try? String(contentsOfFile: clockPath, encoding: .utf8),
+                       let tick = Double(raw), tick - testClockStart >= deadlineSeconds {
+                        TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_REVEAL_EXPIRED_PATH")
+                        self.stop()
+                        return
+                    }
+                    if TraceTestHooks.isUITesting,
+                       let gate = TraceTestHooks.environment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"],
+                       !FileManager.default.fileExists(atPath: gate) {
+                        guard now < testBackstop else { return }
+                        deadline = deadline.advanced(by: previousCheck.duration(to: now))
+                    }
+                    previousCheck = now
                     var ancestor = view.superview
                     while let candidate = ancestor, !(candidate is NSTableView) {
                         ancestor = candidate.superview
@@ -291,7 +312,7 @@ private struct SessionSidebar: View {
                                 }))
                             }
                         }
-                        .task(id: projectRevealTaskID.token) {
+                        .task(id: projectRevealTaskID) {
                             guard let reveal = model.sidebarRevealRequest,
                                   handledProjectRevealToken != reveal.token,
                                   let projectID = projectRevealTaskID.rowID else {

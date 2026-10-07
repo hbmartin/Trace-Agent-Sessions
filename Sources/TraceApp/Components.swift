@@ -51,6 +51,7 @@ struct AgentBadge: View {
 
 struct IndexProgressLabel: View {
     let progress: IndexProgress
+    var monitoringWarnings: [String] = []
     @State private var showingDetails = false
     private var busy: Bool { ![.waiting, .complete, .cancelled, .failed].contains(progress.phase) }
 
@@ -94,6 +95,7 @@ struct IndexProgressLabel: View {
         }
         if let error = progress.error { lines.append(error) }
         if let warning = progress.metadataWarning { lines.append(warning) }
+        lines.append(contentsOf: monitoringWarnings)
         if let rollupError = progress.rollupError { lines.append("Token totals: \(rollupError)") }
         return lines.joined(separator: "\n")
     }

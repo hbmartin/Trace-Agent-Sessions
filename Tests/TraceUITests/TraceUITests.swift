@@ -320,6 +320,102 @@ final class TraceUITests: XCTestCase {
                       "an empty root change must not prevent cached Costs from loading")
     }
 
+    func testSourceReplacementDuringOnboardingMetadataStartUsesNewestGeneration() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let additional = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(decoding: try JSONEncoder().encode([additional.path]), as: UTF8.self)
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        let entered = directory.appendingPathComponent("metadata-entered")
+        let release = directory.appendingPathComponent("metadata-release")
+        let audit = directory.appendingPathComponent("metadata-audit")
+        let completed = directory.appendingPathComponent("index-completed")
+        app.launchEnvironment["TRACE_TEST_METADATA_START_DELAY_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_METADATA_START_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_METADATA_START_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_METADATA_START_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(waitForFile(entered, timeout: 15))
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        let remove = app.buttons["removeAdditionalClaudeRoot-0"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.click()
+        let waiting = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.fileLines(in: audit).filter { $0.hasPrefix("enter,") }.count >= 2
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [waiting], timeout: 10), .completed)
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(completed, timeout: 25))
+        let starts = fileLines(in: audit).filter { $0.hasPrefix("started,") }
+        XCTAssertEqual(starts.count, 1, "stale startup must not report success")
+        XCTAssertTrue(starts.first?.contains("revision=1") == true)
+        XCTAssertEqual(try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT count(*) FROM source_root WHERE path='\(additional.path)'"), 0)
+    }
+
+    func testMonitoringWarningsPreserveOtherErrorsAndRecoverWithoutAlerts() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let codex = directory.appendingPathComponent("Sources/Codex")
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        let sidecar = directory.appendingPathComponent("Sources/session_index.jsonl")
+        try FileManager.default.createSymbolicLink(atPath: sidecar.path, withDestinationPath: "session_index.jsonl")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEED_STARTUP_ERROR"] = "Unrelated startup failure"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Unrelated startup failure"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["OK"].click()
+        let status = app.buttons["indexProgress"]
+        XCTAssertTrue(status.waitForExistence(timeout: 15))
+        status.click()
+        let warning = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "incomplete Codex metadata monitoring")).firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        status.click()
+        try FileManager.default.removeItem(at: sidecar)
+        try Data("{}\n".utf8).write(to: sidecar)
+        status.click()
+        let cleared = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !warning.exists }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 10), .completed)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    func testBlockedFilesystemCallbackDoesNotBlockSourceReplacement() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let additional = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(decoding: try JSONEncoder().encode([additional.path]), as: UTF8.self)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launchEnvironment["TRACE_TEST_GATE_FILESYSTEM_CALLBACK"] = "1"
+        app.launchEnvironment["TRACE_TEST_GATE_FILESYSTEM_ROOT_CONTAINS"] = "AdditionalClaude"
+        let entered = directory.appendingPathComponent("callback-entered")
+        let release = directory.appendingPathComponent("callback-release")
+        let completed = directory.appendingPathComponent("index-completed")
+        app.launchEnvironment["TRACE_TEST_FILESYSTEM_CALLBACK_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_FILESYSTEM_CALLBACK_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(waitForFile(completed, timeout: 25))
+        try FileManager.default.removeItem(at: completed)
+        try Data("{}\n".utf8).write(to: additional.appendingPathComponent("callback-trigger.jsonl"))
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForExistence(timeout: 3))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        app.buttons["removeAdditionalClaudeRoot-0"].click()
+        app.descendants(matching: .any)["General"].firstMatch.click()
+        XCTAssertTrue(app.checkBoxes["Open Trace when I log in"].waitForExistence(timeout: 3),
+                      "main actor must remain responsive while old callbacks drain")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: release.path))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(completed, timeout: 25))
+    }
+
     func testPartialWatcherStartupFailureStillRunsInitialIndexing() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let codex = directory.appendingPathComponent("Sources/Codex")
@@ -340,9 +436,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Find the sample answer"].firstMatch.waitForExistence(
             timeout: 15
         ), "a failed watcher must not prevent initial indexing")
+        app.buttons["indexProgress"].click()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "periodic reconciliation"
         )).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["indexProgress"].click()
 
         let rollout = codex.appendingPathComponent("rollout-live.jsonl")
         let live = [
@@ -2792,15 +2890,75 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testSidebarMaterializesProjectWhenItAppearsAfterSearchNavigation() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let entered = directory.appendingPathComponent("project-unavailable")
+        let release = directory.appendingPathComponent("project-available")
+        let ack = directory.appendingPathComponent("project-ack")
+        app.launchEnvironment["TRACE_TEST_PROJECT_AVAILABILITY_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15))
+        search.click(); search.typeText("Find the sample answer")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(waitForFile(entered, timeout: 5))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(ack, timeout: 5), "the existing token must materialize its newly available project")
+    }
+
+    func testSessionsHeaderDoesNotCancelProjectsReveal() throws { try runUnrelatedSidebarInteraction(titleBar: false) }
+    func testTitleBarDragDoesNotCancelProjectsReveal() throws { try runUnrelatedSidebarInteraction(titleBar: true) }
+
+    private func runUnrelatedSidebarInteraction(titleBar: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let release = directory.appendingPathComponent("reveal-release")
+        let ack = directory.appendingPathComponent("reveal-ack")
+        let cancel = directory.appendingPathComponent("reveal-cancel")
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH"] = cancel.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15)); search.click(); search.typeText("Find the sample answer")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 5))
+        if titleBar {
+            let window = app.windows["Trace"]
+            let point = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0)).withOffset(CGVector(dx: 200, dy: 12))
+            point.click(forDuration: 0.1, thenDragTo: point.withOffset(CGVector(dx: 30, dy: 20)))
+        } else { app.staticTexts["Sessions"].firstMatch.click() }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancel.path))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(ack, timeout: 5))
+    }
+
     func testSidebarRevealUpdatesItsRowIndexDuringMaterialization() throws { try runSidebarRevealMutation(userInterrupt: false) }
     func testUserScrollCancelsOutstandingSidebarReveal() throws { try runSidebarRevealMutation(userInterrupt: true) }
+    func testSidebarRowIndexChangeDoesNotExtendProductionDeadline() throws {
+        try runSidebarRevealMutation(userInterrupt: false, expire: true)
+    }
 
-    private func runSidebarRevealMutation(userInterrupt: Bool) throws {
+    private func runSidebarRevealMutation(userInterrupt: Bool, expire: Bool = false) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let gate = directory.appendingPathComponent("sidebar-gate")
         let ack = directory.appendingPathComponent("sidebar-ack")
         let cancel = directory.appendingPathComponent("sidebar-cancel")
         let audit = directory.appendingPathComponent("sidebar-index-audit")
+        let clock = directory.appendingPathComponent("sidebar-clock")
+        let expired = directory.appendingPathComponent("sidebar-expired")
+        if expire {
+            try Data("0".utf8).write(to: clock)
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CLOCK_PATH"] = clock.path
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_EXPIRED_PATH"] = expired.path
+        }
         app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"] = gate.path
         app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
         app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH"] = cancel.path
@@ -2826,9 +2984,28 @@ final class TraceUITests: XCTestCase {
             try Data().write(to: gate)
             XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
         } else {
+            if expire {
+                let initialCheck = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    !self.fileLines(in: audit).isEmpty
+                }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [initialCheck], timeout: 3), .completed)
+                try Data("2.9".utf8).write(to: clock, options: .atomic)
+            }
             try addSession(id: "newer-sidebar", title: "New sidebar session", project: "NewerSidebarProject",
                 timestamp: 2_000_000_000_000, content: "A newly indexed sidebar row", directory: directory)
             XCTAssertTrue(app.staticTexts["NewerSidebarProject"].firstMatch.waitForExistence(timeout: 3))
+            if expire {
+                let changedRow = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    Set(self.fileLines(in: audit).compactMap { line in
+                        line.split(separator: ",").first { $0.hasPrefix("row=") }.map(String.init)
+                    }).count > 1
+                }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [changedRow], timeout: 3), .completed)
+                try Data("3.01".utf8).write(to: clock, options: .atomic)
+                XCTAssertTrue(waitForFile(expired, timeout: 3))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+                return
+            }
             try Data().write(to: gate)
             XCTAssertTrue(waitForFile(ack, timeout: 3))
             let rows = Set(fileLines(in: audit).compactMap { line in

@@ -171,7 +171,7 @@ public actor IndexCoordinator {
     private var cachedSidecarMapping: (directories: [String], mapping: CodexMetadataSidecarMapping)?
     private var codexNameLoadCounts: [String: Int] = [:]
     private var codexWarnings: [CodexWarningKey: Set<String>] = [:]
-    private var deferredCodexSessionIDs: [String: Set<Int64>] = [:]
+    private var deferredCodexSessionIDs: [String: Set<IndexDatabase.CodexSessionIdentity>] = [:]
 
     private func codexWarningMessage() -> String? {
         let warnings = Set(codexWarnings.values.flatMap { $0 })
@@ -435,6 +435,9 @@ public actor IndexCoordinator {
             let oldScope = try await database.storedIndexScope()
             if rebuild || oldScope != scope {
                 try await database.clearIndex()
+                deferredCodexSessionIDs = [:]
+                codexWarnings = codexWarnings.filter { $0.key.kind != .deferredLegacy }
+                status.metadataWarning = codexWarningMessage()
                 await mutations.markChanged()
             }
             try await database.setIndexScope(scope)
@@ -893,7 +896,7 @@ public actor IndexCoordinator {
                         } else {
                             await clearResolvedFileCodexWarnings(for: root.id, in: &status)
                         }
-                        var pending = metadata.complete ? Set<Int64>() : (deferredCodexSessionIDs[root.id] ?? [])
+                        var pending = metadata.complete ? Set<IndexDatabase.CodexSessionIdentity>() : (deferredCodexSessionIDs[root.id] ?? [])
                         pending.formIntersection(update.existingSessionIDs)
                         pending.subtract(update.resolvedSessionIDs)
                         pending.formUnion(update.deferredSessionIDs)
