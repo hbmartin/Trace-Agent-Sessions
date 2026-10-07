@@ -4287,9 +4287,16 @@ final class TraceUITests: XCTestCase {
         )
         let divider = app.descendants(matching: .any)["projectSessionDivider"].firstMatch
         XCTAssertTrue(divider.exists)
-        let oldY = divider.frame.midY
-        let start = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 90)))
+        let dividerFrame = divider.frame
+        let oldY = dividerFrame.midY
+        let window = app.windows.firstMatch
+        let windowFrame = window.frame
+        // Keep both mouse coordinates anchored to the window as the divider moves.
+        let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: dividerFrame.midX - windowFrame.minX,
+            dy: dividerFrame.midY - windowFrame.minY
+        ))
+        start.click(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 90)))
         let newY = divider.frame.midY
         XCTAssertGreaterThan(newY, oldY + 40)
         app.terminate()
