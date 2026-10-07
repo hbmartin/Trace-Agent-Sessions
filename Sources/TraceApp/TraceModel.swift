@@ -168,6 +168,7 @@ final class TraceModel: ObservableObject {
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
     private var watchers: [FSEventsWatcher] = []
+    private var metadataWatcher: CodexMetadataWatcher?
     private var scheduler: IndexScheduler?
     private var bufferedSourceChanges = SourceChanges()
     private var watcherStartupPending = true
@@ -221,6 +222,7 @@ final class TraceModel: ObservableObject {
     private var started = false
     private var initialIndexRequested = false
     private var sidebarProjectRevealAcknowledged = false
+    private var sidebarProjectMaterializedToken: UUID?
     private var sidebarSessionRevealAcknowledged = false
     private var sidebarRevealFallbackTask: Task<Void, Never>?
     private let watcherGroupingPolicy: WatcherGroupingPolicy
@@ -1075,13 +1077,27 @@ final class TraceModel: ObservableObject {
         sidebarRevealFallbackTask = nil
         sidebarRevealRequest = nil
         sidebarProjectRevealAcknowledged = false
+        sidebarProjectMaterializedToken = nil
         sidebarSessionRevealAcknowledged = false
+    }
+
+    func claimSidebarProjectMaterialization(token: UUID) -> Bool {
+        guard sidebarRevealRequest?.token == token, sidebarProjectMaterializedToken != token else { return false }
+        sidebarProjectMaterializedToken = token
+        return true
     }
 
     func acknowledgeSidebarProjectReveal(token: UUID) {
         guard sidebarRevealRequest?.token == token else { return }
         sidebarProjectRevealAcknowledged = true
+        TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH")
         finishSidebarRevealIfAcknowledged()
+    }
+
+    func cancelSidebarReveal(token: UUID) {
+        guard sidebarRevealRequest?.token == token else { return }
+        TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH")
+        invalidateSidebarRevealRequest(token: token)
     }
 
     func acknowledgeSidebarSessionReveal(token: UUID) {
@@ -1363,9 +1379,11 @@ final class TraceModel: ObservableObject {
         let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
             .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
-        let sidecarMapping = CodexMetadataSidecarMapping(metadataDirectories: metadataRoots)
-        let canonicalRoots = roots.map { TraceFileIO.canonicalPath($0.path) }
-        let canonicalMetadataRoots = metadataRoots.map { TraceFileIO.canonicalPath($0.path) }
+        let (sidecarMapping, canonicalRoots) = await Task.detached(priority: .utility) {
+            (CodexMetadataSidecarMapping(metadataDirectories: metadataRoots),
+             roots.map { TraceFileIO.canonicalPath($0.path) })
+        }.value
+        guard generation == watcherGeneration else { return false }
         var reconciliationPaths = forceRootReconciliation
             ? Set(canonicalRoots.map(\.path))
             : []
@@ -1374,7 +1392,7 @@ final class TraceModel: ObservableObject {
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
         let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
         var grouped: [String: [URL]] = [:]
-        for root in roots + metadataRoots + sidecarMapping.targetDirectories {
+        for root in roots {
             let volumeID = Self.volumeIdentifier(for: root)
             let groupingID = watcherGroupingPolicy.groupIdentifier(
                 for: root, volumeIdentifier: volumeID
@@ -1422,68 +1440,19 @@ final class TraceModel: ObservableObject {
                         where self.liveWatcherReplayStarts[identifier] == nil {
                         self.liveWatcherReplayStarts[identifier] = eventID
                     }
-                    var relevant = SourceChanges()
-                    let changedPaths = changes.paths.union(changes.lexicalPaths)
-                    relevant.paths = Set(changedPaths.flatMap { path -> Set<String> in
+                    var relevant = changes
+                    // These streams cover transcript roots only. Metadata callbacks
+                    // already arrive filtered and mapped from their utility queue.
+                    relevant.paths = Set(changes.paths.filter { path in
                         let canonical = TraceFileIO.canonicalPath(path)
-                        var mapped = sidecarMapping.configuredChangePaths(for: canonical.path)
-                        if canonicalRoots.contains(where: { $0.contains(canonical) }) {
-                            mapped.insert(canonical.path)
-                        }
-                        let url = URL(fileURLWithPath: canonical.path)
-                        let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
-                        if canonicalMetadataRoots.contains(where: { $0.comparisonKey == parent.comparisonKey }),
-                           TraceFileIO.isCodexMetadataChangePath(url) {
-                            mapped.insert(canonical.path)
-                        }
-                        let lexical = URL(fileURLWithPath: path).standardizedFileURL
-                        let lexicalParent = TraceFileIO.canonicalPath(
-                            lexical.deletingLastPathComponent().path
-                        )
-                        if canonicalMetadataRoots.contains(where: {
-                            $0.comparisonKey == lexicalParent.comparisonKey
-                        }), TraceFileIO.isCodexMetadataChangePath(lexical) {
-                            mapped.insert(lexical.path)
-                        }
-                        return mapped
+                        return canonicalRoots.contains { $0.contains(canonical) }
                     })
-                    let sidecarLinkChanged = changedPaths.contains { path in
-                        let url = URL(fileURLWithPath: path).standardizedFileURL
-                        let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
-                        return canonicalMetadataRoots.contains {
-                            $0.comparisonKey == parent.comparisonKey
-                        } && TraceFileIO.isCodexMetadataSidecar(url)
-                    }
+                    relevant.reconciliationPaths = []
                     for path in changes.reconciliationPaths {
                         let changed = TraceFileIO.canonicalPath(path)
                         for root in canonicalRoots where root.intersects(changed) {
-                            relevant.reconciliationPaths.insert(
-                                changed.contains(root) ? root.path : changed.path
-                            )
+                            relevant.reconciliationPaths.insert(changed.contains(root) ? root.path : changed.path)
                         }
-                    }
-                    relevant.recoveryReasons = changes.recoveryReasons
-                    relevant.watermarks = changes.watermarks
-                    relevant.streamRoots = changes.streamRoots
-                    relevant.historyDone = changes.historyDone
-                    if sidecarLinkChanged,
-                       CodexMetadataSidecarMapping(metadataDirectories: metadataRoots)
-                        != sidecarMapping {
-                        let buffered = self.bufferedSourceChanges
-                        guard await self.startWatching(
-                            sources, reconfigureWatchers: true
-                        ) else { return }
-                        relevant.reconciliationPaths.formUnion(self.startupReconciliationPaths)
-                        if !self.startupReconciliationPaths.isEmpty {
-                            relevant.recoveryReasons.insert(.rootChanged)
-                        }
-                        relevant.merge(buffered)
-                        relevant.merge(self.bufferedSourceChanges)
-                        self.bufferedSourceChanges = SourceChanges()
-                        self.watcherStartupPending = false
-                        await self.submitSourceChanges(relevant)
-                        self.startSafetyVerificationLoop()
-                        return
                     }
                     guard !relevant.paths.isEmpty || relevant.requiresReconciliation
                         || !relevant.watermarks.isEmpty else { return }
@@ -1500,6 +1469,17 @@ final class TraceModel: ObservableObject {
             else { failedRoots += configuration.roots }
         }
         watchers = started
+        let metadataWatcher = CodexMetadataWatcher(metadataDirectories: metadataRoots, mapping: sidecarMapping) {
+            [weak self] changes, diagnostics in
+            Task { @MainActor [weak self] in
+                guard let self, self.watcherGeneration == generation else { return }
+                if !diagnostics.isEmpty { self.startupError = diagnostics.joined(separator: "\n") }
+                if self.watcherStartupPending { self.bufferedSourceChanges.merge(changes) }
+                else if changes.hasIndexWork { await self.submitSourceChanges(changes) }
+            }
+        }
+        self.metadataWatcher = metadataWatcher
+        await metadataWatcher.start()
         if !failedRoots.isEmpty {
             let failedCanonical = failedRoots.map { TraceFileIO.canonicalPath($0.path) }
             startupReconciliationPaths.formUnion(canonicalRoots.compactMap { root in
@@ -1571,6 +1551,8 @@ final class TraceModel: ObservableObject {
         watcherGeneration &+= 1
         watchers.forEach { $0.stop() }
         watchers = []
+        metadataWatcher?.stop()
+        metadataWatcher = nil
         safetyVerificationTask?.cancel()
         safetyVerificationTask = nil
         return watcherGeneration

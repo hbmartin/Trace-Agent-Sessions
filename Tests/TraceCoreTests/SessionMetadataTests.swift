@@ -746,6 +746,47 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertNotNil(recorder.terminal?.metadataWarning)
     }
 
+    func testPartialDeferralsRetainUnseenSessionsResolveMatchesAndPruneDeletion() async throws {
+        let root = try directory()
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        for id in ["one", "two"] {
+            try write(codexRollout(id: id), to: sessions.appendingPathComponent("rollout-\(id).jsonl"))
+        }
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try write(["one", "two"].map { ["id": $0, "thread_name": "Original \($0)"] }, to: sidecar)
+        let url = root.appendingPathComponent("trace.sqlite")
+        let database = try IndexDatabase(url: url)
+        let raw = try DatabaseQueue(path: url.path)
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE session SET codex_name_origin=NULL, codex_applied_name=NULL")
+        }
+        let broken = root.appendingPathComponent("state_99.sqlite")
+        try Data("broken".utf8).write(to: broken)
+        try write(["one", "two"].map { ["id": $0, "thread_name": "Changed \($0)"] }, to: sidecar)
+        let both = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertTrue(both.metadataWarning?.contains("2 legacy Codex title rename(s) deferred") == true)
+        try write([["id": "one", "thread_name": "Changed one"]], to: sidecar)
+        let missing = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertTrue(missing.metadataWarning?.contains("2 legacy Codex title rename(s) deferred") == true)
+        try write([["id": "one", "thread_name": "Original one"]], to: sidecar)
+        let resolved = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertTrue(resolved.metadataWarning?.contains("1 legacy Codex title rename(s) deferred") == true)
+        try FileManager.default.removeItem(at: sessions.appendingPathComponent("rollout-two.jsonl"))
+        await coordinator.indexAll(scope: .proseOnly)
+        let deleted = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertFalse(deleted.metadataWarning?.contains("legacy Codex title rename(s) deferred") == true)
+        try write([["id": "one", "thread_name": "Changed one"]], to: sidecar)
+        _ = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        try FileManager.default.removeItem(at: broken)
+        let complete = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertNil(complete.metadataWarning)
+        let names = try await database.sessions().map(\.title)
+        XCTAssertEqual(names, ["Changed one"])
+    }
+
     func testPartialCodexMetadataPreservesLegacyTitleUntilCompleteRead() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")
@@ -1241,13 +1282,12 @@ final class SessionMetadataTests: XCTestCase {
             atPath: sidecar.path, withDestinationPath: "../external/threads.sqlite"
         )
         let mapping = CodexMetadataSidecarMapping(metadataDirectories: [configuredHome])
-        let configuredPath = actualHome.appendingPathComponent("state_7.sqlite").standardizedFileURL.path
+        let configuredPath = sidecar.standardizedFileURL.path
         XCTAssertEqual(mapping.configuredChangePaths(for: target.path), [configuredPath])
         XCTAssertEqual(mapping.configuredChangePaths(for: target.path + "-wal"), [configuredPath])
         XCTAssertTrue(mapping.configuredChangePaths(for: parent
             .appendingPathComponent("external/threads.sqlite").path).isEmpty)
-        XCTAssertEqual(mapping.targetDirectories.map(\.path),
-                       [TraceFileIO.canonicalPath(store.path).path])
+        XCTAssertTrue(mapping.targetDirectories.contains { $0.path == TraceFileIO.canonicalPath(store.path).path })
     }
 
     func testSymlinkedSQLiteWALRefreshesOnlyConfiguredHome() async throws {
@@ -1286,8 +1326,7 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertTrue(mapping.configuredChangePaths(for: target.path + "-shm").isEmpty)
         XCTAssertTrue(mapping.configuredChangePaths(for: store
             .appendingPathComponent("unrelated.sqlite-wal").path).isEmpty)
-        XCTAssertEqual(mapping.targetDirectories.map(\.path),
-                       [TraceFileIO.canonicalPath(store.path).path])
+        XCTAssertTrue(mapping.targetDirectories.contains { $0.path == TraceFileIO.canonicalPath(store.path).path })
         let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
         let coordinator = IndexCoordinator(database: database,
             sources: [CodexSource(roots: [sessions, otherSessions])])

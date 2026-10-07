@@ -168,8 +168,10 @@ public actor IndexCoordinator {
         let sourcePath: String?
     }
     private var codexNameCache: [String: CodexNameCacheEntry] = [:]
+    private var cachedSidecarMapping: (directories: [String], mapping: CodexMetadataSidecarMapping)?
     private var codexNameLoadCounts: [String: Int] = [:]
     private var codexWarnings: [CodexWarningKey: Set<String>] = [:]
+    private var deferredCodexSessionIDs: [String: Set<Int64>] = [:]
 
     private func codexWarningMessage() -> String? {
         let warnings = Set(codexWarnings.values.flatMap { $0 })
@@ -224,7 +226,7 @@ public actor IndexCoordinator {
 
     private func hasCodexMetadataFile(in directory: URL) -> Bool {
         guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil
+            at: directory.resolvingSymlinksInPath(), includingPropertiesForKeys: nil
         ) else { return false }
         return contents.contains { url in
             guard TraceFileIO.isCodexMetadataSidecar(url) else { return false }
@@ -453,10 +455,19 @@ public actor IndexCoordinator {
             var allFiles: [DiscoveredSourceFile] = []
             let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
             if oldScope != scope && !rebuild { status.activity = .scopeChange }
-            let sidecarMapping = CodexMetadataSidecarMapping(metadataDirectories:
-                sources.filter { $0.agent == .codex }
-                    .flatMap(\.roots).map { Self.codexMetadataDirectory(for: $0) }
-            )
+            let metadataDirectories = sources.filter { $0.agent == .codex }
+                .flatMap(\.roots).map { Self.codexMetadataDirectory(for: $0) }
+            let directoryPaths = metadataDirectories.map(\.path)
+            let dependencyChanged = cachedSidecarMapping.map { cached in
+                (paths ?? []).contains { path in
+                    cached.mapping.isMetadataStructurePath(path)
+                        || !cached.mapping.configuredRawChangePaths(for: path).isEmpty
+                } && cached.mapping.topologyHasChanged
+            } ?? true
+            if fullScan || cachedSidecarMapping?.directories != directoryPaths || dependencyChanged {
+                cachedSidecarMapping = (directoryPaths, CodexMetadataSidecarMapping(metadataDirectories: metadataDirectories))
+            }
+            let sidecarMapping = cachedSidecarMapping!.mapping
             let metadataChangePaths = (paths ?? []).flatMap { path in
                 [path] + sidecarMapping.configuredChangePaths(for: path)
             }
@@ -882,7 +893,12 @@ public actor IndexCoordinator {
                         } else {
                             await clearResolvedFileCodexWarnings(for: root.id, in: &status)
                         }
-                        let deferred = update.deferredLegacyCount
+                        var pending = metadata.complete ? Set<Int64>() : (deferredCodexSessionIDs[root.id] ?? [])
+                        pending.formIntersection(update.existingSessionIDs)
+                        pending.subtract(update.resolvedSessionIDs)
+                        pending.formUnion(update.deferredSessionIDs)
+                        deferredCodexSessionIDs[root.id] = pending
+                        let deferred = pending.count
                         let warning = deferred == 0 ? [] : [
                             "\(root.url.path): \(deferred) legacy Codex title rename(s) deferred until metadata is complete"
                         ]

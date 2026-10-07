@@ -191,42 +191,208 @@ public enum TraceFileIO {
 /// Relates changes to a symlinked Codex sidecar's target back to the metadata
 /// directory whose cached names were loaded through that sidecar.
 public struct CodexMetadataSidecarMapping: Equatable, Sendable {
-    private let sidecarsByTarget: [String: Set<String>]
+    private let sidecarsByDependency: [String: Set<String>]
+    private let insensitiveDependencies: [String: Set<String>]
+    private let insensitiveHomes: Set<String>
     public let targetDirectories: [URL]
+    public let configuredSidecars: Set<String>
+    public let linkPaths: Set<String>
+    public let metadataDirectoryPaths: Set<String>
+    public let diagnostics: [String]
+    private let linkDestinations: [String: String]
+    private let homeEntries: [String: Set<String>]
+    private let directoryExistence: [String: Bool]
 
     public init(metadataDirectories: [URL]) {
-        var sidecarsByTarget: [String: Set<String>] = [:]
-        var targetDirectories: [String: URL] = [:]
+        var dependencies: [String: Set<String>] = [:]
+        var insensitiveDependencies: [String: Set<String>] = [:]
+        var directories: Set<String> = []
+        var configured: Set<String> = []
+        var links: Set<String> = []
+        var homes: Set<String> = []
+        var warnings: Set<String> = []
+        let fm = FileManager.default
+        func watchParent(of path: String) {
+            var parent = URL(fileURLWithPath: path).deletingLastPathComponent()
+            var isDirectory: ObjCBool = false
+            while !fm.fileExists(atPath: parent.path, isDirectory: &isDirectory) || !isDirectory.boolValue {
+                let next = parent.deletingLastPathComponent()
+                if next == parent { break }
+                parent = next
+            }
+            directories.insert(TraceFileIO.canonicalPath(parent.path).path)
+        }
+        // Resolve one component at a time, recording ancestor and intermediate links.
+        // Foundation's final resolution loses those dependencies and can loop on cycles.
+        func resolve(_ path: String) -> (path: String, dependencies: Set<String>, links: Set<String>, complete: Bool) {
+            var remaining = URL(fileURLWithPath: path).standardizedFileURL.pathComponents.dropFirst().map { $0 }
+            var current = URL(fileURLWithPath: "/")
+            var seen: Set<String> = []
+            var foundLinks: Set<String> = []
+            var found: Set<String> = [path]
+            var hops = 0
+            while !remaining.isEmpty {
+                let component = remaining.removeFirst()
+                if component == "." { continue }
+                if component == ".." { current.deleteLastPathComponent(); continue }
+                current.appendPathComponent(component)
+                if let destination = try? fm.destinationOfSymbolicLink(atPath: current.path) {
+                    found.insert(current.path)
+                    hops += 1
+                    foundLinks.insert(current.path)
+                    let state = current.path + "|" + remaining.joined(separator: "/")
+                    guard hops <= 40, seen.insert(state).inserted else {
+                        return (current.path, found, foundLinks, false)
+                    }
+                    if destination.hasPrefix("/") { current = URL(fileURLWithPath: "/") }
+                    else { current.deleteLastPathComponent() }
+                    remaining = destination.split(separator: "/").map(String.init) + remaining
+                }
+            }
+            found.insert(current.path)
+            return (current.path, found, foundLinks, true)
+        }
         for directory in metadataDirectories {
-            guard let entries = try? FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: nil
-            ) else { continue }
-            for sidecar in entries where TraceFileIO.isCodexMetadataSidecar(sidecar) {
-                guard let destination = try? FileManager.default.destinationOfSymbolicLink(
-                    atPath: sidecar.path
-                ) else { continue }
-                let targetURL = destination.hasPrefix("/")
-                    ? URL(fileURLWithPath: destination)
-                    : directory.resolvingSymlinksInPath().appendingPathComponent(destination)
-                let target = TraceFileIO.canonicalPath(targetURL.path)
-                let configuredPath = sidecar.standardizedFileURL.path
-                sidecarsByTarget[target.comparisonKey, default: []].insert(configuredPath)
-                let parent = TraceFileIO.canonicalPath(
-                    URL(fileURLWithPath: target.path).deletingLastPathComponent().path
-                )
-                targetDirectories[parent.comparisonKey] = URL(fileURLWithPath: parent.path)
-                if sidecar.pathExtension == "sqlite" {
-                    let wal = TraceFileIO.canonicalPath(target.path + "-wal")
-                    sidecarsByTarget[wal.comparisonKey, default: []].insert(configuredPath)
+            let home = directory.standardizedFileURL.path
+            let resolvedHome = resolve(home)
+            homes.formUnion([home, resolvedHome.path, TraceFileIO.canonicalPath(resolvedHome.path).path])
+            for link in resolvedHome.links { links.insert(link); watchParent(of: link) }
+            if !resolvedHome.complete {
+                warnings.insert("\(home): incomplete Codex metadata monitoring (symlink cycle or more than 40 hops)")
+                continue
+            }
+            var homeIsDirectory: ObjCBool = false
+            if fm.fileExists(atPath: resolvedHome.path, isDirectory: &homeIsDirectory), homeIsDirectory.boolValue {
+                directories.insert(TraceFileIO.canonicalPath(resolvedHome.path).path)
+            } else {
+                watchParent(of: URL(fileURLWithPath: resolvedHome.path).appendingPathComponent("session_index.jsonl").path)
+            }
+            let names = (try? fm.contentsOfDirectory(atPath: resolvedHome.path)) ?? []
+            // Retain a missing index dependency so recovery/creation invalidates its cache.
+            let candidates = Set(names.filter { TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: $0)) })
+                .union(["session_index.jsonl"])
+            for name in candidates {
+                let configuredPath = directory.appendingPathComponent(name).standardizedFileURL.path
+                configured.insert(configuredPath)
+                let resolved = resolve(configuredPath)
+                links.formUnion(resolved.links)
+                links.formUnion(resolved.links.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+                var paths = resolved.dependencies
+                paths.insert(URL(fileURLWithPath: resolvedHome.path).appendingPathComponent(name).path)
+                if name.hasSuffix(".sqlite") {
+                    paths.insert(resolved.path + "-wal")
+                    paths.insert(configuredPath + "-wal")
+                }
+                for path in paths {
+                    let url = URL(fileURLWithPath: path)
+                    let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path)
+                    let physicalParent = parent.path
+                    let parentNormalized = URL(fileURLWithPath: physicalParent).appendingPathComponent(url.lastPathComponent).path
+                    dependencies[parentNormalized, default: []].insert(configuredPath)
+                    let canonical = TraceFileIO.canonicalPath(path)
+                    dependencies[canonical.path, default: []].insert(configuredPath)
+                    if !parent.isCaseSensitive {
+                        for variant in [path, parentNormalized] {
+                            insensitiveDependencies[TraceFileIO.comparisonKey(variant, caseSensitive: false), default: []].insert(configuredPath)
+                        }
+                    }
+                    if !canonical.isCaseSensitive {
+                        insensitiveDependencies[canonical.comparisonKey, default: []].insert(configuredPath)
+                    }
+                    if resolved.links.contains(path) { links.insert(parentNormalized) }
+                    dependencies[path, default: []].insert(configuredPath)
+                    dependencies[URL(fileURLWithPath: path).standardizedFileURL.path, default: []].insert(configuredPath)
+                    watchParent(of: path)
+                }
+                if !resolved.complete {
+                    warnings.insert("\(configuredPath): incomplete Codex metadata monitoring (symlink cycle or more than 40 hops)")
                 }
             }
         }
-        self.sidecarsByTarget = sidecarsByTarget
-        self.targetDirectories = targetDirectories.values.sorted { $0.path < $1.path }
+        sidecarsByDependency = dependencies
+        self.insensitiveDependencies = insensitiveDependencies
+        insensitiveHomes = Set(homes.compactMap { path in
+            let canonical = TraceFileIO.canonicalPath(path)
+            return canonical.isCaseSensitive ? nil : TraceFileIO.comparisonKey(path, caseSensitive: false)
+        })
+        targetDirectories = directories.sorted().map { URL(fileURLWithPath: $0) }
+        configuredSidecars = configured
+        linkPaths = links
+        metadataDirectoryPaths = homes
+        diagnostics = warnings.sorted()
+        linkDestinations = dependencies.keys.reduce(into: [:]) { result, path in
+            result[path] = (try? fm.destinationOfSymbolicLink(atPath: path)) ?? ""
+        }
+        homeEntries = homes.reduce(into: [:]) { result, path in
+            result[path] = Self.sidecarNames(at: path)
+        }
+        directoryExistence = directories.reduce(into: [:]) { result, path in
+            result[path] = fm.fileExists(atPath: path)
+        }
+    }
+
+    public func configuredSidecarsWithChangedDependencies(comparedTo other: Self) -> Set<String> {
+        var affected = configuredSidecars.symmetricDifference(other.configuredSidecars)
+        for dependency in Set(sidecarsByDependency.keys).union(other.sidecarsByDependency.keys) {
+            if sidecarsByDependency[dependency] != other.sidecarsByDependency[dependency]
+                || linkDestinations[dependency] != other.linkDestinations[dependency] {
+                affected.formUnion(sidecarsByDependency[dependency] ?? [])
+                affected.formUnion(other.sidecarsByDependency[dependency] ?? [])
+            }
+        }
+        return affected
+    }
+
+    private static func sidecarNames(at path: String) -> Set<String> {
+        Set(((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).filter {
+            TraceFileIO.isCodexMetadataSidecar(URL(fileURLWithPath: $0))
+        })
+    }
+
+    /// Called only for a relevant dependency/structure event, on a utility queue.
+    /// Content writes and atomic replacement of a regular file keep the mapping.
+    public var topologyHasChanged: Bool {
+        let fm = FileManager.default
+        return linkDestinations.contains { path, destination in
+            ((try? fm.destinationOfSymbolicLink(atPath: path)) ?? "") != destination
+        } || homeEntries.contains { Self.sidecarNames(at: $0.key) != $0.value }
+            || directoryExistence.contains { fm.fileExists(atPath: $0.key) != $0.value }
+    }
+
+    /// No filesystem access: safe for filtering raw FSEvents before canonicalization.
+    public func configuredRawChangePaths(for path: String) -> Set<String> {
+        if let matched = sidecarsByDependency[path] { return matched }
+        guard !insensitiveDependencies.isEmpty else { return [] }
+        return insensitiveDependencies[TraceFileIO.comparisonKey(path, caseSensitive: false)] ?? []
     }
 
     public func configuredChangePaths(for path: String) -> Set<String> {
-        sidecarsByTarget[TraceFileIO.canonicalPath(path).comparisonKey] ?? []
+        let raw = URL(fileURLWithPath: path).standardizedFileURL.path
+        let matched = configuredRawChangePaths(for: raw)
+        if !matched.isEmpty { return matched }
+        return configuredRawChangePaths(for: TraceFileIO.canonicalPath(raw).path)
+    }
+
+    public func configuredRecoveryPaths(for scope: String) -> Set<String> {
+        let prefix = scope.hasSuffix("/") ? scope : scope + "/"
+        var result = sidecarsByDependency.reduce(into: Set<String>()) { result, entry in
+            if entry.key == scope || entry.key.hasPrefix(prefix) { result.formUnion(entry.value) }
+        }
+        let folded = TraceFileIO.comparisonKey(scope, caseSensitive: false)
+        let foldedPrefix = folded.hasSuffix("/") ? folded : folded + "/"
+        for entry in insensitiveDependencies where entry.key == folded || entry.key.hasPrefix(foldedPrefix) {
+            result.formUnion(entry.value)
+        }
+        return result
+    }
+
+    public func isMetadataStructurePath(_ path: String) -> Bool {
+        if linkPaths.contains(path) || metadataDirectoryPaths.contains(path) { return true }
+        let url = URL(fileURLWithPath: path)
+        let parent = url.deletingLastPathComponent().path
+        let home = metadataDirectoryPaths.contains(parent)
+            || insensitiveHomes.contains(TraceFileIO.comparisonKey(parent, caseSensitive: false))
+        return home && TraceFileIO.isCodexMetadataSidecar(url)
     }
 }
 

@@ -4,33 +4,52 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 comparison_dir="${TRACE_SCROLL_COMPARISON_OUTPUT_DIR:-$repo_dir/build/transcript-comparison}"
 if [[ "$comparison_dir" != /* ]]; then comparison_dir="$PWD/$comparison_dir"; fi
-baseline_ref="${TRACE_SCROLL_BASELINE_REF:-115d9fa905d6f19fbff4e01c2786f43f2d74ac67}"
-harness_patch="$repo_dir/docs/benchmarks/2026-10-05/baseline-harness.patch"
-baseline_checkout="$comparison_dir/baseline-checkout"
+baseline_ref="${TRACE_SCROLL_BASELINE_REF:-61c00dec21762408980afe1a476cfcdb3f859437}"
+harness_files=(Tests/TracePerformanceTests/TracePerformanceTests.swift
+  Scripts/measure-transcript-scroll.sh Scripts/compare-transcript-scroll-metrics.py
+  Scripts/export-benchmark-samples.py Scripts/synchronize-benchmark-harness.py Scripts/configure-grdb.sh
+  Sources/TraceCore/Diagnostics/TracePerformance.swift)
+order="${TRACE_SCROLL_COMPARISON_ORDER:-baseline-first}"
+[[ "$order" == baseline-first || "$order" == candidate-first ]] || { echo "Invalid revision order" >&2; exit 1; }
+baseline_checkout="${TRACE_SCROLL_BASELINE_CHECKOUT:-$comparison_dir/baseline-checkout}"
+if [[ "$baseline_checkout" != /* ]]; then baseline_checkout="$PWD/$baseline_checkout"; fi
 
 # A separate clone leaves the caller's working tree and worktree registrations
 # untouched. Retain it with the raw results for inspection after the run.
 mkdir -p "$comparison_dir"
-git clone --quiet --shared --no-checkout "$repo_dir" "$baseline_checkout"
-git -C "$baseline_checkout" checkout --quiet --detach "$baseline_ref"
-git -C "$baseline_checkout" apply --check "$harness_patch"
-git -C "$baseline_checkout" apply "$harness_patch"
+if [[ -e "$baseline_checkout" ]]; then
+  [[ "$(git -C "$baseline_checkout" rev-parse HEAD)" == "$(git -C "$repo_dir" rev-parse "$baseline_ref")" ]] \
+    || { echo "Cached baseline is at a different revision" >&2; exit 1; }
+  git -C "$baseline_checkout" diff --quiet HEAD -- Sources ':(exclude)Sources/TraceCore/Diagnostics/TracePerformance.swift' \
+    || { echo "Cached baseline contains production changes beyond instrumentation" >&2; exit 1; }
+  [[ -z "$(git -C "$baseline_checkout" ls-files --others --exclude-standard -- Sources)" ]] \
+    || { echo "Cached baseline contains untracked production sources" >&2; exit 1; }
+else
+  mkdir -p "$(dirname "$baseline_checkout")"
+  git clone --quiet --shared --no-checkout "$repo_dir" "$baseline_checkout"
+  git -C "$baseline_checkout" checkout --quiet --detach "$baseline_ref"
+fi
+# Overlay the current harness automatically. Only benchmark instrumentation is
+# copied into baseline production sources; historical patches remain archived.
+python3 "$repo_dir/Scripts/synchronize-benchmark-harness.py" "$repo_dir" "$baseline_checkout" \
+  > "$comparison_dir/harness-hashes.json"
 git -C "$baseline_checkout" submodule update --init --recursive
 "$baseline_checkout/Scripts/configure-grdb.sh"
 
 # Both apps use exactly the same corpus, completion checks, and measurement code.
-for file in Tests/TracePerformanceTests/TracePerformanceTests.swift \
-    Scripts/measure-transcript-scroll.sh Scripts/compare-transcript-scroll-metrics.py; do
+for file in "${harness_files[@]}"; do
   cmp "$repo_dir/$file" "$baseline_checkout/$file"
 done
-python3 - "$repo_dir" "$baseline_checkout" "$harness_patch" "$comparison_dir" <<'PY'
+python3 - "$repo_dir" "$baseline_checkout" "$order" "$comparison_dir" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
-candidate, baseline, patch, output = map(pathlib.Path, sys.argv[1:])
+candidate, baseline, output = map(pathlib.Path, [sys.argv[1], sys.argv[2], sys.argv[4]])
+order = sys.argv[3]
 def command(*args): return subprocess.check_output(args, text=True).strip()
 metadata = {
     'candidate_commit': command('git', '-C', str(candidate), 'rev-parse', 'HEAD'),
     'baseline_commit': command('git', '-C', str(baseline), 'rev-parse', 'HEAD'),
-    'baseline_harness_patch_sha256': hashlib.sha256(patch.read_bytes()).hexdigest(),
+    'locale': 'en_US',
+    'instrumentation_overlay': 'Sources/TraceCore/Diagnostics/TracePerformance.swift',
     'toolchain': {
         'macOS': command('sw_vers'), 'xcode': command('xcodebuild', '-version'),
         'swift': command('swift', '--version'), 'architecture': command('uname', '-m'),
@@ -41,16 +60,27 @@ metadata = {
         name: hashlib.sha256((candidate / name).read_bytes()).hexdigest()
         for name in ['Tests/TracePerformanceTests/TracePerformanceTests.swift',
                      'Scripts/measure-transcript-scroll.sh',
-                     'Scripts/compare-transcript-scroll-metrics.py']
+                     'Scripts/compare-transcript-scroll-metrics.py',
+                     'Scripts/export-benchmark-samples.py',
+                     'Scripts/synchronize-benchmark-harness.py',
+                     'Scripts/configure-grdb.sh',
+                     'Sources/TraceCore/Diagnostics/TracePerformance.swift']
     },
-    'order': ['baseline', 'candidate'],
+    'order': ['baseline', 'candidate'] if order == 'baseline-first' else ['candidate', 'baseline'],
 }
 (output / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
 PY
-TRACE_SCROLL_BENCHMARK_OUTPUT_DIR="$comparison_dir/baseline" \
-  "$baseline_checkout/Scripts/measure-transcript-scroll.sh"
-TRACE_SCROLL_BENCHMARK_OUTPUT_DIR="$comparison_dir/candidate" \
-  "$repo_dir/Scripts/measure-transcript-scroll.sh"
+run_revision() {
+  local revision="$1" checkout="$2"
+  TRACE_SCROLL_BENCHMARK_OUTPUT_DIR="$comparison_dir/$revision" "$checkout/Scripts/measure-transcript-scroll.sh"
+}
+if [[ "$order" == baseline-first ]]; then
+  run_revision baseline "$baseline_checkout"
+  run_revision candidate "$repo_dir"
+else
+  run_revision candidate "$repo_dir"
+  run_revision baseline "$baseline_checkout"
+fi
 "$repo_dir/Scripts/compare-transcript-scroll-metrics.py" \
   "$comparison_dir/baseline/metrics.json" "$comparison_dir/candidate/metrics.json" \
   > "$comparison_dir/comparison.txt"

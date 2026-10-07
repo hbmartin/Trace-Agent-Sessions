@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import TraceCore
 
 final class FSEventsWatcherTests: XCTestCase {
@@ -33,6 +34,45 @@ final class FSEventsWatcherTests: XCTestCase {
     func testWatcherReportsEmptyRootStartupFailure() {
         let watcher = FSEventsWatcher(roots: []) { _ in }
         XCTAssertFalse(watcher.start())
+    }
+
+    func testStopDrainsInFlightCallbacksBeforeRelease() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceWatcherStop-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("session.jsonl")
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let stopping = DispatchSemaphore(value: 0)
+        let stopped = DispatchSemaphore(value: 0)
+        let recorder = EventRecorder(expectedSuffix: "/\(directory.lastPathComponent)/session.jsonl")
+        let firstCallback = OSAllocatedUnfairLock(initialState: true)
+        let watcher = FSEventsWatcher(roots: [directory], eventFilter: { path, _ in
+            guard path.hasSuffix("/session.jsonl") else { return false }
+            if firstCallback.withLock({ first in
+                let shouldPause = first
+                first = false
+                return shouldPause
+            }) {
+                entered.signal()
+                _ = release.wait(timeout: .now() + 5)
+            }
+            return true
+        }, tracksWatermarks: false) { recorder.receive($0.paths) }
+        XCTAssertTrue(watcher.start())
+        defer { release.signal(); watcher.stop() }
+        try Data("{}\n".utf8).write(to: file)
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        DispatchQueue.global(qos: .utility).async {
+            stopping.signal()
+            watcher.stop(flushPending: true)
+            stopped.signal()
+        }
+        XCTAssertEqual(stopping.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(stopped.wait(timeout: .now() + 0.05), .timedOut)
+        release.signal()
+        XCTAssertEqual(stopped.wait(timeout: .now() + 5), .success)
+        XCTAssertTrue(recorder.found, "replacement must receive the in-flight batch")
     }
 
     func testEventCheckpointPersistsAcrossDatabaseOpen() async throws {

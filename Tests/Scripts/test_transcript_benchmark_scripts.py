@@ -23,10 +23,73 @@ class TranscriptBenchmarkScriptTests(unittest.TestCase):
             result = subprocess.run([
                 sys.executable, str(SCRIPTS / "compare-transcript-scroll-metrics.py"),
                 str(root / "baseline.json"), str(root / "candidate.json"),
+                "--test", "testTranscriptScrollPerformance()",
             ], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("baseline only=['clock']", result.stderr)
             self.assertNotIn("improvement", result.stdout)
+
+    def complete_reports(self, root):
+        methods = [("testTranscriptScrollPerformance()", "scroll", 5),
+                   ("testStreamingTranscriptFollowPerformance()", "streaming", 3),
+                   ("testExternalSidecarTrafficPerformance()", "watcher", 5)]
+        metrics, samples = [], []
+        for method, workload, count in methods:
+            metrics.append({"testIdentifier": method, "testRuns": [{"metrics": [
+                {"identifier": name, "displayName": name, "measurements": [1] * count}
+                for name in ["cpu", "clock", "memory"]]}]})
+            for index in range(count):
+                samples.append(dict(id=f"{workload}-{index}", updateCount=3,
+                    totalUpdateNanoseconds=400, maximumUpdateNanoseconds=200,
+                    startingFootprintBytes=100, sampledPeakFootprintBytes=200,
+                    endingFootprintBytes=150, retainedFootprintBytes=125, footprintSampleCount=20))
+        (root / "metrics.json").write_text(json.dumps(metrics))
+        (root / "app-samples.json").write_text(json.dumps(samples))
+        return samples
+
+    def test_all_workloads_are_summarized_and_missing_memory_or_timings_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = self.complete_reports(root)
+            command = [sys.executable, str(SCRIPTS / "compare-transcript-scroll-metrics.py"),
+                       str(root / "metrics.json"), str(root / "metrics.json")]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("testStreamingTranscriptFollowPerformance()", result.stdout)
+            self.assertIn("testTranscriptScrollPerformance()", result.stdout)
+            self.assertIn("testExternalSidecarTrafficPerformance()", result.stdout)
+            self.assertIn("retained growth", result.stdout)
+            for field in ["sampledPeakFootprintBytes", "totalUpdateNanoseconds"]:
+                damaged = [dict(s) for s in samples]
+                damaged[0].pop(field)
+                (root / "app-samples.json").write_text(json.dumps(damaged))
+                failed = subprocess.run(command, capture_output=True, text=True)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(field, failed.stderr)
+            (root / "app-samples.json").unlink()
+            failed = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("Missing memory/timing records", failed.stderr)
+
+    def test_current_harness_is_installed_without_replacing_baseline_production(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("harness", SCRIPTS / "synchronize-benchmark-harness.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            candidate, baseline = Path(directory) / "candidate", Path(directory) / "baseline"
+            for name in module.FILES:
+                source = candidate / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("current " + name)
+            production = baseline / "Sources/TraceApp/MainView.swift"
+            production.parent.mkdir(parents=True, exist_ok=True)
+            production.write_text("baseline behavior")
+            hashes = module.synchronize(candidate, baseline)
+            self.assertEqual(set(hashes), set(module.FILES))
+            self.assertEqual(production.read_text(), "baseline behavior")
+            for name in module.FILES:
+                self.assertEqual((candidate / name).read_bytes(), (baseline / name).read_bytes())
 
     def test_relative_paths_and_xcodebuild_failure_are_preserved(self):
         with tempfile.TemporaryDirectory() as directory:

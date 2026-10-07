@@ -4,12 +4,14 @@ import AppKit
 @MainActor
 final class TraceUITests: XCTestCase {
     private var nativeAnchorProbe: (app: XCUIApplication, input: URL, output: URL)?
+    private var nativeAnchorSessionID: String?
 
     private func installNativeAnchorProbe(app: XCUIApplication, directory: URL) {
         let input = directory.appendingPathComponent("native-anchor-index")
         let output = directory.appendingPathComponent("native-anchor-offset")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_INDEX_PATH"] = input.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"] = output.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH"] = directory.appendingPathComponent("native-anchor-samples").path
         nativeAnchorProbe = (app, input, output)
     }
     private func nativeMenu(titled title: String, in app: XCUIApplication) -> XCUIElement {
@@ -1668,8 +1670,9 @@ final class TraceUITests: XCTestCase {
                 probe.app.buttons["testProbeTranscriptPosition"].click()
                 guard waitForFile(probe.output, timeout: 2),
                       let fields = fileLines(in: probe.output).last?.split(separator: ","),
-                      fields.count == 3, fields[0] == String(index), fields[2] == "true",
+                      fields.count == 5, fields[0] == String(index), fields[3] == "true",
                       let offset = Double(fields[1]) else { return nil }
+                nativeAnchorSessionID = String(fields[4])
                 return CGFloat(offset)
             }
         }
@@ -1688,16 +1691,24 @@ final class TraceUITests: XCTestCase {
     private func assertSavedAnchorOnScreen(
         index: Int, in scroll: XCUIElement, expectedY: CGFloat, stage: String
     ) {
-        var latestY: CGFloat?
-        guard let actualY = poll(timeout: 10, { () -> CGFloat? in
-            latestY = savedAnchorY(index: index, in: scroll, timeout: 0)
-            guard let y = latestY, abs(y - expectedY) <= 8 else { return nil }
-            return y
-        }) else {
-            return XCTFail("\(stage): saved row \(index) never settled at \(expectedY); last offset \(String(describing: latestY))")
+        guard let actualY = savedAnchorY(index: index, in: scroll, timeout: 10) else {
+            return XCTFail("\(stage): restoration did not report completion for row \(index); probe=\(nativeAnchorProbe.map { fileLines(in: $0.output) } ?? [])")
         }
         XCTAssertEqual(actualY, expectedY, accuracy: 8,
-                       "\(stage): saved row \(index) moved from its viewport offset")
+                       "\(stage): the first completed native offset must match the bookmark")
+        if let probe = nativeAnchorProbe, let session = nativeAnchorSessionID {
+            let samples = probe.input.deletingLastPathComponent().appendingPathComponent("native-anchor-samples")
+            let offsets = fileLines(in: samples).compactMap { line -> Double? in
+                let fields = line.split(separator: ",")
+                guard fields.count == 4, fields[0] == String(index), fields[3] == session else { return nil }
+                return Double(fields[1])
+            }
+            for offset in offsets {
+                XCTAssertEqual(offset, Double(expectedY), accuracy: 8,
+                    "\(stage): established anchor displaced across a main-loop turn")
+            }
+            try? FileManager.default.removeItem(at: samples)
+        }
     }
 
     private func focusTranscript(_ session: String, in scroll: XCUIElement) {
@@ -2780,6 +2791,52 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testSidebarRevealUpdatesItsRowIndexDuringMaterialization() throws { try runSidebarRevealMutation(userInterrupt: false) }
+    func testUserScrollCancelsOutstandingSidebarReveal() throws { try runSidebarRevealMutation(userInterrupt: true) }
+
+    private func runSidebarRevealMutation(userInterrupt: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let gate = directory.appendingPathComponent("sidebar-gate")
+        let ack = directory.appendingPathComponent("sidebar-ack")
+        let cancel = directory.appendingPathComponent("sidebar-cancel")
+        let audit = directory.appendingPathComponent("sidebar-index-audit")
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"] = gate.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH"] = cancel.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_AUDIT_PATH"] = audit.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15))
+        search.click()
+        search.typeText("Find the sample answer")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        result.click()
+        let project = app.staticTexts["TraceUIExample"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+        if userInterrupt {
+            let point = project.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: -100)
+            XCTAssertTrue(waitForFile(cancel, timeout: 3), "wheel input must cancel even at a scroll boundary")
+            try Data().write(to: gate)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+        } else {
+            try addSession(id: "newer-sidebar", title: "New sidebar session", project: "NewerSidebarProject",
+                timestamp: 2_000_000_000_000, content: "A newly indexed sidebar row", directory: directory)
+            XCTAssertTrue(app.staticTexts["NewerSidebarProject"].firstMatch.waitForExistence(timeout: 3))
+            try Data().write(to: gate)
+            XCTAssertTrue(waitForFile(ack, timeout: 3))
+            let rows = Set(fileLines(in: audit).compactMap { line in
+                line.split(separator: ",").first { $0.hasPrefix("row=") }.map(String.init)
+            })
+            XCTAssertGreaterThan(rows.count, 1, "the same reveal token must track the new native index")
+        }
+    }
+
     func testSidebarRevealRequestFallsBackWhenAnAcknowledgementNeverArrives() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let fallback = directory.appendingPathComponent("sidebar-reveal-fallback")
@@ -3362,6 +3419,84 @@ final class TraceUITests: XCTestCase {
             "the old disclosure restore must never run after search")
     }
 
+    func testDisclosureCancelsSearchIntentAcrossHideAndShow() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let boundsAudit = directory.appendingPathComponent("disclosure-bounds")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = boundsAudit.path
+        defer {
+            let attachment = XCTAttachment(string: fileLines(in: boundsAudit).joined(separator: "\n"))
+            attachment.name = "disclosure-cancellation-bounds"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] = "disclosure-position"
+        try addLongSession(
+            "Disclosure race", project: "DisclosureProject", directory: directory,
+            count: 36, mostlySystem: true, contentRepeats: 0
+        )
+        let file = directory.appendingPathComponent("Sources/Claude/Disclosure race.jsonl")
+        let record: [String: Any] = [
+            "type": "assistant", "uuid": "disclosure-race-thinking",
+            "sessionId": "Disclosure race", "cwd": "/tmp/DisclosureProject",
+            "timestamp": "2026-09-14T12:01:00Z",
+            "message": ["content": [
+                ["type": "text", "text": "Disclosure race message 36"],
+                ["type": "thinking", "thinking": String(repeating: "A thought. ", count: 300)],
+            ]],
+        ]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
+        try handle.close()
+        let searchStarted = directory.appendingPathComponent("search-started")
+        let searchCancelled = directory.appendingPathComponent("search-cancelled")
+        let searchRelease = directory.appendingPathComponent("search-release")
+        let restoreAudit = directory.appendingPathComponent("cancelled-search-restores")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = searchRelease.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] = searchStarted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"] = searchCancelled.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = restoreAudit.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["DisclosureProject"].firstMatch.waitForExistence(timeout: 30))
+        app.staticTexts["DisclosureProject"].firstMatch.click()
+        openSidebarSession("Disclosure race", in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        let disclosure = scroll.buttons["Reasoning"].firstMatch
+        XCTAssertTrue(disclosure.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        try? FileManager.default.removeItem(at: searchStarted)
+        try? FileManager.default.removeItem(at: searchCancelled)
+        app.buttons["testOpenLauncher"].click()
+        let search = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.click()
+        app.typeText("Disclosure race message 4")
+        let hit = app.buttons.containing(NSPredicate(
+            format: "label CONTAINS %@", "Disclosure race message 4"
+        )).firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 10))
+        hit.click()
+        XCTAssertTrue(waitForFile(searchStarted, timeout: 10))
+        app.buttons["testSimulateTranscriptScroll"].click()
+        XCTAssertTrue(disclosure.isHittable, "programmatic setup must leave the disclosure visible without cancelling search")
+        disclosure.click()
+        XCTAssertTrue(waitForFile(searchCancelled, timeout: 5))
+        app.checkBoxes["System"].click()
+        app.checkBoxes["System"].click()
+        try Data().write(to: searchRelease)
+        // Wait for the visibility restore to complete, then inspect its first
+        // native result. Search index 4 must never appear in the restore audit.
+        XCTAssertNotNil(savedAnchorY(index: 36, in: scroll, timeout: 10), "the disclosure/visibility restore must complete")
+        let target = transcriptMessage("Disclosure race", index: 4, in: scroll)
+        XCTAssertFalse(target.isHittable)
+        XCTAssertFalse(fileLines(in: restoreAudit).contains { $0.hasPrefix("4,") },
+            "a consumed search intent must not replay when the hit becomes visible again")
+    }
+
     func testMissingLiveScrollEndRecoversOnIdle() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         try addLongSession("Lost scroll end", project: "ScrollProject", directory: directory)
@@ -3468,6 +3603,93 @@ final class TraceUITests: XCTestCase {
             "document growth must not suppress simultaneous upward reader motion")
     }
 
+    func testDelayedResizePreservesBottomFollow() throws { try runViewportRegression("delayed-resize") }
+    func testLastRowRemainsReachableBeyondDocumentFrame() throws { try runViewportRegression("row-extent") }
+    func testRubberBandReturnKeepsFollowDuringAppend() throws { try runViewportRegression("rubber-band-return") }
+
+    private func runViewportRegression(_ simulation: String) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession("Viewport regression", project: "ViewportProject", directory: directory)
+        let audit = directory.appendingPathComponent("viewport-audit")
+        let done = directory.appendingPathComponent("viewport-done")
+        let jump = directory.appendingPathComponent("viewport-jump")
+        let probe = directory.appendingPathComponent("viewport-position")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] = simulation
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH"] = done.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_JUMP_DONE_PATH"] = jump.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = probe.path
+        defer {
+            let attachment = XCTAttachment(string: fileLines(in: audit).joined(separator: "\n"))
+            attachment.name = "viewport-regression-\(simulation)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["ViewportProject"].firstMatch.waitForExistence(timeout: 20))
+        app.staticTexts["ViewportProject"].firstMatch.click()
+        openSidebarSession("Viewport regression", in: app)
+        app.buttons["testJumpTranscriptBottom"].click()
+        XCTAssertTrue(waitForFile(jump, timeout: 10))
+        app.buttons["testSimulateTranscriptScroll"].click()
+        XCTAssertTrue(waitForFile(done, timeout: 5))
+        if simulation == "row-extent" {
+            let line = try XCTUnwrap(fileLines(in: audit).last { $0.hasPrefix("extent=") })
+            let fields = line.split(separator: ",").map { $0.split(separator: "=").last! }
+            XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 1)
+        } else {
+            XCTAssertTrue(fileLines(in: audit).contains("simulation-classified-bottom=true"))
+        }
+        if simulation == "rubber-band-return" {
+            let source = directory.appendingPathComponent("Sources/Claude/Viewport regression.jsonl")
+            let record: [String: Any] = ["type": "assistant", "uuid": "viewport-append", "sessionId": "Viewport regression",
+                "cwd": "/tmp/ViewportProject", "message": ["content": "Append during rubber band return"]]
+            let handle = try FileHandle(forWritingTo: source)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
+            try handle.close()
+            XCTAssertTrue(app.staticTexts["71 messages"].waitForExistence(timeout: 15))
+        }
+        try? FileManager.default.removeItem(at: probe)
+        app.buttons["testProbeTranscriptPosition"].click()
+        XCTAssertTrue(waitForFile(probe, timeout: 5))
+        let fields = try XCTUnwrap(fileLines(in: probe).last?.split(separator: ","))
+        XCTAssertEqual(String(fields[2]), "true")
+        XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 2)
+    }
+
+    func testUpArrowInSelectableTextCancelsGatedRestore() throws { try runArrowRestoreCancellation(.upArrow) }
+    func testDownArrowInSelectableTextCancelsGatedRestore() throws { try runArrowRestoreCancellation(.downArrow) }
+
+    private func runArrowRestoreCancellation(_ key: XCUIKeyboardKey) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession("Arrow restore", project: "ArrowProject", directory: directory)
+        let started = directory.appendingPathComponent("arrow-started")
+        let cancelled = directory.appendingPathComponent("arrow-cancelled")
+        let release = directory.appendingPathComponent("arrow-release")
+        let routes = directory.appendingPathComponent("arrow-routes")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] = started.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"] = cancelled.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] = "focus-text"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_KEY_ROUTE_PATH"] = routes.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["ArrowProject"].firstMatch.waitForExistence(timeout: 15))
+        app.staticTexts["ArrowProject"].firstMatch.click()
+        openSidebarSession("Arrow restore", in: app)
+        XCTAssertTrue(waitForFile(started, timeout: 10))
+        app.buttons["testSimulateTranscriptScroll"].click()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.path), "focus setup must preserve the gate")
+        app.typeKey(key, modifierFlags: [])
+        XCTAssertTrue(waitForFile(cancelled, timeout: 5), "native text scrolling must cancel the restore before moving")
+        XCTAssertTrue(fileLines(in: routes).contains(key == .upArrow ? "126,true" : "125,true"))
+        try Data().write(to: release)
+    }
+
     func testSlowViewportMotionKeepsLiveScrollActiveUntilMotionStops() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         try addLongSession("Slow scroll", project: "ScrollProject", directory: directory)
@@ -3568,6 +3790,12 @@ final class TraceUITests: XCTestCase {
             attachment.name = "navigation-native-restores"
             attachment.lifetime = .keepAlways
             add(attachment)
+            for name in ["native-anchor-offset", "native-anchor-samples"] {
+                let data = XCTAttachment(string: fileLines(in: directory.appendingPathComponent(name)).joined(separator: "\n"))
+                data.name = name
+                data.lifetime = .keepAlways
+                add(data)
+            }
         }
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
