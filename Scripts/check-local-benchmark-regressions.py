@@ -51,10 +51,18 @@ def summarize_pair(directory):
             changes[name] = (medians[name][1] - medians[name][0]) / denominator * 100
         counters = [name for name, (_, old, _) in reports[0].items()
                     if ('instructions' in name or 'cycles' in name) and all(value == 0 for value in old + reports[1][name][1])]
+        counter_availability = {}
+        for revision, report in zip(['baseline', 'candidate'], reports):
+            counter_availability[revision] = {}
+            for counter in ['cycles', 'instructions']:
+                exported = [values for key, (_, values, _) in report.items() if counter in key]
+                counter_availability[revision][counter] = ('not-exported' if not exported else
+                    ('unavailable-zero-export' if all(value == 0 for values in exported for value in values) else 'available'))
         workloads[workload] = {'individualSamples': values, 'medians': medians,
                               'medianMiB': {name: [value / 1_048_576 for value in sides]
                                             for name, sides in medians.items() if name.endswith('Bytes')},
-                              'pairedChangePercent': changes, 'unavailableHardwareCounters': counters}
+                              'pairedChangePercent': changes, 'unavailableHardwareCounters': counters,
+                              'hardwareCounterAvailability': counter_availability}
     return {'metadata': metadata, 'workloads': workloads}
 
 

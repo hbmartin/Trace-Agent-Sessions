@@ -380,6 +380,8 @@ sys.exit(23)
                 path.write_text(json.dumps(reports))
             report = checker.evaluate(pairs)
             self.assertEqual(report['status'], 'failed')
+            self.assertEqual(report['pairs'][0]['workloads']['scroll']['hardwareCounterAvailability']['baseline'],
+                             {'cycles': 'not-exported', 'instructions': 'not-exported'})
             self.assertTrue(any(r['metric'] == 'cpuSeconds' for r in report['regressions']))
             self.assertFalse(any(r['metric'] == 'xctestGrowthBytes' for r in report['regressions']))
             # Ordinary comparison remains report-only for valid regression records.
