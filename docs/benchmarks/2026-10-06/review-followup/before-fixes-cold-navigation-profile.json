@@ -1,0 +1,127 @@
+{
+  "revision": "8a53bcd",
+  "scope": "attached after process launch; cold indexing and project/session navigation; no full process startup CPU claim",
+  "sampledCpuSeconds": 3.779,
+  "appFrames": [
+    {
+      "name": "static TraceApplication.$main()",
+      "inclusiveMilliseconds": 2239.0
+    },
+    {
+      "name": "TraceModel.reloadSummaries(lightweight:loadCosts:projectReconciliation:terminalPhase:)",
+      "inclusiveMilliseconds": 12.0
+    },
+    {
+      "name": "closure #1 in TraceModel.makeScheduler(_:)",
+      "inclusiveMilliseconds": 12.0
+    },
+    {
+      "name": "TraceModel.receiveProgress(_:)",
+      "inclusiveMilliseconds": 12.0
+    },
+    {
+      "name": "static TraceFileIO.fingerprint(url:preferredHeadLength:)",
+      "inclusiveMilliseconds": 12.0
+    },
+    {
+      "name": "specialized static TraceFileIO.fingerprint(url:preferredHeadLength:)",
+      "inclusiveMilliseconds": 9.0
+    },
+    {
+      "name": "specialized static TraceFileIO.canonicalPath(_:)",
+      "inclusiveMilliseconds": 8.0
+    },
+    {
+      "name": "static TraceFileIO.canonicalPath(_:)",
+      "inclusiveMilliseconds": 7.0
+    },
+    {
+      "name": "specialized TraceModel.projectSessions(canonicalKey:ensuring:database:)",
+      "inclusiveMilliseconds": 7.0
+    },
+    {
+      "name": "specialized static TraceFileIO.read(url:offset:length:)",
+      "inclusiveMilliseconds": 7.0
+    },
+    {
+      "name": "static TraceFileIO.read(url:offset:length:)",
+      "inclusiveMilliseconds": 7.0
+    },
+    {
+      "name": "res_getStringNoTrace",
+      "inclusiveMilliseconds": 5.0
+    },
+    {
+      "name": "closure #1 in TraceModel.completeOnboarding(enableLoginItem:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "TraceModel.startWatching(_:forceRootReconciliation:reconfigureWatchers:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "static TraceFileIO.comparisonKey(_:caseSensitive:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "specialized static TraceFileIO.volumeIsCaseSensitive(at:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "static TraceFileIO.volumeIsCaseSensitive(at:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "TraceModel.selectedSessionID.getter",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "TraceModel.selectProject(_:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "TraceModel.completeOnboarding(enableLoginItem:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "closure #3 in TraceModel.startWatching(_:forceRootReconciliation:reconfigureWatchers:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.projectFilter.getter",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.filteredProjects.getter",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "static SourcesPreferences.$s5Trace18SourcesPreferences33_AA652BBD52BADA5A6393F2F27D2B0F7BLLV11addRootTask5StatefMp_20_initialStoredValue_fMu_.getter",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "closure #1 in TraceModel.scheduleCompletedUsageRefresh(repairIfDirty:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.refreshCompletedUsage(repairIfDirty:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.costDateBounds()",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.reloadCosts()",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.selectedSession.setter",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.clearSession()",
+      "inclusiveMilliseconds": 1.0
+    }
+  ]
+}

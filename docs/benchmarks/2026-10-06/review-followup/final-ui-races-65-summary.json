@@ -1,0 +1,262 @@
+{
+  "devicesAndConfigurations": [
+    {
+      "device": {
+        "architecture": "arm64",
+        "deviceName": "My Mac",
+        "modelName": "Mac mini",
+        "osBuildNumber": "26A428",
+        "osVersion": "27.0",
+        "platform": "macOS"
+      },
+      "expectedFailures": 0,
+      "failedTests": 0,
+      "passedTests": 65,
+      "skippedTests": 0,
+      "testPlanConfiguration": {
+        "configurationId": "1",
+        "configurationName": "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription": "Trace \u00b7 Built with macOS 27.0",
+  "expectedFailures": 0,
+  "failedTests": 0,
+  "finishTime": 1791334003.259,
+  "passedTests": 13,
+  "result": "Passed",
+  "runtimeWarnings": [
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+    }
+  ],
+  "skippedTests": 0,
+  "startTime": 1791332327.911,
+  "statistics": [
+    {
+      "subtitle": "65 test runs",
+      "title": "1 configuration ran with test repetitions"
+    }
+  ],
+  "testFailures": [],
+  "title": "Test - Trace",
+  "topInsights": [],
+  "totalTestCount": 13
+}

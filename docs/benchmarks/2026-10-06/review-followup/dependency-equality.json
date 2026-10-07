@@ -1,0 +1,13 @@
+{
+  "equal": true,
+  "configuration": {
+    "grdbCommit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+    "sqliteCommit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+    "sqlitePatchSHA256": "4dfb013a62a89c9dd77eb51a577c48a87ad9f92b789bcc12333d013969ee4ca2",
+    "customConfigurationSHA256": {
+      "SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+      "SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+      "SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e"
+    }
+  }
+}

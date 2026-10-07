@@ -1,0 +1,64 @@
+{
+  "candidateCommit": "f834c692d659ec82b6945c338d8e843f547179a7",
+  "originChanges": 100,
+  "viewportChecks": 10000,
+  "frameOriginChanges": 2,
+  "explicitInvalidations": 2,
+  "records": [
+    {
+      "repetition": 1,
+      "queriesBefore": 24,
+      "queriesAfterScrolling": 24,
+      "geometryGenerationBefore": 107,
+      "geometryGenerationAfterScrolling": 107,
+      "materializedMessageCount": 1010,
+      "transcriptMessageCount": 2000,
+      "queriesAfterTwoInvalidations": 24,
+      "queriesAfterExplicitFlush": 25
+    },
+    {
+      "repetition": 2,
+      "queriesBefore": 27,
+      "queriesAfterScrolling": 27,
+      "geometryGenerationBefore": 102,
+      "geometryGenerationAfterScrolling": 102,
+      "materializedMessageCount": 1008,
+      "transcriptMessageCount": 2000,
+      "queriesAfterTwoInvalidations": 27,
+      "queriesAfterExplicitFlush": 28
+    },
+    {
+      "repetition": 3,
+      "queriesBefore": 27,
+      "queriesAfterScrolling": 27,
+      "geometryGenerationBefore": 103,
+      "geometryGenerationAfterScrolling": 103,
+      "materializedMessageCount": 1008,
+      "transcriptMessageCount": 2000,
+      "queriesAfterTwoInvalidations": 27,
+      "queriesAfterExplicitFlush": 28
+    },
+    {
+      "repetition": 4,
+      "queriesBefore": 26,
+      "queriesAfterScrolling": 26,
+      "geometryGenerationBefore": 97,
+      "geometryGenerationAfterScrolling": 97,
+      "materializedMessageCount": 1008,
+      "transcriptMessageCount": 2000,
+      "queriesAfterTwoInvalidations": 26,
+      "queriesAfterExplicitFlush": 27
+    },
+    {
+      "repetition": 5,
+      "queriesBefore": 25,
+      "queriesAfterScrolling": 25,
+      "geometryGenerationBefore": 103,
+      "geometryGenerationAfterScrolling": 103,
+      "materializedMessageCount": 1009,
+      "transcriptMessageCount": 2000,
+      "queriesAfterTwoInvalidations": 25,
+      "queriesAfterExplicitFlush": 26
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "candidate_commit": "8a53bcdee05b0449b815d77c5aac19301c1c7701",
+  "baseline_commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+  "locale": "en_US",
+  "instrumentation_overlay": "Sources/TraceCore/Diagnostics/TracePerformance.swift",
+  "toolchain": {
+    "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t15.7.9\nBuildVersion:\t\t24G830",
+    "xcode": "Xcode 26.3\nBuild version 17C529",
+    "swift": "Apple Swift version 6.2.4 (swiftlang-6.2.4.1.4 clang-1700.6.4.2)\nTarget: arm64-apple-macosx15.0",
+    "architecture": "arm64",
+    "cpu": "Apple M1 (Virtual)",
+    "memory_bytes": "7516192768"
+  },
+  "identical_harness_files": {
+    "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee",
+    "Scripts/measure-transcript-scroll.sh": "006f66e517f6c36dedd0cb7f5b9a80e15fae78554fd90fe8ff71d84e419c5a33",
+    "Scripts/compare-transcript-scroll-metrics.py": "fe363f1382e07d3cf01bf54319349c1b27a60ffce5cc21568f28bbb9e8ed103b",
+    "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+    "Scripts/synchronize-benchmark-harness.py": "89d80f2ba7bf3fdea1372383b2ff646287876b031a671d8f9c0e9898b1199acb",
+    "Scripts/configure-grdb.sh": "fdeebb15ccd8e2bdbc0c8aa29a638eef3acc11ecfbf1d66b53b0140b2df76b8f",
+    "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8"
+  },
+  "order": [
+    "baseline",
+    "candidate"
+  ]
+}

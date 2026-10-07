@@ -1,0 +1,13 @@
+{
+  "candidateCommit": "f834c692d659ec82b6945c338d8e843f547179a7",
+  "status": "interrupted; excluded from verification success",
+  "resultBundle": "FinalPinnedAppendFullUI79.xcresult",
+  "blockingApp": "com.apple.SecurityAgent",
+  "competingBuildDetected": true,
+  "passedExecutionsBeforeStopping": 4,
+  "failedCases": [
+    "testAutomaticSearchRefreshKeepsVisibleResultAnchor",
+    "testCopyMessageIncludesCollapsedContentAndDividerPersists"
+  ],
+  "evidence": "XCTest recorded an unhandled SecurityAgent interruption before menu selection; divider drag also remained stationary; owned invocation interrupted."
+}

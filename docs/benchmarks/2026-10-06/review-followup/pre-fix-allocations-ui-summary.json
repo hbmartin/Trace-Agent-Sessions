@@ -1,0 +1,59 @@
+{
+  "profiledCommit": "8a53bcd",
+  "trace": "build/profile-cold-before-fixes/scroll-allocations.trace",
+  "captureDurationSeconds": 30,
+  "acknowledgedSweeps": 4,
+  "source": "Instruments Statistics and Call Trees inspected through the native UI; values retain displayed precision",
+  "statistics": {
+    "allHeapAndAnonymousVM": {
+      "persistentMiB": 149.62,
+      "persistentCount": 671226,
+      "transientCount": 3956916,
+      "totalMiB": 850.84,
+      "totalCount": 4628142
+    },
+    "allHeap": {
+      "persistentMiB": 109.81,
+      "totalMiB": 731.52
+    },
+    "anonymousVM": {
+      "persistentMiB": 39.81,
+      "totalMiB": 119.33
+    },
+    "IOSurface": {
+      "persistentMiB": 27.2,
+      "totalMiB": 61.16
+    },
+    "CoreAnimationVM": {
+      "persistentMiB": 9.72,
+      "totalMiB": 28.81
+    }
+  },
+  "callTreeFilters": {
+    "rectOfRow": {
+      "persistentMatchingRows": 0,
+      "allAllocationMatchingRows": 0
+    },
+    "viewFor": {
+      "allAllocationsDisplayed": "128.95 MB",
+      "persistentAllocationsDisplayed": "16.98 MB",
+      "persistentCount": 99769
+    },
+    "correctEstablishedAnchor": {
+      "persistentAllocationsDisplayed": "324.48 KB",
+      "persistentCount": 2282
+    }
+  },
+  "heaviestPersistentStack": [
+    "CA::Transaction::commit()",
+    "CA::Layer::display_if_needed",
+    "CABackingStoreUpdate_",
+    "IOSurfaceCreate"
+  ],
+  "limitations": [
+    "Allocation totals are distinct from physical footprint and do not describe a peak.",
+    "Call tree byte labels use MB/KB while Statistics uses MiB; displayed precision and original labels are preserved.",
+    "An optimized trace can omit inlined symbols; an empty filter does not prove zero cost.",
+    "This local macOS 27 trace does not establish the cause of the macOS 15 CI CPU and retained-memory regression."
+  ]
+}

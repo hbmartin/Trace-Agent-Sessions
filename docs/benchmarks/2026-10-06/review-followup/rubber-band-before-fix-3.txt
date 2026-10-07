@@ -1,0 +1,14 @@
+previous=0.0,actual=10.0,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=7552.0,oldDocHeight=7552.0,user=false,restore=true,interacting=false,bottom=false
+previous=10.0,actual=6015.5,ignored=true,layout=true,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=6582.0,oldDocHeight=6680.0,user=false,restore=false,interacting=false,bottom=false
+previous=6015.5,actual=6001.5,ignored=true,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=6568.0,oldDocHeight=6582.0,user=false,restore=false,interacting=false,bottom=false
+previous=6001.5,actual=6099.5,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=6568.0,oldDocHeight=6568.0,user=false,restore=false,interacting=false,bottom=false
+previous=6099.5,actual=6099.5,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=6568.0,oldDocHeight=6568.0,user=false,restore=false,interacting=false,bottom=false
+previous=6099.5,actual=6001.5,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=6568.0,oldDocHeight=6568.0,user=false,restore=false,interacting=false,bottom=false
+document-shift=6743.5,padding=10.0
+previous=6001.5,actual=6753.5,ignored=true,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=7320.0,oldDocHeight=6568.0,user=false,restore=false,interacting=false,bottom=true
+simulation-received,items=70,scroll=true
+simulation-classified-bottom=true
+document-shift=7677.5,padding=10.0
+previous=6753.5,actual=7601.5,ignored=false,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=8254.0,oldDocHeight=7406.0,user=true,restore=false,interacting=true,bottom=true
+document-shift=7679.5,padding=10.0
+previous=7601.5,actual=7689.5,ignored=true,layout=true,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=8256.0,oldDocHeight=8240.0,user=false,restore=false,interacting=false,bottom=true

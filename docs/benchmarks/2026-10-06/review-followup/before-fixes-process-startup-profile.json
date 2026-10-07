@@ -1,0 +1,129 @@
+{
+  "revision": "8a53bcd",
+  "scope": "process startup; only Trace process samples retained from system capture",
+  "sampleCount": 1538,
+  "sampledCpuSeconds": 1.538,
+  "warning": "Instruments reported overlapping dyld/pthread library mappings during system-wide processing; these frames are not used for performance attribution",
+  "appFrames": [
+    {
+      "name": "static TraceApplication.$main()",
+      "inclusiveMilliseconds": 1271.0
+    },
+    {
+      "name": "TraceModel.reloadSummaries(lightweight:loadCosts:projectReconciliation:terminalPhase:)",
+      "inclusiveMilliseconds": 12.0
+    },
+    {
+      "name": "closure #1 in TraceModel.makeScheduler(_:)",
+      "inclusiveMilliseconds": 11.0
+    },
+    {
+      "name": "closure #2 in TraceModel.selectSession(_:showWindow:messageID:)",
+      "inclusiveMilliseconds": 10.0
+    },
+    {
+      "name": "TraceModel.receiveProgress(_:)",
+      "inclusiveMilliseconds": 10.0
+    },
+    {
+      "name": "closure #1 in TraceModel.start()",
+      "inclusiveMilliseconds": 8.0
+    },
+    {
+      "name": "closure #2 in TraceModel.hydrate(_:)",
+      "inclusiveMilliseconds": 8.0
+    },
+    {
+      "name": "closure #1 in closure #1 in TraceModel.start()",
+      "inclusiveMilliseconds": 7.0
+    },
+    {
+      "name": "TraceModel.selectedSessionID.getter",
+      "inclusiveMilliseconds": 5.0
+    },
+    {
+      "name": "closure #3 in TraceModel.startWatching(_:forceRootReconciliation:reconfigureWatchers:)",
+      "inclusiveMilliseconds": 3.0
+    },
+    {
+      "name": "closure #1 in TraceModel.makeSources()",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "static TraceFileIO.canonicalPath(_:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "specialized static TraceFileIO.canonicalPath(_:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "specialized TraceModel.projectSessions(canonicalKey:ensuring:database:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "specialized static TraceFileIO.isCodexMetadataSidecar(_:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "static TraceFileIO.isCodexMetadataSidecar(_:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "TraceModel.startWatching(_:forceRootReconciliation:reconfigureWatchers:)",
+      "inclusiveMilliseconds": 2.0
+    },
+    {
+      "name": "TraceApplication.body.getter",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "protocol witness for App.body.getter in conformance TraceApplication",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "specialized TraceModel.init(settings:watcherGroupingPolicy:startupActivityObserver:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.__allocating_init(settings:watcherGroupingPolicy:startupActivityObserver:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.init(settings:watcherGroupingPolicy:startupActivityObserver:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "closure #1 in TraceApplication.body.getter",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceEnvironment.model.getter",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.makeSources()",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "specialized static TraceFileIO.volumeIsCaseSensitive(at:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "static TraceFileIO.volumeIsCaseSensitive(at:)",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.progress.modify",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "outlined destroy of CustomEventTrace.ActionEventType.Reason?",
+      "inclusiveMilliseconds": 1.0
+    },
+    {
+      "name": "TraceModel.selectSession(_:showWindow:messageID:)",
+      "inclusiveMilliseconds": 1.0
+    }
+  ]
+}
