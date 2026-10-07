@@ -274,12 +274,13 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
             guard shouldAttempt(key, changed: restart) else { continue }
             files.removeValue(forKey: path)?.cancel()
             let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC)
+            let openError = errno
             if fd >= 0 {
                 files[path] = VnodeMonitor(fd: fd, queue: queue) { [weak self] invalidated in
                     self?.fileChanged(path: path, invalidated: invalidated)
                 }
                 failures.removeValue(forKey: key)
-            } else if errno == ENOENT && !FileManager.default.fileExists(atPath: path) {
+            } else if openError == ENOENT && !FileManager.default.fileExists(atPath: path) {
                 // Missing targets are watched through their parent namespace.
                 failures.removeValue(forKey: key)
             } else { failed(key, path: path) }

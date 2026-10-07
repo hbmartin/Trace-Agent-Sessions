@@ -1176,10 +1176,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             if let request = pendingRestore, request.hydrationDeadline != nil,
                request.sessionID == sessionID, request.inputGeneration == userInputGeneration,
-               let row = rowByMessageID[request.bookmark.messageID],
-               model.hydratedMessages[items[row].summary.id] != nil
-                    || model.hydrationFailures.contains(items[row].summary.id) {
-                scheduleRestore(token: request.token, delayMilliseconds: 0)
+               let row = rowByMessageID[request.bookmark.messageID] {
+                let target = items[row].summary
+                if model.hydratedMessages[target.id] != nil
+                    || model.hydrationFailures.contains(target.id) {
+                    scheduleRestore(token: request.token, delayMilliseconds: 0)
+                } else if request.hydrationTimedOut {
+                    model.hydrate(target)
+                }
             }
             if !items.isEmpty, pendingRestore == nil { positionEstablished = true }
             if TraceTestHooks.isUITesting,

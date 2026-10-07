@@ -3690,6 +3690,7 @@ final class TraceUITests: XCTestCase {
         point.hover(); point.scroll(byDeltaX: 0, deltaY: -100_000)
         XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
         if input == "keyboard" { point.click() }
+        try Data().write(to: routes)
         let source = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
         let records = try (40..<70).map { index -> Data in
             let record: [String: Any] = ["type": "assistant", "uuid": "streaming-input-\(index)",
