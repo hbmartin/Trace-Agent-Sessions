@@ -275,6 +275,9 @@ sys.exit(23)
             revision = self.git(candidate, 'rev-parse', 'HEAD')
             validator.validate(candidate, baseline, revision)
             user_config = baseline / 'Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig'
+            relative = subprocess.run([sys.executable, str(SCRIPTS / 'validate-benchmark-baseline.py'),
+                                       '.', '../baseline', revision], cwd=candidate, capture_output=True, text=True)
+            self.assertEqual(relative.returncode, 0, relative.stderr)
             user_config.write_text('unexpected configuration\n')
             with self.assertRaisesRegex(ValueError, 'Unexpected generated dependency configuration'):
                 validator.validate(candidate, baseline, revision)

@@ -21,6 +21,7 @@ def harness_files(root):
 
 
 def validate(candidate, baseline, revision):
+    candidate, baseline = candidate.resolve(), baseline.resolve()
     expected = git(candidate, 'rev-parse', revision + '^{commit}').strip()
     if git(baseline, 'rev-parse', 'HEAD').strip() != expected:
         raise ValueError('Cached baseline is at a different revision')
