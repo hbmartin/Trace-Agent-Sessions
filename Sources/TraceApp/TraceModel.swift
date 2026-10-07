@@ -1526,10 +1526,6 @@ final class TraceModel: ObservableObject {
         }
         self.metadataWatcher = metadataWatcher
         TraceTestHooks.appendLine("enter,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
-        if let delay = TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_METADATA_START_DELAY_MS", cappedAt: 30_000,
-            marker: .touch(pathKey: "TRACE_TEST_METADATA_START_ENTERED_PATH")) {
-            try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_METADATA_START_RELEASE_PATH", timeoutMilliseconds: delay)
-        }
         guard generation == watcherGeneration, !Task.isCancelled else { return false }
         await metadataWatcher.start()
         guard generation == watcherGeneration, !Task.isCancelled else { return false }

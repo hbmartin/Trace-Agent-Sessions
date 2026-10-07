@@ -47,6 +47,12 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
                 continuation.resume()
             }
         }
+        // Hold the actual startup return so source replacement can race the
+        // caller's post-await generation check while monitors are already active.
+        if let delay = TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_METADATA_START_DELAY_MS", cappedAt: 30_000,
+            marker: .touch(pathKey: "TRACE_TEST_METADATA_START_ENTERED_PATH")) {
+            try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_METADATA_START_RELEASE_PATH", timeoutMilliseconds: delay)
+        }
     }
 
     public func stop() {
