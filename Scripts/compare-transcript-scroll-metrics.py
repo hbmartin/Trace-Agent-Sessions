@@ -11,6 +11,9 @@ WORKLOADS = {
     'testStreamingTranscriptFollowPerformance()': ('streaming', 3),
     'testExternalSidecarTrafficPerformance()': ('watcher', 5),
 }
+# IDs emitted by TracePerformanceTests: the unreported XCTest warm-up and
+# the increment between measurement invocations (streaming appends ten messages).
+WARMUP_ITERATIONS = {'scroll': (2, 1), 'streaming': (70, 10), 'watcher': (1, 1)}
 
 
 def metrics_for(path, test_name):
@@ -26,13 +29,28 @@ def app_samples(path, workload, count):
     source = path.parent / 'app-samples.json'
     if not source.exists():
         raise SystemExit(f'Missing memory/timing records: {source}')
-    samples = sorted([s for s in json.loads(source.read_text()) if s.get('id', '').startswith(workload + '-')],
-                     key=lambda s: int(s['id'].rsplit('-', 1)[1]))
-    if len(samples) < count:
-        raise SystemExit(f'Missing {workload} memory/timing records: expected {count}, got {len(samples)}')
+    records = json.loads(source.read_text())
+    if not isinstance(records, list) or any(not isinstance(s, dict) or not isinstance(s.get('id'), str) for s in records):
+        raise SystemExit(f'Missing/invalid memory/timing records: {source}')
+    warmup, step = WARMUP_ITERATIONS[workload]
+    expected_ids = [f'{workload}-{warmup + step * index}' for index in range(1, count + 1)]
+    by_id = {}
+    for sample in records:
+        identifier = sample['id']
+        if not identifier.startswith(workload + '-'):
+            continue
+        if identifier in by_id:
+            raise SystemExit(f'Duplicate {workload} memory/timing record: {identifier}')
+        by_id[identifier] = sample
+    unexpected = sorted(by_id.keys() - set(expected_ids) - {f'{workload}-{warmup}'})
+    if unexpected:
+        raise SystemExit(f'Unexpected {workload} iteration IDs: {unexpected}')
+    missing = [identifier for identifier in expected_ids if identifier not in by_id]
+    if missing:
+        raise SystemExit(f'Missing {workload} memory/timing records for iterations: {missing}')
     # XCTest performs an unreported warm-up iteration. Keep it in raw exports,
     # but compare only the iterations represented in its CPU/clock metric arrays.
-    samples = samples[-count:]
+    samples = [by_id[identifier] for identifier in expected_ids]
     fields = ['updateCount', 'totalUpdateNanoseconds', 'maximumUpdateNanoseconds',
               'startingFootprintBytes', 'sampledPeakFootprintBytes', 'endingFootprintBytes',
               'retainedFootprintBytes', 'footprintSampleCount']
@@ -40,6 +58,8 @@ def app_samples(path, workload, count):
         for field in fields:
             if not isinstance(sample.get(field), (float, int)) or not math.isfinite(sample[field]) or sample[field] < 0:
                 raise SystemExit(f'Missing/invalid {field} in {sample.get("id")}')
+            if workload in ('streaming', 'watcher') and field in fields[:3] and sample[field] == 0:
+                raise SystemExit(f'Missing recorded {field} in {sample["id"]}')
         if min(sample[f] for f in fields[3:7]) <= 0 or sample['footprintSampleCount'] <= 1:
             raise SystemExit(f'Missing footprint samples in {sample["id"]}')
         if sample['sampledPeakFootprintBytes'] < max(sample['startingFootprintBytes'], sample['endingFootprintBytes']):

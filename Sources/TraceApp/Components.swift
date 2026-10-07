@@ -60,7 +60,7 @@ struct IndexProgressLabel: View {
             HStack(spacing: 8) {
                 if busy { ProgressView().controlSize(.small) }
                 Text(label).font(.caption)
-                    .foregroundStyle(progress.phase == .failed || hasUnresolvedFailures ? .red : .secondary)
+                    .foregroundStyle(statusColor)
                     .lineLimit(1).truncationMode(.middle)
             }
             .contentShape(Rectangle())
@@ -131,6 +131,8 @@ struct IndexProgressLabel: View {
                 "Index updated · \(progress.failedFiles) failed files"
             } else if progress.rollupError != nil {
                 "Index current · Token totals need retry"
+            } else if !monitoringWarnings.isEmpty {
+                "Index current · Monitoring incomplete"
             } else { "Index current · Watching for changes" }
         case .cancelled:
             hasUnresolvedFailures
@@ -138,6 +140,12 @@ struct IndexProgressLabel: View {
                 : "Indexing stopped · Progress saved"
         case .failed: progress.error ?? "Indexing failed"
         }
+    }
+
+    private var statusColor: Color {
+        if progress.phase == .failed || hasUnresolvedFailures || progress.failedFiles > 0 { return .red }
+        if progress.phase == .complete && !monitoringWarnings.isEmpty { return .orange }
+        return .secondary
     }
 
     private var hasUnresolvedFailures: Bool {

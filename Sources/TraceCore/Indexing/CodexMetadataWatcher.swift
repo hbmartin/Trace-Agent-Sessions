@@ -6,22 +6,41 @@ import os
 /// Namespace watches are nonrecursive. Content streams have no durable checkpoint:
 /// activate them before refreshing the metadata loaded through configured paths.
 public final class CodexMetadataWatcher: @unchecked Sendable {
+    private struct MonitoringFailure {
+        let message: String
+        let attempt: Int
+        let nextRetry: TimeInterval
+    }
     private let directories: [URL]
     private let queue = DispatchQueue(label: "me.haroldmartin.Trace.metadata", qos: .utility)
     private let queueKey = DispatchSpecificKey<Bool>()
     private let mapping: OSAllocatedUnfairLock<CodexMetadataSidecarMapping>
     private let filterMappings: OSAllocatedUnfairLock<[CodexMetadataSidecarMapping]>
     private var streams: [String: FSEventsWatcher] = [:]
-    private var namespaces: [String: NamespaceMonitor] = [:]
-    private var namespaceWork: DispatchWorkItem?
-    private var retryTimer: DispatchSourceTimer?
+    private var namespaces: [String: VnodeMonitor] = [:]
+    private var files: [String: VnodeMonitor] = [:]
+    private var batchWork: DispatchWorkItem?
+    private var batchStartedAt: TimeInterval?
+    private var batchGeneration: UInt64 = 0
+    private var pendingChanges = SourceChanges()
+    private var pendingRawChanges = SourceChanges()
+    private var pendingTopologyCheck = false
+    private var pendingRestartScopes: Set<String> = []
+    private var retryWork: DispatchWorkItem?
+    private var retryGeneration: UInt64 = 0
     private var invalidatedNamespaces: Set<String> = []
-    private var monitoringFailures: [String: String] = [:]
+    private var invalidatedFiles: Set<String> = []
+    private var monitoringFailures: [String: MonitoringFailure] = [:]
     private var publishedWarnings: [String]?
     private var stopped = false
     private let callback: @Sendable (SourceChanges, [String]) -> Void
     var openNamespaceForTesting: (@Sendable (String) -> Int32)?
+    var openFileForTesting: (@Sendable (String) -> Int32)?
     var afterActivationForTesting: (@Sendable () -> Void)?
+    var beforeActivationForTesting: (@Sendable () -> Void)?
+    var userHomeForTesting: URL?
+    var nowForTesting: (@Sendable () -> TimeInterval)?
+    var scheduleForTesting: (@Sendable (TimeInterval, DispatchWorkItem) -> Void)?
     var retryIntervalForTesting: TimeInterval = 5
 
     public init(metadataDirectories: [URL], mapping: CodexMetadataSidecarMapping,
@@ -33,22 +52,22 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
         queue.setSpecific(key: queueKey, value: true)
     }
 
+    private var now: TimeInterval { nowForTesting?() ?? ProcessInfo.processInfo.systemUptime }
+
+    private func makeMapping() -> CodexMetadataSidecarMapping {
+        CodexMetadataSidecarMapping(metadataDirectories: directories,
+            userHome: userHomeForTesting ?? FileManager.default.homeDirectoryForCurrentUser)
+    }
+
     public func start() async {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
-                var changes = replace(CodexMetadataSidecarMapping(metadataDirectories: directories), refresh: true)
-                afterActivationForTesting?()
+                let activation = afterActivationForTesting
                 afterActivationForTesting = nil
-                let installed = mapping.withLock { $0 }
-                if installed.topologyHasChanged {
-                    changes.merge(replace(CodexMetadataSidecarMapping(metadataDirectories: directories), refresh: true))
-                }
-                publish(changes)
+                publish(installStableMapping(refresh: true, afterActivation: activation))
                 continuation.resume()
             }
         }
-        // Hold the actual startup return so source replacement can race the
-        // caller's post-await generation check while monitors are already active.
         if let delay = TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_METADATA_START_DELAY_MS", cappedAt: 30_000,
             marker: .touch(pathKey: "TRACE_TEST_METADATA_START_ENTERED_PATH")) {
             try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_METADATA_START_RELEASE_PATH", timeoutMilliseconds: delay)
@@ -63,12 +82,16 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
 
     private func stopOnQueue() {
         stopped = true
-        namespaceWork?.cancel(); namespaceWork = nil
-        retryTimer?.cancel(); retryTimer = nil
+        batchGeneration &+= 1
+        batchWork?.cancel(); batchWork = nil
+        retryGeneration &+= 1
+        retryWork?.cancel(); retryWork = nil
         namespaces.values.forEach { $0.cancel() }; namespaces = [:]
+        files.values.forEach { $0.cancel() }; files = [:]
         streams.values.forEach { $0.stop() }; streams = [:]
-        invalidatedNamespaces = []
+        invalidatedNamespaces = []; invalidatedFiles = []
         monitoringFailures = [:]
+        pendingChanges = SourceChanges(); pendingRawChanges = SourceChanges()
         filterMappings.withLock { $0 = [] }
     }
 
@@ -80,7 +103,7 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
         if flags & globalRecovery != 0 { return true }
         let recovery = UInt32(kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagMustScanSubDirs)
         let directoryStructure = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
-            && flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
+            && flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed | kFSEventStreamEventFlagItemCloned) != 0
         if (flags & recovery != 0 || directoryStructure), !mapping.configuredRecoveryPaths(for: path).isEmpty { return true }
         if flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0 && !directoryStructure { return false }
         return !mapping.configuredRawChangePaths(for: path).isEmpty || mapping.isMetadataStructurePath(path)
@@ -103,82 +126,163 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
     private func receive(_ changes: SourceChanges, observedMapping: CodexMetadataSidecarMapping) {
         guard !stopped else { return }
         let previous = mapping.withLock { $0 }
-        var relevant = Self.configuredChanges(changes, mapping: previous)
-        relevant.merge(Self.configuredChanges(changes, mapping: observedMapping))
-        let paths = changes.paths.union(changes.lexicalPaths).union(changes.structuralPaths)
-        let rebuild = paths.contains { previous.linkPaths.contains($0) }
-            || changes.structuralPaths.contains {
-                previous.isMetadataStructurePath($0) || !previous.configuredRawChangePaths(for: $0).isEmpty
-            } || !changes.reconciliationPaths.isEmpty
-        if rebuild && (previous.topologyHasChanged || !changes.reconciliationPaths.isEmpty) {
-            relevant.merge(replace(CodexMetadataSidecarMapping(metadataDirectories: directories), refresh: false,
-                restartScopes: changes.recoveryReasons.contains(.rootChanged) ? changes.reconciliationPaths : []))
+        pendingChanges.merge(Self.configuredChanges(changes, mapping: previous))
+        pendingChanges.merge(Self.configuredChanges(changes, mapping: observedMapping))
+        pendingRawChanges.merge(changes)
+        if changes.recoveryReasons.contains(.rootChanged) {
+            pendingRestartScopes.formUnion(changes.reconciliationPaths)
         }
-        publish(relevant)
+        scheduleBatch()
     }
 
     private func namespaceChanged(path: String, invalidated: Bool) {
         guard !stopped else { return }
         if invalidated { invalidatedNamespaces.insert(path) }
-        guard namespaceWork == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.stopped else { return }
-            self.namespaceWork = nil
-            self.refreshTopology(forceRetry: false)
-        }
-        namespaceWork = work
-        queue.asyncAfter(deadline: .now() + 0.05, execute: work)
+        pendingTopologyCheck = true
+        scheduleBatch()
     }
 
-    private func refreshTopology(forceRetry: Bool) {
+    private func fileChanged(path: String, invalidated: Bool) {
         guard !stopped else { return }
+        pendingChanges.paths.formUnion(mapping.withLock { $0.configuredChangePaths(for: path) })
+        if invalidated {
+            invalidatedFiles.insert(path)
+            pendingTopologyCheck = true
+        }
+        scheduleBatch()
+    }
+
+    private func scheduleBatch() {
+        guard !stopped else { return }
+        if batchStartedAt == nil { batchStartedAt = now }
+        let deadline = min(now + 0.05, (batchStartedAt ?? now) + 0.1)
+        batchGeneration &+= 1
+        let generation = batchGeneration
+        batchWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped, self.batchGeneration == generation else { return }
+            self.flushBatch()
+        }
+        batchWork = work
+        schedule(work, after: max(0, deadline - now))
+    }
+
+    private func flushBatch(forceRetry: Bool = false) {
+        guard !stopped else { return }
+        batchGeneration &+= 1
+        batchWork?.cancel(); batchWork = nil; batchStartedAt = nil
+        var changes = pendingChanges
+        let raw = pendingRawChanges
+        let checkTopology = pendingTopologyCheck
+        let restartScopes = pendingRestartScopes
+        pendingChanges = SourceChanges(); pendingRawChanges = SourceChanges()
+        pendingTopologyCheck = false; pendingRestartScopes = []
         let previous = mapping.withLock { $0 }
-        guard forceRetry || !invalidatedNamespaces.isEmpty || previous.topologyHasChanged else { return }
-        var changes = replace(CodexMetadataSidecarMapping(metadataDirectories: directories), refresh: false)
-        if forceRetry && monitoringFailures.isEmpty { changes.paths.formUnion(mapping.withLock { $0.configuredSidecars }) }
+        let paths = raw.paths.union(raw.lexicalPaths).union(raw.structuralPaths)
+        let structural = paths.contains { previous.linkPaths.contains($0) }
+            || raw.structuralPaths.contains {
+                previous.isMetadataStructurePath($0) || !previous.configuredRawChangePaths(for: $0).isEmpty
+            }
+        if forceRetry || !invalidatedNamespaces.isEmpty || !invalidatedFiles.isEmpty
+            || !raw.reconciliationPaths.isEmpty || ((checkTopology || structural) && previous.topologyHasChanged) {
+            changes.merge(installStableMapping(refresh: false, restartScopes: restartScopes))
+        }
+        changes.merge(Self.configuredChanges(raw, mapping: mapping.withLock { $0 }))
         publish(changes)
+    }
+
+    private func installStableMapping(refresh: Bool, restartScopes: Set<String> = [],
+                                      afterActivation: (@Sendable () -> Void)? = nil) -> SourceChanges {
+        var changes = SourceChanges()
+        for pass in 0..<3 {
+            guard !stopped else { return changes }
+            changes.merge(replace(makeMapping(), refresh: refresh,
+                restartScopes: pass == 0 ? restartScopes : []))
+            if pass == 0 { afterActivation?() }
+            if !mapping.withLock({ $0.topologyHasChanged }) { return changes }
+        }
+        // Continuous external churn must not monopolize the watcher queue.
+        pendingTopologyCheck = true
+        scheduleBatch()
+        return changes
     }
 
     private func replace(_ next: CodexMetadataSidecarMapping, refresh: Bool,
                          restartScopes: Set<String> = []) -> SourceChanges {
         guard !stopped else { return SourceChanges() }
+        beforeActivationForTesting?()
         let previous = mapping.withLock { $0 }
-        // Filtering covers both generations until all old streams have drained.
+        let oldFailures = monitoringFailures
         filterMappings.withLock { $0 = [previous, next] }
-        var failures: [String: String] = [:]
+        let desired = Set(next.targetDirectories.map { "stream:" + $0.path })
+            .union(next.namespaceDirectories.map { "namespace:" + $0.path })
+            .union(next.directContentFiles.map { "file:" + $0.path })
+        var failures = oldFailures.filter { desired.contains($0.key) }
+        func shouldAttempt(_ key: String, changed: Bool) -> Bool {
+            changed || oldFailures[key].map { $0.nextRetry <= now } != false
+        }
+        func failed(_ key: String, path: String) {
+            let attempt = (oldFailures[key]?.attempt ?? 0) + 1
+            let delay = min(300, retryIntervalForTesting * pow(2, Double(min(attempt - 1, 6))))
+            failures[key] = MonitoringFailure(message: "\(path): incomplete Codex metadata monitoring",
+                attempt: attempt, nextRetry: now + delay)
+        }
         for directory in next.targetDirectories {
             let path = directory.path
+            let key = "stream:" + path
             let restart = next.monitorIdentityChanged(at: path, comparedTo: previous)
                 || restartScopes.contains { scope in
                     path == scope || path.hasPrefix(scope + "/") || scope.hasPrefix(path + "/")
                 }
-            guard streams[path] == nil || restart else { continue }
+            if streams[path] != nil && !restart { failures.removeValue(forKey: key); continue }
+            guard shouldAttempt(key, changed: restart) else { continue }
             let watcher = FSEventsWatcher(roots: [directory], identifier: "metadata:\(path)",
                 eventFilter: { [weak self] path, flags in
                     self?.filterMappings.withLock { $0.contains { Self.accepts(path: path, flags: flags, mapping: $0) } } ?? false
-                }, tracksWatermarks: false) { [weak self] changes in
+                }, tracksWatermarks: false, batchingDelay: 0) { [weak self] changes in
                     guard let self else { return }
-                    // A queued old batch retains its own mapping, not a growing history.
                     self.queue.async { self.receive(changes, observedMapping: next) }
                 }
-            if watcher.start() { streams.updateValue(watcher, forKey: path)?.stop(flushPending: true) }
-            else {
+            if watcher.start() {
+                streams.updateValue(watcher, forKey: path)?.stop(flushPending: true)
+                failures.removeValue(forKey: key)
+            } else {
                 if restart { streams.removeValue(forKey: path)?.stop(flushPending: true) }
-                failures["stream:" + path] = "\(path): incomplete Codex metadata monitoring"
+                failed(key, path: path)
             }
         }
         for directory in next.namespaceDirectories {
             let path = directory.path
-            guard namespaces[path] == nil || invalidatedNamespaces.contains(path)
-                || next.monitorIdentityChanged(at: path, comparedTo: previous) else { continue }
+            let key = "namespace:" + path
+            let restart = invalidatedNamespaces.contains(path) || next.monitorIdentityChanged(at: path, comparedTo: previous)
+            if namespaces[path] != nil && !restart { failures.removeValue(forKey: key); continue }
+            guard shouldAttempt(key, changed: restart) else { continue }
             namespaces.removeValue(forKey: path)?.cancel()
             let fd = openNamespaceForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC)
             if fd >= 0 {
-                let monitor = NamespaceMonitor(fd: fd, queue: queue) { [weak self] invalidated in
+                namespaces[path] = VnodeMonitor(fd: fd, queue: queue) { [weak self] invalidated in
                     self?.namespaceChanged(path: path, invalidated: invalidated)
                 }
-                namespaces.updateValue(monitor, forKey: path)?.cancel()
-            } else { failures["namespace:" + path] = "\(path): incomplete Codex metadata monitoring" }
+                failures.removeValue(forKey: key)
+            } else { failed(key, path: path) }
+        }
+        for file in next.directContentFiles {
+            let path = file.path
+            let key = "file:" + path
+            let restart = invalidatedFiles.contains(path) || next.monitorIdentityChanged(at: path, comparedTo: previous)
+            if files[path] != nil && !restart { failures.removeValue(forKey: key); continue }
+            guard shouldAttempt(key, changed: restart) else { continue }
+            files.removeValue(forKey: path)?.cancel()
+            let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC)
+            if fd >= 0 {
+                files[path] = VnodeMonitor(fd: fd, queue: queue) { [weak self] invalidated in
+                    self?.fileChanged(path: path, invalidated: invalidated)
+                }
+                failures.removeValue(forKey: key)
+            } else if errno == ENOENT && !FileManager.default.fileExists(atPath: path) {
+                // Missing targets are watched through their parent namespace.
+                failures.removeValue(forKey: key)
+            } else { failed(key, path: path) }
         }
         mapping.withLock { $0 = next }
         for path in Set(streams.keys).subtracting(next.targetDirectories.map(\.path)) {
@@ -187,44 +291,74 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
         for path in Set(namespaces.keys).subtracting(next.namespaceDirectories.map(\.path)) {
             namespaces.removeValue(forKey: path)?.cancel()
         }
-        invalidatedNamespaces = []
+        for path in Set(files.keys).subtracting(next.directContentFiles.map(\.path)) {
+            files.removeValue(forKey: path)?.cancel()
+        }
+        invalidatedNamespaces = []; invalidatedFiles = []
         monitoringFailures = failures
         filterMappings.withLock { $0 = [next] }
-        if failures.isEmpty { retryTimer?.cancel(); retryTimer = nil }
-        else if retryTimer == nil {
-            let timer = DispatchSource.makeTimerSource(queue: queue)
-            timer.schedule(deadline: .now() + retryIntervalForTesting, repeating: retryIntervalForTesting)
-            timer.setEventHandler { [weak self] in self?.refreshTopology(forceRetry: true) }
-            retryTimer = timer; timer.activate()
-        }
+        scheduleRetry()
         var changes = SourceChanges()
         changes.paths = refresh ? next.configuredSidecars : previous.configuredSidecarsWithChangedDependencies(comparedTo: next)
+        for key in Set(oldFailures.keys).subtracting(failures.keys).intersection(desired) {
+            let path = String(key.dropFirst(key.firstIndex(of: ":").map { key.distance(from: key.startIndex, to: $0) + 1 } ?? 0))
+            changes.paths.formUnion(previous.configuredRecoveryPaths(for: path))
+            changes.paths.formUnion(next.configuredRecoveryPaths(for: path))
+        }
         return changes
+    }
+
+    private func scheduleRetry() {
+        retryGeneration &+= 1
+        retryWork?.cancel(); retryWork = nil
+        guard !stopped, let deadline = monitoringFailures.values.map(\.nextRetry).min() else { return }
+        let generation = retryGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped, self.retryGeneration == generation else { return }
+            self.flushBatch(forceRetry: true)
+        }
+        retryWork = work
+        schedule(work, after: max(0, deadline - now))
+    }
+
+    private func schedule(_ work: DispatchWorkItem, after delay: TimeInterval) {
+        if let scheduleForTesting { scheduleForTesting(delay, work) }
+        else { queue.asyncAfter(deadline: .now() + delay, execute: work) }
     }
 
     private func publish(_ changes: SourceChanges) {
         guard !stopped else { return }
-        let warnings = Array(Set(mapping.withLock { $0.diagnostics } + monitoringFailures.values)).sorted()
+        let warnings = Array(Set(mapping.withLock { $0.diagnostics } + monitoringFailures.values.map(\.message))).sorted()
         if changes.hasIndexWork || warnings != publishedWarnings {
             publishedWarnings = warnings
             callback(changes, warnings)
         }
     }
 
-    var namespaceMonitorCountForTesting: Int {
-        queue.sync { namespaces.count }
+    var namespaceMonitorCountForTesting: Int { queue.sync { namespaces.count } }
+    var contentDirectoryPathsForTesting: Set<String> { queue.sync { Set(streams.keys) } }
+    var directContentPathsForTesting: Set<String> { queue.sync { Set(files.keys) } }
+    var retryDelaysForTesting: [String: TimeInterval] {
+        queue.sync { monitoringFailures.mapValues { $0.nextRetry - now } }
     }
-
-    var contentDirectoryPathsForTesting: Set<String> {
-        queue.sync { Set(streams.keys) }
+    func refreshTopologyForTesting() {
+        queue.sync { pendingTopologyCheck = true; flushBatch() }
     }
+    func retryMonitoringForTesting() { queue.sync { flushBatch(forceRetry: true) } }
+    func receiveForTesting(_ changes: SourceChanges, namespacePath: String? = nil) {
+        queue.sync {
+            receive(changes, observedMapping: mapping.withLock { $0 })
+            if let namespacePath { namespaceChanged(path: namespacePath, invalidated: false) }
+        }
+    }
+    func performForTesting(_ work: DispatchWorkItem) { queue.sync { work.perform() } }
 }
 
-private final class NamespaceMonitor {
+private final class VnodeMonitor {
     private let source: any DispatchSourceFileSystemObject
     init(fd: Int32, queue: DispatchQueue, changed: @escaping @Sendable (Bool) -> Void) {
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd,
-            eventMask: [.write, .rename, .delete, .revoke, .attrib, .link], queue: queue)
+            eventMask: [.write, .extend, .rename, .delete, .revoke, .attrib, .link], queue: queue)
         self.source = source
         source.setEventHandler { [weak self] in
             guard let self else { return }

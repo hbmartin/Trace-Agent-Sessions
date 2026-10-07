@@ -34,11 +34,12 @@ public struct SourceChanges: Sendable {
         self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
         if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
         let structuralFlags = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
-            | kFSEventStreamEventFlagItemRenamed | kFSEventStreamEventFlagItemIsSymlink)
+            | kFSEventStreamEventFlagItemRenamed | kFSEventStreamEventFlagItemIsSymlink | kFSEventStreamEventFlagItemCloned)
         if flags & structuralFlags != 0 { structuralPaths.insert(path) }
         let canonical = TraceFileIO.canonicalPath(path).path
         let directory = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
-        let structural = flags & UInt32(kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
+        let structural = flags & UInt32(kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed
+            | kFSEventStreamEventFlagItemCloned) != 0
         let dropped = flags & UInt32(kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0
         let wrapped = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
         if dropped || wrapped {
@@ -95,6 +96,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
     private let callback: @Sendable (SourceChanges) -> Void
     private let eventFilter: (@Sendable (String, FSEventStreamEventFlags) -> Bool)?
     private let tracksWatermarks: Bool
+    private let batchingDelay: TimeInterval
     private let queue = DispatchQueue(label: "me.haroldmartin.Trace.fsevents", qos: .utility)
     private let queueKey = DispatchSpecificKey<Bool>()
     private var stream: FSEventStreamRef?
@@ -112,6 +114,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
                 sinceWhen: UInt64? = nil, latency: CFTimeInterval = 0.02,
                 eventFilter: (@Sendable (String, FSEventStreamEventFlags) -> Bool)? = nil,
                 tracksWatermarks: Bool = true,
+                batchingDelay: TimeInterval = 0.05,
                 onChange: @escaping @Sendable (SourceChanges) -> Void) {
         self.roots = roots.map { TraceFileIO.canonicalPath($0.path).path }
         self.identifier = identifier
@@ -120,6 +123,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
         self.callback = onChange
         self.eventFilter = eventFilter
         self.tracksWatermarks = tracksWatermarks
+        self.batchingDelay = max(0, batchingDelay)
         queue.setSpecific(key: queueKey, value: true)
     }
 
@@ -248,7 +252,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
         let item = DispatchWorkItem { [weak self] in self?.flush() }
         flushWorkItem = item
         lock.unlock()
-        queue.asyncAfter(deadline: .now() + 0.05, execute: item)
+        queue.asyncAfter(deadline: .now() + batchingDelay, execute: item)
     }
 
     private func flush() {

@@ -1570,6 +1570,44 @@ final class IndexingRegressionTests: XCTestCase {
         await scheduler.stop()
     }
 
+    func testClonedDirectoryDiscoversSessionsAndDefersCheckpointThroughFailure() async throws {
+        let root = try directory()
+        let cloned = root.appendingPathComponent("cloned")
+        try FileManager.default.createDirectory(at: cloned, withIntermediateDirectories: true)
+        let file = cloned.appendingPathComponent("cloned.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let failures = MutableFailureSelection([file.lastPathComponent])
+        let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(
+            base: ClaudeCodeSource(roots: [root]), failures: failures)])
+        let completions = CompletionRecorder()
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+            progress: { _ in }, retryDelay: .milliseconds(200), didComplete: { activity, watermarks in
+                await completions.receive(activity: activity, watermarks: watermarks)
+            })
+        var changes = SourceChanges()
+        changes.include(path: cloned.path, flags: UInt32(kFSEventStreamEventFlagItemIsDir
+            | kFSEventStreamEventFlagItemCloned), eventID: 42, streamIdentifier: "volume", streamRoots: [root.path])
+        await scheduler.request(paths: changes.paths, reconciliationPaths: changes.reconciliationPaths,
+            activity: .subtreeRecovery, watermarks: changes.watermarks, streamRoots: changes.streamRoots)
+        await scheduler.waitUntilIdle()
+        let failed = await completions.values
+        XCTAssertFalse(failed.contains { $0.watermarks["volume"] != nil })
+        failures.replace(with: [])
+        // The retained failed operation owns its checkpoint until its retry
+        // reconciles successfully; fresh work does not release that coverage.
+        for _ in 0..<100 {
+            if await completions.values.contains(where: { $0.watermarks["volume"] == 42 }) { break }
+            try await Task.sleep(for: .milliseconds(25))
+            await scheduler.waitUntilIdle()
+        }
+        let sessions = try await database.sessions()
+        let recovered = await completions.values
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(recovered.last?.watermarks["volume"], 42)
+        await scheduler.stop()
+    }
+
     func testWatermarkOnlyRequestAddsItsStreamRootToRetainedRecovery() async throws {
         let root = try directory()
         let firstDirectory = root.appendingPathComponent("first")

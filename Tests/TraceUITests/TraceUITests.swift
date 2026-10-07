@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import os
 
 @MainActor
 final class TraceUITests: XCTestCase {
@@ -3530,6 +3531,217 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(disclosure.isHittable,
                       "an append after expansion must not resume bottom following")
         XCTAssertEqual(disclosure.frame.minY, headerY, accuracy: 64)
+    }
+
+    func testMonitoringWarningsAreVisibleOnAllSearchSurfaces() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let sidecar = directory.appendingPathComponent("Sources/session_index.jsonl")
+        try FileManager.default.createSymbolicLink(atPath: sidecar.path, withDestinationPath: "session_index.jsonl")
+        app.launch(); app.buttons["Build Index"].click()
+        let statusText = "Index current · Monitoring incomplete"
+        XCTAssertTrue(app.buttons["indexProgress"].waitForExistence(timeout: 20))
+        let main = app.windows.firstMatch
+        let mainStatus = main.buttons["indexProgress"]
+        XCTAssertNotNil(poll(timeout: 15) { mainStatus.label.contains(statusText) ? true : nil }, mainStatus.label)
+        attach(app, name: "main-monitoring-incomplete")
+        app.buttons["indexProgress"].click()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "symlink cycle")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["indexProgress"].click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(main.waitForNonExistence(timeout: 5))
+        ensurePopoverOpen(app)
+        let popover = app.textFields["Search all sessions"]
+        XCTAssertTrue(popover.exists)
+        XCTAssertTrue(app.buttons["indexProgress"].label.contains(statusText), app.buttons["indexProgress"].label)
+        attach(app, name: "popover-monitoring-incomplete")
+        popover.click(); popover.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.textFields["Search Claude Code, Codex, and Gemini"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["indexProgress"].label.contains(statusText), app.buttons["indexProgress"].label)
+        attach(app, name: "launcher-monitoring-incomplete")
+        app.buttons["indexProgress"].click()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "symlink cycle")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts.allElementsBoundByIndex.isEmpty)
+    }
+
+    func testRestoreWaitsForHydrationBeyond450Milliseconds() throws { try runHydrationRestore(delay: 650) }
+    func testRestoreWaitsForHydrationBeyond825Milliseconds() throws { try runHydrationRestore(delay: 1300) }
+    func testHydrationTimeoutPreservesBookmarkAndLateCompletionResumes() throws {
+        try runHydrationRestore(delay: 15_000, timeout: true)
+    }
+    func testUserInputCancelsTimedOutHydrationRestore() throws {
+        try runHydrationRestore(delay: 15_000, timeout: true, cancel: true)
+    }
+    func testCollapsedLargeToolRowClampsOffsetWithoutHydrating() throws {
+        try runHydrationRestore(delay: 1300, collapsed: true)
+    }
+
+    private func runHydrationRestore(delay: Int, timeout: Bool = false, cancel: Bool = false, collapsed: Bool = false) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let name = "Hydration restore"
+        try addLongSession(name, project: "HydrationProject", directory: directory, count: 30, contentRepeats: 300)
+        if collapsed {
+            let file = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+            var lines = try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map(String.init)
+            let record: [String: Any] = ["type": "user", "uuid": "collapsed-output", "sessionId": name,
+                "cwd": "/tmp/HydrationProject", "timestamp": "2026-09-14T12:00:00Z",
+                "message": ["content": [["type": "tool_result", "content": "Large collapsed tool output " + String(repeating: "output data. ", count: 50_000)]]]]
+            lines[13] = String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+            try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        }
+        installNativeAnchorProbe(app: app, directory: directory)
+        let release = directory.appendingPathComponent("hydration-release")
+        let timedOut = directory.appendingPathComponent("hydration-timeout")
+        let completed = directory.appendingPathComponent("native-restore-completed")
+        let cancelled = directory.appendingPathComponent("restore-cancelled")
+        let audit = directory.appendingPathComponent("hydration-restore-audit")
+        let hydrated = directory.appendingPathComponent("hydrated-ids")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_DELAY_MS"] = String(delay)
+        if timeout { app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_RELEASE_PATH"] = release.path }
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_TIMEOUT_PATH"] = timedOut.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_COMPLETED_PATH"] = hydrated.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"] = cancelled.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_RESTORE_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"] = "12"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] = "-450"
+        defer {
+            for file in [audit, hydrated, directory.appendingPathComponent("native-anchor-offset")] {
+                let attachment = XCTAttachment(string: fileLines(in: file).joined(separator: "\n"))
+                attachment.name = file.lastPathComponent; attachment.lifetime = .keepAlways; add(attachment)
+            }
+        }
+        app.launch(); app.activate(); app.buttons["Build Index"].click()
+        let project = app.staticTexts["HydrationProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 30)); project.click()
+        openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        if timeout {
+            XCTAssertTrue(waitForFile(timedOut, timeout: 10))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path))
+            let fields = try XCTUnwrap(fileLines(in: audit).last?.split(separator: ",").map(String.init))
+            XCTAssertEqual(fields, ["timeout", "12", "-450.0", "12", "-450.0"])
+            if cancel {
+                scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).scroll(byDeltaX: 0, deltaY: -300)
+                XCTAssertTrue(waitForFile(cancelled, timeout: 5))
+            }
+            try Data().write(to: release)
+        }
+        if cancel {
+            XCTAssertTrue(waitForFile(hydrated, timeout: 10))
+            Thread.sleep(forTimeInterval: 1)
+            let completions = fileLines(in: audit).filter { $0.hasPrefix("completed,") }
+            XCTAssertTrue(completions.allSatisfy { $0.split(separator: ",")[3] == "false" },
+                "late source completion may preserve the new reader anchor but must not replay the cancelled navigation")
+        } else if collapsed {
+            XCTAssertTrue(waitForFile(completed, timeout: 10))
+            let offset = try XCTUnwrap(savedAnchorY(index: 12, in: scroll, timeout: 10))
+            XCTAssertGreaterThan(offset, -450)
+            let id = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+                sql: "SELECT id FROM message WHERE prefix LIKE 'Large collapsed tool output%' LIMIT 1;")
+            XCTAssertFalse(fileLines(in: hydrated).contains(String(id)), "restoring a collapsed row must not hydrate its large output")
+            XCTAssertFalse(fileLines(in: audit).contains { $0.hasPrefix("waiting,12,") })
+        } else {
+            XCTAssertTrue(waitForFile(completed, timeout: 10))
+            assertSavedAnchorOnScreen(index: 12, in: scroll, expectedY: -450, stage: "delayed hydration")
+            let waits = fileLines(in: audit).filter { $0.hasPrefix("waiting,12,") }
+            XCTAssertFalse(waits.isEmpty)
+            XCTAssertTrue(waits.allSatisfy { $0.hasSuffix(",12") }, "all twelve geometry attempts remain available during hydration")
+        }
+    }
+
+    func testStreamingUpdatesRespectUpwardWheelInput() throws { try runStreamingUpwardInput("wheel") }
+    func testStreamingUpdatesRespectUpwardKeyboardInput() throws { try runStreamingUpwardInput("keyboard") }
+    func testStreamingUpdatesRespectUpwardScrollbarInput() throws { try runStreamingUpwardInput("scrollbar") }
+
+    private func runStreamingUpwardInput(_ input: String) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let name = "Streaming input"
+        try addLongSession(name, project: "StreamingInputProject", directory: directory, count: 40)
+        let readerProbe = directory.appendingPathComponent("streaming-input-reader")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_READER_PROBE_PATH"] = readerProbe.path
+        let idle = directory.appendingPathComponent("streaming-input-idle")
+        let probe = directory.appendingPathComponent("streaming-input-position")
+        let routes = directory.appendingPathComponent("streaming-input-routes")
+        let bounds = directory.appendingPathComponent("streaming-input-bounds")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idle.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = probe.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"] = "3000"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_WHEEL_ROUTE_PATH"] = routes.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_KEY_ROUTE_PATH"] = routes.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = bounds.path
+        defer {
+            for file in [routes, bounds, probe, readerProbe] {
+                let attachment = XCTAttachment(string: fileLines(in: file).joined(separator: "\n"))
+                attachment.name = file.lastPathComponent
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        app.launch(); app.activate()
+        app.buttons["Build Index"].click()
+        let project = app.staticTexts["StreamingInputProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 30))
+        project.click()
+        openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        let point = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        point.hover(); point.scroll(byDeltaX: 0, deltaY: -100_000)
+        XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
+        if input == "keyboard" { point.click() }
+        let source = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+        let records = try (40..<70).map { index -> Data in
+            let record: [String: Any] = ["type": "assistant", "uuid": "streaming-input-\(index)",
+                "sessionId": name, "cwd": "/tmp/StreamingInputProject",
+                "message": ["content": "\(name) message \(index)\nLive appended content"]]
+            return try JSONSerialization.data(withJSONObject: record) + Data([10])
+        }
+        let finished = OSAllocatedUnfairLock(initialState: false)
+        let failure = OSAllocatedUnfairLock<String?>(initialState: nil)
+        DispatchQueue.global(qos: .utility).async {
+            defer { finished.withLock { $0 = true } }
+            do {
+                let handle = try FileHandle(forWritingTo: source)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                for record in records {
+                    try handle.write(contentsOf: record)
+                    Thread.sleep(forTimeInterval: 0.2)
+                }
+            } catch { failure.withLock { $0 = String(describing: error) } }
+        }
+        switch input {
+        case "wheel":
+            for _ in 0..<3 { point.scroll(byDeltaX: 0, deltaY: 250) }
+            XCTAssertTrue(fileLines(in: routes).contains("scroll"), "physical wheel events must enter the scroll view")
+        case "keyboard":
+            app.typeKey(.pageUp, modifierFlags: [])
+            app.typeKey(.pageUp, modifierFlags: [])
+            XCTAssertTrue(fileLines(in: routes).contains("116,true"), "Page Up must reach the transcript")
+        default:
+            let scroller = scroll.scrollBars["transcriptScroller"]
+            XCTAssertTrue(scroller.waitForExistence(timeout: 5))
+            let thumb = scroller.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+            thumb.click(forDuration: 0.1, thenDragTo: thumb.withOffset(CGVector(dx: 0, dy: -120)))
+        }
+        app.buttons["testProbeTranscriptPosition"].click()
+        let reader = try XCTUnwrap(fileLines(in: readerProbe).last?.split(separator: ","))
+        let readingIndex = try XCTUnwrap(Int(reader[0]))
+        let readerY = try XCTUnwrap(Double(reader[1]))
+        XCTAssertLessThan(readerY, Double(scroll.frame.height), "the recorded reader anchor must be in the viewport")
+        let anchorProbe = try XCTUnwrap(nativeAnchorProbe)
+        try String(readingIndex).write(to: anchorProbe.input, atomically: true, encoding: .utf8)
+        XCTAssertNotNil(poll(timeout: 10) { finished.withLock { $0 } ? true : nil })
+        XCTAssertNil(failure.withLock { $0 })
+        XCTAssertTrue(app.staticTexts["70 messages"].waitForExistence(timeout: 15))
+        Thread.sleep(forTimeInterval: 3.2)
+        assertSavedAnchorOnScreen(index: readingIndex, in: scroll, expectedY: CGFloat(readerY), stage: "streaming idle completion")
+        app.buttons["testProbeTranscriptPosition"].click()
+        XCTAssertTrue(waitForFile(probe, timeout: 5))
+        let fields = try XCTUnwrap(fileLines(in: probe).last?.split(separator: ","))
+        XCTAssertEqual(String(fields[2]), "false", "upward input must remain unpinned after stream updates and idle completion")
+        XCTAssertGreaterThan(try XCTUnwrap(Double(fields[1])) - XCTUnwrap(Double(fields[0])), 50)
     }
 
     func testSearchReplacesDisclosureRestoreAfterMessagesEmpty() throws {

@@ -178,13 +178,17 @@ public enum TraceFileIO {
             + Int64(status.st_mtimespec.tv_nsec)
 
         return .init(
-            device: UInt64(status.st_dev),
+            device: unsignedDevice(status.st_dev),
             inode: UInt64(status.st_ino),
             size: fileSize,
             modificationNanoseconds: modificationNanoseconds,
             headHash: digest,
             headLength: headLength
         )
+    }
+
+    static func unsignedDevice(_ device: dev_t) -> UInt64 {
+        UInt64(UInt32(bitPattern: device))
     }
 }
 
@@ -202,30 +206,45 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
     private let linkDestinations: [String: String]
     private let homeEntries: [String: Set<String>]
     let namespaceDirectories: [URL]
+    let directContentFiles: [URL]
     private let entryIdentities: [String: EntryIdentity]
+    private let directFileIdentities: [String: EntryIdentity]
 
     private struct EntryIdentity: Equatable, Sendable {
         let device: UInt64
         let inode: UInt64
         let kind: UInt16
-        init(_ path: String) {
+        init(_ path: String, trackRegularFile: Bool = false) {
             var value = stat()
             if lstat(path, &value) == 0 {
                 kind = UInt16(value.st_mode & S_IFMT)
-                // Regular-file replacement changes content, not watch topology.
-                device = kind == S_IFREG ? 0 : UInt64(value.st_dev)
-                inode = kind == S_IFREG ? 0 : UInt64(value.st_ino)
+                // Recursive streams survive regular-file replacement. Direct file
+                // monitors must retain the identity to reopen a replaced inode.
+                device = kind == S_IFREG && !trackRegularFile ? 0 : TraceFileIO.unsignedDevice(value.st_dev)
+                inode = kind == S_IFREG && !trackRegularFile ? 0 : UInt64(value.st_ino)
             } else { device = 0; inode = 0; kind = 0 }
         }
     }
 
     public init(metadataDirectories: [URL]) {
+        self.init(metadataDirectories: metadataDirectories, userHome: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    init(metadataDirectories: [URL], userHome: URL) {
         var dependencies: [String: Set<String>] = [:]
         var insensitiveDependencies: [String: Set<String>] = [:]
         var directories: Set<String> = []
         var namespaceDirectories: Set<String> = []
         var identityPaths: Set<String> = []
-        let userHome = TraceFileIO.canonicalPath(FileManager.default.homeDirectoryForCurrentUser.path).path
+        var directFiles: Set<String> = []
+        let userHome = TraceFileIO.canonicalPath(userHome.path).path
+        func addContentFile(_ path: String) {
+            let url = URL(fileURLWithPath: path)
+            let parent = TraceFileIO.canonicalPath(url.deletingLastPathComponent().path).path
+            if parent == "/" || parent == userHome {
+                directFiles.insert(URL(fileURLWithPath: parent).appendingPathComponent(url.lastPathComponent).path)
+            }
+        }
         func addContentDirectory(_ path: String) {
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
@@ -310,14 +329,25 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
                 let resolved = resolve(configuredPath)
                 if resolved.complete {
                     addContentDirectory(URL(fileURLWithPath: resolved.path).deletingLastPathComponent().path)
+                    addContentFile(resolved.path)
                 }
                 links.formUnion(resolved.links)
                 links.formUnion(resolved.links.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
                 var paths = resolved.dependencies
                 paths.insert(URL(fileURLWithPath: resolvedHome.path).appendingPathComponent(name).path)
                 if name.hasSuffix(".sqlite") {
-                    paths.insert(resolved.path + "-wal")
-                    paths.insert(configuredPath + "-wal")
+                    for walPath in Set([resolved.path + "-wal", configuredPath + "-wal"]) {
+                        let wal = resolve(walPath)
+                        paths.formUnion(wal.dependencies)
+                        links.formUnion(wal.links)
+                        if wal.complete {
+                            paths.insert(wal.path)
+                            addContentDirectory(URL(fileURLWithPath: wal.path).deletingLastPathComponent().path)
+                            addContentFile(wal.path)
+                        } else {
+                            warnings.insert("\(configuredPath): incomplete Codex metadata monitoring (WAL symlink cycle or more than 40 hops)")
+                        }
+                    }
                 }
                 for path in paths {
                     let url = URL(fileURLWithPath: path)
@@ -335,7 +365,7 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
                     if !canonical.isCaseSensitive {
                         insensitiveDependencies[canonical.comparisonKey, default: []].insert(configuredPath)
                     }
-                    if resolved.links.contains(path) { links.insert(parentNormalized) }
+                    if links.contains(path) { links.insert(parentNormalized) }
                     dependencies[path, default: []].insert(configuredPath)
                     dependencies[URL(fileURLWithPath: path).standardizedFileURL.path, default: []].insert(configuredPath)
                     watchParent(of: path)
@@ -363,6 +393,10 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
             result[path] = Self.sidecarNames(at: path)
         }
         self.namespaceDirectories = namespaceDirectories.sorted().map { URL(fileURLWithPath: $0) }
+        directContentFiles = directFiles.sorted().map { URL(fileURLWithPath: $0) }
+        directFileIdentities = directFiles.reduce(into: [:]) { result, path in
+            result[path] = EntryIdentity(path, trackRegularFile: true)
+        }
         entryIdentities = identityPaths.union(homes).union(directories).reduce(into: [:]) { result, path in
             result[path] = EntryIdentity(path)
         }
@@ -377,6 +411,10 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
                 affected.formUnion(sidecarsByDependency[dependency] ?? [])
                 affected.formUnion(other.sidecarsByDependency[dependency] ?? [])
             }
+            if directFileIdentities[dependency] != other.directFileIdentities[dependency] {
+                affected.formUnion(sidecarsByDependency[dependency] ?? [])
+                affected.formUnion(other.sidecarsByDependency[dependency] ?? [])
+            }
         }
         return affected
     }
@@ -388,17 +426,19 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
     }
 
     /// Called only for a relevant dependency/structure event, on a utility queue.
-    /// Content writes and atomic replacement of a regular file keep the mapping.
+    /// Content writes keep the mapping; replacement of a directly watched file does not.
     public var topologyHasChanged: Bool {
         let fm = FileManager.default
         return linkDestinations.contains { path, destination in
             ((try? fm.destinationOfSymbolicLink(atPath: path)) ?? "") != destination
         } || homeEntries.contains { Self.sidecarNames(at: $0.key) != $0.value }
             || entryIdentities.contains { EntryIdentity($0.key) != $0.value }
+            || directFileIdentities.contains { EntryIdentity($0.key, trackRegularFile: true) != $0.value }
     }
 
     func monitorIdentityChanged(at path: String, comparedTo other: Self) -> Bool {
         entryIdentities[path] != other.entryIdentities[path]
+            || directFileIdentities[path] != other.directFileIdentities[path]
     }
 
     /// No filesystem access: safe for filtering raw FSEvents before canonicalization.
