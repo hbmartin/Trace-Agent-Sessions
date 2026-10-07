@@ -78,7 +78,12 @@ metadata = {
 PY
 run_revision() {
   local revision="$1" checkout="$2"
-  TRACE_SCROLL_BENCHMARK_OUTPUT_DIR="$comparison_dir/$revision" "$checkout/Scripts/measure-transcript-scroll.sh"
+  if [[ -n "${TRACE_SCROLL_COMPARISON_DERIVED_DATA_ROOT:-}" ]]; then
+    TRACE_SCROLL_DERIVED_DATA_PATH="$TRACE_SCROLL_COMPARISON_DERIVED_DATA_ROOT/$revision" \
+      TRACE_SCROLL_BENCHMARK_OUTPUT_DIR="$comparison_dir/$revision" "$checkout/Scripts/measure-transcript-scroll.sh"
+  else
+    TRACE_SCROLL_BENCHMARK_OUTPUT_DIR="$comparison_dir/$revision" "$checkout/Scripts/measure-transcript-scroll.sh"
+  fi
 }
 if [[ "$order" == baseline-first ]]; then
   run_revision baseline "$baseline_checkout"

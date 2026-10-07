@@ -30,26 +30,81 @@ class TranscriptBenchmarkScriptTests(unittest.TestCase):
             self.assertNotIn("improvement", result.stdout)
 
     def complete_reports(self, root):
-        methods = [("testTranscriptScrollPerformance()", "scroll", 5),
-                   ("testStreamingTranscriptFollowPerformance()", "streaming", 3),
-                   ("testExternalSidecarTrafficPerformance()", "watcher", 5)]
+        methods = [("testTranscriptScrollPerformance()", "scroll", [3, 4, 5, 6, 7]),
+                   ("testStreamingTranscriptFollowPerformance()", "streaming", [80, 90, 100]),
+                   ("testExternalSidecarTrafficPerformance()", "watcher", [2, 3, 4, 5, 6])]
         metrics, samples = [], []
-        for method, workload, count in methods:
+        for method, workload, iterations in methods:
             metrics.append({"testIdentifier": method, "testRuns": [{"metrics": [
-                {"identifier": name, "displayName": name, "measurements": [1] * count,
+                {"identifier": name, "displayName": name, "measurements": [1] * len(iterations),
                  "unitOfMeasurement": unit}
                 for name, unit in [
                     ("com.apple.dt.XCTMetric_CPU-me.haroldmartin.Trace.time", "s"),
                     ("com.apple.dt.XCTMetric_Clock.time.monotonic", "s"),
                     ("com.apple.dt.XCTMetric_Memory-me.haroldmartin.Trace.physical", "kB")]]}]})
-            for index in range(count):
-                samples.append(dict(id=f"{workload}-{index}", updateCount=3,
-                    totalUpdateNanoseconds=400, maximumUpdateNanoseconds=200,
+            for index in iterations:
+                samples.append(dict(id=f"{workload}-{index}", updateCount=0 if workload == "scroll" else 3,
+                    totalUpdateNanoseconds=0 if workload == "scroll" else 400,
+                    maximumUpdateNanoseconds=0 if workload == "scroll" else 200,
                     startingFootprintBytes=100, sampledPeakFootprintBytes=200,
                     endingFootprintBytes=150, retainedFootprintBytes=125, footprintSampleCount=20))
         (root / "metrics.json").write_text(json.dumps(metrics))
         (root / "app-samples.json").write_text(json.dumps(samples))
         return samples
+
+    def test_update_workloads_require_recorded_updates_and_positive_timings(self):
+        comparison = self.module('compare-transcript-scroll-metrics')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = self.complete_reports(root)
+            for workload, count in [('streaming', 3), ('watcher', 5)]:
+                for field in ['updateCount', 'totalUpdateNanoseconds', 'maximumUpdateNanoseconds']:
+                    with self.subTest(workload=workload, field=field):
+                        damaged = [dict(sample) for sample in samples]
+                        next(s for s in damaged if s['id'].startswith(workload + '-'))[field] = 0
+                        (root / 'app-samples.json').write_text(json.dumps(damaged))
+                        with self.assertRaisesRegex(SystemExit, field):
+                            comparison.app_samples(root / 'metrics.json', workload, count)
+
+    def test_measured_iterations_are_selected_explicitly_with_optional_warmups(self):
+        comparison = self.module('compare-transcript-scroll-metrics')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = self.complete_reports(root)
+            for workload, count, warmup in [('scroll', 5, 2), ('streaming', 3, 70), ('watcher', 5, 1)]:
+                for include_warmup in [False, True]:
+                    with self.subTest(workload=workload, include_warmup=include_warmup):
+                        selected = [dict(s) for s in samples if s['id'].startswith(workload + '-')]
+                        for index, sample in enumerate(selected):
+                            sample['startingFootprintBytes'] = 100 + index
+                        if include_warmup:
+                            selected.append(dict(selected[0], id=f'{workload}-{warmup}', startingFootprintBytes=1))
+                        (root / 'app-samples.json').write_text(json.dumps(list(reversed(selected))))
+                        result = comparison.app_samples(root / 'metrics.json', workload, count)
+                        self.assertEqual(result['startingFootprintBytes'], list(range(100, 100 + count)))
+                        if workload == 'scroll':
+                            self.assertEqual(result['updateCount'], [0] * count)
+                            self.assertEqual(result['totalUpdateNanoseconds'], [0] * count)
+                            self.assertEqual(result['maximumUpdateNanoseconds'], [0] * count)
+
+    def test_duplicate_missing_and_unexpected_iteration_ids_are_rejected(self):
+        comparison = self.module('compare-transcript-scroll-metrics')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = self.complete_reports(root)
+            for workload, count, warmup in [('scroll', 5, 2), ('streaming', 3, 70), ('watcher', 5, 1)]:
+                selected = [s for s in samples if s['id'].startswith(workload + '-')]
+                for defect in ['duplicate', 'missing', 'unexpected', 'malformed', 'extra']:
+                    with self.subTest(workload=workload, defect=defect):
+                        damaged = [dict(s) for s in selected]
+                        if defect == 'duplicate': damaged[-1]['id'] = damaged[0]['id']
+                        elif defect == 'missing': damaged[1]['id'] = f'{workload}-{warmup}'
+                        elif defect == 'unexpected': damaged[-1]['id'] = f'{workload}-999'
+                        elif defect == 'malformed': damaged[-1]['id'] = f'{workload}-invalid'
+                        else: damaged.append(dict(damaged[-1], id=f'{workload}-999'))
+                        (root / 'app-samples.json').write_text(json.dumps(damaged))
+                        with self.assertRaisesRegex(SystemExit, '(Duplicate|Missing|Unexpected).*' + workload):
+                            comparison.app_samples(root / 'metrics.json', workload, count)
 
     def test_counters_and_peak_memory_cannot_replace_required_measurements(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -300,7 +355,8 @@ sys.exit(23)
             self.complete_reports(fixture)
             measure = scripts / 'measure-transcript-scroll.sh'
             measure.write_text('#!/bin/sh\nmkdir -p "$TRACE_SCROLL_BENCHMARK_OUTPUT_DIR"\n'
-                               'cp "$TRACE_FAKE_FIXTURE"/*.json "$TRACE_SCROLL_BENCHMARK_OUTPUT_DIR/"\n')
+                               'cp "$TRACE_FAKE_FIXTURE"/*.json "$TRACE_SCROLL_BENCHMARK_OUTPUT_DIR/"\n'
+                               'printf "%s\\n" "$TRACE_SCROLL_DERIVED_DATA_PATH" > "$TRACE_SCROLL_BENCHMARK_OUTPUT_DIR/derived-data-path.txt"\n')
             for path in scripts.iterdir(): path.chmod(0o755)
             self.git(candidate, 'add', '.')
             self.git(candidate, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'harness')
@@ -320,7 +376,8 @@ sys.exit(23)
             (output / 'candidate/TranscriptScroll.xcresult').mkdir()
             environment = dict(os.environ, PATH=str(binary) + os.pathsep + os.environ['PATH'],
                 TRACE_SCROLL_COMPARISON_OUTPUT_DIR=str(output), TRACE_SCROLL_BASELINE_CHECKOUT=str(baseline),
-                TRACE_SCROLL_BASELINE_REF='baseline-tag', TRACE_FAKE_FIXTURE=str(fixture))
+                TRACE_SCROLL_BASELINE_REF='baseline-tag', TRACE_FAKE_FIXTURE=str(fixture),
+                TRACE_SCROLL_COMPARISON_DERIVED_DATA_ROOT=str(output / 'derived-data'))
             for _ in range(2):
                 result = subprocess.run([str(scripts / 'benchmark-transcript-comparison.sh')], env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -331,6 +388,33 @@ sys.exit(23)
                 self.assertTrue((run / 'comparison.txt').exists())
                 self.assertTrue((run / 'candidate/app-samples.json').exists())
                 self.assertEqual(json.loads((run / 'metadata.json').read_text())['baseline_commit'], self.git(candidate, 'rev-parse', 'baseline-tag^{commit}'))
+                for revision in ['baseline', 'candidate']:
+                    derived_data = (run / revision / 'derived-data-path.txt').read_text().strip()
+                    self.assertEqual(derived_data, str(output / 'derived-data' / revision))
+
+    def test_competing_runners_require_attempt_ownership(self):
+        from unittest.mock import patch
+        runner = self.module('run-local-benchmark-comparisons')
+        root = Path('/fixture/repo')
+        derived_data = root / 'build/pair-1-attempt-1/derived-data'
+        records = '\n'.join([
+            '100 700 /usr/bin/xcodebuild',
+            '101 700 /elsewhere/TracePerformanceTests-Runner',
+            f'102 800 {derived_data}/candidate/Build/Products/TracePerformanceTests-Runner',
+            f'103 801 {root}/build/pair-1-attempt-2/derived-data/TracePerformanceTests-Runner',
+            f'104 802 {root}/build/transcript-scroll-derived-data/TracePerformanceTests-Runner',
+            f'105 803 {derived_data}-other/TracePerformanceTests-Runner',
+            '106 804 /elsewhere/TracePerformanceTests-Runner',
+            '107 805 /usr/bin/xcodebuild',
+            '108 700 /usr/bin/xctrace',
+            '109 700 /System/SecurityAgent',
+        ])
+        with patch.object(runner.subprocess, 'check_output', return_value=records):
+            found = runner.competitors(root, owned_group=700, owned_derived_data=derived_data)
+            self.assertEqual([s['pid'] for s in found], list(range(103, 110)))
+            # A path alone never establishes ownership before an attempt launches.
+            found = runner.competitors(root, owned_derived_data=derived_data)
+            self.assertEqual([s['pid'] for s in found], list(range(100, 110)))
 
     def test_local_runner_preserves_build_failure_and_stops_before_acceptance(self):
         from unittest.mock import patch
@@ -339,6 +423,7 @@ sys.exit(23)
             candidate, _ = self.baseline_fixture(root)
             command = candidate / 'Scripts/benchmark-transcript-comparison.sh'
             command.write_text('#!/bin/sh\nmkdir -p "$TRACE_SCROLL_COMPARISON_OUTPUT_DIR/runs/run-failed"\n'
+                               'printf "%s\\n" "$TRACE_SCROLL_COMPARISON_DERIVED_DATA_ROOT" > "$TRACE_SCROLL_COMPARISON_OUTPUT_DIR/derived-data-root.txt"\n'
                                'printf "build failed\\n"\nexit 23\n')
             command.chmod(0o755)
             self.git(candidate, 'add', '.')
@@ -350,6 +435,8 @@ sys.exit(23)
                     runner.run(candidate, output)
             host = json.loads(next(output.glob('*/runs/*/host-session-check.json')).read_text())
             self.assertEqual(host['processExitCode'], 23)
+            self.assertEqual((output / 'pair-1-attempt-1/derived-data-root.txt').read_text().strip(),
+                             str(output / 'pair-1-attempt-1/derived-data'))
             self.assertIn('build failed', (output / 'pair-1-attempt-1.log').read_text())
             self.assertFalse((output / 'local-acceptance.json').exists())
 

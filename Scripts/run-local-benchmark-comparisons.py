@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 
-def competitors(root, owned_group=None):
+def competitors(root, owned_group=None, owned_derived_data=None):
     records = subprocess.check_output(['ps', '-axo', 'pid=,pgid=,comm='], text=True)
     found = []
     for line in records.splitlines():
@@ -17,8 +17,11 @@ def competitors(root, owned_group=None):
         if len(fields) != 3: continue
         pid, group, command = int(fields[0]), int(fields[1]), fields[2]
         name = Path(command).name
-        owned = group == owned_group or (owned_group is not None and name == 'TracePerformanceTests-Runner'
-                                         and command.startswith(str(root) + '/build/'))
+        # macOS may launch the UI runner outside xcodebuild's process group.
+        # Only this attempt's fresh build directory establishes ownership then.
+        owned = owned_group is not None and (group == owned_group or (
+            name == 'TracePerformanceTests-Runner' and owned_derived_data is not None
+            and Path(command).resolve().is_relative_to(owned_derived_data.resolve())))
         if name == 'SecurityAgent': found.append({'pid': pid, 'reason': 'protected-macOS-dialog'})
         elif name in ['xctrace', 'Instruments']: found.append({'pid': pid, 'reason': 'profiling-session'})
         elif not owned and (name == 'xcodebuild' or name.endswith('-Runner') or name == 'xctest'):
@@ -52,8 +55,10 @@ def run(root, output):
             subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--', '.', ':(exclude)Vendor/GRDB.swift'], cwd=root, check=True)
             attempt += 1
             destination = output / f'pair-{index}-attempt-{attempt}'
+            derived_data = destination / 'derived-data'
             environment = dict(os.environ, TRACE_SCROLL_COMPARISON_OUTPUT_DIR=str(destination),
                                TRACE_SCROLL_COMPARISON_ORDER=order,
+                               TRACE_SCROLL_COMPARISON_DERIVED_DATA_ROOT=str(derived_data),
                                TRACE_SCROLL_BASELINE_CHECKOUT=str(root / 'build/local-release-baseline'))
             log = output / f'pair-{index}-attempt-{attempt}.log'
             print(f'Starting pair {index}, attempt {attempt}: {order}', flush=True)
@@ -63,7 +68,7 @@ def run(root, output):
                 process = subprocess.Popen([str(root / 'Scripts/benchmark-transcript-comparison.sh')], cwd=root,
                                            env=environment, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
                 while process.poll() is None:
-                    active = competitors(root, process.pid)
+                    active = competitors(root, process.pid, derived_data)
                     samples += 1
                     if active:
                         observations.append({'elapsedSeconds': time.monotonic() - started, 'sessions': active})
@@ -76,6 +81,7 @@ def run(root, output):
                     if 'Invoking UI interruption monitors' in line and 'from Application' in line and 'me.haroldmartin.Trace' not in line:
                         observations.append({'revision': test_log.parent.name, 'reason': 'foreign-window-interruption'})
             host = {'valid': not observations, 'sampleCount': samples, 'checkIntervalSeconds': 2,
+                    'ownedDerivedDataPath': str(derived_data),
                     'quietBeforeStartSeconds': 10, 'elapsedSeconds': time.monotonic() - started,
                     'competingSessionObservations': observations, 'processExitCode': process.returncode}
             (directory / 'host-session-check.json').write_text(json.dumps(host, indent=2) + '\n')
