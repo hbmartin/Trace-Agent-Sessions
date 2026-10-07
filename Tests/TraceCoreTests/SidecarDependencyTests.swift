@@ -112,6 +112,232 @@ final class SidecarDependencyTests: XCTestCase {
             XCTAssertTrue(mapping.configuredRecoveryPaths(for: external.path.uppercased()).contains(sidecar.path))
         }
     }
+    func testNegativeDeviceIdentityAndDevNullTargetAreSafe() throws {
+        XCTAssertEqual(TraceFileIO.unsignedDevice(-1), UInt64(UInt32.max))
+        XCTAssertEqual(TraceFileIO.unsignedDevice(Int32.min), 2_147_483_648)
+        let root = try fixture()
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try FileManager.default.createSymbolicLink(atPath: sidecar.path, withDestinationPath: "/dev/null")
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [root])
+        XCTAssertEqual(mapping.configuredChangePaths(for: "/dev/null"), [sidecar.path])
+        XCTAssertFalse(mapping.topologyHasChanged)
+        var status = stat()
+        XCTAssertEqual(lstat("/dev/null", &status), 0)
+        let fingerprint = try TraceFileIO.fingerprint(url: URL(fileURLWithPath: "/dev/null"))
+        XCTAssertEqual(fingerprint.device, UInt64(UInt32(bitPattern: status.st_dev)))
+    }
+
+    func testHomeFileMonitorObservesAppendReplacementAndMissingWalCreation() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("configured")
+        let userHome = root.appendingPathComponent("user-home")
+        for dir in [home, userHome] { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        let target = userHome.appendingPathComponent("names")
+        let sidecar = home.appendingPathComponent("state_7.sqlite")
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: target)
+        let snapshot = CodexMetadataSidecarMapping(metadataDirectories: [home], userHome: userHome)
+        XCTAssertFalse(snapshot.targetDirectories.contains { $0.path == userHome.path || $0.path == "/" })
+        XCTAssertTrue(snapshot.namespaceDirectories.contains { $0.path == userHome.path })
+        XCTAssertTrue(snapshot.directContentFiles.contains(target))
+        let received = OSAllocatedUnfairLock(initialState: [Set<String>]())
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: snapshot) { changes, _ in
+            if changes.hasIndexWork { received.withLock { $0.append(changes.paths) } }
+        }
+        watcher.userHomeForTesting = userHome
+        await watcher.start()
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(250))
+        func count() -> Int { received.withLock { $0.filter { $0.contains(sidecar.path) }.count } }
+        var prior = count()
+        try Data("first".utf8).write(to: target)
+        var observed = await eventually { count() > prior && watcher.directContentPathsForTesting.contains(target.path) }
+        XCTAssertTrue(observed, "namespace creation must install the missing target")
+        try await Task.sleep(for: .milliseconds(200)); prior = count()
+        let handle = try FileHandle(forWritingTo: target)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data("append".utf8)); try handle.close()
+        observed = await eventually { count() > prior }; XCTAssertTrue(observed)
+        try await Task.sleep(for: .milliseconds(200)); prior = count()
+        let replacement = userHome.appendingPathComponent("replacement")
+        try Data("replace".utf8).write(to: replacement)
+        XCTAssertEqual(rename(replacement.path, target.path), 0)
+        observed = await eventually { count() > prior }; XCTAssertTrue(observed)
+        try await Task.sleep(for: .milliseconds(200)); prior = count()
+        let reopened = try FileHandle(forWritingTo: target)
+        try reopened.seekToEnd(); try reopened.write(contentsOf: Data("new inode append".utf8)); try reopened.close()
+        observed = await eventually { count() > prior }; XCTAssertTrue(observed, "replacement inode must be reopened")
+        try await Task.sleep(for: .milliseconds(200)); prior = count()
+        let wal = URL(fileURLWithPath: target.path + "-wal")
+        try Data("wal".utf8).write(to: wal)
+        observed = await eventually { count() > prior && watcher.directContentPathsForTesting.contains(wal.path) }
+        XCTAssertTrue(observed)
+        try await Task.sleep(for: .milliseconds(200)); prior = count()
+        let walHandle = try FileHandle(forWritingTo: wal)
+        try walHandle.seekToEnd(); try walHandle.write(contentsOf: Data("append".utf8)); try walHandle.close()
+        observed = await eventually { count() > prior }; XCTAssertTrue(observed)
+        watcher.stop()
+        _ = watcher.namespaceMonitorCountForTesting // Drain shutdown before checking descriptors.
+        XCTAssertTrue(watcher.directContentPathsForTesting.isEmpty)
+    }
+
+    func testIndependentlySymlinkedWalTargetInHomeGetsDirectFileMonitor() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("configured")
+        let userHome = root.appendingPathComponent("user-home")
+        for dir in [home, userHome] { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        let database = home.appendingPathComponent("state_7.sqlite")
+        let target = userHome.appendingPathComponent("independent-wal")
+        try Data().write(to: database); try Data().write(to: target)
+        try FileManager.default.createSymbolicLink(at: URL(fileURLWithPath: database.path + "-wal"), withDestinationURL: target)
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [home], userHome: userHome)
+        XCTAssertTrue(mapping.directContentFiles.contains(target))
+        XCTAssertFalse(mapping.targetDirectories.contains(userHome))
+        let received = OSAllocatedUnfairLock(initialState: Set<String>())
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: mapping) { changes, _ in
+            received.withLock { $0.formUnion(changes.paths) }
+        }
+        watcher.userHomeForTesting = userHome
+        await watcher.start()
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(250)); received.withLock { $0 = [] }
+        let handle = try FileHandle(forWritingTo: target)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data("append".utf8)); try handle.close()
+        let observed = await eventually { received.withLock { $0.contains(database.path) } }
+        XCTAssertTrue(observed)
+    }
+
+    func testRootTargetUsesFileAndNamespaceMonitorsWithoutRecursiveRootStream() throws {
+        let root = try fixture()
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        let target = "/TraceMissing-" + UUID().uuidString
+        try FileManager.default.createSymbolicLink(atPath: sidecar.path, withDestinationPath: target)
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [root])
+        XCTAssertTrue(mapping.directContentFiles.contains { $0.path == target })
+        XCTAssertTrue(mapping.namespaceDirectories.contains { $0.path == "/" })
+        XCTAssertFalse(mapping.targetDirectories.contains { $0.path == "/" })
+    }
+
+    func testSelectiveRecoveryBackoffWarningsAndShutdownUseInjectedSchedule() async throws {
+        let root = try fixture()
+        let homes = [root.appendingPathComponent("first/config"), root.appendingPathComponent("second/config")]
+        let parents = homes.map { $0.deletingLastPathComponent() }
+        for parent in parents { try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true) }
+        let clock = OSAllocatedUnfairLock(initialState: 100.0)
+        let failedPaths = OSAllocatedUnfairLock(initialState: Set(parents.map(\.path)))
+        let opens = OSAllocatedUnfairLock(initialState: [String: Int]())
+        let scheduled = OSAllocatedUnfairLock(initialState: [ScheduledMetadataWork]())
+        let received = OSAllocatedUnfairLock(initialState: [(Set<String>, [String])]())
+        let watcher = CodexMetadataWatcher(metadataDirectories: homes,
+            mapping: CodexMetadataSidecarMapping(metadataDirectories: homes)) { changes, warnings in
+            received.withLock { $0.append((changes.paths, warnings)) }
+        }
+        watcher.nowForTesting = { clock.withLock { $0 } }
+        watcher.scheduleForTesting = { delay, work in let entry = ScheduledMetadataWork(delay: delay, work: work); scheduled.withLock { $0.append(entry) } }
+        watcher.openNamespaceForTesting = { path in
+            opens.withLock { $0[path, default: 0] += 1 }
+            if failedPaths.withLock({ $0.contains(path) }) { errno = EACCES; return -1 }
+            return open(path, O_EVTONLY | O_CLOEXEC)
+        }
+        await watcher.start()
+        defer { watcher.stop() }
+        let firstKey = "namespace:" + parents[0].path
+        let secondKey = "namespace:" + parents[1].path
+        XCTAssertEqual(watcher.retryDelaysForTesting[firstKey], 5)
+        XCTAssertEqual(watcher.retryDelaysForTesting[secondKey], 5)
+        let initialCount = received.withLock { $0.count }
+        watcher.retryMonitoringForTesting()
+        XCTAssertEqual(received.withLock { $0.count }, initialCount, "not-due monitors and unchanged warnings stay quiet")
+        failedPaths.withLock { _ = $0.remove(parents[0].path) }
+        clock.withLock { $0 += 5 }
+        watcher.retryMonitoringForTesting()
+        XCTAssertNil(watcher.retryDelaysForTesting[firstKey])
+        XCTAssertEqual(watcher.retryDelaysForTesting[secondKey], 10)
+        let recovery = received.withLock { $0.last! }
+        XCTAssertTrue(recovery.0.contains(homes[0].appendingPathComponent("session_index.jsonl").path))
+        XCTAssertFalse(recovery.0.contains(homes[1].appendingPathComponent("session_index.jsonl").path))
+        XCTAssertEqual(recovery.1.count, 1, "one unavailable monitor must not block refreshing the recovered scope")
+        let recoveredCount = received.withLock { $0.count }
+        for delay in [10.0, 20, 40, 80, 160, 300] {
+            XCTAssertEqual(watcher.retryDelaysForTesting[secondKey], delay)
+            clock.withLock { $0 += delay }
+            watcher.retryMonitoringForTesting()
+            XCTAssertEqual(received.withLock { $0.count }, recoveredCount, "unchanged warnings must not be republished")
+        }
+        XCTAssertEqual(watcher.retryDelaysForTesting[secondKey], 300)
+        watcher.stop(); _ = watcher.namespaceMonitorCountForTesting
+        let openCount = opens.withLock { $0 }
+        for entry in scheduled.withLock({ $0 }) { watcher.performForTesting(entry.work) }
+        watcher.retryMonitoringForTesting()
+        XCTAssertEqual(opens.withLock { $0 }, openCount)
+        XCTAssertEqual(received.withLock { $0.count }, recoveredCount)
+    }
+
+    func testLiveWalCreationCoalescesContentAndNamespaceNotifications() async throws {
+        let root = try fixture()
+        let file = root.appendingPathComponent("state_7.sqlite")
+        let wal = URL(fileURLWithPath: file.path + "-wal")
+        try Data().write(to: file)
+        let received = OSAllocatedUnfairLock(initialState: [Set<String>]())
+        let watcher = CodexMetadataWatcher(metadataDirectories: [root], mapping: CodexMetadataSidecarMapping(metadataDirectories: [root])) {
+            changes, _ in if changes.paths.contains(file.path) { received.withLock { $0.append(changes.paths) } }
+        }
+        await watcher.start()
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(250))
+        received.withLock { $0 = [] }
+        try Data("wal".utf8).write(to: wal)
+        var observed = await eventually { received.withLock { !$0.isEmpty } }
+        XCTAssertTrue(observed)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(received.withLock { $0.count }, 1, "WAL content and parent creation notifications share one batch")
+        let handle = try FileHandle(forWritingTo: wal)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data("later write".utf8)); try handle.close()
+        observed = await eventually { received.withLock { $0.count == 2 } }
+        XCTAssertTrue(observed, "a later write must create a new batch")
+    }
+
+    func testContentAndNamespaceBatchUsesQuietWindowAndMaximumDelay() async throws {
+        let root = try fixture()
+        let file = root.appendingPathComponent("state_7.sqlite")
+        try Data().write(to: file)
+        let clock = OSAllocatedUnfairLock(initialState: 10.0)
+        let scheduled = OSAllocatedUnfairLock(initialState: [ScheduledMetadataWork]())
+        let received = OSAllocatedUnfairLock(initialState: [Set<String>]())
+        let watcher = CodexMetadataWatcher(metadataDirectories: [root], mapping: CodexMetadataSidecarMapping(metadataDirectories: [root])) {
+            changes, _ in received.withLock { $0.append(changes.paths) }
+        }
+        watcher.nowForTesting = { clock.withLock { $0 } }
+        watcher.scheduleForTesting = { delay, work in let entry = ScheduledMetadataWork(delay: delay, work: work); scheduled.withLock { $0.append(entry) } }
+        await watcher.start()
+        defer { watcher.stop() }
+        // Drain native startup events before injecting a deterministic notification sequence.
+        try await Task.sleep(for: .milliseconds(250))
+        watcher.refreshTopologyForTesting()
+        scheduled.withLock { $0 = [] }; received.withLock { $0 = [] }
+        var changes = SourceChanges()
+        changes.include(path: file.path + "-wal", flags: UInt32(kFSEventStreamEventFlagItemCreated),
+            eventID: 1, streamIdentifier: "metadata")
+        watcher.receiveForTesting(changes, namespacePath: root.path)
+        XCTAssertEqual(scheduled.withLock { $0.last!.delay }, 0.05, accuracy: 0.0001)
+        clock.withLock { $0 += 0.04 }
+        watcher.receiveForTesting(changes)
+        XCTAssertEqual(scheduled.withLock { $0.last!.delay }, 0.05, accuracy: 0.0001)
+        clock.withLock { $0 += 0.04 }
+        watcher.receiveForTesting(changes)
+        XCTAssertEqual(scheduled.withLock { $0.last!.delay }, 0.02, accuracy: 0.0001)
+        let work = scheduled.withLock { $0.last! }.work
+        for entry in scheduled.withLock({ Array($0.dropLast()) }) { watcher.performForTesting(entry.work) }
+        XCTAssertTrue(received.withLock { $0.isEmpty })
+        clock.withLock { $0 += 0.02 }; watcher.performForTesting(work)
+        XCTAssertEqual(received.withLock { $0 }, [[file.path]])
+        watcher.receiveForTesting(changes)
+        watcher.performForTesting(scheduled.withLock { $0.last! }.work)
+        XCTAssertEqual(received.withLock { $0.count }, 2, "subsequent writes require a new batch")
+        watcher.receiveForTesting(changes)
+        watcher.stop(); _ = watcher.namespaceMonitorCountForTesting
+        watcher.performForTesting(scheduled.withLock { $0.last! }.work)
+        XCTAssertEqual(received.withLock { $0.count }, 2, "shutdown discards pending batches")
+    }
+
     private func eventually(_ condition: () -> Bool) async -> Bool {
         for _ in 0..<100 {
             if condition() { return true }
@@ -173,6 +399,47 @@ final class SidecarDependencyTests: XCTestCase {
         try Data([1]).write(to: target)
         let observed = await eventually { records.withLock { $0.contains { $0.paths.isSuperset(of: [index.path, sidecar.path]) } } }
         XCTAssertTrue(observed)
+    }
+
+    func testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("home")
+        let external = root.appendingPathComponent("external")
+        for path in [home, external] {
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        }
+        let intermediate = external.appendingPathComponent("new")
+        let targetDirectory = intermediate.appendingPathComponent("deep")
+        let target = targetDirectory.appendingPathComponent("names")
+        let sidecar = home.appendingPathComponent("session_index.jsonl")
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: target)
+        let records = OSAllocatedUnfairLock<[SourceChanges]>(initialState: [])
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: .init(metadataDirectories: [home])) {
+            changes, _ in records.withLock { $0.append(changes) }
+        }
+        // Deliver the parent notification explicitly. A quiet vnode prevents a
+        // second native parent event from accidentally repairing the activation gap.
+        watcher.openNamespaceForTesting = { _ in open("/dev/null", O_EVTONLY | O_CLOEXEC) }
+        await watcher.start()
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(200))
+        try FileManager.default.createDirectory(at: intermediate, withIntermediateDirectories: false)
+        let injected = OSAllocatedUnfairLock(initialState: false)
+        watcher.beforeActivationForTesting = {
+            if injected.withLock({ value in let old = value; value = true; return old }) { return }
+            try? FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: false)
+            try? Data().write(to: target)
+        }
+        watcher.refreshTopologyForTesting()
+        XCTAssertTrue(injected.withLock { $0 })
+        XCTAssertTrue(watcher.contentDirectoryPathsForTesting.contains(targetDirectory.path),
+                      "refresh must recheck the namespace after activating its next level")
+        records.withLock { $0 = [] }
+        let handle = try FileHandle(forWritingTo: target)
+        try handle.write(contentsOf: Data("{}\n".utf8))
+        try handle.close()
+        let observed = await eventually { records.withLock { $0.contains { $0.paths.contains(sidecar.path) } } }
+        XCTAssertTrue(observed, "a later write must reach the configured sidecar without another parent event")
     }
 
     func testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored() async throws {
@@ -321,4 +588,9 @@ final class SidecarDependencyTests: XCTestCase {
         let updated = await eventually { calls.withLock { $0 > 0 } }
         XCTAssertTrue(updated, "the recreated namespace must monitor subsequent target writes; streams=\(watcher.contentDirectoryPathsForTesting)")
     }
+}
+
+private struct ScheduledMetadataWork: @unchecked Sendable {
+    let delay: TimeInterval
+    let work: DispatchWorkItem
 }

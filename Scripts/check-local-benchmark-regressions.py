@@ -24,8 +24,19 @@ def summarize_pair(directory):
     metadata = json.loads((directory / 'metadata.json').read_text())
     if metadata['locale'] != 'en_US' or metadata['baseline_commit'] != BASELINE:
         raise ValueError('Pair uses a different baseline or locale')
+    if metadata.get('build_inputs_validated') is not True:
+        raise ValueError('Pair is missing completed build-input validation')
+    for revision in ['baseline', 'candidate']:
+        before = metadata.get(revision + '_build_inputs')
+        after = metadata.get(revision + '_build_inputs_after')
+        if not before or before != after or before.get('.', {}).get('commit') != metadata[revision + '_commit']:
+            raise ValueError('Pair build-input provenance differs: ' + revision)
+        for phase in ['before-baseline', 'after-baseline', 'before-candidate', 'after-candidate', 'after']:
+            recorded = json.loads((directory / (revision + '-build-inputs.' + phase + '.json')).read_text())
+            if recorded != before:
+                raise ValueError('Pair build inputs changed: ' + revision + ' ' + phase)
     host = json.loads((directory / 'host-session-check.json').read_text())
-    if not host.get('valid') or host.get('competingSessionObservations'):
+    if not host.get('valid') or host.get('competingSessionObservations') or host.get('processExitCode', 0) != 0:
         raise ValueError('Pair overlaps another UI/build/profiling session')
     baseline, candidate = [directory / revision / 'metrics.json' for revision in ('baseline', 'candidate')]
     subprocess.run([sys.executable, str(Path(__file__).with_name('compare-transcript-scroll-metrics.py')),
@@ -66,14 +77,16 @@ def summarize_pair(directory):
     return {'metadata': metadata, 'workloads': workloads}
 
 
-def evaluate(directories, tolerance=10):
+def evaluate(directories, tolerance=10, candidate_commit=None):
     if len(directories) != 3: raise ValueError('Exactly three pairs are required')
     pairs = [summarize_pair(directory) for directory in directories]
     first = pairs[0]['metadata']
+    if candidate_commit is not None and first['candidate_commit'] != candidate_commit:
+        raise ValueError('Pair uses a different candidate commit')
     for index, pair in enumerate(pairs):
         metadata = pair['metadata']
         if metadata['order'] != ORDERS[index]: raise ValueError('Unexpected pair revision order')
-        for key in ['candidate_commit', 'identical_harness_files', 'toolchain']:
+        for key in ['candidate_commit', 'identical_harness_files', 'toolchain', 'candidate_build_inputs', 'baseline_build_inputs']:
             if metadata[key] != first[key]: raise ValueError('Pair provenance differs: ' + key)
     aggregate, aggregate_medians, failures = {}, {}, []
     for workload in pairs[0]['workloads']:
@@ -110,9 +123,10 @@ if __name__ == '__main__':
     parser.add_argument('pairs', nargs=3, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--tolerance-percent', type=float, default=10)
+    parser.add_argument('--candidate-commit')
     args = parser.parse_args()
     if not math.isfinite(args.tolerance_percent) or args.tolerance_percent < 0: parser.error('Invalid tolerance')
-    try: report = evaluate(args.pairs, args.tolerance_percent)
+    try: report = evaluate(args.pairs, args.tolerance_percent, args.candidate_commit)
     except (ValueError, KeyError, FileNotFoundError, subprocess.CalledProcessError) as error:
         raise SystemExit('Local benchmark validation failed: ' + str(error))
     args.output.parent.mkdir(parents=True, exist_ok=True)

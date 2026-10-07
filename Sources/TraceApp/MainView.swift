@@ -765,6 +765,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var refreshedTargetRowHeight = false
             var revealedTargetRow = false
             var lastDocumentHeight: CGFloat?
+            var hydrationDeadline: ContinuousClock.Instant?
+            var hydrationTimedOut = false
+            var inputGeneration: UInt64 = 0
+            var sessionID: Int64 = 0
 
             init(
                 bookmark: TranscriptBookmark, reason: Reason,
@@ -1170,6 +1174,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     refreshesRowHeights: refreshesRowHeights
                 )
             }
+            if let request = pendingRestore, request.hydrationDeadline != nil,
+               request.sessionID == sessionID, request.inputGeneration == userInputGeneration,
+               let row = rowByMessageID[request.bookmark.messageID],
+               model.hydratedMessages[items[row].summary.id] != nil
+                    || model.hydrationFailures.contains(items[row].summary.id) {
+                scheduleRestore(token: request.token, delayMilliseconds: 0)
+            }
             if !items.isEmpty, pendingRestore == nil { positionEstablished = true }
             if TraceTestHooks.isUITesting,
                TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] == "rubber-band-return",
@@ -1451,6 +1462,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 }
             }
             guard !items.isEmpty else { return }
+            if TraceTestHooks.isUITesting,
+               let raw = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"],
+               let index = Int(raw), let item = items.first(where: { $0.sourceIndex == index }) {
+                model.scrollPositions[sessionID] = .init(messageID: item.summary.id,
+                    offset: Double(TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] ?? "0") ?? 0,
+                    index: index)
+            }
             requestRestore(
                 model.scrollPositions[sessionID]
                     ?? .init(messageID: items[0].summary.id, offset: 0, index: 0),
@@ -1480,7 +1498,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             beginRestore(request)
         }
 
-        private func beginRestore(_ request: RestoreRequest) {
+        private func beginRestore(_ initialRequest: RestoreRequest) {
+            var request = initialRequest
+            request.inputGeneration = userInputGeneration
+            request.sessionID = sessionID
             cancelPendingRestore(reportCancellation: false)
             pendingRestore = request
             if request.reason.reportsHooks {
@@ -1553,7 +1574,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
                   let table, let scrollView, !userScrolling else { return }
             let performanceInterval = TracePerformance.begin("Transcript Restore")
             defer { TracePerformance.end(performanceInterval) }
-            let bookmark = request.bookmark
+            guard request.sessionID == sessionID, request.inputGeneration == userInputGeneration else {
+                cancelPendingRestore(reportCancellation: true, cause: .userInteraction)
+                return
+            }
+            var bookmark = request.bookmark
             let exact = rowByMessageID[bookmark.messageID]
             let row = exact ?? items.indices.min {
                 abs(items[$0].sourceIndex - bookmark.index) < abs(items[$1].sourceIndex - bookmark.index)
@@ -1577,22 +1602,36 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 request.revealedTargetRow = true
             }
             let target = items[row].summary
-            if table.rect(ofRow: row).height + bookmark.offset <= 0,
-               model?.hydratedMessages[target.id] == nil,
-               model?.hydrationFailures.contains(target.id) != true,
-               request.attemptsRemaining > 1 {
-                // A clipped bookmark can exceed the preview row's height. Keep
-                // the row revealed until its content loads; clipping it now can
-                // remove the SwiftUI task before it starts hydration.
+            let collapsed = TranscriptRowContent.isLazyAuxiliary(role: target.role, visibility: visibility)
+                && !expansionState(for: target.id).auxiliary
+            let contentReady = collapsed || model?.hydratedMessages[target.id] != nil
+                || model?.hydrationFailures.contains(target.id) == true
+            if !contentReady {
+                // Waiting for source content does not spend the geometry budget.
+                // Keep the original bookmark through timeout and resume on a content
+                // update only while this session and input generation still match.
                 model?.hydrate(target)
-                request.attemptsRemaining -= 1
+                let deadline = request.hydrationDeadline ?? .now.advanced(by: .seconds(5))
+                request.hydrationDeadline = deadline
                 request.stableChecks = 0
+                request.lastDocumentHeight = nil
+                TraceTestHooks.appendLine("waiting,\(request.bookmark.index),\(request.bookmark.offset),\(request.attemptsRemaining)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_RESTORE_AUDIT_PATH")
+                request.hydrationTimedOut = ContinuousClock.now >= deadline
                 pendingRestore = request
                 rememberProgrammaticOrigin()
                 applyingProgrammaticScroll = false
-                scheduleRestore(token: token, delayMilliseconds: 75)
+                if request.hydrationTimedOut {
+                    TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_TIMEOUT_PATH")
+                    TraceTestHooks.appendLine("timeout,\(request.bookmark.index),\(request.bookmark.offset),\(request.attemptsRemaining),\(model?.scrollPositions[sessionID]?.offset ?? 0)",
+                        pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_RESTORE_AUDIT_PATH")
+                } else {
+                    scheduleRestore(token: token, delayMilliseconds: 75)
+                }
                 return
             }
+            request.hydrationDeadline = nil
+            request.hydrationTimedOut = false
             // Invalidating automatic heights can replace the anchor's measured
             // height with an estimate. Materialize and lay out just this row before
             // restoring a negative offset, which may exceed that estimate.
@@ -1621,6 +1660,25 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 request.refreshedTargetRowHeight = true
             }
             var rowRect = table.rect(ofRow: row)
+            if !collapsed, rowRect.height + bookmark.offset <= 0,
+               model?.hydrationFailures.contains(target.id) != true,
+               request.attemptsRemaining > 1 {
+                // The cache can publish before the hosting view measures its full
+                // content. Keep the hydrated row visible for the next layout turn
+                // instead of clipping it away using its preview-height estimate.
+                request.attemptsRemaining -= 1
+                request.stableChecks = 0
+                request.lastDocumentHeight = nil
+                pendingRestore = request
+                rememberProgrammaticOrigin()
+                applyingProgrammaticScroll = false
+                scheduleRestore(token: token, delayMilliseconds: 75)
+                return
+            }
+            if collapsed, rowRect.height + bookmark.offset <= 0 {
+                bookmark = .init(messageID: bookmark.messageID,
+                    offset: min(0, 1 - rowRect.height), index: bookmark.index)
+            }
             var origin = constrainedOrigin(
                 for: rowRect.minY - bookmark.offset, table: table, scrollView: scrollView
             )
@@ -1653,15 +1711,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let heightIsStable = request.lastDocumentHeight.map {
                 abs($0 - documentHeight) <= 1
             } ?? false
-            let contentIsReady: Bool
-            if case .search(let messageID) = request.reason {
-                contentIsReady = model?.hydratedMessages[messageID] != nil
-                    || model?.hydrationFailures.contains(messageID) == true
-            } else {
-                contentIsReady = true
-            }
             request.lastDocumentHeight = documentHeight
-            if (offsetMatches || constrainedAtEdge) && heightIsStable && contentIsReady {
+            if (offsetMatches || constrainedAtEdge) && heightIsStable {
                 request.stableChecks += 1
             }
             else { request.stableChecks = 0 }
@@ -1676,6 +1727,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 pendingRestore = nil
                 restoreWorkItem = nil
                 TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_COMPLETED_PATH")
+                TraceTestHooks.appendLine("completed,\(request.bookmark.index),\(request.bookmark.offset),\(request.reason.isExplicitNavigation),\(request.inputGeneration)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_RESTORE_AUDIT_PATH")
                 positionEstablished = true
                 pendingAnchorCorrection = !pendingHeightMessageIDs.isEmpty || extentNeedsRefresh
                 establishedBookmark = .init(messageID: items[row].summary.id, offset: achievedOffset, index: items[row].sourceIndex)
@@ -2095,6 +2148,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             guard let maximumScrollY = exactMaximumScrollY else { return }
             recordVisibleGapForUITest()
+            if let bookmark = currentBookmark() {
+                TraceTestHooks.appendLine("\(bookmark.index),\(bookmark.offset)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_READER_PROBE_PATH")
+            }
             TraceTestHooks.appendLine(
                 "\(Double(scrollView.contentView.bounds.origin.y)),\(Double(maximumScrollY)),\(followsBottom)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"
@@ -2478,7 +2535,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
             refreshesRowHeights: Bool = false
         ) {
             guard !items.isEmpty else { return }
-            if let pendingRestore, pendingRestore.reason.priority > reason.priority { return }
+            if let pendingRestore,
+               pendingRestore.reason.priority > reason.priority
+                    || (pendingRestore.hydrationDeadline != nil && !reason.isExplicitNavigation) { return }
             if snapshot.followsBottom {
                 if case .passive = reason,
                    !isUserInteracting || settledBottomInputGeneration == userInputGeneration {
@@ -2944,8 +3003,7 @@ private struct MessageRow: View {
     }
 
     private var isLazyAuxiliary: Bool {
-        visibility.includes(role: summary.role)
-            && [.toolResult, .toolUse, .system, .reasoning].contains(summary.role)
+        TranscriptRowContent.isLazyAuxiliary(role: summary.role, visibility: visibility)
     }
 
     private struct HydrationTaskID: Hashable {
@@ -2986,5 +3044,11 @@ private struct MessageRow: View {
         case .system: .secondary
         case .reasoning: .purple
         }
+    }
+}
+
+private enum TranscriptRowContent {
+    static func isLazyAuxiliary(role: MessageRole, visibility: TranscriptVisibility) -> Bool {
+        visibility.includes(role: role) && [.toolResult, .toolUse, .system, .reasoning].contains(role)
     }
 }

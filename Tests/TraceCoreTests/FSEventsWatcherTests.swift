@@ -31,6 +31,23 @@ final class FSEventsWatcherTests: XCTestCase {
         XCTAssertEqual(changes.watermarks["sidecars"], 11)
     }
 
+    func testClonedDirectoriesRequireReconciliationWithoutCreatedFlag() {
+        for extra in [UInt32(0), UInt32(kFSEventStreamEventFlagItemCreated)] {
+            var changes = SourceChanges()
+            changes.include(path: "/tmp/cloned", flags: UInt32(kFSEventStreamEventFlagItemIsDir
+                | kFSEventStreamEventFlagItemCloned) | extra, eventID: 42,
+                streamIdentifier: "volume", streamRoots: ["/tmp"])
+            XCTAssertEqual(changes.reconciliationPaths, ["/tmp/cloned"])
+            XCTAssertTrue(changes.hasIndexWork)
+            XCTAssertEqual(changes.watermarks["volume"], 42)
+        }
+        var created = SourceChanges()
+        created.include(path: "/tmp/created", flags: UInt32(kFSEventStreamEventFlagItemIsDir
+            | kFSEventStreamEventFlagItemCreated), eventID: 43, streamIdentifier: "volume")
+        XCTAssertTrue(created.reconciliationPaths.isEmpty)
+        XCTAssertFalse(created.hasIndexWork)
+    }
+
     func testWatcherReportsEmptyRootStartupFailure() {
         let watcher = FSEventsWatcher(roots: []) { _ in }
         XCTAssertFalse(watcher.start())

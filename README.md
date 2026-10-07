@@ -179,6 +179,10 @@ Debug signing includes `get-task-allow` so Xcode can attach to Trace while the
 hardened runtime stays enabled. `CODE_SIGNING_ALLOWED=NO` is useful for compile
 checks but produces an app that cannot be debugged this way.
 
+Local benchmark validation permits this ignored signing file with comments and
+`DEVELOPMENT_TEAM` only, and records its SHA-256. Other signing-file build-setting
+overrides and unknown build inputs are rejected.
+
 The generated `Trace.xcodeproj` is committed. CI regenerates it and rejects
 drift from `project.yml`; CI also checks the Debug and Release signing settings.
 
@@ -244,3 +248,32 @@ transcript text.
 signed app, creates a DMG, notarizes, staples, and verifies it. Configure team
 `MGPHJKUJSY` in `Config/Signing.xcconfig`, install its Developer ID Application
 certificate, and create a `notarytool` keychain profile first.
+
+### Local performance acceptance safeguards
+
+Freeze the candidate commit, then run `python3 Scripts/run-local-benchmark-comparisons.py`.
+It runs three Release pairs against `61c00de`, in baseline-first, candidate-first,
+baseline-first order, and applies the local 10% tolerance described in `AGENTS.md`.
+CI remains report-only for performance differences.
+
+Each measured revision and pair has before/after input records covering the
+captured commit, production sources, build configuration, initialized dependencies,
+and synchronized harness. Acceptance requires matching records, including after
+the third pair. Builds stay in the existing candidate checkout: these checks
+cannot detect an edit fully reverted between observations. Do not edit the
+candidate during measurements. A subsequent code change requires a new frozen
+candidate and three fresh pairs.
+
+Attempts retain raw samples, signed memory growth, hashes, logs, and failed-run
+evidence. Missing cached dependencies are initialized after validating the root
+and existing dependencies; dependency drift is rejected. Interrupted attempts
+stop their owned process group and detached app/test executables under that
+attempt's derived-data directory, with bounded SIGINT, SIGTERM, and SIGKILL
+escalation. Unrelated processes and artifacts are preserved.
+
+The defaults are three attempts per pair, a five-minute quiet-desktop timeout,
+and a one-hour attempt timeout. Positive CLI overrides are `--max-attempts`,
+`--quiet-timeout-seconds`, and `--attempt-timeout-seconds`. Build failures stop
+immediately. Protected dialogs and foreign-window interruptions stop with a
+diagnostic so the interruption can be resolved before restarting. Other host
+contamination may retry within the configured attempt limit.

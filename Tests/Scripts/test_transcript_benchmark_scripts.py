@@ -451,7 +451,17 @@ sys.exit(23)
                 target.mkdir()
                 self.complete_reports(target)
             (pair / 'metadata.json').write_text(json.dumps(dict(locale='en_US', baseline_commit=checker.BASELINE,
-                candidate_commit='frozen', order=order, toolchain={'fixture': True}, identical_harness_files={'fixture': 'equal'})))
+                candidate_commit='frozen', order=order, toolchain={'fixture': True}, identical_harness_files={'fixture': 'equal'},
+                build_inputs_validated=True,
+                **{revision + suffix: {'.': {'commit': commit}, 'production_sources_sha256': 'fixture',
+                     'build_input_sha256': {'fixture': 'hash'}, 'harness_sha256': {'fixture': 'equal'}}
+                   for revision, commit in [('baseline', checker.BASELINE), ('candidate', 'frozen')]
+                   for suffix in ['_build_inputs', '_build_inputs_after']})))
+            metadata = json.loads((pair / 'metadata.json').read_text())
+            for revision in ['baseline', 'candidate']:
+                for phase in ['before-baseline', 'after-baseline', 'before-candidate', 'after-candidate', 'after']:
+                    (pair / (revision + '-build-inputs.' + phase + '.json')).write_text(
+                        json.dumps(metadata[revision + '_build_inputs']))
             (pair / 'host-session-check.json').write_text(json.dumps(dict(valid=True, competingSessionObservations=[])))
             pairs.append(pair)
         return checker, pairs

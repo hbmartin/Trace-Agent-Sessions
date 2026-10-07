@@ -1180,12 +1180,21 @@ final class TraceModel: ObservableObject {
         hydratingMessageIDs.insert(message.id)
         let request = sessionRequestID
         let generation = selectedSession?.sourceGeneration
-        hydrationFailures.remove(message.id)
+        if hydrationFailures.contains(message.id) { hydrationFailures.remove(message.id) }
         Task {
             defer { hydratingMessageIDs.remove(message.id) }
             let start = ContinuousClock.now
             do {
+                if let delay = TraceTestHooks.delayMilliseconds(
+                    for: "TRACE_TEST_TRANSCRIPT_HYDRATION_DELAY_MS",
+                    marker: .line(String(message.id), pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_STARTED_PATH")
+                ) {
+                    try await TraceTestHooks.waitForRelease(
+                        pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_RELEASE_PATH", timeoutMilliseconds: delay
+                    )
+                }
                 let hydrated = try await coordinator.hydrate(message)
+                TraceTestHooks.appendLine(String(message.id), pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_COMPLETED_PATH")
                 guard sessionRequestID == request, selectedSession?.sourceGeneration == generation else { return }
                 var cache = hydratedMessages
                 cache[message.id] = hydrated

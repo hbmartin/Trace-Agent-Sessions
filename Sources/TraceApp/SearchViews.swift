@@ -72,7 +72,7 @@ struct RecentPopoverView: View {
 
             Divider()
             HStack {
-                IndexProgressLabel(progress: model.progress)
+                IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings)
                 Spacer()
                 Button("Open Trace") {
                     NotificationCenter.default.post(name: .traceShowMainWindow, object: nil)
@@ -195,7 +195,7 @@ struct LauncherView: View {
             }
             Divider()
             HStack {
-                IndexProgressLabel(progress: model.progress)
+                IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings)
                 Spacer()
                 if TraceTestHooks.isUITesting {
                     Button("Rebuild Index") { model.rebuildIndex() }
