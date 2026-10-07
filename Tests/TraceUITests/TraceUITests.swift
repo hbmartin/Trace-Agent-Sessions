@@ -12,6 +12,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_INDEX_PATH"] = input.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"] = output.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH"] = directory.appendingPathComponent("native-anchor-samples").path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_COMPLETED_PATH"] = directory.appendingPathComponent("native-restore-completed").path
         nativeAnchorProbe = (app, input, output)
     }
     private func nativeMenu(titled title: String, in app: XCUIApplication) -> XCUIElement {
@@ -319,6 +320,102 @@ final class TraceUITests: XCTestCase {
                       "an empty root change must not prevent cached Costs from loading")
     }
 
+    func testSourceReplacementDuringOnboardingMetadataStartUsesNewestGeneration() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let additional = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(decoding: try JSONEncoder().encode([additional.path]), as: UTF8.self)
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        let entered = directory.appendingPathComponent("metadata-entered")
+        let release = directory.appendingPathComponent("metadata-release")
+        let audit = directory.appendingPathComponent("metadata-audit")
+        let completed = directory.appendingPathComponent("index-completed")
+        app.launchEnvironment["TRACE_TEST_METADATA_START_DELAY_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_METADATA_START_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_METADATA_START_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_METADATA_START_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        XCTAssertTrue(waitForFile(entered, timeout: 15))
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        let remove = app.buttons["removeAdditionalClaudeRoot-0"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.click()
+        let waiting = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.fileLines(in: audit).filter { $0.hasPrefix("enter,") }.count >= 2
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [waiting], timeout: 10), .completed)
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(completed, timeout: 25))
+        let starts = fileLines(in: audit).filter { $0.hasPrefix("started,") }
+        XCTAssertEqual(starts.count, 1, "stale startup must not report success")
+        XCTAssertTrue(starts.first?.contains("revision=1") == true)
+        XCTAssertEqual(try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT count(*) FROM source_root WHERE path='\(additional.path)'"), 0)
+    }
+
+    func testMonitoringWarningsPreserveOtherErrorsAndRecoverWithoutAlerts() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let codex = directory.appendingPathComponent("Sources/Codex")
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        let sidecar = directory.appendingPathComponent("Sources/session_index.jsonl")
+        try FileManager.default.createSymbolicLink(atPath: sidecar.path, withDestinationPath: "session_index.jsonl")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEED_STARTUP_ERROR"] = "Unrelated startup failure"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Unrelated startup failure"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["OK"].click()
+        let status = app.buttons["indexProgress"]
+        XCTAssertTrue(status.waitForExistence(timeout: 15))
+        status.click()
+        let warning = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "incomplete Codex metadata monitoring")).firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        status.click()
+        try FileManager.default.removeItem(at: sidecar)
+        try Data("{}\n".utf8).write(to: sidecar)
+        status.click()
+        let cleared = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !warning.exists }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 10), .completed)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    func testBlockedFilesystemCallbackDoesNotBlockSourceReplacement() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let additional = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
+        app.launchEnvironment["TRACE_TEST_SEED_ADDITIONAL_CLAUDE_ROOTS"] = String(decoding: try JSONEncoder().encode([additional.path]), as: UTF8.self)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launchEnvironment["TRACE_TEST_GATE_FILESYSTEM_CALLBACK"] = "1"
+        app.launchEnvironment["TRACE_TEST_GATE_FILESYSTEM_ROOT_CONTAINS"] = "AdditionalClaude"
+        let entered = directory.appendingPathComponent("callback-entered")
+        let release = directory.appendingPathComponent("callback-release")
+        let completed = directory.appendingPathComponent("index-completed")
+        app.launchEnvironment["TRACE_TEST_FILESYSTEM_CALLBACK_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_FILESYSTEM_CALLBACK_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(waitForFile(completed, timeout: 25))
+        try FileManager.default.removeItem(at: completed)
+        try Data("{}\n".utf8).write(to: additional.appendingPathComponent("callback-trigger.jsonl"))
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForExistence(timeout: 3))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        app.buttons["removeAdditionalClaudeRoot-0"].click()
+        app.descendants(matching: .any)["General"].firstMatch.click()
+        XCTAssertTrue(app.checkBoxes["Open Trace when I log in"].waitForExistence(timeout: 3),
+                      "main actor must remain responsive while old callbacks drain")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: release.path))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(completed, timeout: 25))
+    }
+
     func testPartialWatcherStartupFailureStillRunsInitialIndexing() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let codex = directory.appendingPathComponent("Sources/Codex")
@@ -339,9 +436,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Find the sample answer"].firstMatch.waitForExistence(
             timeout: 15
         ), "a failed watcher must not prevent initial indexing")
+        app.buttons["indexProgress"].click()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "value CONTAINS %@", "periodic reconciliation"
         )).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["indexProgress"].click()
 
         let rollout = codex.appendingPathComponent("rollout-live.jsonl")
         let live = [
@@ -2791,15 +2890,75 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testSidebarMaterializesProjectWhenItAppearsAfterSearchNavigation() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let entered = directory.appendingPathComponent("project-unavailable")
+        let release = directory.appendingPathComponent("project-available")
+        let ack = directory.appendingPathComponent("project-ack")
+        app.launchEnvironment["TRACE_TEST_PROJECT_AVAILABILITY_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15))
+        search.click(); search.typeText("Find the sample answer")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(waitForFile(entered, timeout: 5))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(ack, timeout: 5), "the existing token must materialize its newly available project")
+    }
+
+    func testSessionsHeaderDoesNotCancelProjectsReveal() throws { try runUnrelatedSidebarInteraction(titleBar: false) }
+    func testTitleBarDragDoesNotCancelProjectsReveal() throws { try runUnrelatedSidebarInteraction(titleBar: true) }
+
+    private func runUnrelatedSidebarInteraction(titleBar: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let release = directory.appendingPathComponent("reveal-release")
+        let ack = directory.appendingPathComponent("reveal-ack")
+        let cancel = directory.appendingPathComponent("reveal-cancel")
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH"] = cancel.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let search = app.textFields["Search all sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15)); search.click(); search.typeText("Find the sample answer")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 5))
+        if titleBar {
+            let window = app.windows["Trace"]
+            let point = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0)).withOffset(CGVector(dx: 200, dy: 12))
+            point.click(forDuration: 0.1, thenDragTo: point.withOffset(CGVector(dx: 30, dy: 20)))
+        } else { app.staticTexts["Sessions"].firstMatch.click() }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancel.path))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(ack, timeout: 5))
+    }
+
     func testSidebarRevealUpdatesItsRowIndexDuringMaterialization() throws { try runSidebarRevealMutation(userInterrupt: false) }
     func testUserScrollCancelsOutstandingSidebarReveal() throws { try runSidebarRevealMutation(userInterrupt: true) }
+    func testSidebarRowIndexChangeDoesNotExtendProductionDeadline() throws {
+        try runSidebarRevealMutation(userInterrupt: false, expire: true)
+    }
 
-    private func runSidebarRevealMutation(userInterrupt: Bool) throws {
+    private func runSidebarRevealMutation(userInterrupt: Bool, expire: Bool = false) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
         let gate = directory.appendingPathComponent("sidebar-gate")
         let ack = directory.appendingPathComponent("sidebar-ack")
         let cancel = directory.appendingPathComponent("sidebar-cancel")
         let audit = directory.appendingPathComponent("sidebar-index-audit")
+        let clock = directory.appendingPathComponent("sidebar-clock")
+        let expired = directory.appendingPathComponent("sidebar-expired")
+        if expire {
+            try Data("0".utf8).write(to: clock)
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CLOCK_PATH"] = clock.path
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_EXPIRED_PATH"] = expired.path
+        }
         app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"] = gate.path
         app.launchEnvironment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_ACK_PATH"] = ack.path
         app.launchEnvironment["TRACE_TEST_SIDEBAR_REVEAL_CANCELLED_PATH"] = cancel.path
@@ -2825,9 +2984,28 @@ final class TraceUITests: XCTestCase {
             try Data().write(to: gate)
             XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
         } else {
+            if expire {
+                let initialCheck = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    !self.fileLines(in: audit).isEmpty
+                }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [initialCheck], timeout: 3), .completed)
+                try Data("2.9".utf8).write(to: clock, options: .atomic)
+            }
             try addSession(id: "newer-sidebar", title: "New sidebar session", project: "NewerSidebarProject",
                 timestamp: 2_000_000_000_000, content: "A newly indexed sidebar row", directory: directory)
             XCTAssertTrue(app.staticTexts["NewerSidebarProject"].firstMatch.waitForExistence(timeout: 3))
+            if expire {
+                let changedRow = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    Set(self.fileLines(in: audit).compactMap { line in
+                        line.split(separator: ",").first { $0.hasPrefix("row=") }.map(String.init)
+                    }).count > 1
+                }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [changedRow], timeout: 3), .completed)
+                try Data("3.01".utf8).write(to: clock, options: .atomic)
+                XCTAssertTrue(waitForFile(expired, timeout: 3))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+                return
+            }
             try Data().write(to: gate)
             XCTAssertTrue(waitForFile(ack, timeout: 3))
             let rows = Set(fileLines(in: audit).compactMap { line in
@@ -3535,6 +3713,15 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = boundsAudit.path
+        defer {
+            for (name, path) in [("external-bounds", boundsAudit), ("external-idle", idleAudit),
+                                 ("external-bookmark", bookmarkSaved)] {
+                let attachment = XCTAttachment(string: fileLines(in: path).joined(separator: "\n"))
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
@@ -3543,9 +3730,12 @@ final class TraceUITests: XCTestCase {
         openSidebarSession("External scroll", in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("native-restore-completed"), timeout: 10))
+        let initialFinishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
-        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: initialFinishes + 1, timeout: 10))
         let bottomIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
+        XCTAssertGreaterThan(bottomIndex, 50, "the initial wheel must reach the end of the 70-message transcript")
         let finishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
 
         app.buttons["testSimulateTranscriptScroll"].click()
@@ -3604,12 +3794,18 @@ final class TraceUITests: XCTestCase {
     }
 
     func testDelayedResizePreservesBottomFollow() throws { try runViewportRegression("delayed-resize") }
+    func testMultiStageResizePreservesBottomFollowDuringAppend() throws { try runViewportRegression("multi-stage-resize") }
+    func testExpiredResizeDoesNotSuppressUpwardMotion() throws { try runViewportRegression("expired-resize") }
+    func testUserInputInvalidatesResizeTransaction() throws { try runViewportRegression("interrupted-resize") }
+    func testUnchangedGeometryScrollingUsesCachedExtentAndLazyRows() throws { try runViewportRegression("cached-extent") }
     func testLastRowRemainsReachableBeyondDocumentFrame() throws { try runViewportRegression("row-extent") }
     func testRubberBandReturnKeepsFollowDuringAppend() throws { try runViewportRegression("rubber-band-return") }
 
     private func runViewportRegression(_ simulation: String) throws {
+        let expectedFollowing = simulation != "expired-resize" && simulation != "interrupted-resize"
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        try addLongSession("Viewport regression", project: "ViewportProject", directory: directory)
+        try addLongSession("Viewport regression", project: "ViewportProject", directory: directory,
+            count: simulation == "cached-extent" ? 2_000 : 70)
         let audit = directory.appendingPathComponent("viewport-audit")
         let done = directory.appendingPathComponent("viewport-done")
         let jump = directory.appendingPathComponent("viewport-jump")
@@ -3635,29 +3831,52 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(jump, timeout: 10))
         app.buttons["testSimulateTranscriptScroll"].click()
         XCTAssertTrue(waitForFile(done, timeout: 5))
-        if simulation == "row-extent" {
+        if simulation == "interrupted-resize" {
+            XCTAssertTrue(fileLines(in: audit).contains("resize-rearmed-after-input=false"))
+        }
+        if simulation == "cached-extent" {
+            let line = try XCTUnwrap(fileLines(in: audit).last { $0.hasPrefix("cache=") })
+            let fields = line.dropFirst(6).split(separator: ",").compactMap { Int($0) }
+            XCTAssertEqual(fields.count, 8)
+            guard fields.count == 8 else { return }
+            XCTAssertEqual(fields[0], fields[1], "scroll-only bounds checks must not query the last row")
+            XCTAssertEqual(fields[2], fields[3], "origin changes must not invalidate row geometry")
+            XCTAssertLessThan(fields[4], fields[5], "the table must retain lazy row materialization")
+            XCTAssertEqual(fields[6], fields[1], "invalidation must defer the extent query")
+            XCTAssertEqual(fields[7], fields[6] + 1, "multiple invalidations must flush in one query")
+            return
+        } else if simulation == "row-extent" {
             let line = try XCTUnwrap(fileLines(in: audit).last { $0.hasPrefix("extent=") })
             let fields = line.split(separator: ",").map { $0.split(separator: "=").last! }
             XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 1)
         } else {
-            XCTAssertTrue(fileLines(in: audit).contains("simulation-classified-bottom=true"))
+            XCTAssertTrue(fileLines(in: audit).contains("simulation-classified-bottom=\(expectedFollowing)"))
         }
-        if simulation == "rubber-band-return" {
+        if simulation == "rubber-band-return" || simulation == "multi-stage-resize" {
             let source = directory.appendingPathComponent("Sources/Claude/Viewport regression.jsonl")
             let record: [String: Any] = ["type": "assistant", "uuid": "viewport-append", "sessionId": "Viewport regression",
-                "cwd": "/tmp/ViewportProject", "message": ["content": "Append during rubber band return"]]
+                "cwd": "/tmp/ViewportProject", "message": ["content": "Viewport regression message 70\nAppend after viewport adjustment"]]
             let handle = try FileHandle(forWritingTo: source)
             try handle.seekToEnd()
             try handle.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
             try handle.close()
             XCTAssertTrue(app.staticTexts["71 messages"].waitForExistence(timeout: 15))
+            XCTAssertTrue(transcriptMessage("Viewport regression", index: 70, in: app.scrollViews["transcriptScroll"])
+                .wait(for: \.isHittable, toEqual: true, timeout: 15))
+            if simulation == "rubber-band-return" {
+                XCTAssertTrue(fileLines(in: audit).contains("post-append-native-motion"))
+            }
         }
         try? FileManager.default.removeItem(at: probe)
         app.buttons["testProbeTranscriptPosition"].click()
         XCTAssertTrue(waitForFile(probe, timeout: 5))
         let fields = try XCTUnwrap(fileLines(in: probe).last?.split(separator: ","))
-        XCTAssertEqual(String(fields[2]), "true")
-        XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 2)
+        XCTAssertEqual(String(fields[2]), String(expectedFollowing))
+        if expectedFollowing {
+            XCTAssertEqual(try XCTUnwrap(Double(fields[0])), try XCTUnwrap(Double(fields[1])), accuracy: 2)
+        } else {
+            XCTAssertGreaterThan(try XCTUnwrap(Double(fields[1])) - XCTUnwrap(Double(fields[0])), 2)
+        }
     }
 
     func testUpArrowInSelectableTextCancelsGatedRestore() throws { try runArrowRestoreCancellation(.upArrow) }
@@ -3782,15 +4001,17 @@ final class TraceUITests: XCTestCase {
         let bookmarkSaved = directory.appendingPathComponent("navigation-bookmark-saved")
         let idleAudit = directory.appendingPathComponent("navigation-scroll-idle-audit")
         let restoreAudit = directory.appendingPathComponent("navigation-restore-audit")
+        let rowAudit = directory.appendingPathComponent("navigation-row-audit")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = restoreAudit.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_ROW_LAYOUT_AUDIT_PATH"] = rowAudit.path
         defer {
             let attachment = XCTAttachment(string: fileLines(in: restoreAudit).joined(separator: "\n"))
             attachment.name = "navigation-native-restores"
             attachment.lifetime = .keepAlways
             add(attachment)
-            for name in ["native-anchor-offset", "native-anchor-samples"] {
+            for name in ["native-anchor-offset", "native-anchor-samples", "navigation-row-audit"] {
                 let data = XCTAttachment(string: fileLines(in: directory.appendingPathComponent(name)).joined(separator: "\n"))
                 data.name = name
                 data.lifetime = .keepAlways
@@ -4243,9 +4464,16 @@ final class TraceUITests: XCTestCase {
         )
         let divider = app.descendants(matching: .any)["projectSessionDivider"].firstMatch
         XCTAssertTrue(divider.exists)
-        let oldY = divider.frame.midY
-        let start = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 90)))
+        let dividerFrame = divider.frame
+        let oldY = dividerFrame.midY
+        let window = app.windows.firstMatch
+        let windowFrame = window.frame
+        // Keep both mouse coordinates anchored to the window as the divider moves.
+        let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: dividerFrame.midX - windowFrame.minX,
+            dy: dividerFrame.midY - windowFrame.minY
+        ))
+        start.click(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 90)))
         let newY = divider.frame.midY
         XCTAssertGreaterThan(newY, oldY + 40)
         app.terminate()

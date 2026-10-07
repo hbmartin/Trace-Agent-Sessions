@@ -9,6 +9,10 @@ result_bundle="$output_dir/TranscriptScroll.xcresult"
 derived_data="${TRACE_SCROLL_DERIVED_DATA_PATH:-$repo_dir/build/transcript-scroll-derived-data}"
 if [[ "$derived_data" != /* ]]; then derived_data="$PWD/$derived_data"; fi
 
+if [[ -e "$result_bundle" ]]; then
+  echo "Refusing to reuse benchmark result bundle: $result_bundle" >&2
+  exit 1
+fi
 mkdir -p "$output_dir"
 cd "$repo_dir"
 

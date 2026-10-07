@@ -1,0 +1,2 @@
+No prohibited runtime network APIs found.
+No prohibited runtime network frameworks or symbols found in build/ui-review-derived/Build/Products/Debug/Trace.app/Contents/MacOS/Trace.

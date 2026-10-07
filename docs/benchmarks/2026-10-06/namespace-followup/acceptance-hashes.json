@@ -1,0 +1,7 @@
+{
+  "Scripts/check-local-benchmark-regressions.py": "5d46e626f9ee56ecaf120aa5666405e6e323da91ef7f5aa38777651d8ce32690",
+  "Scripts/run-local-benchmark-comparisons.py": "622c871941f0e0bc3264386b8cf3c1f511a0d1c3cc28cdf7056431081533d05b",
+  "Scripts/validate-benchmark-baseline.py": "b075518d310d52d2f33d532b9d074f0d1a57b5d07ee4fd32150126133a56948d",
+  "Scripts/benchmark-transcript-comparison.sh": "4486e7b95e1e34025fcf508e442b12793bdbca4699a31faceaf99ea572f8424e",
+  "AGENTS.md": "31137468fb7725d27d061d22a72ea40c601dd8962761907cebfb63ecdbfcf13d"
+}

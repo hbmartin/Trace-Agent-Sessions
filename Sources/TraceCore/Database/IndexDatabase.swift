@@ -1719,11 +1719,16 @@ public actor IndexDatabase {
         }
     }
 
+    struct CodexSessionIdentity: Hashable, Sendable {
+        let sourcePath: String
+        let externalID: String
+    }
+
     struct CodexNameUpdateResult: Sendable {
         let changed: Bool
-        let deferredSessionIDs: Set<Int64>
-        let resolvedSessionIDs: Set<Int64>
-        let existingSessionIDs: Set<Int64>
+        let deferredSessionIDs: Set<CodexSessionIdentity>
+        let resolvedSessionIDs: Set<CodexSessionIdentity>
+        let existingSessionIDs: Set<CodexSessionIdentity>
         var deferredLegacyCount: Int { deferredSessionIDs.count }
     }
 
@@ -1748,7 +1753,7 @@ public actor IndexDatabase {
     ) throws -> CodexNameUpdateResult {
         let rows = try pool.read { db in
             let fields = """
-                SELECT s.id, s.external_id, s.generated_title,
+                SELECT s.id, sf.path AS source_path, s.external_id, s.generated_title,
                        s.codex_name_origin, s.codex_applied_name FROM session s
                 JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN source_root sr ON sr.id=sf.root_id
@@ -1761,12 +1766,15 @@ public actor IndexDatabase {
             return try Row.fetchAll(db, sql: fields + " WHERE s.agent=? AND sr.path=?",
                                     arguments: [AgentKind.codex.rawValue, root.standardizedFileURL.path])
         }
-        var deferredSessionIDs: Set<Int64> = []
-        var resolvedSessionIDs: Set<Int64> = []
-        let existingSessionIDs = Set(rows.map { row -> Int64 in row["id"] })
+        var deferredSessionIDs: Set<CodexSessionIdentity> = []
+        var resolvedSessionIDs: Set<CodexSessionIdentity> = []
+        let existingSessionIDs = Set(rows.map { row in
+            CodexSessionIdentity(sourcePath: row["source_path"], externalID: row["external_id"])
+        })
         let updates: [(Int64, String?, String?, String?, CodexName?)] = rows.compactMap { row in
             let id: Int64 = row["id"]
             let externalID: String = row["external_id"]
+            let identity = CodexSessionIdentity(sourcePath: row["source_path"], externalID: externalID)
             let existing: String? = row["generated_title"]
             let origin: String? = row["codex_name_origin"]
             let parsedOrigin = origin.flatMap(CodexNameOrigin.init(storedValue:))
@@ -1782,9 +1790,9 @@ public actor IndexDatabase {
                     // Only a complete provider read may take ownership of it.
                     guard origin != nil, applied != nil else {
                         if existing != candidate.value && !fillOnlyOrigins.contains(candidate.origin) {
-                            deferredSessionIDs.insert(id)
+                            deferredSessionIDs.insert(identity)
                         } else if existing == candidate.value && !fillOnlyOrigins.contains(candidate.origin) {
-                            resolvedSessionIDs.insert(id)
+                            resolvedSessionIDs.insert(identity)
                         }
                         return nil
                     }
@@ -1805,7 +1813,7 @@ public actor IndexDatabase {
             case .complete:
                 break
             }
-            if candidate != nil { resolvedSessionIDs.insert(id) }
+            if candidate != nil { resolvedSessionIDs.insert(identity) }
             guard existing != candidate?.value || origin != candidate?.origin.storedValue
                 || applied != candidate?.value else { return nil }
             return (id, existing, origin, applied, candidate)

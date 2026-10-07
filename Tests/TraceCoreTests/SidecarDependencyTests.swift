@@ -61,7 +61,7 @@ final class SidecarDependencyTests: XCTestCase {
         let mapping = CodexMetadataSidecarMapping(metadataDirectories: [home])
         XCTAssertEqual(mapping.configuredChangePaths(for: missing.path), [sidecar.path])
         XCTAssertEqual(mapping.configuredRecoveryPaths(for: root.appendingPathComponent("missing").path), [sidecar.path])
-        XCTAssertTrue(mapping.targetDirectories.contains { $0.path == root.path })
+        XCTAssertTrue(mapping.namespaceDirectories.contains { $0.path == root.path })
         let temporary = home.appendingPathComponent("replacement")
         try FileManager.default.createSymbolicLink(atPath: temporary.path, withDestinationPath: "session_index.jsonl")
         XCTAssertEqual(rename(temporary.path, sidecar.path), 0)
@@ -112,6 +112,141 @@ final class SidecarDependencyTests: XCTestCase {
             XCTAssertTrue(mapping.configuredRecoveryPaths(for: external.path.uppercased()).contains(sidecar.path))
         }
     }
+    private func eventually(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<100 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
+    func testMissingHomeAndEmptySymlinkTargetUseNamespaceMonitors() throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent(".codex")
+        let target = root.appendingPathComponent("external")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let missing = CodexMetadataSidecarMapping(metadataDirectories: [home])
+        XCTAssertFalse(missing.targetDirectories.contains { $0.path == root.path || $0.path == "/" })
+        XCTAssertTrue(missing.namespaceDirectories.contains { $0.path == root.path })
+        try FileManager.default.createSymbolicLink(at: home, withDestinationURL: target)
+        XCTAssertTrue(missing.topologyHasChanged)
+        let linked = CodexMetadataSidecarMapping(metadataDirectories: [home])
+        XCTAssertTrue(linked.targetDirectories.contains { $0.path == target.path })
+        XCTAssertFalse(linked.targetDirectories.contains { $0.path == "/" })
+        try FileManager.default.removeItem(at: home)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        XCTAssertTrue(linked.topologyHasChanged)
+    }
+
+    func testSystemAliasAncestorsNeverCreateRecursiveRootStreams() throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent(".codex")
+        try FileManager.default.createSymbolicLink(atPath: home.path,
+            withDestinationPath: "/tmp/TraceMissing-" + UUID().uuidString + "/home")
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [home])
+        XCTAssertFalse(mapping.targetDirectories.contains { $0.path == "/" })
+        XCTAssertTrue(mapping.namespaceDirectories.contains { $0.path == "/" })
+    }
+
+    func testStartupRebuildsStaleSnapshotAndRechecksAfterActivation() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("home")
+        let external = root.appendingPathComponent("external")
+        for path in [home, external] { try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true) }
+        let snapshot = CodexMetadataSidecarMapping(metadataDirectories: [home])
+        let target = external.appendingPathComponent("names")
+        try Data().write(to: target)
+        let sidecar = home.appendingPathComponent("state_7.sqlite")
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: target)
+        let records = OSAllocatedUnfairLock<[SourceChanges]>(initialState: [])
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: snapshot) {
+            changes, _ in records.withLock { $0.append(changes) }
+        }
+        let index = home.appendingPathComponent("session_index.jsonl")
+        watcher.afterActivationForTesting = {
+            try? FileManager.default.createSymbolicLink(at: index, withDestinationURL: target)
+        }
+        await watcher.start()
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(200))
+        records.withLock { $0 = [] }
+        try Data([1]).write(to: target)
+        let observed = await eventually { records.withLock { $0.contains { $0.paths.isSuperset(of: [index.path, sidecar.path]) } } }
+        XCTAssertTrue(observed)
+    }
+
+    func testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("home")
+        let external = root.appendingPathComponent("missing/deep")
+        let records = OSAllocatedUnfairLock<[SourceChanges]>(initialState: [])
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: .init(metadataDirectories: [home])) {
+            changes, _ in records.withLock { $0.append(changes) }
+        }
+        await watcher.start()
+        defer { watcher.stop() }
+        try FileManager.default.createSymbolicLink(at: home, withDestinationURL: external)
+        try await Task.sleep(for: .milliseconds(200))
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        try await Task.sleep(for: .milliseconds(200))
+        let index = external.appendingPathComponent("session_index.jsonl")
+        try Data([1]).write(to: index)
+        let created = await eventually { records.withLock { $0.contains { $0.paths.contains(home.appendingPathComponent("session_index.jsonl").path) } } }
+        XCTAssertTrue(created)
+        try await Task.sleep(for: .milliseconds(200))
+        records.withLock { $0 = [] }
+        try Data([2]).write(to: index)
+        let changed = await eventually { records.withLock { !$0.isEmpty } }
+        XCTAssertTrue(changed)
+    }
+
+    func testUnrelatedNamespaceTrafficDoesNotPublishAndDescriptorsClose() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("home")
+        let records = OSAllocatedUnfairLock<Int>(initialState: 0)
+        let descriptors = OSAllocatedUnfairLock<[Int32]>(initialState: [])
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: .init(metadataDirectories: [home])) {
+            _, _ in records.withLock { $0 += 1 }
+        }
+        watcher.openNamespaceForTesting = { path in
+            let fd = open(path, O_EVTONLY | O_CLOEXEC)
+            if fd >= 0 { descriptors.withLock { $0.append(fd) } }
+            return fd
+        }
+        await watcher.start()
+        try await Task.sleep(for: .milliseconds(150))
+        records.withLock { $0 = 0 }
+        for index in 0..<500 { try Data().write(to: root.appendingPathComponent("unrelated-\(index)")) }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(records.withLock { $0 }, 0)
+        watcher.stop()
+        let closed = await eventually { watcher.namespaceMonitorCountForTesting == 0
+            && descriptors.withLock { $0.allSatisfy { fcntl($0, F_GETFD) == -1 } } }
+        XCTAssertTrue(closed)
+    }
+
+    func testFailedNamespaceMonitoringRetriesAndClearsWarnings() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("home")
+        let fail = OSAllocatedUnfairLock(initialState: true)
+        let warnings = OSAllocatedUnfairLock<[[String]]>(initialState: [])
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: .init(metadataDirectories: [home])) {
+            _, value in warnings.withLock { $0.append(value) }
+        }
+        watcher.retryIntervalForTesting = 0.05
+        watcher.openNamespaceForTesting = { path in
+            fail.withLock { $0 } ? -1 : open(path, O_EVTONLY | O_CLOEXEC)
+        }
+        await watcher.start()
+        defer { watcher.stop() }
+        XCTAssertTrue(warnings.withLock { $0.first?.isEmpty == false })
+        try await Task.sleep(for: .milliseconds(160))
+        XCTAssertEqual(warnings.withLock { $0.count }, 1, "identical failures are deduplicated")
+        fail.withLock { $0 = false }
+        let recovered = await eventually { warnings.withLock { $0.last?.isEmpty == true } }
+        XCTAssertTrue(recovered)
+    }
+
     func testRelevantChangesSurviveWatcherReplacement() async throws {
         let root = try fixture()
         let home = root.appendingPathComponent("home")
@@ -153,5 +288,37 @@ final class SidecarDependencyTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertTrue(recorder.withLock { $0.contains { $0.paths.contains(sidecar.path) && $0.watermarks.isEmpty } })
+    }
+
+    func testHomeDeletionRecreationAndPopulatedLinkReopenMonitors() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("home")
+        let target = root.appendingPathComponent("target")
+        for path in [home, target] { try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true) }
+        let sidecar = home.appendingPathComponent("session_index.jsonl")
+        let final = target.appendingPathComponent("session_index.jsonl")
+        try Data("old\n".utf8).write(to: sidecar)
+        try Data("new\n".utf8).write(to: final)
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home], mapping: .init(metadataDirectories: [home])) { changes, _ in
+            if changes.paths.contains(sidecar.path) { calls.withLock { $0 += 1 } }
+        }
+        await watcher.start()
+        defer { watcher.stop() }
+        calls.withLock { $0 = 0 }
+        try FileManager.default.removeItem(at: home)
+        let deleted = await eventually { calls.withLock { $0 > 0 } }
+        XCTAssertTrue(deleted)
+        calls.withLock { $0 = 0 }
+        try FileManager.default.createSymbolicLink(at: home, withDestinationURL: target)
+        let recreated = await eventually {
+            calls.withLock { $0 > 0 } && watcher.contentDirectoryPathsForTesting.contains(target.path)
+                && !watcher.contentDirectoryPathsForTesting.contains(home.path)
+        }
+        XCTAssertTrue(recreated)
+        calls.withLock { $0 = 0 }
+        try Data("updated\n".utf8).write(to: final)
+        let updated = await eventually { calls.withLock { $0 > 0 } }
+        XCTAssertTrue(updated, "the recreated namespace must monitor subsequent target writes; streams=\(watcher.contentDirectoryPathsForTesting)")
     }
 }

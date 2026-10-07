@@ -42,10 +42,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: transcript-scroll-comparison
-          path: |
-            build/transcript-comparison/metadata.json
-            build/transcript-comparison/comparison.txt
-            build/transcript-comparison/baseline
-            build/transcript-comparison/candidate
+          path: build/transcript-comparison/runs/**
           if-no-files-found: error
           retention-days: 7

@@ -201,12 +201,39 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
     public let diagnostics: [String]
     private let linkDestinations: [String: String]
     private let homeEntries: [String: Set<String>]
-    private let directoryExistence: [String: Bool]
+    let namespaceDirectories: [URL]
+    private let entryIdentities: [String: EntryIdentity]
+
+    private struct EntryIdentity: Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+        let kind: UInt16
+        init(_ path: String) {
+            var value = stat()
+            if lstat(path, &value) == 0 {
+                kind = UInt16(value.st_mode & S_IFMT)
+                // Regular-file replacement changes content, not watch topology.
+                device = kind == S_IFREG ? 0 : UInt64(value.st_dev)
+                inode = kind == S_IFREG ? 0 : UInt64(value.st_ino)
+            } else { device = 0; inode = 0; kind = 0 }
+        }
+    }
 
     public init(metadataDirectories: [URL]) {
         var dependencies: [String: Set<String>] = [:]
         var insensitiveDependencies: [String: Set<String>] = [:]
         var directories: Set<String> = []
+        var namespaceDirectories: Set<String> = []
+        var identityPaths: Set<String> = []
+        let userHome = TraceFileIO.canonicalPath(FileManager.default.homeDirectoryForCurrentUser.path).path
+        func addContentDirectory(_ path: String) {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+            let canonical = TraceFileIO.canonicalPath(path).path
+            identityPaths.insert(canonical)
+            if canonical == "/" || canonical == userHome { namespaceDirectories.insert(canonical) }
+            else { directories.insert(canonical) }
+        }
         var configured: Set<String> = []
         var links: Set<String> = []
         var homes: Set<String> = []
@@ -220,7 +247,9 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
                 if next == parent { break }
                 parent = next
             }
-            directories.insert(TraceFileIO.canonicalPath(parent.path).path)
+            let physical = TraceFileIO.canonicalPath(parent.path).path
+            namespaceDirectories.insert(physical)
+            identityPaths.formUnion([path, parent.path, physical])
         }
         // Resolve one component at a time, recording ancestor and intermediate links.
         // Foundation's final resolution loses those dependencies and can loop on cycles.
@@ -236,6 +265,9 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
                 if component == "." { continue }
                 if component == ".." { current.deleteLastPathComponent(); continue }
                 current.appendPathComponent(component)
+                found.insert(current.path)
+                identityPaths.insert(current.path)
+                watchParent(of: current.path)
                 if let destination = try? fm.destinationOfSymbolicLink(atPath: current.path) {
                     found.insert(current.path)
                     hops += 1
@@ -254,6 +286,7 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
         }
         for directory in metadataDirectories {
             let home = directory.standardizedFileURL.path
+            watchParent(of: home)
             let resolvedHome = resolve(home)
             homes.formUnion([home, resolvedHome.path, TraceFileIO.canonicalPath(resolvedHome.path).path])
             for link in resolvedHome.links { links.insert(link); watchParent(of: link) }
@@ -263,7 +296,7 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
             }
             var homeIsDirectory: ObjCBool = false
             if fm.fileExists(atPath: resolvedHome.path, isDirectory: &homeIsDirectory), homeIsDirectory.boolValue {
-                directories.insert(TraceFileIO.canonicalPath(resolvedHome.path).path)
+                addContentDirectory(resolvedHome.path)
             } else {
                 watchParent(of: URL(fileURLWithPath: resolvedHome.path).appendingPathComponent("session_index.jsonl").path)
             }
@@ -275,6 +308,9 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
                 let configuredPath = directory.appendingPathComponent(name).standardizedFileURL.path
                 configured.insert(configuredPath)
                 let resolved = resolve(configuredPath)
+                if resolved.complete {
+                    addContentDirectory(URL(fileURLWithPath: resolved.path).deletingLastPathComponent().path)
+                }
                 links.formUnion(resolved.links)
                 links.formUnion(resolved.links.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
                 var paths = resolved.dependencies
@@ -320,14 +356,15 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
         linkPaths = links
         metadataDirectoryPaths = homes
         diagnostics = warnings.sorted()
-        linkDestinations = dependencies.keys.reduce(into: [:]) { result, path in
+        linkDestinations = Set(dependencies.keys).union(homes).union(identityPaths).reduce(into: [:]) { result, path in
             result[path] = (try? fm.destinationOfSymbolicLink(atPath: path)) ?? ""
         }
         homeEntries = homes.reduce(into: [:]) { result, path in
             result[path] = Self.sidecarNames(at: path)
         }
-        directoryExistence = directories.reduce(into: [:]) { result, path in
-            result[path] = fm.fileExists(atPath: path)
+        self.namespaceDirectories = namespaceDirectories.sorted().map { URL(fileURLWithPath: $0) }
+        entryIdentities = identityPaths.union(homes).union(directories).reduce(into: [:]) { result, path in
+            result[path] = EntryIdentity(path)
         }
     }
 
@@ -335,7 +372,8 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
         var affected = configuredSidecars.symmetricDifference(other.configuredSidecars)
         for dependency in Set(sidecarsByDependency.keys).union(other.sidecarsByDependency.keys) {
             if sidecarsByDependency[dependency] != other.sidecarsByDependency[dependency]
-                || linkDestinations[dependency] != other.linkDestinations[dependency] {
+                || linkDestinations[dependency] != other.linkDestinations[dependency]
+                || entryIdentities[dependency] != other.entryIdentities[dependency] {
                 affected.formUnion(sidecarsByDependency[dependency] ?? [])
                 affected.formUnion(other.sidecarsByDependency[dependency] ?? [])
             }
@@ -356,7 +394,11 @@ public struct CodexMetadataSidecarMapping: Equatable, Sendable {
         return linkDestinations.contains { path, destination in
             ((try? fm.destinationOfSymbolicLink(atPath: path)) ?? "") != destination
         } || homeEntries.contains { Self.sidecarNames(at: $0.key) != $0.value }
-            || directoryExistence.contains { fm.fileExists(atPath: $0.key) != $0.value }
+            || entryIdentities.contains { EntryIdentity($0.key) != $0.value }
+    }
+
+    func monitorIdentityChanged(at path: String, comparedTo other: Self) -> Bool {
+        entryIdentities[path] != other.entryIdentities[path]
     }
 
     /// No filesystem access: safe for filtering raw FSEvents before canonicalization.

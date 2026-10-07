@@ -1,0 +1,13 @@
+previous=0.0,actual=10.0,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=7552.0,oldDocHeight=7552.0,user=false,restore=true,interacting=false,bottom=false
+previous=10.0,actual=7373.5,ignored=true,layout=true,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=7940.0,oldDocHeight=8168.0,user=false,restore=false,interacting=false,bottom=false
+previous=7373.5,actual=7297.5,ignored=true,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=7864.0,oldDocHeight=7940.0,user=false,restore=false,interacting=false,bottom=false
+previous=7297.5,actual=7525.5,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=7864.0,oldDocHeight=7864.0,user=false,restore=false,interacting=false,bottom=false
+previous=7525.5,actual=7525.5,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=7864.0,oldDocHeight=7864.0,user=false,restore=false,interacting=false,bottom=false
+previous=7525.5,actual=7297.5,ignored=true,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=7864.0,oldDocHeight=7864.0,user=false,restore=false,interacting=false,bottom=false
+previous=7297.5,actual=8049.5,ignored=true,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=8616.0,oldDocHeight=7864.0,user=false,restore=false,interacting=false,bottom=true
+simulation-received,items=70,scroll=true
+previous=8049.5,actual=7939.5,ignored=true,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=8506.0,oldDocHeight=8616.0,user=false,restore=false,interacting=false,bottom=true
+extent=8039.5,expected=8039.5
+previous=7939.5,actual=8039.5,ignored=true,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=8606.0,oldDocHeight=8506.0,user=false,restore=false,interacting=false,bottom=true
+previous=8039.5,actual=7601.5,ignored=false,layout=true,passiveLayout=true,viewHeight=566.5,oldViewHeight=566.5,docHeight=8168.0,oldDocHeight=8606.0,user=false,restore=false,interacting=false,bottom=true
+previous=7601.5,actual=7591.5,ignored=false,layout=false,passiveLayout=false,viewHeight=566.5,oldViewHeight=566.5,docHeight=8168.0,oldDocHeight=8168.0,user=false,restore=false,interacting=false,bottom=true

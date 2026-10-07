@@ -1,0 +1,147 @@
+testTranscriptScrollPerformance()
+CPU Cycles (Trace): 0.000 -> 0.000 (zero baseline)
+  baseline=[0, 0, 0, 0, 0]
+  candidate=[0, 0, 0, 0, 0]
+CPU Instructions Retired (Trace): 0.000 -> 0.000 (zero baseline)
+  baseline=[0, 0, 0, 0, 0]
+  candidate=[0, 0, 0, 0, 0]
+CPU Time (Trace): 1.518 -> 73.734 (+4758.1% change)
+  baseline=[1.342333891, 1.593254957, 1.489829464, 1.517772973, 1.7850433630000002]
+  candidate=[50.451089334, 73.73420488100001, 58.67779985000001, 78.874137081, 90.170807713]
+Clock Monotonic Time: 1.881 -> 74.094 (+3839.3% change)
+  baseline=[1.7690190870000002, 1.9910840660000002, 1.8733220620000002, 1.880917312, 2.1055195760000003]
+  candidate=[50.66994376700001, 74.094225471, 59.021761355, 79.35316090900001, 90.871964785]
+Memory Physical (Trace): 868.352 -> 128092.800 (+14651.3% change)
+  baseline=[-2293.76, 557.056, 1294.336, 1966.08, 868.352]
+  candidate=[111479.296, 199561.536, 121653.504, 193777.536, 128092.8]
+Absolute Memory Physical (Trace): 254496.640 -> 1726960.576 (+578.6% change)
+  baseline=[252710.784, 253202.304, 254496.64, 256233.344, 256872.32]
+  candidate=[1431910.528, 1599277.504, 1726960.576, 1891263.296, 1989225.92]
+Memory Peak Physical (Trace): 255217.536 -> 1727484.864 (+576.9% change)
+  baseline=[255217.536, 253742.976, 254693.248, 256675.712, 257380.224]
+  candidate=[1432451.2, 1599343.04, 1727484.864, 1891672.896, 1989782.976]
+updateCount: 0.000 -> 0.000 (zero baseline)
+  baseline=[0, 0, 0, 0, 0]
+  candidate=[0, 0, 0, 0, 0]
+totalUpdateNanoseconds: 0.000 ms -> 0.000 ms (zero baseline)
+  baseline=[0, 0, 0, 0, 0]
+  candidate=[0, 0, 0, 0, 0]
+maximumUpdateNanoseconds: 0.000 ms -> 0.000 ms (zero baseline)
+  baseline=[0, 0, 0, 0, 0]
+  candidate=[0, 0, 0, 0, 0]
+startingFootprintBytes: 242.488 MiB -> 1530.831 MiB (+531.3% change)
+  baseline=[255004544, 252645248, 253202304, 254267264, 256003968]
+  candidate=[1321021056, 1400240256, 1605192384, 1698255808, 1862525760]
+sampledPeakFootprintBytes: 243.191 MiB -> 1647.567 MiB (+577.5% change)
+  baseline=[255004544, 253644672, 254676864, 256561024, 257281920]
+  candidate=[1432025216, 1600850496, 1727599552, 1891656512, 1991142848]
+endingFootprintBytes: 242.707 MiB -> 1647.349 MiB (+578.7% change)
+  baseline=[252710784, 253202304, 254496640, 256233344, 256872320]
+  candidate=[1431844992, 1600850496, 1727370176, 1891656512, 1991142848]
+retainedFootprintBytes: 242.488 MiB -> 1620.364 MiB (+568.2% change)
+  baseline=[252645248, 253202304, 254267264, 256003968, 256806784]
+  candidate=[1401010304, 1605143232, 1699075008, 1863476032, 1979788736]
+footprintSampleCount: 40.000 -> 1517.000 (+3692.5% change)
+  baseline=[38, 43, 40, 40, 45]
+  candidate=[1030, 1517, 1207, 1620, 1868]
+retained growth (distinct from sampled peak): 0.766 MiB -> 111.831 MiB (+14506.5% change)
+  baseline=[-2359296, 557056, 1064960, 1736704, 802816]
+  candidate=[79989248, 204902976, 93882624, 165220224, 117262976]
+testStreamingTranscriptFollowPerformance()
+CPU Cycles (Trace): 0.000 -> 0.000 (zero baseline)
+  baseline=[0, 0, 0]
+  candidate=[0, 0, 0]
+CPU Instructions Retired (Trace): 0.000 -> 0.000 (zero baseline)
+  baseline=[0, 0, 0]
+  candidate=[0, 0, 0]
+CPU Time (Trace): 0.546 -> 0.575 (+5.2% change)
+  baseline=[0.5004803170000001, 0.546091505, 0.576064801]
+  candidate=[0.580491612, 0.5746263570000001, 0.530477885]
+Clock Monotonic Time: 1.050 -> 1.071 (+2.0% change)
+  baseline=[1.058071338, 1.042545909, 1.050070639]
+  candidate=[1.064744006, 1.0838857990000001, 1.071286458]
+Memory Physical (Trace): 32.768 -> 98.304 (+200.0% change)
+  baseline=[98.304, 32.768, 32.768]
+  candidate=[212.992, 98.304, 32.768]
+Absolute Memory Physical (Trace): 102402.560 -> 100075.904 (-2.3% change)
+  baseline=[102369.792, 102402.56, 102402.56]
+  candidate=[99977.6, 100075.904, 100075.904]
+Memory Peak Physical (Trace): 102992.384 -> 100665.728 (-2.3% change)
+  baseline=[102976, 102992.384, 102992.384]
+  candidate=[100600.192, 100665.728, 100665.728]
+updateCount: 10.000 -> 10.000 (+0.0% change)
+  baseline=[10, 10, 10]
+  candidate=[10, 10, 10]
+totalUpdateNanoseconds: 70.608 ms -> 67.260 ms (-4.7% change)
+  baseline=[51703918, 70607542, 82427582]
+  candidate=[70358289, 67260250, 63244165]
+maximumUpdateNanoseconds: 41.078 ms -> 31.566 ms (-23.2% change)
+  baseline=[22021584, 42580666, 41077750]
+  candidate=[32835000, 31566083, 27689666]
+startingFootprintBytes: 97.627 MiB -> 95.346 MiB (-2.3% change)
+  baseline=[102271488, 102369792, 102369792]
+  candidate=[99764608, 99977600, 100043136]
+sampledPeakFootprintBytes: 97.877 MiB -> 95.659 MiB (-2.3% change)
+  baseline=[102812160, 102631936, 102631936]
+  candidate=[100239744, 100501888, 100305280]
+endingFootprintBytes: 97.659 MiB -> 95.440 MiB (-2.3% change)
+  baseline=[102369792, 102402560, 102402560]
+  candidate=[99977600, 100075904, 100075904]
+retainedFootprintBytes: 97.627 MiB -> 95.409 MiB (-2.3% change)
+  baseline=[102369792, 102369792, 102369792]
+  candidate=[99977600, 100043136, 100043136]
+footprintSampleCount: 23.000 -> 24.000 (+4.3% change)
+  baseline=[23, 24, 23]
+  candidate=[24, 24, 24]
+retained growth (distinct from sampled peak): 0.000 MiB -> 0.062 MiB (zero baseline)
+  baseline=[98304, 0, 0]
+  candidate=[212992, 65536, 0]
+testExternalSidecarTrafficPerformance()
+CPU Cycles (Trace): 0.000 -> 0.000 (zero baseline)
+  baseline=[0, 0, 0, 0, 0]
+  candidate=[0, 0, 0, 0, 0]
+CPU Instructions Retired (Trace): 0.000 -> 0.000 (zero baseline)
+  baseline=[0, 0, 0, 0, 0]
+  candidate=[0, 0, 0, 0, 0]
+CPU Time (Trace): 5.906 -> 6.376 (+8.0% change)
+  baseline=[6.169212928, 5.959970453, 5.789467566000001, 5.895025100000001, 5.905637868]
+  candidate=[6.376481868000001, 6.470458173000001, 6.321346462, 6.463197401, 6.343088721]
+Clock Monotonic Time: 9.009 -> 9.585 (+6.4% change)
+  baseline=[8.572604966, 9.361674976, 8.691554986, 9.274797493000001, 9.008636194000001]
+  candidate=[9.150987989, 9.585155726, 9.341043899, 9.606969612, 9.691870567]
+Memory Physical (Trace): 1654.784 -> 3227.648 (+95.0% change)
+  baseline=[-32.768, 1032.192, 1654.784, 6979.584, 8224.768]
+  candidate=[3325.952, 3227.648, 2670.592, 2097.152, 3276.8]
+Absolute Memory Physical (Trace): 107579.840 -> 103762.240 (-3.5% change)
+  baseline=[105253.312, 106662.336, 107579.84, 115018.176, 126503.36]
+  candidate=[96651.584, 100387.136, 103762.24, 106989.888, 110807.36]
+Memory Peak Physical (Trace): 112675.264 -> 108611.904 (-3.6% change)
+  baseline=[110430.656, 111413.696, 112675.264, 118065.6, 130566.592]
+  candidate=[101239.104, 105056.576, 108611.904, 112085.312, 115640.704]
+updateCount: 129.000 -> 136.000 (+5.4% change)
+  baseline=[129, 133, 136, 122, 121]
+  candidate=[136, 129, 143, 129, 143]
+totalUpdateNanoseconds: 1.917 ms -> 6.838 ms (+256.6% change)
+  baseline=[1917490, 1961216, 1754378, 1886833, 2104755]
+  candidate=[6728252, 6265755, 9259542, 7759670, 6838123]
+maximumUpdateNanoseconds: 0.746 ms -> 3.971 ms (+432.2% change)
+  baseline=[746208, 776000, 679959, 733458, 803042]
+  candidate=[3971417, 3510167, 6487000, 5128625, 3930666]
+startingFootprintBytes: 101.018 MiB -> 96.409 MiB (-4.6% change)
+  baseline=[105286080, 105630144, 105925056, 108038592, 118278592]
+  candidate=[93325632, 97159488, 101091648, 104892736, 107530560]
+sampledPeakFootprintBytes: 105.627 MiB -> 101.799 MiB (-3.6% change)
+  baseline=[107825600, 110758336, 110365120, 118294976, 130959808]
+  candidate=[99354944, 102844736, 106744128, 109693248, 113936704]
+endingFootprintBytes: 105.127 MiB -> 101.799 MiB (-3.2% change)
+  baseline=[107743680, 108677568, 110234048, 118294976, 128928192]
+  candidate=[99354944, 102844736, 106744128, 109693248, 113936704]
+retainedFootprintBytes: 103.034 MiB -> 100.034 MiB (-2.9% change)
+  baseline=[105630144, 105925056, 108038592, 118278592, 126699968]
+  candidate=[97159488, 101091648, 104892736, 107530560, 111069504]
+footprintSampleCount: 192.000 -> 203.000 (+5.7% change)
+  baseline=[184, 198, 184, 198, 192]
+  candidate=[194, 203, 197, 205, 206]
+retained growth (distinct from sampled peak): 2.016 MiB -> 3.625 MiB (+79.8% change)
+  baseline=[344064, 294912, 2113536, 10240000, 8421376]
+  candidate=[3833856, 3932160, 3801088, 2637824, 3538944]

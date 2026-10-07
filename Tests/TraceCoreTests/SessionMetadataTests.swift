@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import CoreServices
 import XCTest
 @testable import TraceCore
 
@@ -785,6 +786,75 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertNil(complete.metadataWarning)
         let names = try await database.sessions().map(\.title)
         XCTAssertEqual(names, ["Changed one"])
+    }
+
+    func testDeferredNamesDoNotSurviveIndexReplacementOrReusedRowIDs() async throws {
+        let root = try directory()
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let rollout = sessions.appendingPathComponent("rollout-review.jsonl")
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try write(codexRollout(id: "old-session"), to: rollout)
+        try write([["id": "old-session", "thread_name": "Old title"]], to: sidecar)
+        let databaseURL = root.appendingPathComponent("trace.sqlite")
+        let database = try IndexDatabase(url: databaseURL)
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: databaseURL.path)
+        let oldID = try await raw.read { db in try Int64.fetchOne(db, sql: "SELECT id FROM session") }
+        XCTAssertNotNil(oldID)
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE session SET codex_name_origin=NULL, codex_applied_name=NULL")
+        }
+        try write([["id": "old-session", "thread_name": "Changed title"]], to: sidecar)
+        try Data("broken".utf8).write(to: root.appendingPathComponent("state_99.sqlite"))
+        let deferred = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertTrue(deferred.metadataWarning?.contains("1 legacy Codex title rename(s) deferred") == true, "warning=\(deferred.metadataWarning ?? "nil"), phase=\(deferred.phase), error=\(deferred.error ?? "nil")")
+        try write(codexRollout(id: "new-session"), to: rollout)
+        try write([], to: sidecar)
+        let replaced = await coordinator.indexAllResult(scope: .proseOnly, rebuild: true)
+        let newID = try await raw.read { db in try Int64.fetchOne(db, sql: "SELECT id FROM session") }
+        XCTAssertEqual(newID, oldID, "fixture must exercise SQLite row-ID reuse")
+        XCTAssertFalse(replaced.metadataWarning?.contains("legacy Codex title rename(s) deferred") == true)
+
+        // A deleted/reinserted row is also a new logical identity without a rebuild.
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE session SET generated_title='Legacy', codex_name_origin=NULL, codex_applied_name=NULL")
+        }
+        let origin = CodexNameOrigin(directory: root, provider: .sessionIndex)
+        let update = try await database.updateCodexNamesResult(
+            ["new-session": CodexName(value: "Changed", origin: origin)], root: sessions, policy: .partial)
+        try await raw.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TABLE deleted_session AS SELECT * FROM session;
+                DELETE FROM session;
+                UPDATE deleted_session SET external_id='replacement-session';
+                INSERT INTO session SELECT * FROM deleted_session;
+                DROP TABLE deleted_session;
+                """)
+        }
+        let after = try await database.updateCodexNamesResult([:], root: sessions, policy: .partial)
+        XCTAssertTrue(update.deferredSessionIDs.intersection(after.existingSessionIDs).isEmpty)
+    }
+
+    func testDirectoryCreationDoesNotReloadCodexNameCache() async throws {
+        let root = try directory()
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try write(codexRollout(id: "same-session"), to: sessions.appendingPathComponent("rollout-review.jsonl"))
+        try write([["id": "same-session", "thread_name": "Title"]], to: root.appendingPathComponent("session_index.jsonl"))
+        let database = try IndexDatabase(url: root.appendingPathComponent("trace.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let before = await coordinator.codexNameLoadCountForTesting(directory: root)
+        let day = sessions.appendingPathComponent("2026/10/06")
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+        var changes = SourceChanges()
+        changes.include(path: day.path, flags: UInt32(kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemCreated))
+        XCTAssertFalse(changes.hasIndexWork)
+        _ = await coordinator.refreshResult(paths: changes.paths, scope: .proseOnly)
+        let after = await coordinator.codexNameLoadCountForTesting(directory: root)
+        XCTAssertEqual(after, before)
     }
 
     func testPartialCodexMetadataPreservesLegacyTitleUntilCompleteRead() async throws {

@@ -65,7 +65,7 @@ struct MainView: View {
                         .frame(width: 220)
                     }
                     Spacer()
-                    IndexProgressLabel(progress: model.progress)
+                    IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
@@ -153,13 +153,13 @@ private struct SidebarRowReveal: NSViewRepresentable {
                     let column = scroll.convert(scroll.bounds, to: nil)
                     let relevant: Bool
                     if event.type == .keyDown {
-                        relevant = (window.firstResponder as? NSView).map {
-                            column.minX <= $0.convert($0.bounds, to: nil).midX
-                                && $0.convert($0.bounds, to: nil).midX <= column.maxX
-                        } ?? false
+                        let navigationKeys: Set<UInt16> = [115, 116, 119, 121, 123, 124, 125, 126]
+                        relevant = navigationKeys.contains(event.keyCode) && ((window.firstResponder as? NSView).map {
+                            $0 === scroll || $0.isDescendant(of: scroll)
+                        } ?? false)
                     } else {
                         let point = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-                        relevant = column.minX <= point.x && point.x <= column.maxX
+                        relevant = column.contains(point)
                     }
                     if relevant { self.stop(); interrupted(token) }
                 }
@@ -167,13 +167,34 @@ private struct SidebarRowReveal: NSViewRepresentable {
             }
             task = Task { @MainActor [weak self, weak view] in
                 var progress = SidebarRevealProgress()
-                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                let deadlineSeconds = 3.0
+                var deadline = ContinuousClock.now.advanced(by: .seconds(deadlineSeconds))
+                let testClockPath = TraceTestHooks.isUITesting
+                    ? TraceTestHooks.environment["TRACE_TEST_SIDEBAR_REVEAL_CLOCK_PATH"] : nil
+                let testClockStart = testClockPath.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }.flatMap(Double.init)
+                let testBackstop = ContinuousClock.now.advanced(by: .seconds(15))
+                var previousCheck = ContinuousClock.now
                 var attempt = 0
                 while ContinuousClock.now < deadline {
                     defer { attempt += 1 }
                     do { try await Task.sleep(for: .milliseconds(50)) }
                     catch { return }
                     guard let self, let view, !Task.isCancelled, self.token == token else { return }
+                    let now = ContinuousClock.now
+                    if let clockPath = testClockPath, let testClockStart,
+                       let raw = try? String(contentsOfFile: clockPath, encoding: .utf8),
+                       let tick = Double(raw), tick - testClockStart >= deadlineSeconds {
+                        TraceTestHooks.touch(pathKey: "TRACE_TEST_SIDEBAR_REVEAL_EXPIRED_PATH")
+                        self.stop()
+                        return
+                    }
+                    if TraceTestHooks.isUITesting,
+                       let gate = TraceTestHooks.environment["TRACE_TEST_SIDEBAR_PROJECT_REVEAL_RELEASE_PATH"],
+                       !FileManager.default.fileExists(atPath: gate) {
+                        guard now < testBackstop else { return }
+                        deadline = deadline.advanced(by: previousCheck.duration(to: now))
+                    }
+                    previousCheck = now
                     var ancestor = view.superview
                     while let candidate = ancestor, !(candidate is NSTableView) {
                         ancestor = candidate.superview
@@ -291,7 +312,7 @@ private struct SessionSidebar: View {
                                 }))
                             }
                         }
-                        .task(id: projectRevealTaskID.token) {
+                        .task(id: projectRevealTaskID) {
                             guard let reveal = model.sidebarRevealRequest,
                                   handledProjectRevealToken != reveal.token,
                                   let projectID = projectRevealTaskID.rowID else {
@@ -796,7 +817,16 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var lastObservedOrigin: NSPoint?
         private var lastObservedViewportSize: NSSize?
         private var lastObservedDocumentHeight: CGFloat?
-        private var pendingViewportResizeShift: (delta: CGFloat, expires: ContinuousClock.Instant)?
+        private struct ResizeTransaction {
+            let initiallyFollowing: Bool
+            let viewportDelta: CGFloat
+            let expires: ContinuousClock.Instant
+            let inputGeneration: UInt64
+        }
+        private var resizeTransaction: ResizeTransaction?
+        private var userInputGeneration: UInt64 = 0
+        private var settledBottomInputGeneration: UInt64?
+        private var injectedAppendAdjustmentForUITest = false
         private var pendingDocumentBottomShift: (origin: CGFloat, expires: ContinuousClock.Instant)?
         private var userScrolling = false
         private var liveScrolling = false
@@ -816,6 +846,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         func attach(table: NSTableView, scrollView: NSScrollView) {
             self.table = table
             self.scrollView = scrollView
+            observeDocumentGeometry()
             do {
                 let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 0) {
                     [weak self] _, _ in
@@ -927,7 +958,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     forName: NSView.frameDidChangeNotification,
                     object: table, queue: .main
                 ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.scheduleBottomFollow() }
+                    MainActor.assumeIsolated {
+                        self?.observeDocumentGeometry()
+                        self?.scheduleBottomFollow()
+                    }
                 },
                 NotificationCenter.default.addObserver(
                     forName: .traceTestTranscriptScroll,
@@ -981,8 +1015,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
             lastObservedOrigin = nil
             lastObservedViewportSize = nil
             lastObservedDocumentHeight = nil
-            pendingViewportResizeShift = nil
+            resizeTransaction = nil
+            settledBottomInputGeneration = nil
             pendingDocumentBottomShift = nil
+            extentRefreshWorkItem?.cancel()
+            extentRefreshWorkItem = nil
+            pendingAnchorCorrection = false
             lastUserScrollInput = nil
             lastUserScrollMotion = nil
             upwardScrollTravel = 0
@@ -1019,7 +1057,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             self.model = model
             if self.sessionID != sessionID || self.visibility != visibility || self.density != density
                 || self.messageRevision != messageRevision || self.contentRevision != contentRevision {
-                cachedRowExtent = nil
+                invalidateDocumentExtent()
             }
             let sessionChanged = self.sessionID != sessionID
             let requestedMessageWasAvailable = model.requestedMessageID.map {
@@ -1028,6 +1066,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var refreshesRowHeights = false
             var visibilityChanged = false
             if sessionChanged {
+                cachedTrailingDocumentPadding = nil
+                settledBottomInputGeneration = nil
                 cancelPendingRestore(reportCancellation: false)
                 expansionStates.removeAll()
                 pendingHeightMessageIDs.removeAll()
@@ -1131,6 +1171,26 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 )
             }
             if !items.isEmpty, pendingRestore == nil { positionEstablished = true }
+            if TraceTestHooks.isUITesting,
+               TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] == "rubber-band-return",
+               items.count == 71, !injectedAppendAdjustmentForUITest {
+                injectedAppendAdjustmentForUITest = true
+                DispatchQueue.main.async { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, let scrollView = self.scrollView,
+                              let maximum = self.exactMaximumScrollY else { return }
+                        // AppKit can restore the old bottom after the appended
+                        // row changes the document extent, without new input.
+                        var origin = scrollView.contentView.bounds.origin
+                        origin.y = maximum
+                        scrollView.contentView.setBoundsOrigin(origin)
+                        origin.y = max(0, maximum - 86)
+                        scrollView.contentView.setBoundsOrigin(origin)
+                        TraceTestHooks.appendLine("post-append-native-motion",
+                            pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                    }
+                }
+            }
         }
 
         private func updateRows(
@@ -1215,6 +1275,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard items.indices.contains(row), let model else { return nil }
             let item = items[row]
+            if TraceTestHooks.isUITesting { materializedMessageIDs.insert(item.summary.id) }
             let identifier = NSUserInterfaceItemIdentifier("messageCell")
             let cell = (tableView.makeView(withIdentifier: identifier, owner: nil) as? TranscriptHostingCell)
                 ?? TranscriptHostingCell(identifier: identifier)
@@ -1515,6 +1576,23 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 }
                 request.revealedTargetRow = true
             }
+            let target = items[row].summary
+            if table.rect(ofRow: row).height + bookmark.offset <= 0,
+               model?.hydratedMessages[target.id] == nil,
+               model?.hydrationFailures.contains(target.id) != true,
+               request.attemptsRemaining > 1 {
+                // A clipped bookmark can exceed the preview row's height. Keep
+                // the row revealed until its content loads; clipping it now can
+                // remove the SwiftUI task before it starts hydration.
+                model?.hydrate(target)
+                request.attemptsRemaining -= 1
+                request.stableChecks = 0
+                pendingRestore = request
+                rememberProgrammaticOrigin()
+                applyingProgrammaticScroll = false
+                scheduleRestore(token: token, delayMilliseconds: 75)
+                return
+            }
             // Invalidating automatic heights can replace the anchor's measured
             // height with an estimate. Materialize and lay out just this row before
             // restoring a negative offset, which may exceed that estimate.
@@ -1599,6 +1677,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 restoreWorkItem = nil
                 TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_COMPLETED_PATH")
                 positionEstablished = true
+                pendingAnchorCorrection = !pendingHeightMessageIDs.isEmpty || extentNeedsRefresh
                 establishedBookmark = .init(messageID: items[row].summary.id, offset: achievedOffset, index: items[row].sourceIndex)
                 switch request.reason {
                 case .navigation:
@@ -1661,9 +1740,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 upwardScrollTravel = 0
             }
             lastUserScrollInput = .now
-            pendingViewportResizeShift = nil
+            userInputGeneration &+= 1
+            settledBottomInputGeneration = nil
+            resizeTransaction = nil
             pendingDocumentBottomShift = nil
             establishedBookmark = nil
+            pendingAnchorCorrection = false
             cancelBottomFollowWork()
             expectedProgrammaticOrigin = nil
             pendingAnchorRestore = nil
@@ -1728,10 +1810,18 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func invalidateHeight(messageID: Int64, userInitiated: Bool = false) {
-            cachedRowExtent = nil
+            // Offscreen content changes stay deferred until their native row
+            // height changes; they do not invalidate the current document extent.
             pendingHeightMessageIDs.insert(messageID)
+            if positionEstablished, !isUserInteracting, !followsBottom,
+               establishedBookmark != nil { pendingAnchorCorrection = true }
             if userInitiated {
+                userInputGeneration &+= 1
+                settledBottomInputGeneration = nil
+                resizeTransaction = nil
+                pendingDocumentBottomShift = nil
                 establishedBookmark = nil
+                pendingAnchorCorrection = false
                 userHeightMessageIDs.insert(messageID)
                 if pendingInteractionBookmark == nil,
                    let row = rowByMessageID[messageID] {
@@ -1796,7 +1886,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 cancelPendingRestore(reportCancellation: true, cause: .userInteraction)
             }
             applyingProgrammaticScroll = true
-            cachedRowExtent = nil
+            invalidateDocumentExtent()
             table.noteHeightOfRows(withIndexesChanged: rows)
             table.layoutSubtreeIfNeeded()
             rememberProgrammaticOrigin()
@@ -1831,28 +1921,35 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let actual = scrollView.contentView.bounds.origin
             let viewportSize = scrollView.contentView.bounds.size
             let documentHeight = table?.frame.height
+            observeDocumentGeometry()
             lastObservedViewportSize = viewportSize
             lastObservedDocumentHeight = documentHeight
             let viewportResized = previousViewportSize.map {
                 abs($0.width - viewportSize.width) > 0.5
                     || abs($0.height - viewportSize.height) > 0.5
             } ?? false
-            if viewportResized, followsBottom, let previousViewportSize {
-                pendingViewportResizeShift = (
-                    viewportSize.height - previousViewportSize.height,
-                    .now.advanced(by: .milliseconds(500))
+            if viewportResized, !isUserInteracting, let previousViewportSize {
+                resizeTransaction = ResizeTransaction(
+                    initiallyFollowing: followsBottom,
+                    viewportDelta: viewportSize.height - previousViewportSize.height,
+                    expires: .now.advanced(by: .milliseconds(500)),
+                    inputGeneration: userInputGeneration
                 )
             }
             let documentResized = previousDocumentHeight.flatMap { before in
                 documentHeight.map { abs(before - $0) > 0.5 }
             } ?? false
             if documentResized, followsBottom, let table, !items.isEmpty {
-                _ = maximumScrollY
-                if let bottom = cachedRowExtent?.bottom {
-                    // AppKit can anchor to the last row before applying trailing
-                    // document padding in a later origin-only update.
+                // A synchronous native resize can deliver its padding adjustment
+                // before our coalesced row-extent refresh runs. Preserve the last
+                // measured trailing padding, rather than using a stale row bottom.
+                let bottom = cachedTrailingDocumentPadding.map { max(0, table.frame.height - $0) }
+                    ?? cachedRowExtent
+                if let bottom {
                     pendingDocumentBottomShift = (max(0, bottom - viewportSize.height),
                         .now.advanced(by: .milliseconds(500)))
+                    TraceTestHooks.appendLine("document-shift=\(max(0, bottom - viewportSize.height)),padding=\(cachedTrailingDocumentPadding ?? -1)",
+                        pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
                 }
             }
             let layoutChanged = viewportResized || documentResized || scrollView.inLiveResize
@@ -1863,12 +1960,22 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var passiveLayoutMotion = viewportResized || scrollView.inLiveResize
                 || (documentResized && originTravel <= documentTravel + 2
                     && originDelta * documentDelta >= 0)
-            if !ignored, !viewportResized, !documentResized,
-               let pending = pendingViewportResizeShift, let previous {
-                pendingViewportResizeShift = nil
-                if ContinuousClock.now < pending.expires,
-                   TranscriptViewportPolicy.matchesResizeShift(actual: actual.y, previous: previous.y, viewportDelta: pending.delta) {
+            if let transaction = resizeTransaction {
+                if ContinuousClock.now >= transaction.expires
+                    || transaction.inputGeneration != userInputGeneration {
+                    resizeTransaction = nil
+                } else if transaction.initiallyFollowing, !scrollerTracking, !selectionTracking {
+                    // A resize can change estimated row heights and then deliver
+                    // multiple origin-only adjustments, including another upward
+                    // adjustment. Physical input invalidates this transaction
+                    // before AppKit moves the viewport.
+                    let oppositeShift = previous.map {
+                        TranscriptViewportPolicy.matchesResizeShift(actual: actual.y, previous: $0.y,
+                            viewportDelta: transaction.viewportDelta)
+                    } ?? false
                     passiveLayoutMotion = true
+                    TraceTestHooks.appendLine(oppositeShift ? "resize-motion=opposite" : "resize-motion=native",
+                        pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
                 }
             }
             if !ignored, !viewportResized, !documentResized,
@@ -1934,7 +2041,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let viewport = viewportStatus
             followsBottom = TranscriptViewportPolicy.followsBottom(atBottom: viewport.atBottom,
                 withinBounds: viewport.withinBounds, upwardTravel: upwardScrollTravel, previouslyFollowing: followsBottom)
-            if viewport.atBottom { upwardScrollTravel = 0 }
+            if viewport.atBottom {
+                upwardScrollTravel = 0
+                settledBottomInputGeneration = userInputGeneration
+            } else {
+                settledBottomInputGeneration = nil
+            }
             if viewport.atBottom || (upwardScrollTravel > 0.5 && viewport.withinBounds) {
                 pendingBottomFollow = false
                 if !followsBottom { cancelBottomFollowWork() }
@@ -1994,20 +2106,30 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 let rect = table.rect(ofRow: row)
                 let viewport = scrollView.documentVisibleRect
                 TraceTestHooks.appendLine(
-                    "\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(positionEstablished && pendingRestore?.reason.reportsHooks != true),\(sessionID)",
+                    "probe=\(index),rowHeight=\(rect.height),established=\(positionEstablished),restore=\(pendingRestore != nil),heights=\(pendingHeightMessageIDs.count),extent=\(extentNeedsRefresh),correction=\(pendingAnchorCorrection),interacting=\(isUserInteracting)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_ROW_LAYOUT_AUDIT_PATH"
+                )
+                TraceTestHooks.appendLine(
+                    "\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(positionEstablished && pendingRestore == nil && pendingHeightMessageIDs.isEmpty && !extentNeedsRefresh && !pendingAnchorCorrection),\(sessionID)",
                     pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_POSITION_PATH"
                 )
             }
         }
 
         private func correctEstablishedAnchor() {
+            guard pendingAnchorCorrection else { return }
             guard positionEstablished, !applyingProgrammaticScroll, !isUserInteracting,
                   !followsBottom, restoreGateTask == nil,
                   pendingRestore?.reason.isExplicitNavigation != true,
                   let bookmark = pendingRestore?.bookmark ?? establishedBookmark,
                   let row = rowByMessageID[bookmark.messageID], let table, let scrollView else { return }
             let desired = table.rect(ofRow: row).minY - bookmark.offset
-            guard abs(desired - scrollView.contentView.bounds.origin.y) > 1 else { return }
+            guard abs(desired - scrollView.contentView.bounds.origin.y) > 1 else {
+                if pendingRestore == nil, pendingHeightMessageIDs.isEmpty, !extentNeedsRefresh {
+                    pendingAnchorCorrection = false
+                }
+                return
+            }
             // Coalesced automatic-height changes must settle before the next
             // main-loop turn, even while the height-invalidation batch is pending.
             applyingProgrammaticScroll = true
@@ -2041,7 +2163,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"
             )
             guard TraceTestHooks.isUITesting, let scrollView, let maximumScrollY else { return }
-            switch TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] {
+            let simulation = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"]
+            switch simulation {
             case "external-midpoint":
                 TraceTestHooks.appendLine(
                     "simulate-before=\(scrollView.contentView.bounds.origin.y),max=\(maximumScrollY)",
@@ -2090,7 +2213,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 // phase separately, with a real changed viewport extent.
                 lastObservedViewportSize = resized
                 lastObservedDocumentHeight = table?.frame.height
-                pendingViewportResizeShift = (delta, .now.advanced(by: .milliseconds(500)))
+                resizeTransaction = ResizeTransaction(initiallyFollowing: followsBottom, viewportDelta: delta,
+                    expires: .now.advanced(by: .milliseconds(500)), inputGeneration: userInputGeneration)
                 expectedProgrammaticOrigin = nil
                 lastObservedOrigin = origin
                 scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y - delta))
@@ -2103,13 +2227,90 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 window.setFrame(originalFrame, display: true)
                 window.contentView?.layoutSubtreeIfNeeded()
                 TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
+            case "multi-stage-resize":
+                guard let window = scrollView.window, let table else { return }
+                let origin = scrollView.contentView.bounds.origin
+                let oldSize = scrollView.contentView.bounds.size
+                let oldHeight = table.frame.height
+                scrollView.contentView.postsBoundsChangedNotifications = false
+                var frame = window.frame
+                frame.size.height -= 80
+                window.setFrame(frame, display: true)
+                window.contentView?.layoutSubtreeIfNeeded()
+                table.setFrameSize(NSSize(width: table.frame.width, height: max(0, oldHeight - 264)))
+                lastObservedOrigin = origin
+                lastObservedViewportSize = oldSize
+                lastObservedDocumentHeight = oldHeight
+                expectedProgrammaticOrigin = nil
+                let viewportDelta = scrollView.contentView.bounds.height - oldSize.height
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y - 264 - viewportDelta))
+                boundsDidChange()
+                let intermediate = scrollView.contentView.bounds.origin
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: intermediate.x, y: intermediate.y + viewportDelta))
+                boundsDidChange()
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                TraceTestHooks.appendLine("simulation-classified-bottom=\(followsBottom)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
+            case "expired-resize", "interrupted-resize":
+                resizeTransaction = ResizeTransaction(initiallyFollowing: true, viewportDelta: -80,
+                    expires: .now.advanced(by: .milliseconds(simulation == "expired-resize" ? -1 : 500)),
+                    inputGeneration: userInputGeneration)
+                if simulation == "interrupted-resize" {
+                    beginUserScrolling()
+                    // A queued resize callback after physical input must not
+                    // rearm the transaction and suppress the next upward move.
+                    let size = scrollView.contentView.bounds.size
+                    lastObservedViewportSize = NSSize(width: size.width, height: size.height + 80)
+                    lastObservedOrigin = scrollView.contentView.bounds.origin
+                    expectedProgrammaticOrigin = nil
+                    boundsDidChange()
+                    TraceTestHooks.appendLine("resize-rearmed-after-input=\(resizeTransaction != nil)",
+                        pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                }
+                expectedProgrammaticOrigin = nil
+                lastObservedOrigin = scrollView.contentView.bounds.origin
+                var origin = scrollView.contentView.bounds.origin
+                origin.y -= 24
+                scrollView.contentView.setBoundsOrigin(origin)
+                boundsDidChange()
+                TraceTestHooks.appendLine("simulation-classified-bottom=\(followsBottom)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
+            case "cached-extent":
+                guard let table else { return }
+                _ = prepareDocumentExtent()
+                let queries = extentQueryCount
+                let generation = extentGeneration
+                let original = scrollView.contentView.bounds.origin
+                applyingProgrammaticScroll = true
+                for step in 0..<100 {
+                    // Exercise real bounds notifications with unchanged sizes.
+                    scrollView.contentView.setBoundsOrigin(NSPoint(x: original.x,
+                        y: original.y - CGFloat(step % 2)))
+                    for _ in 0..<100 { _ = viewportStatus }
+                }
+                table.setFrameOrigin(NSPoint(x: table.frame.origin.x, y: table.frame.origin.y + 1))
+                table.setFrameOrigin(NSPoint(x: table.frame.origin.x, y: table.frame.origin.y - 1))
+                scrollView.contentView.setBoundsOrigin(original)
+                rememberProgrammaticOrigin()
+                applyingProgrammaticScroll = false
+                let scrollQueries = extentQueryCount
+                let scrollGeneration = extentGeneration
+                invalidateDocumentExtent()
+                invalidateDocumentExtent()
+                let beforeFlush = extentQueryCount
+                _ = exactMaximumScrollY
+                TraceTestHooks.appendLine("cache=\(queries),\(scrollQueries),\(generation),\(scrollGeneration),\(materializedMessageIDs.count),\(items.count),\(beforeFlush),\(extentQueryCount)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
             case "row-extent":
                 guard let table else { return }
                 applyingProgrammaticScroll = true
                 let bottom = table.rect(ofRow: items.count - 1).maxY
                 table.setFrameSize(NSSize(width: table.frame.width, height: max(0, bottom - 100)))
-                cachedRowExtent = nil
-                let maximum = self.maximumScrollY ?? -1
+                invalidateDocumentExtent()
+                let maximum = exactMaximumScrollY ?? -1
                 TraceTestHooks.appendLine("extent=\(maximum),expected=\(max(0, bottom - scrollView.contentView.bounds.height))",
                     pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
                 scrollToBottom()
@@ -2279,6 +2480,19 @@ private struct TranscriptRenderer: NSViewRepresentable {
             guard !items.isEmpty else { return }
             if let pendingRestore, pendingRestore.reason.priority > reason.priority { return }
             if snapshot.followsBottom {
+                if case .passive = reason,
+                   !isUserInteracting || settledBottomInputGeneration == userInputGeneration {
+                    // Known app mutations can trigger a later native origin-only
+                    // adjustment. During the idle debounce, a settled bottom
+                    // proves that no input since snap-back has moved us away.
+                    if resizeTransaction?.initiallyFollowing != true
+                        || resizeTransaction?.inputGeneration != userInputGeneration
+                        || resizeTransaction.map({ ContinuousClock.now >= $0.expires }) != false {
+                        resizeTransaction = ResizeTransaction(initiallyFollowing: true,
+                            viewportDelta: 0, expires: .now.advanced(by: .milliseconds(500)),
+                            inputGeneration: userInputGeneration)
+                    }
+                }
                 cancelPendingRestore(reportCancellation: false)
                 followsBottom = true
                 pendingAnchorRestore = nil
@@ -2307,33 +2521,100 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private struct ExtentGeometry: Equatable {
-            let frame: NSRect
-            let bounds: NSRect
+            // Origins change during scrolling without changing any row's extent.
+            let frameSize: NSSize
+            let boundsSize: NSSize
             let spacing: NSSize
             let rows: Int
         }
-        private var cachedRowExtent: (geometry: ExtentGeometry, bottom: CGFloat)?
+        private var extentGeometry: ExtentGeometry?
+        private var extentGeneration: UInt64 = 0
+        private var extentNeedsRefresh = true
+        private var refreshingExtent = false
+        private var extendingDocumentFrame = false
+        private var extentRefreshWorkItem: DispatchWorkItem?
+        private var cachedRowExtent: CGFloat?
+        private var cachedDocumentHeight: CGFloat = 0
+        private var cachedTrailingDocumentPadding: CGFloat?
+        private var pendingAnchorCorrection = false
+        private var extentQueryCount = 0
+        private var materializedMessageIDs: Set<Int64> = []
 
-        private var maximumScrollY: CGFloat? {
-            guard let table, let scrollView else { return nil }
-            let geometry = ExtentGeometry(frame: table.frame, bounds: table.bounds,
+        private func observeDocumentGeometry() {
+            guard let table else { return }
+            let geometry = ExtentGeometry(frameSize: table.frame.size, boundsSize: table.bounds.size,
                                           spacing: table.intercellSpacing, rows: items.count)
-            if cachedRowExtent?.geometry != geometry {
-                cachedRowExtent = (geometry, items.isEmpty ? 0 : table.rect(ofRow: items.count - 1).maxY)
-            }
-            return TranscriptViewportPolicy.maximumOrigin(frameHeight: table.frame.height,
-                lastRowBottom: cachedRowExtent?.bottom ?? 0, viewportHeight: scrollView.contentView.bounds.height)
+            cachedDocumentHeight = geometry.frameSize.height
+            guard geometry != extentGeometry else { return }
+            extentGeometry = geometry
+            if !extendingDocumentFrame { invalidateDocumentExtent() }
         }
 
-        private var exactMaximumScrollY: CGFloat? { maximumScrollY }
+        private func invalidateDocumentExtent() {
+            extentGeneration &+= 1
+            extentNeedsRefresh = true
+            if positionEstablished, !isUserInteracting, !followsBottom,
+               establishedBookmark != nil { pendingAnchorCorrection = true }
+            guard extentRefreshWorkItem == nil, table != nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.extentRefreshWorkItem = nil
+                    self.refreshDocumentExtent()
+                    self.scheduleBottomFollow()
+                }
+            }
+            extentRefreshWorkItem = work
+            // rect(ofRow:) may cause AppKit to tile its table. Never call it from
+            // a bounds notification or while a hosted row is being configured.
+            DispatchQueue.main.async(execute: work)
+        }
+
+        private func refreshDocumentExtent() {
+            observeDocumentGeometry()
+            guard extentNeedsRefresh, !refreshingExtent, let table else { return }
+            extentRefreshWorkItem?.cancel()
+            extentRefreshWorkItem = nil
+            refreshingExtent = true
+            let generation = extentGeneration
+            extentQueryCount += 1
+            cachedRowExtent = items.isEmpty ? 0 : table.rect(ofRow: items.count - 1).maxY
+            cachedDocumentHeight = table.frame.height
+            if !items.isEmpty, let bottom = cachedRowExtent, cachedDocumentHeight >= bottom {
+                cachedTrailingDocumentPadding = cachedDocumentHeight - bottom
+            }
+            extentGeometry = ExtentGeometry(frameSize: table.frame.size, boundsSize: table.bounds.size,
+                                            spacing: table.intercellSpacing, rows: items.count)
+            extentNeedsRefresh = generation != extentGeneration
+            refreshingExtent = false
+            if !extentNeedsRefresh {
+                extentRefreshWorkItem?.cancel()
+                extentRefreshWorkItem = nil
+            }
+        }
+
+        private var maximumScrollY: CGFloat? {
+            guard table != nil, let scrollView else { return nil }
+            return TranscriptViewportPolicy.maximumOrigin(frameHeight: cachedDocumentHeight,
+                lastRowBottom: cachedRowExtent ?? 0, viewportHeight: scrollView.contentView.bounds.height)
+        }
+
+        private var exactMaximumScrollY: CGFloat? {
+            refreshDocumentExtent()
+            return maximumScrollY
+        }
 
         private func prepareDocumentExtent() -> CGFloat? {
-            _ = maximumScrollY
-            if let table, let bottom = cachedRowExtent?.bottom, bottom > table.frame.height {
-                // NSClipView constrains origins to the document frame. Include an
-                // already measured row extending beyond it before applying an origin.
+            refreshDocumentExtent()
+            if let table, let bottom = cachedRowExtent, bottom > table.frame.height {
+                // Extending the frame to an already measured row does not change
+                // row geometry and must not trigger another last-row query.
+                extendingDocumentFrame = true
                 table.setFrameSize(NSSize(width: table.frame.width, height: bottom))
-                cachedRowExtent = nil
+                extendingDocumentFrame = false
+                cachedDocumentHeight = table.frame.height
+                extentGeometry = ExtentGeometry(frameSize: table.frame.size, boundsSize: table.bounds.size,
+                                                spacing: table.intercellSpacing, rows: items.count)
             }
             return maximumScrollY
         }

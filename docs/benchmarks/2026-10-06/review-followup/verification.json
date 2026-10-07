@@ -1,0 +1,43 @@
+{
+  "candidateCommit": "a47041501c90d9b6bf76e3a27eb5ee93b061b0c7",
+  "fullCoreTests": 194,
+  "coreRaceCases": 12,
+  "coreRaceExecutions": 60,
+  "scriptTests": 6,
+  "uiRaceCases": 17,
+  "uiRaceExecutionsPlanned": 85,
+  "fullUICasesPlanned": 79,
+  "resultsPending": [
+    "completeUI",
+    "threeReleasePairs"
+  ],
+  "nativeMenuUnchanged": true,
+  "baselineCommit": "61c00dec21762408980afe1a476cfcdb3f859437",
+  "delivery": "local commits only; no push",
+  "testBuildAppAndUITestCommit": "a47041501c90d9b6bf76e3a27eb5ee93b061b0c7",
+  "coreRaceSourceCommit": "be5b0c3e6897035538e940d2cf1ddff3190b5983",
+  "coreRaceSourcesUnchanged": true,
+  "clippedNavigationRepetitionsPassed": 5,
+  "deterministicPassiveAppendAndInputExecutions": 20,
+  "uiRaceExecutions": 85,
+  "uiRaceFailures": 0,
+  "uiRaceResultBundles": [
+    "PassiveAppendDeterministic20.xcresult",
+    "FinalPinnedAppendRaces65.xcresult"
+  ],
+  "reviewRaceSourceCommit": "f834c692d659ec82b6945c338d8e843f547179a7",
+  "reviewRaceSourcesUnchanged": true,
+  "dividerMouseDragRepetitionsPassed": 5,
+  "totalRepeatedUIChecks": 90,
+  "fullCoreResultBundle": "NativeMouseFinalCore194.xcresult",
+  "fullCoreSourceCommit": "a47041501c90d9b6bf76e3a27eb5ee93b061b0c7",
+  "dividerMouseDragResultBundle": "NativeDividerMouse5.xcresult",
+  "status": "awaiting protected macOS dialog resolution and quiet desktop",
+  "fullUIStatus": "incomplete: recurring protected dialog interrupted the full suite; corrected candidate reached 40 passes with no assertion failures",
+  "pairedReleaseRuns": 0,
+  "measuredLocalSamples": 0,
+  "blockingTool": "mcp__cua_repl.js",
+  "blockingToolReason": "Computer Use is not allowed to use the app 'com.apple.SecurityAgent' for safety reasons.",
+  "backgroundVerificationProcessesRunning": false,
+  "appAndUITestSourcesMatchCandidateCommit": true
+}

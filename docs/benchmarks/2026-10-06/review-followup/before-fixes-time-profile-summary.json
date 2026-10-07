@@ -1,0 +1,345 @@
+{
+  "revision": "8a53bcd",
+  "workload": "four acknowledged 2,000-message scrolling sweeps; Time Profiler overhead included",
+  "samples": 4507,
+  "sampled_cpu_seconds": 4.507,
+  "app_inclusive_frames": [
+    {
+      "name": "TranscriptRenderer.Coordinator.benchmarkScrollStep(_:sweep:distance:)",
+      "inclusive_ms": 1669.0,
+      "percent_of_samples": 37.031284668293765
+    },
+    {
+      "name": "closure #1 in closure #1 in TranscriptRenderer.Coordinator.benchmarkScrollStep(_:sweep:distance:)",
+      "inclusive_ms": 1668.0,
+      "percent_of_samples": 37.009096960284005
+    },
+    {
+      "name": "closure #1 in TranscriptRenderer.Coordinator.benchmarkScrollStep(_:sweep:distance:)",
+      "inclusive_ms": 1668.0,
+      "percent_of_samples": 37.009096960284005
+    },
+    {
+      "name": "partial apply for closure #1 in closure #1 in TranscriptRenderer.Coordinator.benchmarkScrollStep(_:sweep:distance:)",
+      "inclusive_ms": 1668.0,
+      "percent_of_samples": 37.009096960284005
+    },
+    {
+      "name": "partial apply for closure #1 in TranscriptRenderer.Coordinator.invalidateHeight(messageID:userInitiated:)",
+      "inclusive_ms": 62.0,
+      "percent_of_samples": 1.3756378966052807
+    },
+    {
+      "name": "closure #1 in closure #9 in TranscriptRenderer.Coordinator.attach(table:scrollView:)",
+      "inclusive_ms": 62.0,
+      "percent_of_samples": 1.3756378966052807
+    },
+    {
+      "name": "closure #1 in TranscriptRenderer.Coordinator.invalidateHeight(messageID:userInitiated:)",
+      "inclusive_ms": 62.0,
+      "percent_of_samples": 1.3756378966052807
+    },
+    {
+      "name": "partial apply for closure #1 in closure #1 in TranscriptRenderer.Coordinator.invalidateHeight(messageID:userInitiated:)",
+      "inclusive_ms": 61.0,
+      "percent_of_samples": 1.3534501885955181
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.flushHeightChanges()",
+      "inclusive_ms": 61.0,
+      "percent_of_samples": 1.3534501885955181
+    },
+    {
+      "name": "@objc TranscriptRenderer.Coordinator.tableView(_:viewFor:row:)",
+      "inclusive_ms": 19.0,
+      "percent_of_samples": 0.4215664521854892
+    },
+    {
+      "name": "specialized TranscriptRenderer.Coordinator.tableView(_:viewFor:row:)",
+      "inclusive_ms": 19.0,
+      "percent_of_samples": 0.4215664521854892
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.tableView(_:viewFor:row:)",
+      "inclusive_ms": 19.0,
+      "percent_of_samples": 0.4215664521854892
+    },
+    {
+      "name": "specialized TranscriptRenderer.Coordinator.tableView(_:rowViewForRow:)",
+      "inclusive_ms": 6.0,
+      "percent_of_samples": 0.13312624805857554
+    },
+    {
+      "name": "@objc TranscriptRenderer.Coordinator.tableView(_:rowViewForRow:)",
+      "inclusive_ms": 6.0,
+      "percent_of_samples": 0.13312624805857554
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.tableView(_:rowViewForRow:)",
+      "inclusive_ms": 6.0,
+      "percent_of_samples": 0.13312624805857554
+    },
+    {
+      "name": "-[NSTableView rectOfRow:]",
+      "inclusive_ms": 5.0,
+      "percent_of_samples": 0.11093854004881296
+    },
+    {
+      "name": "closure #1 in TranscriptRenderer.Coordinator.attach(table:scrollView:)",
+      "inclusive_ms": 4.0,
+      "percent_of_samples": 0.08875083203905036
+    },
+    {
+      "name": "partial apply for closure #1 in closure #1 in TranscriptRenderer.Coordinator.scheduleBookmarkSave(reportStart:)",
+      "inclusive_ms": 3.0,
+      "percent_of_samples": 0.06656312402928777
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.finishUserScrolling()",
+      "inclusive_ms": 3.0,
+      "percent_of_samples": 0.06656312402928777
+    },
+    {
+      "name": "partial apply for closure #1 in TranscriptRenderer.Coordinator.scheduleBookmarkSave(reportStart:)",
+      "inclusive_ms": 3.0,
+      "percent_of_samples": 0.06656312402928777
+    },
+    {
+      "name": "closure #1 in TranscriptRenderer.Coordinator.scheduleBookmarkSnapshot()",
+      "inclusive_ms": 3.0,
+      "percent_of_samples": 0.06656312402928777
+    },
+    {
+      "name": "closure #1 in closure #1 in TranscriptRenderer.Coordinator.scheduleBookmarkSnapshot()",
+      "inclusive_ms": 3.0,
+      "percent_of_samples": 0.06656312402928777
+    },
+    {
+      "name": "-[NSTableView _rectOfRowAssumingRowExists:tileIfNeeded:]",
+      "inclusive_ms": 3.0,
+      "percent_of_samples": 0.06656312402928777
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.maximumScrollY.getter",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.viewportStatus.getter",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "closure #9 in TranscriptRenderer.Coordinator.attach(table:scrollView:)",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "partial apply for closure #1 in closure #2 in TranscriptRenderer.Coordinator.benchmarkScrollStep(_:sweep:distance:)",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "closure #2 in TranscriptRenderer.Coordinator.benchmarkScrollStep(_:sweep:distance:)",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "closure #1 in closure #2 in TranscriptRenderer.Coordinator.benchmarkScrollStep(_:sweep:distance:)",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "closure #1 in closure #1 in TranscriptRenderer.Coordinator.attach(table:scrollView:)",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "partial apply for closure #1 in closure #1 in TranscriptRenderer.Coordinator.attach(table:scrollView:)",
+      "inclusive_ms": 2.0,
+      "percent_of_samples": 0.04437541601952518
+    },
+    {
+      "name": "closure #1 in TranscriptRenderer.Coordinator.attachBenchmarkObserverForUITest()",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "partial apply for closure #1 in closure #1 in TranscriptRenderer.Coordinator.attachBenchmarkObserverForUITest()",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "closure #1 in closure #1 in TranscriptRenderer.Coordinator.attachBenchmarkObserverForUITest()",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.startBenchmarkScrollSweep(_:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptHostingCell.setDensity(_:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptExpansionState.auxiliary.getter",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptHostingCell.set(rootView:messageID:configuration:copyMessage:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.expansionState(for:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "partial apply for closure #1 in closure #9 in TranscriptRenderer.Coordinator.attach(table:scrollView:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.boundsDidChange()",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.recordUserViewportMotion(from:to:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.requestRestore(_:reason:refreshesRowHeights:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.applyRestore(token:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "closure #2 in TranscriptRenderer.Coordinator.applyRestore(token:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.beginRestore(_:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "closure #1 in TranscriptRenderer.Coordinator.tableView(_:viewFor:row:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "closure #10 in TranscriptRenderer.Coordinator.attach(table:scrollView:)",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "-[NSTableView _rectOfRow:withRowHeightData:assumeRowExists:]",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "TranscriptRenderer.Coordinator.correctEstablishedAnchor()",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    },
+    {
+      "name": "objc_msgSend$rectOfRow:",
+      "inclusive_ms": 1.0,
+      "percent_of_samples": 0.02218770800976259
+    }
+  ],
+  "top_leaf_frames": [
+    {
+      "name": "objc_msgSend",
+      "milliseconds": 235.0
+    },
+    {
+      "name": "<deduplicated_symbol>",
+      "milliseconds": 115.0
+    },
+    {
+      "name": "mach_msg2_trap",
+      "milliseconds": 78.0
+    },
+    {
+      "name": "swift_release",
+      "milliseconds": 72.0
+    },
+    {
+      "name": "start_wqthread",
+      "milliseconds": 53.0
+    },
+    {
+      "name": "__kdebug_trace64",
+      "milliseconds": 52.0
+    },
+    {
+      "name": "AG::Graph::UpdateStack::update()",
+      "milliseconds": 52.0
+    },
+    {
+      "name": "swift::MetadataCacheKey::operator==(swift::MetadataCacheKey const&) const",
+      "milliseconds": 51.0
+    },
+    {
+      "name": "_xzm_free_main",
+      "milliseconds": 48.0
+    },
+    {
+      "name": "AG::Graph::propagate_dirty(AG::AttributeID)",
+      "milliseconds": 43.0
+    },
+    {
+      "name": "swift_retain",
+      "milliseconds": 41.0
+    },
+    {
+      "name": "_xzm_xzone_malloc_tiny",
+      "milliseconds": 41.0
+    },
+    {
+      "name": "objc_release",
+      "milliseconds": 41.0
+    },
+    {
+      "name": "weak_entry_for_referent",
+      "milliseconds": 38.0
+    },
+    {
+      "name": "_platform_memmove",
+      "milliseconds": 31.0
+    },
+    {
+      "name": "AGGraphGetInputValue",
+      "milliseconds": 28.0
+    },
+    {
+      "name": "___chkstk_darwin",
+      "milliseconds": 28.0
+    },
+    {
+      "name": "ViewLayoutEngine.sizeThatFits(_:)",
+      "milliseconds": 27.0
+    },
+    {
+      "name": "u_strFromUTF8WithSub",
+      "milliseconds": 27.0
+    },
+    {
+      "name": "NSViewGetTransformToAncestor",
+      "milliseconds": 26.0
+    }
+  ]
+}

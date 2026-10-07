@@ -1,0 +1,62 @@
+[
+  {
+    "candidateCommit": "f834c692d659ec82b6945c338d8e843f547179a7",
+    "resultBundle": "FinalUninterruptedUI79Attempt1.xcresult",
+    "log": "final-uninterrupted-ui-79-attempt1.log",
+    "sampleCount": 40,
+    "checkIntervalSeconds": 2,
+    "quietBeforeStartSeconds": 60,
+    "competingSessionObservations": [
+      {
+        "elapsedSeconds": 80.411,
+        "kinds": [
+          "other-project-xcodebuild"
+        ]
+      }
+    ],
+    "valid": false,
+    "exitCode": 75,
+    "passedExecutionsBeforeExit": 3,
+    "failedExecutionsBeforeExit": 0
+  },
+  {
+    "candidateCommit": "f834c692d659ec82b6945c338d8e843f547179a7",
+    "resultBundle": "FinalUninterruptedUI79Attempt2.xcresult",
+    "log": "final-uninterrupted-ui-79-attempt2.log",
+    "sampleCount": 848,
+    "checkIntervalSeconds": 2,
+    "quietBeforeStartSeconds": 60,
+    "competingSessionObservations": [
+      {
+        "elapsedSeconds": 1746.248,
+        "kinds": [
+          "protected-macOS-dialog"
+        ]
+      }
+    ],
+    "valid": false,
+    "exitCode": 75,
+    "passedExecutionsBeforeExit": 74,
+    "failedExecutionsBeforeExit": 1
+  },
+  {
+    "candidateCommit": "a47041501c90d9b6bf76e3a27eb5ee93b061b0c7",
+    "resultBundle": "FinalUninterruptedUI79Attempt3.xcresult",
+    "log": "final-uninterrupted-ui-79-attempt3.log",
+    "sampleCount": 465,
+    "checkIntervalSeconds": 2,
+    "quietBeforeStartSeconds": 60,
+    "competingSessionObservations": [
+      {
+        "elapsedSeconds": 995.715,
+        "kinds": [
+          "protected-macOS-dialog"
+        ]
+      }
+    ],
+    "valid": false,
+    "exitCode": 75,
+    "passedExecutionsBeforeExit": 40,
+    "failedExecutionsBeforeExit": 0
+  }
+]

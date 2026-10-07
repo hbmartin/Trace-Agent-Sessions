@@ -1,0 +1,12 @@
+{
+  "candidateCommit": "be5b0c3e6897035538e940d2cf1ddff3190b5983",
+  "status": "interrupted; excluded from verification success",
+  "blockingApp": "com.apple.dt.mcp-server",
+  "permissionProject": "CREG",
+  "dialogButtons": [
+    "Allow for 24 Hours",
+    "Don\u2019t Allow"
+  ],
+  "passedExecutionsBeforeStopping": 6,
+  "failedSetup": "Reasoning disclosure unreachable while foreign permission dialog intercepted scroll"
+}

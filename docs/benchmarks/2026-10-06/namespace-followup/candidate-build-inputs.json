@@ -1,0 +1,32 @@
+{
+  ".": {
+    "commit": "900901b5108b02ac7905219323d5da54af73236b"
+  },
+  "Vendor/GRDB.swift/": {
+    "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115"
+  },
+  "Vendor/GRDB.swift/SQLiteCustom/src/": {
+    "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c"
+  },
+  "build_input_sha256": {
+    ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+    ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+    "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+    "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+    "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+    "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+    "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+    "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+    "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+    "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+    "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+    "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+    "Trace.xcodeproj/project.pbxproj": "144d3e3e2b34b054cf81411043b31c5d0130852a3ef0514804929290bbf4a5db",
+    "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+    "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+    "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+    "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+    "project.yml": "8cbbde6fce205d9d33282475d4a6b2f204f3d9d922ea93e1f257256c791a61bf"
+  },
+  "production_sources_sha256": "df7ccbbc785a5f64c24ffd8fa6026b2157c4a2c2c437ed546501d26f7e17e2fb"
+}

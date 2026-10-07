@@ -38,7 +38,7 @@ public struct SourceChanges: Sendable {
         if flags & structuralFlags != 0 { structuralPaths.insert(path) }
         let canonical = TraceFileIO.canonicalPath(path).path
         let directory = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
-        let structural = flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
+        let structural = flags & UInt32(kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
         let dropped = flags & UInt32(kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0
         let wrapped = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
         if dropped || wrapped {
@@ -75,6 +75,15 @@ public struct SourceChanges: Sendable {
 }
 
 public final class FSEventsWatcher: @unchecked Sendable {
+    private final class RetiredStream: @unchecked Sendable {
+        let stream: FSEventStreamRef
+        init(_ stream: FSEventStreamRef) { self.stream = stream }
+        func release() {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+    }
     private final class StreamContext {
         weak var watcher: FSEventsWatcher?
         init(_ watcher: FSEventsWatcher) { self.watcher = watcher }
@@ -114,7 +123,14 @@ public final class FSEventsWatcher: @unchecked Sendable {
         queue.setSpecific(key: queueKey, value: true)
     }
 
-    deinit { stop() }
+    deinit {
+        if Thread.isMainThread, let stream {
+            // The weak stream context cannot call a destroyed watcher. Retain
+            // the native stream until previously queued callbacks have returned.
+            let retired = RetiredStream(stream)
+            queue.async { retired.release() }
+        } else { stop() }
+    }
 
     @discardableResult
     public func start() -> Bool {
@@ -155,7 +171,19 @@ public final class FSEventsWatcher: @unchecked Sendable {
                 changes.watermarks = [:]
                 changes.streamRoots = [:]
             }
-            if changes.hasIndexWork || !changes.watermarks.isEmpty || changes.historyDone {
+            if changes.hasIndexWork, TraceTestHooks.isUITesting,
+               let fragment = TraceTestHooks.environment["TRACE_TEST_GATE_FILESYSTEM_ROOT_CONTAINS"],
+               watcher.roots.contains(where: { $0.contains(fragment) }),
+               TraceTestHooks.failOnce(for: "TRACE_TEST_GATE_FILESYSTEM_CALLBACK") {
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_FILESYSTEM_CALLBACK_ENTERED_PATH")
+                let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+                while ContinuousClock.now < deadline,
+                      let release = TraceTestHooks.environment["TRACE_TEST_FILESYSTEM_CALLBACK_RELEASE_PATH"],
+                      !FileManager.default.fileExists(atPath: release) {
+                    Thread.sleep(forTimeInterval: 0.025)
+                }
+            }
+            if changes.hasIndexWork || !changes.structuralPaths.isEmpty || !changes.watermarks.isEmpty || changes.historyDone {
                 watcher.enqueue(changes)
             }
         }
@@ -192,6 +220,11 @@ public final class FSEventsWatcher: @unchecked Sendable {
 
     public func stop(flushPending: Bool = false) {
         guard let stream else { return }
+        if Thread.isMainThread {
+            // Preserve the watcher until draining completes without blocking UI.
+            queue.async { [self] in stop(flushPending: flushPending) }
+            return
+        }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         // Callbacks already queued before invalidation must finish before their
@@ -205,7 +238,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
         let remaining = pending
         pending = SourceChanges()
         lock.unlock()
-        if flushPending, remaining.hasIndexWork { callback(remaining) }
+        if flushPending, remaining.hasIndexWork || !remaining.structuralPaths.isEmpty { callback(remaining) }
     }
 
     private func enqueue(_ changes: SourceChanges) {
@@ -224,7 +257,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
         pending = SourceChanges()
         flushWorkItem = nil
         lock.unlock()
-        if !paths.paths.isEmpty || paths.requiresReconciliation || !paths.watermarks.isEmpty
+        if !paths.paths.isEmpty || !paths.structuralPaths.isEmpty || paths.requiresReconciliation || !paths.watermarks.isEmpty
             || paths.historyDone { callback(paths) }
     }
 }

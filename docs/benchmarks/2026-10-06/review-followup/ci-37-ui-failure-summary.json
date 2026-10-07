@@ -1,0 +1,40 @@
+{
+  "totalTestCount": 75,
+  "passedTests": 74,
+  "failedTests": 1,
+  "skippedTests": 0,
+  "testFailures": [
+    {
+      "failureText": "XCTAssertEqual failed: (\"false\") is not equal to (\"true\") - resize must preserve bottom-follow mode",
+      "targetName": "TraceUITests",
+      "testIdentifier": 67,
+      "testIdentifierString": "TraceUITests/testTranscriptBottomFollowsLiveAppendOnlyWhilePinned()",
+      "testIdentifierURL": "test://com.apple.xcode/Trace/TraceUITests/TraceUITests/testTranscriptBottomFollowsLiveAppendOnlyWhilePinned",
+      "testName": "testTranscriptBottomFollowsLiveAppendOnlyWhilePinned()"
+    }
+  ],
+  "runs": [
+    "37526424912",
+    "37526416451"
+  ],
+  "revision": "8a53bcdee05b0449b815d77c5aac19301c1c7701",
+  "nativeResizeSequence": [
+    {
+      "previousY": 8094,
+      "actualY": 7910,
+      "previousViewportHeight": 504,
+      "viewportHeight": 424,
+      "previousDocumentHeight": 8598,
+      "documentHeight": 8334,
+      "following": true
+    },
+    {
+      "previousY": 7910,
+      "actualY": 7830,
+      "viewportHeight": 424,
+      "documentHeight": 8334,
+      "following": true,
+      "classifiedAsUserInput": true
+    }
+  ]
+}
