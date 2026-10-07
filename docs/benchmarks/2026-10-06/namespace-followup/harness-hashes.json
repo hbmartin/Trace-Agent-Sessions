@@ -1,0 +1,9 @@
+{
+  "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee",
+  "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+  "Scripts/compare-transcript-scroll-metrics.py": "1f187ef548c7b4c928bde33dc29883e4915db1d44f2436d6e52bfebae38d08d5",
+  "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+  "Scripts/synchronize-benchmark-harness.py": "89d80f2ba7bf3fdea1372383b2ff646287876b031a671d8f9c0e9898b1199acb",
+  "Scripts/configure-grdb.sh": "fdeebb15ccd8e2bdbc0c8aa29a638eef3acc11ecfbf1d66b53b0140b2df76b8f",
+  "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8"
+}

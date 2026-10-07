@@ -1,0 +1,84 @@
+{
+  "recordedAt": "2026-10-06T20:17:04.387247-07:00",
+  "candidateCodeCommit": "900901b5108b02ac7905219323d5da54af73236b",
+  "baselineCommit": "61c00dec21762408980afe1a476cfcdb3f859437",
+  "status": "incomplete-awaiting-protected-dialog-clearance",
+  "pushed": false,
+  "prDraftStatusChanged": false,
+  "checks": {
+    "fullCoreSuite": {
+      "passed": 205,
+      "failed": 0
+    },
+    "affectedCoreRaces": {
+      "iterations": 5,
+      "passed": 135,
+      "failed": 0
+    },
+    "homeRecreationExtraRepetitions": {
+      "passed": 10,
+      "failed": 0
+    },
+    "scriptTests": {
+      "passed": 14,
+      "failed": 0
+    },
+    "projectDrift": "passed",
+    "signingConfiguration": "passed",
+    "networkSurface": "passed",
+    "debugUICompilation": "passed",
+    "fullUIExecution": {
+      "status": "pending",
+      "testCount": 86
+    },
+    "affectedUIRaceRepetitions": {
+      "status": "pending",
+      "iterations": 5
+    },
+    "releaseBenchmarkCompilation": {
+      "candidate": "passed",
+      "baseline": "passed"
+    },
+    "buildInputValidation": {
+      "candidate": "passed",
+      "baseline": "passed"
+    }
+  },
+  "localPerformance": {
+    "status": "not-started",
+    "validatedPairs": 0,
+    "requiredPairs": 3,
+    "tolerancePercent": 10,
+    "orders": [
+      "baseline-first",
+      "candidate-first",
+      "baseline-first"
+    ],
+    "iterations": {
+      "scroll": 5,
+      "streaming": 3,
+      "watcher": 5
+    },
+    "watcherWorkload": {
+      "unrelatedChanges": 10000,
+      "targetUpdates": 100,
+      "retargetCycles": 50
+    },
+    "cpuSamples": null,
+    "clockSamples": null,
+    "physicalFootprintSamples": null,
+    "xctestMemoryGrowthSamples": null
+  },
+  "blockingCondition": {
+    "process": "SecurityAgent",
+    "protectedDialogClearanceVerified": false,
+    "action": "The local Mac user must clear the protected dialog before UI execution or measurements.",
+    "competingBuildOrUISessionsObserved": true
+  },
+  "preserved": [
+    "older checkout",
+    "nativeMenu",
+    "unrelated GRDB changes",
+    "historical evidence"
+  ]
+}

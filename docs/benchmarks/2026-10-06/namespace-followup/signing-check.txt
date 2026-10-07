@@ -1,0 +1,1 @@
+Debug and Release signing settings are configured correctly.
