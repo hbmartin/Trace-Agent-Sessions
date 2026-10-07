@@ -1,7 +1,10 @@
 Implementation is committed locally through `900901b`. Acceptance is incomplete:
 the 86-test UI suite, five repetitions of affected UI races, and three local
 Release pairs have not run. No final CPU, clock, update-timing, or memory samples
-exist for this candidate. Nothing was pushed and PR #37 remains a draft.
+exist for this candidate. These follow-up commits had not been pushed when this
+verification snapshot was recorded. PR #37 has since been confirmed merged;
+the follow-up changes are being published in a separate ready pull request at
+the user's request, with UI and performance acceptance still pending.
 
 The final core suite passes all 205 tests. The affected core race selection passes
 135 executions across five repetitions; the home-recreation case additionally
