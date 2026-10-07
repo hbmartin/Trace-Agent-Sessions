@@ -804,6 +804,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
         }
         private var resizeTransaction: ResizeTransaction?
         private var userInputGeneration: UInt64 = 0
+        private var settledBottomInputGeneration: UInt64?
+        private var injectedAppendAdjustmentForUITest = false
         private var pendingDocumentBottomShift: (origin: CGFloat, expires: ContinuousClock.Instant)?
         private var userScrolling = false
         private var liveScrolling = false
@@ -993,6 +995,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             lastObservedViewportSize = nil
             lastObservedDocumentHeight = nil
             resizeTransaction = nil
+            settledBottomInputGeneration = nil
             pendingDocumentBottomShift = nil
             extentRefreshWorkItem?.cancel()
             extentRefreshWorkItem = nil
@@ -1043,6 +1046,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             var visibilityChanged = false
             if sessionChanged {
                 cachedTrailingDocumentPadding = nil
+                settledBottomInputGeneration = nil
                 cancelPendingRestore(reportCancellation: false)
                 expansionStates.removeAll()
                 pendingHeightMessageIDs.removeAll()
@@ -1146,6 +1150,26 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 )
             }
             if !items.isEmpty, pendingRestore == nil { positionEstablished = true }
+            if TraceTestHooks.isUITesting,
+               TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION"] == "rubber-band-return",
+               items.count == 71, !injectedAppendAdjustmentForUITest {
+                injectedAppendAdjustmentForUITest = true
+                DispatchQueue.main.async { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, let scrollView = self.scrollView,
+                              let maximum = self.exactMaximumScrollY else { return }
+                        // AppKit can restore the old bottom after the appended
+                        // row changes the document extent, without new input.
+                        var origin = scrollView.contentView.bounds.origin
+                        origin.y = maximum
+                        scrollView.contentView.setBoundsOrigin(origin)
+                        origin.y = max(0, maximum - 86)
+                        scrollView.contentView.setBoundsOrigin(origin)
+                        TraceTestHooks.appendLine("post-append-native-motion",
+                            pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                    }
+                }
+            }
         }
 
         private func updateRows(
@@ -1696,6 +1720,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             lastUserScrollInput = .now
             userInputGeneration &+= 1
+            settledBottomInputGeneration = nil
             resizeTransaction = nil
             pendingDocumentBottomShift = nil
             establishedBookmark = nil
@@ -1771,6 +1796,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                establishedBookmark != nil { pendingAnchorCorrection = true }
             if userInitiated {
                 userInputGeneration &+= 1
+                settledBottomInputGeneration = nil
                 resizeTransaction = nil
                 pendingDocumentBottomShift = nil
                 establishedBookmark = nil
@@ -1994,7 +2020,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let viewport = viewportStatus
             followsBottom = TranscriptViewportPolicy.followsBottom(atBottom: viewport.atBottom,
                 withinBounds: viewport.withinBounds, upwardTravel: upwardScrollTravel, previouslyFollowing: followsBottom)
-            if viewport.atBottom { upwardScrollTravel = 0 }
+            if viewport.atBottom {
+                upwardScrollTravel = 0
+                settledBottomInputGeneration = userInputGeneration
+            } else {
+                settledBottomInputGeneration = nil
+            }
             if viewport.atBottom || (upwardScrollTravel > 0.5 && viewport.withinBounds) {
                 pendingBottomFollow = false
                 if !followsBottom { cancelBottomFollowWork() }
@@ -2428,6 +2459,19 @@ private struct TranscriptRenderer: NSViewRepresentable {
             guard !items.isEmpty else { return }
             if let pendingRestore, pendingRestore.reason.priority > reason.priority { return }
             if snapshot.followsBottom {
+                if case .passive = reason,
+                   !isUserInteracting || settledBottomInputGeneration == userInputGeneration {
+                    // Known app mutations can trigger a later native origin-only
+                    // adjustment. During the idle debounce, a settled bottom
+                    // proves that no input since snap-back has moved us away.
+                    if resizeTransaction?.initiallyFollowing != true
+                        || resizeTransaction?.inputGeneration != userInputGeneration
+                        || resizeTransaction.map({ ContinuousClock.now >= $0.expires }) != false {
+                        resizeTransaction = ResizeTransaction(initiallyFollowing: true,
+                            viewportDelta: 0, expires: .now.advanced(by: .milliseconds(500)),
+                            inputGeneration: userInputGeneration)
+                    }
+                }
                 cancelPendingRestore(reportCancellation: false)
                 followsBottom = true
                 pendingAnchorRestore = nil

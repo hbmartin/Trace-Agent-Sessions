@@ -3686,6 +3686,9 @@ final class TraceUITests: XCTestCase {
             XCTAssertTrue(app.staticTexts["71 messages"].waitForExistence(timeout: 15))
             XCTAssertTrue(transcriptMessage("Viewport regression", index: 70, in: app.scrollViews["transcriptScroll"])
                 .wait(for: \.isHittable, toEqual: true, timeout: 15))
+            if simulation == "rubber-band-return" {
+                XCTAssertTrue(fileLines(in: audit).contains("post-append-native-motion"))
+            }
         }
         try? FileManager.default.removeItem(at: probe)
         app.buttons["testProbeTranscriptPosition"].click()
