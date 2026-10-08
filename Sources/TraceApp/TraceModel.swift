@@ -155,7 +155,10 @@ final class TraceModel: ObservableObject {
     }
     @Published private(set) var recentSessions: [SessionSummary] = []
     @Published private(set) var messages: [MessageSummary] = [] {
-        didSet { transcriptMessageRevision &+= 1 }
+        didSet {
+            transcriptMessageRevision &+= 1
+            messageIdentities = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, MessageIdentity($0)) })
+        }
     }
     @Published private(set) var hydratedMessages: [Int64: HydratedMessage] = [:] {
         didSet { transcriptContentRevision &+= 1 }
@@ -208,14 +211,27 @@ final class TraceModel: ObservableObject {
     private var liveWatcherReplayStarts: [String: UInt64] = [:]
     private var safetyVerificationTask: Task<Void, Never>?
     private var hydrationOrder: [Int64] = []
+    private struct MessageIdentity: Equatable {
+        let id: Int64
+        let path: String
+        let format: String
+        let locator: RecordLocator
+
+        init(_ message: MessageSummary) {
+            id = message.id
+            path = message.sourcePath
+            format = message.sourceFormat.rawValue
+            locator = message.locator
+        }
+    }
+    private var messageIdentities: [Int64: MessageIdentity] = [:]
+    private var hydrationEpoch = UUID()
     private struct HydrationRequest {
         let token = UUID()
-        let session: UUID
-        let generation: Int64?
-        let sourcePath: String?
+        let epoch: UUID
+        let identity: MessageIdentity
     }
     private var hydratingMessageIDs: [Int64: HydrationRequest] = [:]
-    @Published private(set) var hydrationSettlementRevision = 0
     private let hydrationCacheLimit = 512
     private var sourceChangeTask: Task<Void, Never>?
     private var sourceConfigurationRevision: UInt64 = 0
@@ -878,6 +894,7 @@ final class TraceModel: ObservableObject {
         hydratedMessages.removeAll()
         hydrationFailures.removeAll()
         hydrationOrder.removeAll()
+        hydrationEpoch = UUID()
         hydratingMessageIDs.removeAll()
         expandedReasoningIDs.removeAll()
         requestedMessageID = nil
@@ -1123,6 +1140,7 @@ final class TraceModel: ObservableObject {
         hydratedMessages.removeAll(keepingCapacity: true)
         hydrationFailures.removeAll(keepingCapacity: true)
         hydrationOrder.removeAll(keepingCapacity: true)
+        hydrationEpoch = UUID()
         hydratingMessageIDs.removeAll(keepingCapacity: true)
         expandedReasoningIDs.removeAll()
         if !preservingMainSearch {
@@ -1131,16 +1149,15 @@ final class TraceModel: ObservableObject {
         }
         guard let database else { return }
         Task {
-            let session = try? await database.session(id: sessionID)
-            let rows = (try? await database.messages(sessionID: sessionID)) ?? []
-            guard sessionRequestID == request, selectedSessionID == sessionID else { return }
-            selectedSession = session
+            guard let snapshot = try? await database.transcriptSnapshot(sessionID: sessionID),
+                  sessionRequestID == request, selectedSessionID == sessionID else { return }
+            publishTranscript(snapshot)
+            let session = snapshot.session
             if let session,
                adoptProjectIdentity(from: session) {
                 if !preservingMainSearch { syncMainSearchProjectFilter() }
                 loadProjectSessions(ensuring: sessionID)
             }
-            messages = rows
             scrollRequest = UUID()
             try? await diagnostics.recordOpen()
             if showWindow, sessionRequestID == request {
@@ -1307,29 +1324,31 @@ final class TraceModel: ObservableObject {
     }
 
     func hydrate(_ message: MessageSummary) {
+        guard messageIdentities[message.id] == MessageIdentity(message) else { return }
         if hydratedMessages[message.id] != nil {
             hydrationOrder.removeAll { $0 == message.id }
             hydrationOrder.append(message.id)
             return
         }
         guard hydrationFailures[message.id] == nil, let coordinator else { return }
-        let request = sessionRequestID
-        let generation = selectedSession?.sourceGeneration
-        let sourcePath = selectedSession?.sourcePath
-        if let active = hydratingMessageIDs[message.id], active.session == request, active.generation == generation, active.sourcePath == sourcePath { return }
-        let active = HydrationRequest(session: request, generation: generation, sourcePath: sourcePath)
+        let identity = MessageIdentity(message)
+        guard messageIdentities[message.id] == identity else { return }
+        if let active = hydratingMessageIDs[message.id],
+           active.epoch == hydrationEpoch, active.identity == identity { return }
+        let active = HydrationRequest(epoch: hydrationEpoch, identity: identity)
         hydratingMessageIDs[message.id] = active
         Task {
             defer {
                 if hydratingMessageIDs[message.id]?.token == active.token {
                     hydratingMessageIDs.removeValue(forKey: message.id)
                 }
-                hydrationSettlementRevision &+= 1
             }
             let start = ContinuousClock.now
             do {
                 TraceTestHooks.appendLine(String(message.id), pathKey: "TRACE_TEST_HYDRATION_REQUESTS_PATH")
-                if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_HYDRATION_ONCE") {
+                let failureIndex = TraceTestHooks.environment["TRACE_TEST_FAIL_HYDRATION_MESSAGE_INDEX"].flatMap(Int.init)
+                if (failureIndex == nil || messages.firstIndex(where: { $0.id == message.id }) == failureIndex),
+                   TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_HYDRATION_ONCE") {
                     throw SessionSourceError.unreadableFile("Synthetic read failure")
                 }
                 if let delay = TraceTestHooks.delayMilliseconds(
@@ -1341,9 +1360,14 @@ final class TraceModel: ObservableObject {
                     )
                 }
                 let hydrated = try await coordinator.hydrate(message)
+                if TraceTestHooks.isUITesting,
+                   TraceTestHooks.environment["TRACE_TEST_HYDRATION_RESULT_RELEASE_PATH"] != nil {
+                    TraceTestHooks.appendLine(String(message.id), pathKey: "TRACE_TEST_HYDRATION_RESULT_ENTERED_PATH")
+                    try await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_HYDRATION_RESULT_RELEASE_PATH",
+                                                           timeoutMilliseconds: 30_000)
+                }
+                guard hydrationIsCurrent(active) else { return }
                 TraceTestHooks.appendLine(String(message.id), pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_COMPLETED_PATH")
-                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation,
-                      selectedSession?.sourcePath == sourcePath else { return }
                 var cache = hydratedMessages
                 cache[message.id] = hydrated
                 hydrationOrder.removeAll { $0 == message.id }
@@ -1358,14 +1382,47 @@ final class TraceModel: ObservableObject {
                     + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
                 try? await diagnostics.recordOpen(hydrationMilliseconds: milliseconds)
             } catch {
-                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation,
-                      selectedSession?.sourcePath == sourcePath else { return }
+                guard hydrationIsCurrent(active) else { return }
                 hydrationFailures[message.id] = error.localizedDescription
             }
         }
     }
 
+    private func hydrationIsCurrent(_ request: HydrationRequest) -> Bool {
+        hydrationEpoch == request.epoch
+            && messageIdentities[request.identity.id] == request.identity
+            && hydratingMessageIDs[request.identity.id]?.token == request.token
+    }
+
+    /// Called on the main actor without suspension: no hydration request can
+    /// observe new source metadata paired with the old locator rows.
+    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot) {
+        let changed = selectedSession?.id != snapshot.session?.id
+            || selectedSession?.sourceGeneration != snapshot.session?.sourceGeneration
+            || selectedSession?.sourcePath != snapshot.session?.sourcePath
+        if changed {
+            hydrationEpoch = UUID()
+            hydratingMessageIDs.removeAll(keepingCapacity: true)
+            hydratedMessages.removeAll(keepingCapacity: true)
+            hydrationFailures.removeAll(keepingCapacity: true)
+            hydrationOrder.removeAll(keepingCapacity: true)
+        }
+        if let rows = snapshot.messages, !changed {
+            let identities = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, MessageIdentity($0)) })
+            let stale = Set(messageIdentities.keys.filter { messageIdentities[$0] != identities[$0] })
+            for id in stale {
+                hydratedMessages.removeValue(forKey: id)
+                hydrationFailures.removeValue(forKey: id)
+                hydratingMessageIDs.removeValue(forKey: id)
+            }
+            hydrationOrder.removeAll { stale.contains($0) }
+        }
+        selectedSession = snapshot.session
+        if let rows = snapshot.messages { messages = rows }
+    }
+
     func retryHydration(_ message: MessageSummary) {
+        guard messageIdentities[message.id] == MessageIdentity(message) else { return }
         hydrationFailures.removeValue(forKey: message.id)
         hydrate(message)
     }
@@ -1893,8 +1950,17 @@ final class TraceModel: ObservableObject {
         let projectRequest = projectRequestID
         let ensuredSessionID = selectedSessionID
         let selectedSessionRequest = sessionRequestID
-        let loadedSelectedSession = await lookupSession(
-            id: ensuredSessionID, database: database
+        let loadedTranscript: SessionTranscriptSnapshot?
+        if let ensuredSessionID {
+            loadedTranscript = try? await database.transcriptSnapshot(
+                sessionID: ensuredSessionID, knownSession: selectedSession, knownMessageCount: messages.count
+            )
+        } else {
+            loadedTranscript = nil
+        }
+        let loadedSelectedSession = SessionLookupResult(
+            succeeded: ensuredSessionID == nil || loadedTranscript != nil,
+            session: loadedTranscript?.session
         )
         let pageRevision = sessionListRevision
         let loadedSessions = try? await projectSessions(
@@ -1976,25 +2042,8 @@ final class TraceModel: ObservableObject {
            sessionRequestID == selectedSessionRequest,
            summaryRequestID == refresh,
            loadedSelectedSession.succeeded {
-            let loadedSession = loadedSelectedSession.session
-            if let loadedSession {
-                let changed = selectedSession?.sourceGeneration != loadedSession.sourceGeneration
-                    || selectedSession?.sourcePath != loadedSession.sourcePath
-                selectedSession = loadedSession
-                if changed || loadedSession.messageCount != messages.count {
-                    let rows = (try? await database.messages(sessionID: sessionID)) ?? []
-                    if selectedSessionID == sessionID,
-                       sessionRequestID == selectedSessionRequest,
-                       summaryRequestID == refresh {
-                        if changed {
-                            hydratedMessages.removeAll(keepingCapacity: true)
-                            hydrationFailures.removeAll(keepingCapacity: true)
-                            hydrationOrder.removeAll(keepingCapacity: true)
-                            hydratingMessageIDs.removeAll(keepingCapacity: true)
-                        }
-                        messages = rows
-                    }
-                }
+            if let loadedTranscript, loadedTranscript.session != nil {
+                publishTranscript(loadedTranscript)
             } else {
                 returnFromSession()
             }

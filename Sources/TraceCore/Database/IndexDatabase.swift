@@ -1953,33 +1953,52 @@ public actor IndexDatabase {
     }
 
     public func session(id: Int64) throws -> SessionSummary? {
-        try pool.read { db in
-            return try Row.fetchOne(db, sql: """
-                SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
-                       sf.path AS source_path,
-                       sf.content_generation AS source_generation,
-                       p.canonical_key AS project_canonical_key
-                FROM session s
-                JOIN source_file sf ON sf.id=s.source_file_id
-                JOIN project p ON p.id=s.project_id
-                WHERE s.id=? AND s.agent IN (SELECT agent FROM supported_agent)
-                """, arguments: [id]).flatMap(sessionSummary(from:))
-        }
+        try pool.read { db in try transcriptSession(id: id, in: db) }
     }
 
     public func messages(sessionID: Int64) throws -> [MessageSummary] {
+        try pool.read { db in try transcriptMessages(sessionID: sessionID, in: db) }
+    }
+
+    public func transcriptSnapshot(
+        sessionID: Int64, knownSession: SessionSummary? = nil, knownMessageCount: Int? = nil
+    ) throws -> SessionTranscriptSnapshot {
         try pool.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT m.*, sf.path AS source_path, sf.format AS source_format
-                FROM message m
-                JOIN source_file sf ON sf.id=m.source_file_id
-                JOIN session s ON s.id=m.session_id
-                WHERE m.session_id=?
-                    AND s.agent IN (SELECT agent FROM supported_agent)
-                ORDER BY m.seq
-                """, arguments: [sessionID])
-            return rows.compactMap(messageSummary(from:))
+            let session = try transcriptSession(id: sessionID, in: db)
+            guard let session else { return .init(session: nil, messages: []) }
+            let unchanged = knownSession?.id == sessionID
+                && knownSession?.sourceGeneration == session.sourceGeneration
+                && knownSession?.sourcePath == session.sourcePath
+                && knownMessageCount == session.messageCount
+            return .init(session: session, messages: unchanged ? nil
+                : try transcriptMessages(sessionID: sessionID, in: db))
         }
+    }
+
+    private func transcriptSession(id: Int64, in db: Database) throws -> SessionSummary? {
+        try Row.fetchOne(db, sql: """
+            SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
+                   sf.path AS source_path,
+                   sf.content_generation AS source_generation,
+                   p.canonical_key AS project_canonical_key
+            FROM session s
+            JOIN source_file sf ON sf.id=s.source_file_id
+            JOIN project p ON p.id=s.project_id
+            WHERE s.id=? AND s.agent IN (SELECT agent FROM supported_agent)
+            """, arguments: [id]).flatMap(sessionSummary(from:))
+    }
+
+    private func transcriptMessages(sessionID: Int64, in db: Database) throws -> [MessageSummary] {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT m.*, sf.path AS source_path, sf.format AS source_format
+            FROM message m
+            JOIN source_file sf ON sf.id=m.source_file_id
+            JOIN session s ON s.id=m.session_id
+            WHERE m.session_id=?
+                AND s.agent IN (SELECT agent FROM supported_agent)
+            ORDER BY m.seq
+            """, arguments: [sessionID])
+        return rows.compactMap(messageSummary(from:))
     }
 
     public func message(id: Int64) throws -> MessageSummary? {

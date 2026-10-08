@@ -3395,6 +3395,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(first.isHittable, "initial hydration must leave the first message in view")
 
         let transcriptPoint = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        try? FileManager.default.removeItem(at: idleAudit)
         transcriptPoint.hover()
         transcriptPoint.scroll(byDeltaX: 0, deltaY: -100_000)
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
@@ -3683,10 +3684,125 @@ final class TraceUITests: XCTestCase {
         try runHydrationRestore(delay: 30_000, timeout: true, switchSession: true)
     }
 
+    func testFinalRowBookmarkWaitsWithoutFollowingProvisionalBottom() throws {
+        try runHydrationRestore(delay: 15_000, timeout: true, bookmarkIndex: 29)
+    }
+    func testLateDensityAndVisibilityChangesPreserveHydrationIntent() throws {
+        try runHydrationRestore(delay: 15_000, timeout: true, lateChanges: true)
+    }
+    func testFailedBookmarkLoadKeepsIntentUntilManualRetry() throws {
+        try runHydrationRestore(delay: 0, failedRead: true)
+    }
+    func testFinalRowFailedLoadKeepsIntentUntilManualRetry() throws {
+        try runHydrationRestore(delay: 0, bookmarkIndex: 29, failedRead: true)
+    }
+    func testDensityChangeDuringGatedGeometryResetsRefinement() throws {
+        try runHydrationRestore(delay: 0, geometryGate: true)
+    }
+
+    func testReplacementWithReusedIDsAndChangedLocatorsRejectsLateHydration() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Sources/Claude/session.jsonl"))
+        let name = "Replacement race"
+        try addLongSession(name, project: "ReplacementProject", directory: directory, count: 30, contentRepeats: 300)
+        let entered = directory.appendingPathComponent("result-entered")
+        let release = directory.appendingPathComponent("result-release")
+        let accepted = directory.appendingPathComponent("accepted-hydration")
+        app.launchEnvironment["TRACE_TEST_HYDRATION_RESULT_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_HYDRATION_RESULT_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_COMPLETED_PATH"] = accepted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"] = "12"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] = "-450"
+        installNativeAnchorProbe(app: app, directory: directory)
+        app.launch(); app.activate(); app.buttons["Build Index"].click()
+        let project = app.staticTexts["ReplacementProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 30)); project.click()
+        openSidebarSession(name, in: app)
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        let db = directory.appendingPathComponent("index.sqlite")
+        let previousID = try sqliteInteger(db, sql: "SELECT id FROM message WHERE seq=12;")
+        let previousLocator = try sqliteInteger(db, sql: "SELECT coalesce(max(loc_offset), -1) FROM message WHERE seq=12;")
+        let source = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+        let lines = try String(contentsOf: source, encoding: .utf8).split(separator: "\n")
+        var replacement = Data()
+        for line in lines {
+            var record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            if var message = record["message"] as? [String: Any], let text = message["content"] as? String {
+                message["content"] = text + " ReplacementHydratedTail " + String(repeating: "changed bytes ", count: 100)
+                record["message"] = message
+            }
+            replacement.append(try JSONSerialization.data(withJSONObject: record)); replacement.append(10)
+        }
+        try replacement.write(to: source, options: .atomic)
+        XCTAssertNotNil(poll(timeout: 15) {
+            guard let offset = try? self.sqliteInteger(db, sql: "SELECT coalesce(max(loc_offset), -1) FROM message WHERE seq=12;"),
+                  offset > 0, offset != previousLocator else { return nil }
+            return offset
+        })
+        XCTAssertEqual(try sqliteInteger(db, sql: "SELECT id FROM message WHERE seq=12;"), previousID,
+                       "the fixture must exercise reused IDs")
+        XCTAssertTrue(fileLines(in: accepted).isEmpty)
+        try Data().write(to: release)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "ReplacementHydratedTail")).firstMatch.waitForExistence(timeout: 15),
+                      "only hydration for the replacement locators may publish")
+        assertSavedAnchorOnScreen(index: 12, in: scroll, expectedY: -450, stage: "replacement locators")
+    }
+
+    func testAppendCannotCancelSearchAndSettledBottomSearchFollowsLaterAppends() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let name = "Search append"
+        try addLongSession(name, project: "SearchAppendProject", directory: directory, count: 30, contentRepeats: 0)
+        let source = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+        let entered = directory.appendingPathComponent("search-restore-entered")
+        let release = directory.appendingPathComponent("search-restore-release")
+        let completed = directory.appendingPathComponent("search-restore-completed")
+        let probe = directory.appendingPathComponent("search-position")
+        let follow = directory.appendingPathComponent("search-follow")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = release.path
+        let initialCompleted = directory.appendingPathComponent("initial-completed")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_COMPLETED_PATH"] = completed.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_COMPLETED_PATH"] = initialCompleted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = probe.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_FOLLOW_MARKER_PREFIX"] = follow.path
+        app.launch(); app.activate(); app.buttons["Build Index"].click()
+        let project = app.staticTexts["SearchAppendProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 30)); project.click()
+        openSidebarSession(name, in: app)
+        XCTAssertTrue(waitForFile(initialCompleted, timeout: 10))
+        app.buttons["testOpenLauncher"].click()
+        let search = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.click(); search.typeText("Search append message 29")
+        let hit = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Search append message 29")).firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 10)); hit.click()
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        func append(_ index: Int) throws {
+            let record: [String: Any] = ["type": "assistant", "uuid": "append-\(index)", "sessionId": name,
+                "cwd": "/tmp/SearchAppendProject", "timestamp": 1_790_000_000_000 + index,
+                "message": ["content": "Search append message \(index)"]]
+            let writer = try FileHandle(forWritingTo: source)
+            try writer.seekToEnd(); try writer.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10])); try writer.close()
+        }
+        try append(30)
+        XCTAssertTrue(app.staticTexts["31 messages"].waitForExistence(timeout: 15))
+        app.buttons["testProbeTranscriptPosition"].click()
+        XCTAssertEqual(fileLines(in: probe).last?.split(separator: ",").last, "false")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        app.buttons["testProbeTranscriptPosition"].click()
+        XCTAssertEqual(fileLines(in: probe).last?.split(separator: ",").last, "true",
+                       "search may follow bottom only after it fully settles")
+        try append(31)
+        XCTAssertTrue(waitForFile(URL(fileURLWithPath: follow.path + "-32"), timeout: 15))
+    }
+
     private func runHydrationRestore(delay: Int, timeout: Bool = false, cancel: Bool = false, collapsed: Bool = false,
                                      hidden: Bool = false, replaceGeneration: Bool = false,
                                      neverCompletes: Bool = false, passiveAndVisibility: Bool = false,
-                                     oversized: Bool = false, switchSession: Bool = false) throws {
+                                     oversized: Bool = false, switchSession: Bool = false, bookmarkIndex: Int = 12,
+                                     lateChanges: Bool = false, failedRead: Bool = false, geometryGate: Bool = false) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let name = "Hydration restore"
         try addLongSession(name, project: "HydrationProject", directory: directory, count: 30, contentRepeats: 300)
@@ -3701,6 +3817,9 @@ final class TraceUITests: XCTestCase {
             try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
         }
         installNativeAnchorProbe(app: app, directory: directory)
+        if let probe = nativeAnchorProbe {
+            try String(bookmarkIndex).write(to: probe.input, atomically: true, encoding: .utf8)
+        }
         let release = directory.appendingPathComponent("hydration-release")
         let timedOut = directory.appendingPathComponent("hydration-timeout")
         let completed = directory.appendingPathComponent("native-restore-completed")
@@ -3715,7 +3834,23 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = savedReader.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"] = cancelled.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_RESTORE_AUDIT_PATH"] = audit.path
-        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"] = "12"
+        let intent = directory.appendingPathComponent("intended-bookmark")
+        let position = directory.appendingPathComponent("hydration-position")
+        let passes = directory.appendingPathComponent("geometry-passes")
+        let geometry = directory.appendingPathComponent("geometry-entered")
+        let geometryRelease = directory.appendingPathComponent("geometry-release")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_INTENDED_BOOKMARK_PROBE_PATH"] = intent.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = position.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_PASSES_PATH"] = passes.path
+        if failedRead {
+            app.launchEnvironment["TRACE_TEST_FAIL_HYDRATION_ONCE"] = "1"
+            app.launchEnvironment["TRACE_TEST_FAIL_HYDRATION_MESSAGE_INDEX"] = String(bookmarkIndex)
+        }
+        if geometryGate {
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_RELEASE_PATH"] = geometryRelease.path
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_ENTERED_PATH"] = geometry.path
+        }
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"] = String(bookmarkIndex)
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] = oversized ? "-100000" : "-450"
         app.launchEnvironment["TRACE_TEST_WINDOW_WIDTH_DELTA"] = "600"
         app.launchEnvironment["TRACE_TEST_WINDOW_HEIGHT_DELTA"] = "0"
@@ -3733,12 +3868,56 @@ final class TraceUITests: XCTestCase {
         openSidebarSession(name, in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        func assertIntendedBookmark() {
+            app.buttons["testProbeTranscriptPosition"].click()
+            XCTAssertEqual(fileLines(in: intent).last, "\(bookmarkIndex),-450.0")
+            XCTAssertEqual(fileLines(in: position).last?.split(separator: ",").last, "false",
+                           "provisional geometry cannot establish bottom-follow")
+            XCTAssertTrue(fileLines(in: passes).isEmpty, "waiting consumes no full-content geometry passes")
+            let samples = directory.appendingPathComponent("native-anchor-samples")
+            let waiting = fileLines(in: samples).filter { $0.split(separator: ",").dropFirst(4).first == "waiting" }
+            XCTAssertFalse(waiting.isEmpty, "the provisional anchor must be sampled while restoration is pending")
+            for sample in waiting {
+                let fields = sample.split(separator: ",")
+                guard fields.count == 9, let y = Double(fields[1]), let height = Double(fields[5]),
+                      let rowY = Double(fields[6]), let documentHeight = Double(fields[7]),
+                      let viewportHeight = Double(fields[8]) else { XCTFail("invalid geometry sample"); continue }
+                let clipped = max(-450.0, -max(0, height - 64))
+                let origin = min(max(0, rowY - clipped), max(0, documentHeight - viewportHeight))
+                XCTAssertEqual(y, rowY - origin, accuracy: 8, "placeholder must retain its fixture-clamped position across main-loop turns")
+                XCTAssertEqual(fields[2], "true")
+            }
+            try? FileManager.default.removeItem(at: samples)
+        }
+        if failedRead {
+            let retry = scroll.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "retryMessage-")).firstMatch
+            XCTAssertTrue(retry.waitForExistence(timeout: 10))
+            assertIntendedBookmark()
+            app.radioButtons["Compact"].click()
+            app.checkBoxes["Reasoning"].click()
+            assertIntendedBookmark()
+            retry.click()
+            XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
+        }
+        if geometryGate {
+            XCTAssertTrue(waitForFile(geometry, timeout: 10))
+            app.radioButtons["Compact"].click()
+            app.checkBoxes["Reasoning"].click()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path))
+            try Data().write(to: geometryRelease)
+        }
         if timeout {
             XCTAssertTrue(waitForFile(timedOut, timeout: 10))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: completed.path), "provisional geometry must finish while content remains gated")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path), "a placeholder must not commit restoration while content remains gated")
             let fields = try XCTUnwrap(fileLines(in: audit).last?.split(separator: ",").map(String.init))
-            XCTAssertEqual(fields, ["timeout", "12", "-450.0", "0", "-450.0"])
-            XCTAssertEqual(fileLines(in: persisted).last, "12,-450.0", "automatic saves must preserve the intended bookmark")
+            XCTAssertEqual(fields.first, "timeout")
+            assertIntendedBookmark()
+            if lateChanges {
+                app.radioButtons["Compact"].click()
+                app.checkBoxes["Reasoning"].click()
+                assertIntendedBookmark()
+            }
+            XCTAssertFalse(fileLines(in: persisted).contains { $0 != "\(bookmarkIndex),-450.0" }, "automatic saves must preserve the intended bookmark")
             if switchSession {
                 app.buttons["backToProject"].click()
                 openSidebarSession("Other restore", in: app)
@@ -3771,7 +3950,7 @@ final class TraceUITests: XCTestCase {
             }
             if neverCompletes {
                 XCTAssertNotNil(poll(timeout: 5) {
-                    guard let value = fileLines(in: savedReader).last, value != "12" else { return nil }
+                    guard let value = fileLines(in: savedReader).last, value != String(bookmarkIndex) else { return nil }
                     return value
                 }, "new reader position must replace the deferred bookmark")
                 XCTAssertTrue(scroll.exists)
@@ -3785,13 +3964,13 @@ final class TraceUITests: XCTestCase {
             XCTAssertEqual(fileLines(in: savedReader).last, "0")
         } else if oversized {
             XCTAssertTrue(waitForFile(completed, timeout: 10))
-            XCTAssertGreaterThan(try XCTUnwrap(savedAnchorY(index: 12, in: scroll, timeout: 10)), -100000)
+            XCTAssertGreaterThan(try XCTUnwrap(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10)), -100000)
             app.radioButtons["Compact"].click()
-            XCTAssertNotNil(savedAnchorY(index: 12, in: scroll, timeout: 10))
+            XCTAssertNotNil(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10))
             app.buttons["testResizeWindow"].click()
-            let y = try XCTUnwrap(savedAnchorY(index: 12, in: scroll, timeout: 10))
+            let y = try XCTUnwrap(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10))
             let fields = try XCTUnwrap(fileLines(in: persisted).last?.split(separator: ","))
-            XCTAssertEqual(fields.first, "12")
+            XCTAssertEqual(fields.first.map(String.init), String(bookmarkIndex))
             XCTAssertEqual(try XCTUnwrap(Double(fields[1])), y, accuracy: 2, "normalized geometry must replace the impossible persisted offset")
         } else if hidden {
             XCTAssertTrue(waitForFile(completed, timeout: 10))
@@ -3804,7 +3983,7 @@ final class TraceUITests: XCTestCase {
             assertSavedAnchorOnScreen(index: 11, in: scroll, expectedY: 0, stage: "hidden bookmark fallback")
         } else if replaceGeneration {
             XCTAssertTrue(waitForFile(hydrated, timeout: 10))
-            XCTAssertNotNil(savedAnchorY(index: 12, in: scroll, timeout: 10), "current-generation content must settle without another user action")
+            XCTAssertNotNil(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10), "current-generation content must settle without another user action")
         } else if cancel {
             XCTAssertTrue(waitForFile(hydrated, timeout: 10))
             Thread.sleep(forTimeInterval: 1)
@@ -3813,29 +3992,32 @@ final class TraceUITests: XCTestCase {
                 "late source completion may preserve the new reader anchor but must not replay the cancelled navigation")
         } else if collapsed {
             XCTAssertTrue(waitForFile(completed, timeout: 10))
-            let offset = try XCTUnwrap(savedAnchorY(index: 12, in: scroll, timeout: 10))
+            let offset = try XCTUnwrap(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10))
             XCTAssertGreaterThan(offset, -450)
             let id = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
                 sql: "SELECT id FROM message WHERE prefix LIKE 'Large collapsed tool output%' LIMIT 1;")
             XCTAssertFalse(fileLines(in: hydrated).contains(String(id)), "restoring a collapsed row must not hydrate its large output")
-            XCTAssertFalse(fileLines(in: audit).contains { $0.hasPrefix("waiting,12,") })
+            XCTAssertFalse(fileLines(in: audit).contains { $0.hasPrefix("waiting,\(bookmarkIndex),") })
             if passiveAndVisibility {
                 app.radioButtons["Compact"].click()
-                XCTAssertNotNil(savedAnchorY(index: 12, in: scroll, timeout: 10))
+                XCTAssertNotNil(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10))
                 app.checkBoxes["Reasoning"].click()
-                XCTAssertNotNil(savedAnchorY(index: 12, in: scroll, timeout: 10))
+                XCTAssertNotNil(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10))
                 if let probe = nativeAnchorProbe {
                     let samples = probe.input.deletingLastPathComponent().appendingPathComponent("native-anchor-samples")
+                    XCTAssertFalse(fileLines(in: samples).isEmpty)
                     XCTAssertTrue(fileLines(in: samples).allSatisfy { $0.split(separator: ",")[2] == "true" },
                         "effective collapsed bookmark must remain visible on settled main-loop turns")
                 }
             }
         } else {
             XCTAssertTrue(waitForFile(completed, timeout: 10))
-            assertSavedAnchorOnScreen(index: 12, in: scroll, expectedY: -450, stage: "delayed hydration")
-            let waits = fileLines(in: audit).filter { $0.hasPrefix("waiting,12,") }
-            XCTAssertFalse(waits.isEmpty)
-            XCTAssertTrue(waits.allSatisfy { $0.hasSuffix(",12") }, "all twelve geometry attempts remain available during hydration")
+            assertSavedAnchorOnScreen(index: bookmarkIndex, in: scroll, expectedY: -450, stage: "delayed hydration")
+            let waits = fileLines(in: audit).filter { $0.hasPrefix("waiting,\(bookmarkIndex),") }
+            if delay > 0 || failedRead { XCTAssertFalse(waits.isEmpty) }
+            let saved = try XCTUnwrap(fileLines(in: persisted).last?.split(separator: ","))
+            XCTAssertEqual(saved.first.map(String.init), String(bookmarkIndex))
+            XCTAssertEqual(try XCTUnwrap(Double(saved[1])), -450, accuracy: 2)
         }
     }
 
@@ -3877,6 +4059,7 @@ final class TraceUITests: XCTestCase {
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let point = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        try? FileManager.default.removeItem(at: idle)
         point.hover(); point.scroll(byDeltaX: 0, deltaY: -100_000)
         XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
         if input == "keyboard" { point.click() }
