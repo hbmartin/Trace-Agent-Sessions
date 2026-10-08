@@ -3703,6 +3703,9 @@ final class TraceUITests: XCTestCase {
     func testDensityChangeDuringGatedGeometryResetsRefinement() throws {
         try runHydrationRestore(delay: 0, geometryGate: true)
     }
+    func testExhaustedGeometryWaitsForMeaningfulChangeBeforeSaving() throws {
+        try runHydrationRestore(delay: 0, exhaustGeometryBudget: true)
+    }
 
     func testReplacementWithReusedIDsAndChangedLocatorsRejectsLateHydration() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
@@ -3806,7 +3809,8 @@ final class TraceUITests: XCTestCase {
                                      hidden: Bool = false, replaceGeneration: Bool = false,
                                      neverCompletes: Bool = false, passiveAndVisibility: Bool = false,
                                      oversized: Bool = false, switchSession: Bool = false, bookmarkIndex: Int = 12,
-                                     lateChanges: Bool = false, failedRead: Bool = false, geometryGate: Bool = false) throws {
+                                     lateChanges: Bool = false, failedRead: Bool = false, geometryGate: Bool = false,
+                                     exhaustGeometryBudget: Bool = false) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let name = "Hydration restore"
         try addLongSession(name, project: "HydrationProject", directory: directory, count: 30, contentRepeats: 300)
@@ -3843,6 +3847,8 @@ final class TraceUITests: XCTestCase {
         let passes = directory.appendingPathComponent("geometry-passes")
         let geometry = directory.appendingPathComponent("geometry-entered")
         let geometryRelease = directory.appendingPathComponent("geometry-release")
+        let stabilityRelease = directory.appendingPathComponent("geometry-stability-release")
+        let exhausted = directory.appendingPathComponent("geometry-exhausted")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_INTENDED_BOOKMARK_PROBE_PATH"] = intent.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = position.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_PASSES_PATH"] = passes.path
@@ -3853,6 +3859,10 @@ final class TraceUITests: XCTestCase {
         if geometryGate {
             app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_RELEASE_PATH"] = geometryRelease.path
             app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_ENTERED_PATH"] = geometry.path
+        }
+        if exhaustGeometryBudget {
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_STABILITY_RELEASE_PATH"] = stabilityRelease.path
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_GEOMETRY_BUDGET_EXHAUSTED_PATH"] = exhausted.path
         }
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"] = String(bookmarkIndex)
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] = oversized ? "-100000" : "-450"
@@ -3872,6 +3882,28 @@ final class TraceUITests: XCTestCase {
         openSidebarSession(name, in: app)
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        if exhaustGeometryBudget {
+            XCTAssertTrue(waitForFile(exhausted, timeout: 10))
+            Thread.sleep(forTimeInterval: 1)
+            let attempted = fileLines(in: passes).count
+            XCTAssertGreaterThanOrEqual(attempted, 12)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path))
+            XCTAssertTrue(fileLines(in: persisted).isEmpty,
+                          "exhaustion cannot replace the intended bookmark with provisional geometry")
+            try Data().write(to: stabilityRelease)
+            let filter = app.textFields["projectFilter"]
+            XCTAssertTrue(filter.exists); filter.click()
+            for character in "Hydra" {
+                filter.typeText(String(character))
+                XCTAssertEqual(fileLines(in: passes).count, attempted,
+                               "unrelated model redraws cannot extend an exhausted geometry budget")
+                XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path))
+            }
+            app.radioButtons["Compact"].click()
+            XCTAssertTrue(waitForFile(completed, timeout: 10))
+            XCTAssertGreaterThanOrEqual(fileLines(in: passes).count - attempted, 6,
+                                       "a layout change requires a new measurement and five stable checks")
+        }
         func assertIntendedBookmark() {
             app.buttons["testProbeTranscriptPosition"].click()
             XCTAssertEqual(fileLines(in: intent).last, "\(bookmarkIndex),-450.0")

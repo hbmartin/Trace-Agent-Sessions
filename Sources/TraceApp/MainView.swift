@@ -1676,9 +1676,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             let target = items[row].summary
             if model?.hydratedMessages[target.id] != nil {
-                if let pendingRestore {
-                    scheduleRestore(token: pendingRestore.token, delayMilliseconds: 0)
-                } else {
+                // Content revisions already restart active refinement in update().
+                // An unrelated redraw must not spend another attempt, especially
+                // after the geometry budget is exhausted.
+                if pendingRestore == nil {
                     cancelDeferredContentRestore()
                     requestRestore(deferred.bookmark, reason: deferred.reason)
                 }
@@ -1704,6 +1705,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 return
             }
             guard var request = pendingRestore, request.token == token,
+                  request.attemptsRemaining > 0,
                   let table, let scrollView, !userScrolling else { return }
             let performanceInterval = TracePerformance.begin("Transcript Restore")
             defer { TracePerformance.end(performanceInterval) }
@@ -1839,7 +1841,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             } ?? false
             request.lastDocumentHeight = documentHeight
             request.lastTargetHeight = rowRect.height
-            if (offsetMatches || constrainedAtEdge) && heightIsStable && targetIsStable {
+            let stabilityRelease = TraceTestHooks.isUITesting
+                ? TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_GEOMETRY_STABILITY_RELEASE_PATH"] : nil
+            let geometryMaySettle = stabilityRelease.map { FileManager.default.fileExists(atPath: $0) } ?? true
+            if (offsetMatches || constrainedAtEdge) && heightIsStable && targetIsStable && geometryMaySettle {
                 request.stableChecks += 1
             } else { request.stableChecks = 0 }
             request.attemptsRemaining -= 1
@@ -1849,6 +1854,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 if request.attemptsRemaining > 0 {
                     scheduleRestore(token: token,
                         delayMilliseconds: request.refreshesRowHeights ? 50 : 75)
+                } else {
+                    TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_GEOMETRY_BUDGET_EXHAUSTED_PATH")
                 }
                 // Exhaustion waits for a meaningful change; provisional geometry
                 // does not become a normalized saved bookmark or bottom-follow.
