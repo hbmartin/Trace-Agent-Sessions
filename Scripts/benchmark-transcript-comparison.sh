@@ -23,16 +23,12 @@ mkdir -p "$comparison_dir"
 mkdir -p "$comparison_dir/runs"
 comparison_dir="$(mktemp -d "$comparison_dir/runs/run-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
 printf 'TRACE_BENCHMARK_RUN_DIRECTORY=%s\n' "$comparison_dir"
+python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_dir" "$candidate_commit" --role candidate >/dev/null
+"$repo_dir/Scripts/configure-grdb.sh"
 python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_dir" "$candidate_commit" --role candidate \
   > "$comparison_dir/candidate-initial-build-inputs.json"
-if [[ -e "$baseline_checkout" ]]; then
-  python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$baseline_checkout" "$baseline_commit" --initialize-missing \
-    > "$comparison_dir/baseline-cache-validation.json"
-else
-  mkdir -p "$(dirname "$baseline_checkout")"
-  git clone --quiet --shared --no-checkout "$repo_dir" "$baseline_checkout"
-  git -C "$baseline_checkout" checkout --quiet --detach "$baseline_commit"
-fi
+python3 "$repo_dir/Scripts/prepare-benchmark-baseline.py" "$repo_dir" "$baseline_checkout" "$baseline_commit" \
+  > "$comparison_dir/baseline-cache-validation.json"
 # Overlay the current harness automatically. Only benchmark instrumentation is
 # copied into baseline production sources; historical patches remain archived.
 python3 "$repo_dir/Scripts/synchronize-benchmark-harness.py" "$repo_dir" "$baseline_checkout" \
