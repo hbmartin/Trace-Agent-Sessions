@@ -45,6 +45,11 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
     role = role or ('candidate' if candidate.samefile(baseline) else 'baseline')
     label = 'Candidate checkout' if role == 'candidate' else 'Cached baseline'
     expected = git(candidate, 'rev-parse', revision + '^{commit}').strip()
+    root_is_empty = baseline.exists() and not any(p.name not in {'.git', '.DS_Store'} for p in baseline.iterdir())
+    if root_is_empty:
+        if not allow_uninitialized:
+            raise ValueError(label + ' has an uninitialized checkout')
+        return {'uninitialized_submodules': ['.']}
     if git(baseline, 'rev-parse', 'HEAD').strip() != expected:
         raise ValueError(label + ' is at a different revision')
     overlays = harness_files(candidate)
@@ -71,26 +76,24 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
         if not owns_checkout(checkout):
             if not allow_uninitialized:
                 raise ValueError(label + ' has an uninitialized dependency: ' + prefix)
-            if checkout.exists() and any(checkout.iterdir()):
+            if checkout.exists() and any(p.name not in {'.git', '.DS_Store'} for p in checkout.iterdir()):
                 raise ValueError(label + ' has files in an uninitialized dependency: ' + prefix)
             missing.append(prefix.rstrip('/'))
             return
-        head = git(checkout, 'rev-parse', 'HEAD').decode().strip()
-        if expected_revision and head != expected_revision:
-            raise ValueError(label + ': Dependency revision differs: ' + prefix)
         index = Path(git(checkout, 'rev-parse', '--git-path', 'index').decode().strip())
         if not index.is_absolute():
             index = checkout / index
-        if expected_revision and not index.exists():
-            # git clone --no-checkout has the right HEAD but no index or worktree.
-            # Only recognize that narrow interrupted state; modified initialized
-            # dependencies must still fail validation.
-            if any(p.name != '.git' for p in checkout.iterdir()):
+        empty_worktree = not any(p.name not in {'.git', '.DS_Store'} for p in checkout.iterdir())
+        if expected_revision and (not index.exists() or empty_worktree):
+            if not empty_worktree:
                 raise ValueError(label + ' has files in an incomplete dependency: ' + prefix)
             if not allow_uninitialized:
                 raise ValueError(label + ' has an uninitialized dependency: ' + prefix)
             missing.append(prefix.rstrip('/'))
             return
+        head = git(checkout, 'rev-parse', 'HEAD').decode().strip()
+        if expected_revision and head != expected_revision:
+            raise ValueError(label + ': Dependency revision differs: ' + prefix)
         entries = git(checkout, 'ls-tree', '-r', '-z', 'HEAD').decode().split('\0')
         modules = {}
         for entry in entries:
@@ -171,14 +174,22 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
 def initialize_missing(candidate, baseline, revision):
     """Repair missing clones only, after checking all initialized dependency drift."""
     candidate, baseline = candidate.resolve(), baseline.resolve()
+    previous_missing = None
     while True:
         records = validate(candidate, baseline, revision, role='baseline', allow_uninitialized=True)
         missing = records.get('uninitialized_submodules', [])
         if not missing:
             return
+        if missing == previous_missing:
+            raise ValueError('Dependency initialization made no progress: ' + ', '.join(missing))
+        previous_missing = missing
         # Initialize one level at a time; recursively updating an initialized
         # dependency could otherwise hide a mismatched nested checkout.
         for path in missing:
+            if path == '.':
+                pinned = git(candidate, 'rev-parse', revision + '^{commit}').decode().strip()
+                subprocess.run(['git', '-C', str(baseline), 'checkout', '--detach', pinned], check=True)
+                continue
             parent, name = Path(path).parent, Path(path).name
             if parent == Path('.'):
                 owner = baseline
@@ -190,7 +201,14 @@ def initialize_missing(candidate, baseline, revision):
                         raise ValueError('Cached baseline has no initialized owner for dependency: ' + path)
                     owner = owner.parent
                 name = str((baseline / path).relative_to(owner))
-            subprocess.run(['git', '-C', str(owner), 'submodule', 'update', '--init', '--', name], check=True)
+            target = baseline / path
+            if owns_checkout(target):
+                # A recognized no-checkout clone can have default HEAD ahead of
+                # the gitlink. Ordinary submodule update may leave it unchanged.
+                pinned = git(owner, 'rev-parse', 'HEAD:' + name).decode().strip()
+                subprocess.run(['git', '-C', str(target), 'checkout', '--detach', pinned], check=True)
+            else:
+                subprocess.run(['git', '-C', str(owner), 'submodule', 'update', '--init', '--', name], check=True)
 
 
 if __name__ == '__main__':

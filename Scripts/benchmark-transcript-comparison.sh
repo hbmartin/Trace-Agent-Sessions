@@ -6,10 +6,6 @@ comparison_root="${TRACE_SCROLL_COMPARISON_OUTPUT_DIR:-$repo_dir/build/transcrip
 comparison_dir="$comparison_root"
 if [[ "$comparison_dir" != /* ]]; then comparison_dir="$PWD/$comparison_dir"; fi
 baseline_ref="${TRACE_SCROLL_BASELINE_REF:-61c00dec21762408980afe1a476cfcdb3f859437}"
-harness_files=(Tests/TracePerformanceTests/TracePerformanceTests.swift
-  Scripts/measure-transcript-scroll.sh Scripts/compare-transcript-scroll-metrics.py
-  Scripts/export-benchmark-samples.py Scripts/synchronize-benchmark-harness.py Scripts/configure-grdb.sh
-  Sources/TraceCore/Diagnostics/TracePerformance.swift)
 order="${TRACE_SCROLL_COMPARISON_ORDER:-baseline-first}"
 [[ "$order" == baseline-first || "$order" == candidate-first ]] || { echo "Invalid revision order" >&2; exit 1; }
 baseline_checkout="${TRACE_SCROLL_BASELINE_CHECKOUT:-$comparison_dir/baseline-checkout}"
@@ -29,25 +25,21 @@ python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_di
   > "$comparison_dir/candidate-initial-build-inputs.json"
 python3 "$repo_dir/Scripts/prepare-benchmark-baseline.py" "$repo_dir" "$baseline_checkout" "$baseline_commit" \
   > "$comparison_dir/baseline-cache-validation.json"
-# Overlay the current harness automatically. Only benchmark instrumentation is
-# copied into baseline production sources; historical patches remain archived.
-python3 "$repo_dir/Scripts/synchronize-benchmark-harness.py" "$repo_dir" "$baseline_checkout" \
-  > "$comparison_dir/harness-hashes.json"
-python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$baseline_checkout" "$baseline_commit" --initialize-missing \
-  > "$comparison_dir/baseline-prepared-dependencies.json"
-"$baseline_checkout/Scripts/configure-grdb.sh"
-python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$baseline_checkout" "$baseline_commit" \
-  > "$comparison_dir/baseline-build-inputs.json"
+# Preparation already synchronizes, initializes, configures, and validates.
+cp "$comparison_dir/baseline-cache-validation.json" "$comparison_dir/baseline-build-inputs.json"
+cp "$comparison_dir/baseline-cache-validation.json" "$comparison_dir/baseline-prepared-dependencies.json"
+python3 - "$comparison_dir" <<'PY_HASHES'
+import json, pathlib, sys
+output = pathlib.Path(sys.argv[1])
+records = json.loads((output / 'baseline-cache-validation.json').read_text())
+(output / 'harness-hashes.json').write_text(json.dumps(records['harness_sha256'], indent=2) + '\n')
+PY_HASHES
 python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_dir" "$candidate_commit" --role candidate \
   > "$comparison_dir/candidate-build-inputs.json"
 cmp -s "$comparison_dir/candidate-initial-build-inputs.json" "$comparison_dir/candidate-build-inputs.json" || {
   echo "Candidate build inputs changed during comparison preparation" >&2; exit 1;
 }
 
-# Both apps use exactly the same corpus, completion checks, and measurement code.
-for file in "${harness_files[@]}"; do
-  cmp "$repo_dir/$file" "$baseline_checkout/$file"
-done
 python3 - "$repo_dir" "$baseline_checkout" "$order" "$comparison_dir" "$candidate_commit" "$baseline_commit" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 candidate, baseline, output = map(pathlib.Path, [sys.argv[1], sys.argv[2], sys.argv[4]])
@@ -64,21 +56,15 @@ metadata = {
         'cpu': command('sysctl', '-n', 'machdep.cpu.brand_string'),
         'memory_bytes': command('sysctl', '-n', 'hw.memsize'),
     },
-    'identical_harness_files': {
-        name: hashlib.sha256((candidate / name).read_bytes()).hexdigest()
-        for name in ['Tests/TracePerformanceTests/TracePerformanceTests.swift',
-                     'Scripts/measure-transcript-scroll.sh',
-                     'Scripts/compare-transcript-scroll-metrics.py',
-                     'Scripts/export-benchmark-samples.py',
-                     'Scripts/synchronize-benchmark-harness.py',
-                     'Scripts/configure-grdb.sh',
-                     'Sources/TraceCore/Diagnostics/TracePerformance.swift']
-    },
+    'identical_harness_files': json.loads((output / 'harness-hashes.json').read_text()),
     'baseline_build_inputs': json.loads((output / 'baseline-build-inputs.json').read_text()),
     'candidate_build_inputs': json.loads((output / 'candidate-build-inputs.json').read_text()),
     'build_inputs_validated': False,
     'order': ['baseline', 'candidate'] if order == 'baseline-first' else ['candidate', 'baseline'],
 }
+for name, expected in metadata['identical_harness_files'].items():
+    if hashlib.sha256((candidate / name).read_bytes()).hexdigest() != expected:
+        raise SystemExit('Synchronized harness differs: ' + name)
 (output / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
 PY
 snapshot_inputs() {
