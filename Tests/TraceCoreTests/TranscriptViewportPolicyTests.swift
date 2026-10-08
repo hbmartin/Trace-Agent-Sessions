@@ -2,6 +2,12 @@ import XCTest
 @testable import TraceCore
 
 final class TranscriptViewportPolicyTests: XCTestCase {
+    func testRestoreOffsetKeepsPreviewAndShortenedRowsVisible() {
+        XCTAssertEqual(TranscriptViewportPolicy.clampedRestoreOffset(-450, rowHeight: 96), -95)
+        XCTAssertEqual(TranscriptViewportPolicy.clampedRestoreOffset(-450, rowHeight: 800), -450)
+        XCTAssertEqual(TranscriptViewportPolicy.clampedRestoreOffset(-450, rowHeight: 0), 0)
+        XCTAssertEqual(TranscriptViewportPolicy.clampedRestoreOffset(0, rowHeight: 96), 0)
+    }
     func testDelayedResizeMovesOppositeToViewportHeight() {
         XCTAssertTrue(TranscriptViewportPolicy.matchesResizeShift(actual: 780, previous: 800, viewportDelta: 20))
         XCTAssertTrue(TranscriptViewportPolicy.matchesResizeShift(actual: 820.8, previous: 800, viewportDelta: -20))

@@ -186,7 +186,13 @@ final class TraceModel: ObservableObject {
     private var liveWatcherReplayStarts: [String: UInt64] = [:]
     private var safetyVerificationTask: Task<Void, Never>?
     private var hydrationOrder: [Int64] = []
-    private var hydratingMessageIDs: Set<Int64> = []
+    private struct HydrationRequest {
+        let token = UUID()
+        let session: UUID
+        let generation: Int64?
+    }
+    private var hydratingMessageIDs: [Int64: HydrationRequest] = [:]
+    @Published private(set) var hydrationSettlementRevision = 0
     private let hydrationCacheLimit = 512
     private var sourceChangeTask: Task<Void, Never>?
     private var sourceConfigurationRevision: UInt64 = 0
@@ -868,7 +874,7 @@ final class TraceModel: ObservableObject {
         hydratedMessages = [:]
         hydrationFailures = []
         hydrationOrder = []
-        hydratingMessageIDs = []
+        hydratingMessageIDs = [:]
         expandedReasoningIDs = []
         scrollPositions = [:]
         requestedMessageID = nil
@@ -1176,13 +1182,20 @@ final class TraceModel: ObservableObject {
             hydrationOrder.append(message.id)
             return
         }
-        guard !hydratingMessageIDs.contains(message.id), let coordinator else { return }
-        hydratingMessageIDs.insert(message.id)
+        guard let coordinator else { return }
         let request = sessionRequestID
         let generation = selectedSession?.sourceGeneration
+        if let active = hydratingMessageIDs[message.id], active.session == request, active.generation == generation { return }
+        let active = HydrationRequest(session: request, generation: generation)
+        hydratingMessageIDs[message.id] = active
         if hydrationFailures.contains(message.id) { hydrationFailures.remove(message.id) }
         Task {
-            defer { hydratingMessageIDs.remove(message.id) }
+            defer {
+                if hydratingMessageIDs[message.id]?.token == active.token {
+                    hydratingMessageIDs.removeValue(forKey: message.id)
+                }
+                hydrationSettlementRevision &+= 1
+            }
             let start = ContinuousClock.now
             do {
                 if let delay = TraceTestHooks.delayMilliseconds(
