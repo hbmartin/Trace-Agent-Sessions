@@ -2380,6 +2380,8 @@ final class TraceUITests: XCTestCase {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let file = directory.appendingPathComponent("Sources/Claude/failed-pass-costs.jsonl")
         let repairStarted = directory.appendingPathComponent("deferred-rollup-started")
+        let initialCompleted = directory.appendingPathComponent("initial-pass-completed")
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = initialCompleted.path
         let initial: [String: Any] = [
             "type": "assistant", "uuid": "failed-pass-initial", "sessionId": "failed-pass",
             "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
@@ -2389,9 +2391,13 @@ final class TraceUITests: XCTestCase {
         ]
         try (JSONSerialization.data(withJSONObject: initial) + Data([10])).write(to: file)
         app.launch()
+        app.activate()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
+        XCTAssertTrue(waitForFile(initialCompleted, timeout: 15))
         app.radioButtons["Costs"].click()
+        XCTAssertEqual(app.radioButtons["Costs"].value as? Int, 1,
+                       "the baseline snapshot must be observed in the Costs section")
         XCTAssertTrue(app.staticTexts["10"].waitForExistence(timeout: 15))
         app.terminate()
 
@@ -2417,6 +2423,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"] = "3000"
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH"] = repairStarted.path
         app.launch()
+        app.activate()
         XCTAssertTrue(waitForFile(repairStarted, timeout: 15),
                       "a failed pass with committed mutations must schedule dirty-rollup repair")
         app.radioButtons["Costs"].click()
