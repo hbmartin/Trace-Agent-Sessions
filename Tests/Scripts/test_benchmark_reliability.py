@@ -3,6 +3,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -113,6 +114,9 @@ class BenchmarkReliabilityTests(unittest.TestCase):
 
     def runner_fixture(self, root, body):
         candidate, _ = self.fixture.baseline_fixture(root)
+        configure = candidate / 'Scripts/configure-grdb.sh'
+        configure.write_text('#!/bin/sh\nexit 0\n')
+        configure.chmod(0o755)
         script = candidate / 'Scripts/benchmark-transcript-comparison.sh'
         script.write_text('#!/bin/sh\nset -eu\nmkdir -p "$TRACE_SCROLL_COMPARISON_OUTPUT_DIR/runs/run-fixture"\n' + body)
         script.chmod(0o755)
@@ -195,6 +199,7 @@ class BenchmarkReliabilityTests(unittest.TestCase):
                     if (root / 'results/pair-1-attempt-1/host-session-check.json').exists() else json.loads(
                     (root / 'results/pair-1-attempt-1/runs/run-fixture/host-session-check.json').read_text())
                 self.assertFalse(host['valid'])
+                self.assertEqual(host['interruptionSignal'], getattr(interruption, 'signum', signal.SIGINT))
 
     def test_cleanup_reaps_detached_owned_runner_and_preserves_unrelated_process(self):
         runner = self.fixture.module('run-local-benchmark-comparisons')
@@ -205,10 +210,17 @@ class BenchmarkReliabilityTests(unittest.TestCase):
             binary = derived / 'TracePerformanceTests-Runner'
             shutil.copyfile('/bin/sleep', binary)
             binary.chmod(0o755)
+            if sys.platform == 'darwin':
+                subprocess.run(['codesign', '-f', '-s', '-', str(binary)], check=True, capture_output=True)
             parent = subprocess.Popen(['/bin/sleep', '60'], start_new_session=True)
             detached = subprocess.Popen([str(binary), '60'], start_new_session=True)
             unrelated = subprocess.Popen(['/bin/sleep', '60'], start_new_session=True)
             try:
+                import time
+                time.sleep(0.1)
+                self.assertIsNone(detached.poll(), 'Detached runner must survive before cleanup')
+                self.assertTrue(any(pid == detached.pid and runner.owned_process(group, command, parent.pid, derived)
+                                    for pid, group, command in runner.process_records()))
                 runner.stop_owned_processes(parent, derived)
                 self.assertIsNotNone(parent.poll())
                 self.assertIsNotNone(detached.wait(timeout=5))
