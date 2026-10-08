@@ -145,6 +145,12 @@ final class SidecarDependencyTests: XCTestCase {
                 received.withLock { $0 = warnings }
             }
         watcher.userHomeForTesting = userHome
+        let descriptors = OSAllocatedUnfairLock(initialState: [Int32]())
+        watcher.openNamespaceForTesting = { path in
+            let fd = open(path, O_EVTONLY | O_NONBLOCK | O_CLOEXEC)
+            if fd >= 0 { descriptors.withLock { $0.append(fd) } }
+            return fd
+        }
         let started = expectation(description: "FIFO monitoring activation returns")
         let activated = OSAllocatedUnfairLock(initialState: false)
         Task {
@@ -170,11 +176,17 @@ final class SidecarDependencyTests: XCTestCase {
         let stopped = expectation(description: "FIFO watcher shutdown closes descriptors")
         let closed = OSAllocatedUnfairLock(initialState: false)
         Task.detached {
+            let opened = watcher.monitorDescriptorsForTesting
             watcher.stop()
-            closed.withLock { $0 = watcher.namespaceMonitorCountForTesting == 0 }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while !opened.allSatisfy({ fcntl($0, F_GETFD) == -1 && errno == EBADF }),
+                  ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            closed.withLock { $0 = !opened.isEmpty && opened.allSatisfy { fcntl($0, F_GETFD) == -1 && errno == EBADF } }
             stopped.fulfill()
         }
-        await fulfillment(of: [stopped], timeout: 2)
+        await fulfillment(of: [stopped], timeout: 3)
         XCTAssertTrue(closed.withLock { $0 })
     }
 

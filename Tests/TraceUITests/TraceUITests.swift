@@ -1664,9 +1664,15 @@ final class TraceUITests: XCTestCase {
                                   timeout: TimeInterval = 10) -> Bool {
         poll(timeout: timeout) {
             let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            return content.components(separatedBy: line + "\n").count - 1 >= count
-                ? true
-                : nil
+            let lines = content.split(whereSeparator: \.isNewline)
+            if line == "finished" {
+                let starts = Set(lines.filter { $0.hasPrefix("started,") }.map { $0.dropFirst(8) })
+                let completions = lines.filter {
+                    $0.hasPrefix("finished,") && starts.contains($0.dropFirst(9))
+                }
+                return completions.count >= count ? true : nil
+            }
+            return lines.filter { $0 == line }.count >= count ? true : nil
         } ?? false
     }
 
@@ -1798,14 +1804,25 @@ final class TraceUITests: XCTestCase {
                        "\(stage): the first completed native offset must match the bookmark")
         if let probe = nativeAnchorProbe, let session = nativeAnchorSessionID {
             let samples = probe.input.deletingLastPathComponent().appendingPathComponent("native-anchor-samples")
-            let offsets = fileLines(in: samples).compactMap { line -> Double? in
-                let fields = line.split(separator: ",")
-                guard fields.count == 4, fields[0] == String(index), fields[3] == session else { return nil }
-                return Double(fields[1])
+            let observed = fileLines(in: samples).filter {
+                let fields = $0.split(separator: ",")
+                return fields.count >= 4 && fields[0] == String(index) && fields[3] == session
             }
-            for offset in offsets {
-                XCTAssertEqual(offset, Double(expectedY), accuracy: 8,
-                    "\(stage): established anchor displaced across a main-loop turn")
+            XCTAssertFalse(observed.isEmpty, "\(stage): native anchor sampling must observe main-loop frames")
+            for sample in observed {
+                let fields = sample.split(separator: ",")
+                guard let offset = Double(fields[1]) else { XCTFail("invalid offset sample"); continue }
+                var expected = Double(expectedY)
+                if fields.count == 9, fields[4] != "established",
+                   let height = Double(fields[5]), let rowY = Double(fields[6]),
+                   let documentHeight = Double(fields[7]), let viewportHeight = Double(fields[8]) {
+                    let visibleFooter = fields[4] == "waiting" ? 64.0 : 1.0
+                    let clipped = max(expected, -max(0, height - visibleFooter))
+                    let origin = min(max(0, rowY - clipped), max(0, documentHeight - viewportHeight))
+                    expected = rowY - origin
+                }
+                XCTAssertEqual(offset, expected, accuracy: 8,
+                    "\(stage): anchor displaced across a main-loop turn (\(sample))")
             }
             try? FileManager.default.removeItem(at: samples)
         }

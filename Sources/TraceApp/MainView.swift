@@ -868,6 +868,9 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var pendingBottomFollow = false
         private var pendingAnchorRestore: TranscriptBookmark?
         private var pendingIdleSaveAfterRestore = false
+        private var scrollIdleCycle: UInt64 = 0
+        private var pendingScrollIdleCycle: UInt64?
+        private var scrollIdleReadyToSave = false
 
         deinit {
             observers.removeAll()
@@ -1069,6 +1072,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
             userHeightMessageIDs.removeAll()
             pendingInteractionBookmark = nil
             pendingIdleSaveAfterRestore = false
+            pendingScrollIdleCycle = nil
+            scrollIdleReadyToSave = false
             observers.removeAll()
             if let benchmarkObserver {
                 DistributedNotificationCenter.default().removeObserver(benchmarkObserver)
@@ -1112,6 +1117,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 pendingBottomFollow = false
                 pendingAnchorRestore = nil
                 pendingIdleSaveAfterRestore = false
+            }
+            if sessionChanged {
+                pendingScrollIdleCycle = nil
+                scrollIdleReadyToSave = false
             }
             self.sessionID = sessionID
             var needsRequestedRestore = sessionChanged || self.scrollRequest != scrollRequest
@@ -1393,13 +1402,21 @@ private struct TranscriptRenderer: NSViewRepresentable {
             model.scrollPositions[sessionID] = persisted
             TraceTestHooks.appendLine("\(persisted.index),\(persisted.offset)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_PERSISTED_BOOKMARK_PATH")
-            TraceTestHooks.appendLine(
-                "finished", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
-            )
             if TraceTestHooks.isUITesting,
                let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] {
                 try? Data("\(bookmark.index)".utf8).write(to: URL(fileURLWithPath: path))
             }
+            completeScrollIdleCycleIfSaved()
+        }
+
+        private func completeScrollIdleCycleIfSaved() {
+            guard let cycle = pendingScrollIdleCycle, scrollIdleReadyToSave, !isUserInteracting,
+                  !pendingIdleSaveAfterRestore, pendingRestore == nil else { return }
+            pendingScrollIdleCycle = nil
+            scrollIdleReadyToSave = false
+            TraceTestHooks.appendLine("finished,\(cycle)",
+                pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH")
+            TraceTestHooks.appendLine("finished", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH")
         }
 
         private func savePositionWhileScrolling() {
@@ -1429,6 +1446,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
             guard !applyingProgrammaticScroll else { return }
             bookmarkWorkItem?.cancel()
             if reportStart {
+                scrollIdleCycle &+= 1
+                pendingScrollIdleCycle = scrollIdleCycle
+                scrollIdleReadyToSave = false
+                TraceTestHooks.appendLine("started,\(scrollIdleCycle)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH")
                 TraceTestHooks.appendLine(
                     "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
                 )
@@ -1905,6 +1927,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 return
             }
             userScrolling = false
+            scrollIdleReadyToSave = true
             if viewport.atBottom {
                 followsBottom = true
                 pendingBottomFollow = false
@@ -2272,15 +2295,15 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private func sampleEstablishedAnchorForUITest() {
             guard TraceTestHooks.isUITesting,
                   TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH"] != nil,
-                  pendingRestore == nil, deferredContentRestore == nil,
-                  pendingHeightMessageIDs.isEmpty, !extentNeedsRefresh, !pendingAnchorCorrection,
                   positionEstablished, let table, let scrollView,
                   let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_ANCHOR_INDEX_PATH"],
                   let text = try? String(contentsOfFile: path, encoding: .utf8), let index = Int(text),
                   let row = items.firstIndex(where: { $0.sourceIndex == index }) else { return }
             let rect = table.rect(ofRow: row)
             let viewport = scrollView.documentVisibleRect
-            TraceTestHooks.appendLine("\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(sessionID)",
+            let waiting = deferredContentRestore != nil && model?.hydratedMessages[items[row].summary.id] == nil
+            let phase = waiting ? "waiting" : pendingRestore != nil ? "refining" : "established"
+            TraceTestHooks.appendLine("\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(sessionID),\(phase),\(rect.height),\(rect.minY),\(table.frame.height),\(viewport.height)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH")
         }
 
