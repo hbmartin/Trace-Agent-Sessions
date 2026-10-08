@@ -680,11 +680,37 @@ public struct ParsedUsageRecord: Sendable {
     public let usage: UsageObservation
 }
 
+/// Context at the last committed byte boundary. The fallback stays fixed across appends.
+public struct SourceReadContext: Sendable {
+    public var sessionID: String?
+    public var fallbackTimestampMilliseconds: Int64
+    public var lastValidTimestampMilliseconds: Int64?
+
+    public init(sessionID: String? = nil, fallbackTimestampMilliseconds: Int64,
+                lastValidTimestampMilliseconds: Int64? = nil) {
+        self.sessionID = sessionID
+        self.fallbackTimestampMilliseconds = fallbackTimestampMilliseconds
+        self.lastValidTimestampMilliseconds = lastValidTimestampMilliseconds
+    }
+
+    var timestampMilliseconds: Int64 {
+        lastValidTimestampMilliseconds ?? fallbackTimestampMilliseconds
+    }
+
+    mutating func observeTimestamp(_ value: Any?) -> ParsedRecord? {
+        guard let timestamp = JSONHelpers.explicitTimestampMilliseconds(value) else { return nil }
+        lastValidTimestampMilliseconds = timestamp
+        return .timestampContext(timestamp)
+    }
+}
+
 public enum ParsedRecord: Sendable {
     case message(ParsedMessage)
     case usage(ParsedUsageRecord)
     case event(ParsedSessionEvent)
     case sessionContext(String)
+    /// An explicit valid timestamp, including one on an otherwise ignored record.
+    case timestampContext(Int64)
     case checkpoint(Int64)
 }
 
@@ -778,6 +804,24 @@ public struct ProjectSummary: Identifiable, Sendable {
     public let rootPath: String
     public let sessionCount: Int
     public let lastActivityMilliseconds: Int64
+}
+
+public struct SessionCursor: Hashable, Sendable {
+    public let projectCanonicalKey: String?
+    public let lastActivityMilliseconds: Int64
+    public let sessionID: Int64
+
+    public init(projectCanonicalKey: String?, lastActivityMilliseconds: Int64, sessionID: Int64) {
+        self.projectCanonicalKey = projectCanonicalKey
+        self.lastActivityMilliseconds = lastActivityMilliseconds
+        self.sessionID = sessionID
+    }
+}
+
+public struct SessionPage: Sendable {
+    public let sessions: [SessionSummary]
+    public let totalCount: Int
+    public let nextCursor: SessionCursor?
 }
 
 public struct SessionSummary: Identifiable, Sendable {

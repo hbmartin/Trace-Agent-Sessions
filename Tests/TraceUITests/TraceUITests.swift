@@ -5000,3 +5000,300 @@ final class TraceUITests: XCTestCase {
     }
 
 }
+
+extension TraceUITests {
+    func testSessionPageRejectsCompletionAfterProjectSwitchAndRefreshesLoadedPages() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        var data = Data()
+        for index in 0..<230 {
+            let record: [String: Any] = ["type": "user", "uuid": "race-\(index)", "sessionId": "race-\(index)",
+                "cwd": "/tmp/RaceProject", "timestamp": 1_700_000_000_000 + index,
+                "message": ["content": "Race session \(index)"]]
+            data.append(try JSONSerialization.data(withJSONObject: record)); data.append(10)
+        }
+        try data.write(to: directory.appendingPathComponent("Sources/Claude/race.jsonl"))
+        let started = directory.appendingPathComponent("page-started")
+        let finished = directory.appendingPathComponent("page-finished")
+        app.launchEnvironment["TRACE_TEST_SESSION_PAGE_DELAY_MS"] = "5000"
+        app.launchEnvironment["TRACE_TEST_SESSION_PAGE_STARTED_PATH"] = started.path
+        app.launchEnvironment["TRACE_TEST_SESSION_PAGE_FINISHED_PATH"] = finished.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let project = app.staticTexts["RaceProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 20)); project.click()
+        let list = app.descendants(matching: .any)["sessionSidebarList"].firstMatch
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        let more = app.buttons["loadMoreSessions"]
+        XCTAssertTrue(more.wait(for: \.isHittable, toEqual: true, timeout: 10)); more.click()
+        XCTAssertTrue(waitForFile(started, timeout: 10))
+        app.staticTexts["TraceUIExample"].firstMatch.click()
+        XCTAssertTrue(waitForFile(finished, timeout: 10))
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "1")
+        XCTAssertFalse(more.exists)
+        project.click()
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        XCTAssertTrue(more.wait(for: \.isHittable, toEqual: true, timeout: 10)); more.click()
+        let oldestID = try sqliteInteger(directory.appendingPathComponent("index.sqlite"), sql: "SELECT id FROM session WHERE external_id='race-0';")
+        XCTAssertTrue(app.descendants(matching: .any)["sessionSidebarRow-\(oldestID)"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertFalse(more.exists)
+        try addSession(id: "new-race", title: "Newest race session", project: "RaceProject",
+                       timestamp: 1_800_000_000_000, content: "New race content", directory: directory)
+        let count = app.staticTexts["sessionTotalCount"]
+        expectation(for: NSPredicate { _, _ in count.value as? String == "231" }, evaluatedWith: nil)
+        waitForExpectations(timeout: 15)
+        XCTAssertTrue(app.descendants(matching: .any)["sessionSidebarRow-\(oldestID)"].firstMatch.exists,
+                      "live updates must refresh both previously loaded pages")
+        XCTAssertFalse(more.exists)
+    }
+
+    func testMainSearchReturnDefersLiveReplacementAndRebuildKeepsCriteria() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 20)); query.click(); query.typeText("Find")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        try addSession(id: "return-new", title: "Find retained new result", project: "OtherReturnProject",
+                       timestamp: 1_800_000_000_000, content: "Find newest result", directory: directory)
+        XCTAssertTrue(app.staticTexts["OtherReturnProject"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["backToProject"].click()
+        XCTAssertEqual(query.value as? String, "Find")
+        let newest = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find newest result")).firstMatch
+        XCTAssertFalse(newest.exists, "return must retain the original result set until explicit refresh")
+        let refresh = app.buttons["refreshSearchResults"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 10)); refresh.click()
+        XCTAssertTrue(newest.waitForExistence(timeout: 10)); newest.click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.descendants(matching: .any)["Sources"].firstMatch.click()
+        settings.buttons["Rebuild Index…"].click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(query.waitForExistence(timeout: 15))
+        XCTAssertEqual(query.value as? String, "Find")
+        XCTAssertEqual(query.placeholderValue, "Search all sessions")
+        XCTAssertTrue(result.waitForExistence(timeout: 15))
+        XCTAssertTrue(newest.waitForExistence(timeout: 15))
+    }
+
+    func testDeletedOpenResultReturnsToRetainedMainSearch() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 20)); query.click(); query.typeText("Find")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Sources/Claude/session.jsonl"))
+        XCTAssertTrue(query.waitForExistence(timeout: 15))
+        XCTAssertEqual(query.value as? String, "Find")
+        XCTAssertEqual(query.placeholderValue, "Search all sessions")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        let refresh = app.buttons["refreshSearchResults"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 10)); refresh.click()
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 10))
+    }
+
+    func testMainSearchBackRetainsPagesScopeAndScrollPosition() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try addLongSession("ReturnNeedle", project: "ReturnProject", directory: directory, count: 220, contentRepeats: 1)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 20))
+        query.click(); query.typeText("ReturnNeedle")
+        let scroll = app.scrollViews["searchResultsScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        let oldest = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "ReturnNeedle message 0")).firstMatch
+        for _ in 0..<4 {
+            if oldest.isHittable { break }
+            scroll.scroll(byDeltaX: 0, deltaY: -100_000)
+        }
+        XCTAssertTrue(oldest.wait(for: \.isHittable, toEqual: true, timeout: 15))
+        let y = oldest.frame.minY
+        oldest.click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["backToProject"].label, "Back to results")
+        app.buttons["backToProject"].click()
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        XCTAssertEqual(query.value as? String, "ReturnNeedle")
+        XCTAssertTrue(oldest.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        XCTAssertEqual(oldest.frame.minY, y, accuracy: 24)
+        XCTAssertEqual(query.placeholderValue, "Search all sessions", "Back must restore the original all-project scope")
+    }
+
+    func testSessionSidebarPagesBeyondFiveHundredAndUsesTrueTotal() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let file = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        var data = Data()
+        for index in 0..<605 {
+            data.append(try JSONSerialization.data(withJSONObject: ["type": "user", "uuid": "paged-m-\(index)",
+                "sessionId": "paged-\(index)", "cwd": "/tmp/PagingProject", "timestamp": 1_700_000_000_000 + index / 3,
+                "message": ["content": "Paged session \(index)"]]))
+            data.append(10)
+        }
+        try data.write(to: file)
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let project = app.staticTexts["PagingProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 20)); project.click()
+        let count = app.staticTexts["sessionTotalCount"]
+        XCTAssertTrue(count.waitForExistence(timeout: 10))
+        XCTAssertEqual(count.value as? String, "605")
+        let list = app.descendants(matching: .any)["sessionSidebarList"].firstMatch
+        for page in 1...3 {
+            list.scroll(byDeltaX: 0, deltaY: -60_000)
+            let more = app.buttons["loadMoreSessions"]
+            XCTAssertTrue(more.wait(for: \.isHittable, toEqual: true, timeout: 10)); more.click()
+            let index = max(0, 605 - (page + 1) * 200)
+            let id = try sqliteInteger(directory.appendingPathComponent("index.sqlite"), sql: "SELECT id FROM session WHERE external_id='paged-\(index)';")
+            XCTAssertTrue(app.descendants(matching: .any)["sessionSidebarRow-\(id)"].firstMatch.waitForExistence(timeout: 10))
+        }
+        XCTAssertFalse(app.buttons["loadMoreSessions"].exists)
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        let oldest = app.staticTexts["Paged session 0"].firstMatch
+        XCTAssertTrue(oldest.wait(for: \.isHittable, toEqual: true, timeout: 10)); oldest.click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+    }
+
+    func testHydrationFailureIsInlineDoesNotAutomaticallyRetryAndRecovers() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let audit = directory.appendingPathComponent("hydration-requests")
+        app.launchEnvironment["TRACE_TEST_FAIL_HYDRATION_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_HYDRATION_REQUESTS_PATH"] = audit.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let session = app.staticTexts["Find the sample answer"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 20)); session.click()
+        let retry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "retryMessage-")).firstMatch
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        let id = String(retry.identifier.dropFirst("retryMessage-".count))
+        func requests() -> Int {
+            ((try? String(contentsOf: audit, encoding: .utf8)) ?? "").split(separator: "\n").filter { $0 == id }.count
+        }
+        XCTAssertEqual(requests(), 1)
+        let tools = app.checkBoxes["Tools"]
+        tools.click(); tools.click()
+        XCTAssertTrue(retry.isHittable)
+        XCTAssertEqual(requests(), 1, "row recreation must not automatically retry a failed read")
+        retry.click()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(requests(), 2)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    func testMarkdownPreservesParagraphWhitespaceAndNativeCopy() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let content = "First paragraph.\n\nSecond paragraph.\n\n- First item\n- Second item\n\n```swift\nlet value = 1\n```"
+        let object: [String: Any] = ["type": "user", "uuid": "markdown", "sessionId": "markdown", "cwd": "/tmp/MarkdownProject",
+            "timestamp": 1_700_000_000_000, "message": ["content": content]]
+        try (JSONSerialization.data(withJSONObject: object) + Data([10])).write(to: directory.appendingPathComponent("Sources/Claude/session.jsonl"))
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let project = app.staticTexts["MarkdownProject"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 20)); project.click()
+        let id = try sqliteInteger(directory.appendingPathComponent("index.sqlite"), sql: "SELECT id FROM session WHERE external_id='markdown';")
+        let session = app.descendants(matching: .any)["sessionSidebarRow-\(id)"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 10)); session.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        let text = scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "First paragraph.\n\nSecond paragraph.")).firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 10))
+        XCTAssertTrue((text.value as? String)?.contains("```swift\nlet value = 1\n```") == true,
+                      "fenced code must keep its syntax and line breaks visible")
+        text.click()
+        let nativeChange = preparePasteboardForCopy()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("c", modifierFlags: .command)
+        assertPasteboardChanged(after: nativeChange, contains: [content], message: "native selection and copy must preserve whitespace")
+        let change = preparePasteboardForCopy()
+        text.rightClick(); app.menuItems["Copy Message"].click()
+        assertPasteboardChanged(after: change, contains: [content], message: "native message copy must preserve whitespace")
+    }
+
+    func testCaptureReadmeShowcaseWithoutTestControls() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launchEnvironment["TRACE_TEST_SHOWCASE"] = "1"
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Sources/Claude/session.jsonl"))
+        func writeSession(_ title: String, project: String, agent: String, number: Int) throws {
+            let lines = [title,
+                "Keep the app focused on the work in front of you.\n\nUse clear labels and make every state easy to understand.",
+                "Add a compact dashboard with activation, retention, and weekly active teams.",
+                "Add a seven-day funnel with accessible colors and direct labels.\n\nLoad each section independently so the dashboard stays responsive.\n\nShow clear empty, loading, error, and complete states.",
+                "Make keyboard navigation and reduced motion part of the definition of done.",
+                "Include focus order, VoiceOver labels, contrast checks, and a no-animation path in the acceptance criteria.",
+                "Use a disposable cache so source transcripts stay untouched.",
+                "Cache only the local search index. Rebuild it safely when the source format changes."]
+            let root = directory.appendingPathComponent("Sources/\(agent)")
+            let parent = agent == "Gemini" ? root.appendingPathComponent("\(project)/chats") : root
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            var records: [[String: Any]] = []
+            if agent == "Codex" { records.append(["type": "session_meta", "payload": ["id": title, "cwd": "/tmp/\(project)"]]) }
+            for (index, text) in lines.enumerated() {
+                let timestamp = 1_789_746_000_000 + number * 60_000 + index * 60_000
+                if agent == "Codex" {
+                    records.append(["type": "response_item", "timestamp": timestamp,
+                        "payload": ["type": "message", "id": "showcase-\(number)-\(index)", "role": index % 2 == 0 ? "user" : "assistant", "content": text]])
+                } else if agent == "Gemini" {
+                    records.append(["id": "showcase-\(number)-\(index)", "type": index % 2 == 0 ? "user" : "gemini", "timestamp": timestamp, "content": text])
+                } else {
+                    records.append(["type": index % 2 == 0 ? "user" : "assistant", "uuid": "showcase-\(number)-\(index)", "sessionId": title,
+                        "cwd": "/tmp/\(project)", "timestamp": timestamp, "message": ["content": text]])
+                }
+            }
+            let file = parent.appendingPathComponent(agent == "Codex" ? "rollout-\(number).jsonl" : "session-\(number).\(agent == "Gemini" ? "json" : "jsonl")")
+            if agent == "Gemini" {
+                try JSONSerialization.data(withJSONObject: ["sessionId": title, "messages": records]).write(to: file)
+                try Data("/tmp/\(project)".utf8).write(to: parent.deletingLastPathComponent().appendingPathComponent(".project_root"))
+            } else {
+                var data = Data()
+                for record in records { data.append(try JSONSerialization.data(withJSONObject: record)); data.append(10) }
+                try data.write(to: file)
+            }
+        }
+        try writeSession("Plan the analytics dashboard", project: "AtlasApp", agent: "Claude", number: 0)
+        try writeSession("Investigate search latency", project: "AtlasApp", agent: "Codex", number: 1)
+        try writeSession("Migrate authentication flow", project: "NimbusAPI", agent: "Gemini", number: 2)
+        try writeSession("Ship the macOS release", project: "OrbitMobile", agent: "Claude", number: 3)
+        try writeSession("Polish first-run onboarding", project: "OrbitMobile", agent: "Claude", number: 4)
+        let output = URL(fileURLWithPath: "/tmp/trace-readme-showcase")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        func capture(_ name: String) throws {
+            let screenshot = app.windows.firstMatch.screenshot()
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: screenshot.pngRepresentation))
+            let jpeg = try XCTUnwrap(bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92]))
+            try jpeg.write(to: output.appendingPathComponent("\(name).jpg"))
+            attach(app, name: "showcase-\(name)")
+        }
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        XCTAssertTrue(app.staticTexts["AtlasApp"].firstMatch.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["NimbusAPI"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["1 session"].firstMatch.exists)
+        try capture("project-browser")
+        let query = app.textFields["mainSearch"]
+        query.click(); query.typeText("cache")
+        XCTAssertTrue(app.scrollViews["searchResultsScroll"].waitForExistence(timeout: 10))
+        try capture("search-results")
+        query.click(); query.typeKey("a", modifierFlags: .command); query.typeKey(.delete, modifierFlags: [])
+        app.staticTexts["AtlasApp"].firstMatch.click()
+        let session = app.staticTexts["Plan the analytics dashboard"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 10)); session.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["testOpenLauncher"].exists)
+        XCTAssertTrue(scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "Keep the app focused")).firstMatch.waitForExistence(timeout: 10))
+        try capture("transcript-view")
+        app.radioButtons["Compact"].click()
+        try capture("compact-transcript")
+    }
+}

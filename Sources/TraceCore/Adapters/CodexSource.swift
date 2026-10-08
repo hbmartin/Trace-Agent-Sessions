@@ -33,24 +33,49 @@ public struct CodexSource: SessionSource {
     public func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        let fallbackTimestamp = TraceFileIO.modificationMilliseconds(url: file.url)
+        records(in: file, from: offset, through: boundary, context: .init(
+            fallbackTimestampMilliseconds: TraceFileIO.modificationMilliseconds(url: file.url)
+        ), recoverTimestamp: true)
+    }
+
+    public func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+                        initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, context: initialContext, recoverTimestamp: false)
+    }
+
+    private func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+                         context initialContext: SourceReadContext, recoverTimestamp: Bool) -> AsyncThrowingStream<ParsedRecord, Error> {
+        var readContext = initialContext
         var context = CodexContext(
-            sessionID: file.url.deletingPathExtension().lastPathComponent,
-            cwd: "Unknown", model: "unknown", timestamp: fallbackTimestamp
+            sessionID: initialContext.sessionID ?? file.url.deletingPathExtension().lastPathComponent,
+            cwd: "Unknown", model: "unknown", timestamp: readContext.timestampMilliseconds
         )
         var loadedHeader = offset == 0
         return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
             if !loadedHeader {
                 try loadCodexContext(file.url, through: offset, into: &context)
+                if recoverTimestamp { readContext.lastValidTimestampMilliseconds = context.lastValidTimestamp }
+                context.timestamp = readContext.timestampMilliseconds
                 loadedHeader = true
             }
             guard let object = try? JSONHelpers.object(from: line.data) else { return [] }
-            return parseCodexRecord(
+            var records: [ParsedRecord] = []
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            let explicit = JSONHelpers.explicitTimestampMilliseconds(object["timestamp"])
+                ?? (object["type"] as? String == "session_meta"
+                    ? JSONHelpers.explicitTimestampMilliseconds(payload["timestamp"]) : nil)
+            if let explicit {
+                readContext.lastValidTimestampMilliseconds = explicit
+                records.append(.timestampContext(explicit))
+            }
+            context.timestamp = readContext.timestampMilliseconds
+            records += parseCodexRecord(
                 object, context: &context,
                 locator: .byteRange(offset: line.offset, length: Int64(line.data.count)),
                 sourceKey: "\(line.offset)",
-                fallbackTimestamp: fallbackTimestamp + line.offset
+                fallbackTimestamp: readContext.timestampMilliseconds
             )
+            return records
         }
     }
 
@@ -85,14 +110,20 @@ private struct CodexContext {
     var cwd: String
     var model: String
     var timestamp: Int64
+    var lastValidTimestamp: Int64? = nil
 }
 
 private func loadCodexContext(_ url: URL, through boundary: Int64, into context: inout CodexContext) throws {
     let cursor = try JSONLineCursor(url: url, from: 0, through: boundary)
     while let line = try cursor.next() {
-        guard let object = try? JSONHelpers.object(from: line.data),
-              let payload = object["payload"] as? [String: Any]
-        else { continue }
+        guard let object = try? JSONHelpers.object(from: line.data) else { continue }
+        let payload = object["payload"] as? [String: Any] ?? [:]
+        if let timestamp = JSONHelpers.explicitTimestampMilliseconds(object["timestamp"])
+            ?? (object["type"] as? String == "session_meta"
+                ? JSONHelpers.explicitTimestampMilliseconds(payload["timestamp"]) : nil) {
+            context.timestamp = timestamp
+            context.lastValidTimestamp = timestamp
+        }
         switch object["type"] as? String {
         case "session_meta":
             context.sessionID = payload["session_id"] as? String ?? payload["id"] as? String ?? context.sessionID
@@ -128,7 +159,7 @@ private func parseCodexRecord(
         context.sessionID = payload["session_id"] as? String ?? payload["id"] as? String ?? context.sessionID
         context.cwd = payload["cwd"] as? String ?? context.cwd
         context.model = payload["model"] as? String ?? context.model
-        context.timestamp = JSONHelpers.timestampMilliseconds(payload["timestamp"], fallback: timestamp)
+        context.timestamp = timestamp
         return []
     }
 
@@ -216,7 +247,7 @@ private func parseCodexRecord(
     }
 
     let message = ParsedMessage(
-        sourceKey: externalID ?? sourceKey,
+        sourceKey: "\(itemType):\(externalID ?? sourceKey)",
         externalID: externalID,
         sessionExternalID: context.sessionID,
         cwd: context.cwd,

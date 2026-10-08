@@ -10,6 +10,7 @@ public enum TraceTestHooks {
 
     public static let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing")
     public static let environment = ProcessInfo.processInfo.environment
+    public static let showsTestControls = isUITesting && environment["TRACE_TEST_SHOWCASE"] != "1"
     private static let consumedFailures = OSAllocatedUnfairLock(initialState: Set<String>())
 
     public static func failOnce(for key: String) -> Bool {

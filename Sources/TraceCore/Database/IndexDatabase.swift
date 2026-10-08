@@ -3,11 +3,14 @@ import GRDB
 
 public enum IndexDatabaseError: LocalizedError {
     case timestampCollisionLimit
+    case invalidSessionCursor
 
     public var errorDescription: String? {
         switch self {
         case .timestampCollisionLimit:
             "More than 1,048,576 messages share one millisecond timestamp."
+        case .invalidSessionCursor:
+            "The session page belongs to a different project."
         }
     }
 }
@@ -28,6 +31,8 @@ struct IndexedSourceState: Sendable {
     let contentGeneration: Int64
     let contentSessionID: String?
     let metadataSessionID: String?
+    let fallbackTimestampMilliseconds: Int64?
+    let lastValidTimestampMilliseconds: Int64?
     let isPlaceholder: Bool
     let lastError: String?
     let hadRecordedError: Bool
@@ -75,8 +80,8 @@ public actor IndexDatabase {
     func codexNameWriteTransactionCountForTesting() -> Int {
         codexNameWriteTransactionCount
     }
-    public static let schemaVersion = 17
-    public static let indexFormatVersion = 6
+    public static let schemaVersion = 18
+    public static let indexFormatVersion = 7
     private static let sourceStateSelection = """
         sf.*,
         (sf.last_error IS NOT NULL OR EXISTS (
@@ -460,6 +465,19 @@ public actor IndexDatabase {
             }
             try db.execute(sql: "UPDATE trace_meta SET value='17' WHERE key='schema_version'")
         }
+        migrator.registerMigration("trace-v18-timestamps-and-usage-session-index", foreignKeyChecks: .immediate) { db in
+            let columns = try Set(db.columns(in: "source_file").map(\.name))
+            if !columns.contains("fallback_ts") {
+                try db.execute(sql: "ALTER TABLE source_file ADD COLUMN fallback_ts INTEGER")
+            }
+            if !columns.contains("last_valid_ts") {
+                try db.execute(sql: "ALTER TABLE source_file ADD COLUMN last_valid_ts INTEGER")
+            }
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_observation(session_id);
+                UPDATE trace_meta SET value='18' WHERE key='schema_version';
+                """)
+        }
         try migrator.migrate(pool)
     }
 
@@ -734,6 +752,8 @@ public actor IndexDatabase {
             contentGeneration: row["content_generation"],
             contentSessionID: row["content_session_id"],
             metadataSessionID: row["metadata_session_id"],
+            fallbackTimestampMilliseconds: row["fallback_ts"],
+            lastValidTimestampMilliseconds: row["last_valid_ts"],
             isPlaceholder: row["is_placeholder"],
             lastError: row["last_error"],
             hadRecordedError: row["had_recorded_error"]
@@ -790,7 +810,7 @@ public actor IndexDatabase {
         try pool.write { db in
             try db.execute(sql: """
                 UPDATE source_file SET root_id=?, agent=?, format=?, is_placeholder=0,
-                    dev=?, inode=?, size=?, mtime_ns=?, scanned_bytes=0, head_hash=?, head_length=?
+                    dev=?, inode=?, size=?, mtime_ns=?, scanned_bytes=0, head_hash=?, head_length=?, fallback_ts=NULL, last_valid_ts=NULL
                 WHERE id=? AND is_placeholder=1
                 """, arguments: [
                     rootID, file.agent.rawValue, file.format.rawValue,
@@ -836,7 +856,7 @@ public actor IndexDatabase {
                 try Self.markRollupsDirty(db)
                 try deleteOrphanedProjects(db: db)
                 try db.execute(
-                    sql: "UPDATE source_file SET scanned_bytes=0, metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, content_generation=content_generation+1 WHERE id=?",
+                    sql: "UPDATE source_file SET scanned_bytes=0, metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, fallback_ts=NULL, last_valid_ts=NULL, content_generation=content_generation+1 WHERE id=?",
                     arguments: [id]
                 )
                 return .commit
@@ -850,12 +870,19 @@ public actor IndexDatabase {
 
     func insert(
         records: [ParsedRecord], sourceFileID: Int64, scope: IndexScope,
-        checkpoint: Int64? = nil, contentSessionID: String? = nil
+        checkpoint: Int64? = nil, contentSessionID: String? = nil,
+        readContext: SourceReadContext? = nil
     ) throws {
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try insert(records: records, sourceFileID: sourceFileID, scope: scope, db: db)
-                if let checkpoint {
+                if let checkpoint, let readContext {
+                    try db.execute(
+                        sql: "UPDATE source_file SET scanned_bytes=?, content_session_id=?, fallback_ts=coalesce(?, fallback_ts), last_valid_ts=? WHERE id=?",
+                        arguments: [checkpoint, contentSessionID, readContext.fallbackTimestampMilliseconds,
+                                    readContext.lastValidTimestampMilliseconds, sourceFileID]
+                    )
+                } else if let checkpoint {
                     try db.execute(
                         sql: "UPDATE source_file SET scanned_bytes=?, content_session_id=? WHERE id=?",
                         arguments: [checkpoint, contentSessionID, sourceFileID]
@@ -871,7 +898,8 @@ public actor IndexDatabase {
         records: [ParsedRecord],
         scope: IndexScope,
         fingerprint: SourceFingerprint,
-        scannedBytes: Int64
+        scannedBytes: Int64,
+        readContext: SourceReadContext? = nil
     ) throws {
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
@@ -885,8 +913,9 @@ public actor IndexDatabase {
                 try deleteOrphanedProjects(db: db)
                 try insert(records: records, sourceFileID: id, scope: scope, db: db)
                 try db.execute(
-                    sql: "UPDATE source_file SET metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, content_generation=content_generation+1 WHERE id=?",
-                    arguments: [id]
+                    sql: "UPDATE source_file SET metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, fallback_ts=?, last_valid_ts=?, content_generation=content_generation+1 WHERE id=?",
+                    arguments: [readContext?.fallbackTimestampMilliseconds,
+                                readContext?.lastValidTimestampMilliseconds, id]
                 )
                 try updateSource(
                     id: id,
@@ -948,7 +977,7 @@ public actor IndexDatabase {
                     detail: event.detail ?? "The source recorded a \(event.kind.rawValue) turn without an explanation.",
                     locator: event.locator, db: db
                 )
-            case .sessionContext:
+            case .sessionContext, .timestampContext:
                 break
             case .checkpoint(let offset):
                 try db.execute(sql: "UPDATE source_file SET scanned_bytes=? WHERE id=?", arguments: [offset, sourceFileID])
@@ -1884,6 +1913,42 @@ public actor IndexDatabase {
                 WHERE \(predicates.joined(separator: " AND "))
                 ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
                 """, arguments: arguments).compactMap(sessionSummary(from:))
+        }
+    }
+
+    public func sessionsPage(projectCanonicalKey: String? = nil, cursor: SessionCursor? = nil,
+                             limit: Int = 200) throws -> SessionPage {
+        guard cursor == nil || cursor?.projectCanonicalKey == projectCanonicalKey else {
+            throw IndexDatabaseError.invalidSessionCursor
+        }
+        let pageSize = max(1, min(limit, 1_000))
+        return try pool.read { db in
+            var predicates = ["s.agent IN (SELECT agent FROM supported_agent)"]
+            var arguments = StatementArguments()
+            if let projectCanonicalKey {
+                predicates.append("p.canonical_key=?")
+                arguments += [projectCanonicalKey]
+            }
+            let joins = "FROM session s JOIN source_file sf ON sf.id=s.source_file_id JOIN project p ON p.id=s.project_id"
+            let total = try Int.fetchOne(db, sql: "SELECT count(*) \(joins) WHERE \(predicates.joined(separator: " AND "))", arguments: arguments) ?? 0
+            if let cursor {
+                predicates.append("(s.last_activity_at < ? OR (s.last_activity_at = ? AND s.id < ?))")
+                arguments += [cursor.lastActivityMilliseconds, cursor.lastActivityMilliseconds, cursor.sessionID]
+            }
+            arguments += [pageSize + 1]
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
+                    sf.path AS source_path, sf.content_generation AS source_generation,
+                    p.canonical_key AS project_canonical_key
+                \(joins) WHERE \(predicates.joined(separator: " AND "))
+                ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
+                """, arguments: arguments).compactMap(sessionSummary(from:))
+            let sessions = Array(rows.prefix(pageSize))
+            let next = rows.count > pageSize ? sessions.last.map {
+                SessionCursor(projectCanonicalKey: projectCanonicalKey,
+                              lastActivityMilliseconds: $0.lastActivityMilliseconds, sessionID: $0.id)
+            } : nil
+            return SessionPage(sessions: sessions, totalCount: total, nextCursor: next)
         }
     }
 

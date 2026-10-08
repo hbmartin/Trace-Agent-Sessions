@@ -165,12 +165,9 @@ rename/trash/resume, localization, and cross-platform support.
 - Existing Claude Code, Codex, and Gemini support remains intact.
 - Partial-provider limitations appear only in Source Health.
 - The roadmap is grounded in the
-  [comparison report](</Users/haroldmartin/.codex/attachments/56f2fc76-f268-4870-9931-7532680023ea/Pasted text.txt>),
-  [architecture](/Users/haroldmartin/Downloads/Trace-Agent-Sessions/Documentation/Architecture.md),
-  [performance budgets](/Users/haroldmartin/Downloads/Trace-Agent-Sessions/Documentation/Benchmarks.md),
-  [privacy contract](/Users/haroldmartin/Downloads/Trace-Agent-Sessions/Documentation/PrivacyAndNetworking.md),
-  [source-format notes](/Users/haroldmartin/Downloads/Trace-Agent-Sessions/Documentation/SourceFormats.md),
+  [architecture](Documentation/Architecture.md),
+  [performance budgets](Documentation/Benchmarks.md),
+  [privacy contract](Documentation/PrivacyAndNetworking.md),
+  [source-format notes](Documentation/SourceFormats.md),
   and current
   [AgentsView format references](https://github.com/kenn-io/agentsview/blob/main/docs/internal/session-format-sources.md).
-- Progress coordination followed the
-  [long-task-voice-progress skill](/Users/haroldmartin/.codex/skills/long-task-voice-progress/SKILL.md).

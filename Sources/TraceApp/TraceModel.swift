@@ -131,6 +131,28 @@ final class TraceModel: ObservableObject {
     @Published private(set) var progress = IndexProgress(phase: .waiting)
     @Published private(set) var projects: [ProjectSummary] = []
     @Published private(set) var sessions: [SessionSummary] = []
+    @Published private(set) var totalSessionCount = 0
+    @Published private(set) var hasMoreSessions = false
+    @Published private(set) var isLoadingSessions = false
+    @Published private(set) var sessionListError: String?
+    @Published private(set) var hasSearchReturnContext = false
+    var mainSearchReturnAnchor: SearchResultAnchor?
+    private struct MainSearchReturnContext {
+        let projectID: Int64?
+        let canonicalKey: String?
+        let displayName: String?
+    }
+    private var mainSearchReturnContext: MainSearchReturnContext?
+    private var sessionListProjectKey: String?
+    private var loadedSessionPageCount = 1
+    private var sessionListRevision = UUID()
+    private var nextSessionCursor: SessionCursor?
+    private struct LoadedSessionPages {
+        var sessions: [SessionSummary]
+        let total: Int
+        let nextCursor: SessionCursor?
+        let pageCount: Int
+    }
     @Published private(set) var recentSessions: [SessionSummary] = []
     @Published private(set) var messages: [MessageSummary] = [] {
         didSet { transcriptMessageRevision &+= 1 }
@@ -138,7 +160,7 @@ final class TraceModel: ObservableObject {
     @Published private(set) var hydratedMessages: [Int64: HydratedMessage] = [:] {
         didSet { transcriptContentRevision &+= 1 }
     }
-    @Published private(set) var hydrationFailures: Set<Int64> = [] {
+    @Published private(set) var hydrationFailures: [Int64: String] = [:] {
         didSet { transcriptContentRevision &+= 1 }
     }
     @Published var projectFilter = ""
@@ -190,6 +212,7 @@ final class TraceModel: ObservableObject {
         let token = UUID()
         let session: UUID
         let generation: Int64?
+        let sourcePath: String?
     }
     private var hydratingMessageIDs: [Int64: HydrationRequest] = [:]
     @Published private(set) var hydrationSettlementRevision = 0
@@ -539,7 +562,8 @@ final class TraceModel: ObservableObject {
                 else { globalSearchNeedsRefresh = true }
             }
             if !mainSearch.query.isEmpty {
-                if mainSearch.protectsPagination { mainSearch.markResultsStale() }
+                if hasSearchReturnContext { mainSearch.markResultsStale() }
+                else if mainSearch.protectsPagination { mainSearch.markResultsStale() }
                 else { mainSearchNeedsRefresh = true }
             }
             scheduleAutomaticSearch()
@@ -761,12 +785,14 @@ final class TraceModel: ObservableObject {
         globalSearch.search(sort: settings.searchSort, reset: reset)
     }
     func searchMain() {
+        guard !hasSearchReturnContext else { mainSearch.markResultsStale(); return }
         mainSearchNeedsRefresh = false
         syncMainSearchProjectFilter()
         mainSearch.search(sort: settings.searchSort)
     }
 
     private func syncMainSearchProjectFilter() {
+        guard !hasSearchReturnContext else { return }
         mainSearch.setProjectFilter(
             canonicalKey: selectedProjectCanonicalKey,
             displayName: selectedProjectDisplayName
@@ -823,7 +849,25 @@ final class TraceModel: ObservableObject {
         return selectedProjectDisplayName ?? "Trace"
     }
 
+    func returnFromSession() {
+        let context = mainSearchReturnContext
+        let anchor = mainSearchReturnAnchor
+        clearSession()
+        if let context {
+            mainSearchReturnAnchor = anchor
+            let project = projects.first { $0.canonicalKey == context.canonicalKey }
+            selectedProjectID = project?.id ?? context.projectID
+            selectedProjectCanonicalKey = context.canonicalKey
+            selectedProjectDisplayName = project?.displayName ?? context.displayName
+            mainSearchNeedsRefresh = false
+            loadProjectSessions()
+        }
+    }
+
     func clearSession() {
+        mainSearchReturnContext = nil
+        hasSearchReturnContext = false
+        mainSearchReturnAnchor = nil
         mayRestoreSession = false
         invalidateSidebarRevealRequest()
         sessionRequestID = UUID()
@@ -844,6 +888,15 @@ final class TraceModel: ObservableObject {
     }
 
     private func prepareForIndexReset() {
+        if let context = mainSearchReturnContext {
+            selectedProjectCanonicalKey = context.canonicalKey
+            selectedProjectDisplayName = context.displayName
+        }
+        mainSearchReturnContext = nil
+        hasSearchReturnContext = false
+        mainSearchReturnAnchor = nil
+        resetSessionPagination()
+        sessionListProjectKey = selectedProjectCanonicalKey
         cancelAutomaticSearch()
         deferredUsageRepairTask?.cancel()
         deferredUsageRepairTask = nil
@@ -872,7 +925,7 @@ final class TraceModel: ObservableObject {
         recentSessions = []
         messages = []
         hydratedMessages = [:]
-        hydrationFailures = []
+        hydrationFailures = [:]
         hydrationOrder = []
         hydratingMessageIDs = [:]
         expandedReasoningIDs = []
@@ -921,51 +974,118 @@ final class TraceModel: ObservableObject {
     }
 
     private func loadProjectSessions(ensuring ensuringSessionID: Int64? = nil) {
+        if sessionListProjectKey != selectedProjectCanonicalKey {
+            resetSessionPagination()
+        }
+        sessionListProjectKey = selectedProjectCanonicalKey
         let request = UUID()
         projectRequestID = request
         let projectCanonicalKey = selectedProjectCanonicalKey
-        sessions = []
-        guard let database else { return }
+        isLoadingSessions = true
+        sessionListError = nil
+        guard let database else { isLoadingSessions = false; return }
         Task {
-            let rows = await projectSessions(
-                canonicalKey: projectCanonicalKey,
-                ensuring: ensuringSessionID,
-                database: database
-            )
-            guard projectRequestID == request,
-                  selectedProjectCanonicalKey == projectCanonicalKey else { return }
-            sessions = rows
-        }
-    }
-
-    private func projectSessions(
-        canonicalKey: String?,
-        ensuring sessionID: Int64? = nil,
-        database: IndexDatabase
-    ) async -> [SessionSummary] {
-        let lookup = await lookupSession(id: sessionID, database: database)
-        return await projectSessions(
-            canonicalKey: canonicalKey, ensuring: lookup.session, database: database
-        )
-    }
-
-    private func projectSessions(
-        canonicalKey: String?,
-        ensuring session: SessionSummary?,
-        database: IndexDatabase
-    ) async -> [SessionSummary] {
-        var rows = (try? await database.sessions(projectCanonicalKey: canonicalKey)) ?? []
-        if let session, !rows.contains(where: { $0.id == session.id }),
-           session.projectCanonicalKey == canonicalKey {
-            rows.append(session)
-            rows.sort {
-                if $0.lastActivityMilliseconds != $1.lastActivityMilliseconds {
-                    return $0.lastActivityMilliseconds > $1.lastActivityMilliseconds
-                }
-                return $0.id > $1.id
+            defer { if projectRequestID == request { isLoadingSessions = false } }
+            do {
+                let page = try await projectSessions(
+                    canonicalKey: projectCanonicalKey, ensuring: ensuringSessionID, database: database
+                )
+                guard projectRequestID == request, selectedProjectCanonicalKey == projectCanonicalKey else { return }
+                applySessionPages(page)
+            } catch {
+                guard projectRequestID == request else { return }
+                sessionListError = error.localizedDescription
             }
         }
-        return rows
+    }
+
+    private func resetSessionPagination() {
+        sessions = []
+        totalSessionCount = 0
+        nextSessionCursor = nil
+        hasMoreSessions = false
+        loadedSessionPageCount = 1
+        sessionListRevision = UUID()
+        sessionListError = nil
+        isLoadingSessions = false
+    }
+
+    private func applySessionPages(_ page: LoadedSessionPages) {
+        sessions = page.sessions
+        totalSessionCount = page.total
+        nextSessionCursor = page.nextCursor
+        hasMoreSessions = page.nextCursor != nil
+        loadedSessionPageCount = page.pageCount
+        sessionListRevision = UUID()
+        sessionListError = nil
+    }
+
+    func loadMoreSessions() {
+        guard !isLoadingSessions else { return }
+        guard let cursor = nextSessionCursor, let database else {
+            if sessionListError != nil { loadProjectSessions(ensuring: selectedSessionID) }
+            return
+        }
+        let key = selectedProjectCanonicalKey
+        let request = projectRequestID
+        let revision = sessionListRevision
+        isLoadingSessions = true
+        sessionListError = nil
+        Task {
+            defer { if projectRequestID == request { isLoadingSessions = false } }
+            do {
+                let page = try await database.sessionsPage(projectCanonicalKey: key, cursor: cursor)
+                if let delay = TraceTestHooks.delayMilliseconds(
+                    for: "TRACE_TEST_SESSION_PAGE_DELAY_MS", cappedAt: 5_000,
+                    marker: .touch(pathKey: "TRACE_TEST_SESSION_PAGE_STARTED_PATH")
+                ) {
+                    try await Task.sleep(for: .milliseconds(delay))
+                    TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_PAGE_FINISHED_PATH")
+                }
+                guard projectRequestID == request, sessionListRevision == revision,
+                      selectedProjectCanonicalKey == key else { return }
+                let existing = Set(sessions.map(\.id))
+                sessions.append(contentsOf: page.sessions.filter { !existing.contains($0.id) })
+                sessions.sort { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }
+                totalSessionCount = page.totalCount
+                nextSessionCursor = page.nextCursor
+                hasMoreSessions = page.nextCursor != nil
+                loadedSessionPageCount += 1
+                sessionListRevision = UUID()
+            } catch {
+                guard projectRequestID == request, sessionListRevision == revision else { return }
+                sessionListError = error.localizedDescription
+            }
+        }
+    }
+
+    private func projectSessions(canonicalKey: String?, ensuring sessionID: Int64? = nil,
+                                 database: IndexDatabase) async throws -> LoadedSessionPages {
+        let lookup = await lookupSession(id: sessionID, database: database)
+        return try await projectSessions(canonicalKey: canonicalKey, ensuring: lookup.session, database: database)
+    }
+
+    private func projectSessions(canonicalKey: String?, ensuring session: SessionSummary?,
+                                 database: IndexDatabase) async throws -> LoadedSessionPages {
+        let pageBudget = sessionListProjectKey == canonicalKey ? loadedSessionPageCount : 1
+        var cursor: SessionCursor?
+        var rows: [SessionSummary] = []
+        var total = 0
+        var fetched = 0
+        repeat {
+            let page = try await database.sessionsPage(projectCanonicalKey: canonicalKey, cursor: cursor)
+            rows.append(contentsOf: page.sessions)
+            total = page.totalCount
+            cursor = page.nextCursor
+            fetched += 1
+        } while cursor != nil && fetched < pageBudget
+        if let session, !rows.contains(where: { $0.id == session.id }), session.projectCanonicalKey == canonicalKey {
+            rows.append(session)
+        }
+        var seen = Set<Int64>()
+        rows = rows.filter { seen.insert($0.id).inserted }
+        rows.sort { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }
+        return .init(sessions: rows, total: total, nextCursor: cursor, pageCount: fetched)
     }
 
     private func lookupSession(
@@ -979,7 +1099,8 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil) {
+    func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil, preservingMainSearch: Bool = false) {
+        if !preservingMainSearch { mainSearchReturnContext = nil; hasSearchReturnContext = false; mainSearchReturnAnchor = nil }
         mayRestoreSession = false
         if sidebarRevealRequest?.sessionID != sessionID {
             invalidateSidebarRevealRequest()
@@ -1004,10 +1125,10 @@ final class TraceModel: ObservableObject {
         hydrationOrder.removeAll(keepingCapacity: true)
         hydratingMessageIDs.removeAll(keepingCapacity: true)
         expandedReasoningIDs.removeAll()
-        mainSearch.query = ""
-        mainSearchNeedsRefresh = false
-        syncMainSearchProjectFilter()
-        mainSearch.search(sort: settings.searchSort)
+        if !preservingMainSearch {
+            mainSearchNeedsRefresh = !mainSearch.query.isEmpty
+            syncMainSearchProjectFilter()
+        }
         guard let database else { return }
         Task {
             let session = try? await database.session(id: sessionID)
@@ -1016,7 +1137,7 @@ final class TraceModel: ObservableObject {
             selectedSession = session
             if let session,
                adoptProjectIdentity(from: session) {
-                syncMainSearchProjectFilter()
+                if !preservingMainSearch { syncMainSearchProjectFilter() }
                 loadProjectSessions(ensuring: sessionID)
             }
             messages = rows
@@ -1038,14 +1159,23 @@ final class TraceModel: ObservableObject {
         selectSession(session.id, showWindow: true)
     }
 
-    func openSearchResult(_ result: SearchResult) {
+    func openSearchResult(_ result: SearchResult, fromMainSearch: Bool = false, anchor: SearchResultAnchor? = nil) {
+        if fromMainSearch {
+            cancelAutomaticSearch()
+            mainSearch.suspendForNavigation()
+            mainSearchReturnContext = .init(projectID: selectedProjectID,
+                                           canonicalKey: selectedProjectCanonicalKey,
+                                           displayName: selectedProjectDisplayName)
+            hasSearchReturnContext = true
+            mainSearchReturnAnchor = anchor
+        }
         prepareExternalSessionSelection(
             projectID: result.projectID,
             projectCanonicalKey: result.projectCanonicalKey,
             projectDisplayName: result.projectName,
             sessionID: result.sessionID
         )
-        selectSession(result.sessionID, showWindow: true, messageID: result.id)
+        selectSession(result.sessionID, showWindow: true, messageID: result.id, preservingMainSearch: fromMainSearch)
     }
 
     private func prepareExternalSessionSelection(
@@ -1182,13 +1312,13 @@ final class TraceModel: ObservableObject {
             hydrationOrder.append(message.id)
             return
         }
-        guard let coordinator else { return }
+        guard hydrationFailures[message.id] == nil, let coordinator else { return }
         let request = sessionRequestID
         let generation = selectedSession?.sourceGeneration
-        if let active = hydratingMessageIDs[message.id], active.session == request, active.generation == generation { return }
-        let active = HydrationRequest(session: request, generation: generation)
+        let sourcePath = selectedSession?.sourcePath
+        if let active = hydratingMessageIDs[message.id], active.session == request, active.generation == generation, active.sourcePath == sourcePath { return }
+        let active = HydrationRequest(session: request, generation: generation, sourcePath: sourcePath)
         hydratingMessageIDs[message.id] = active
-        if hydrationFailures.contains(message.id) { hydrationFailures.remove(message.id) }
         Task {
             defer {
                 if hydratingMessageIDs[message.id]?.token == active.token {
@@ -1198,6 +1328,10 @@ final class TraceModel: ObservableObject {
             }
             let start = ContinuousClock.now
             do {
+                TraceTestHooks.appendLine(String(message.id), pathKey: "TRACE_TEST_HYDRATION_REQUESTS_PATH")
+                if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_HYDRATION_ONCE") {
+                    throw SessionSourceError.unreadableFile("Synthetic read failure")
+                }
                 if let delay = TraceTestHooks.delayMilliseconds(
                     for: "TRACE_TEST_TRANSCRIPT_HYDRATION_DELAY_MS",
                     marker: .line(String(message.id), pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_STARTED_PATH")
@@ -1208,7 +1342,8 @@ final class TraceModel: ObservableObject {
                 }
                 let hydrated = try await coordinator.hydrate(message)
                 TraceTestHooks.appendLine(String(message.id), pathKey: "TRACE_TEST_TRANSCRIPT_HYDRATION_COMPLETED_PATH")
-                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation else { return }
+                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation,
+                      selectedSession?.sourcePath == sourcePath else { return }
                 var cache = hydratedMessages
                 cache[message.id] = hydrated
                 hydrationOrder.removeAll { $0 == message.id }
@@ -1223,11 +1358,16 @@ final class TraceModel: ObservableObject {
                     + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
                 try? await diagnostics.recordOpen(hydrationMilliseconds: milliseconds)
             } catch {
-                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation else { return }
-                hydrationFailures.insert(message.id)
-                startupError = "Could not read source message: \(error.localizedDescription)"
+                guard sessionRequestID == request, selectedSession?.sourceGeneration == generation,
+                      selectedSession?.sourcePath == sourcePath else { return }
+                hydrationFailures[message.id] = error.localizedDescription
             }
         }
+    }
+
+    func retryHydration(_ message: MessageSummary) {
+        hydrationFailures.removeValue(forKey: message.id)
+        hydrate(message)
     }
 
     func revealSelectedSession() {
@@ -1756,7 +1896,8 @@ final class TraceModel: ObservableObject {
         let loadedSelectedSession = await lookupSession(
             id: ensuredSessionID, database: database
         )
-        let loadedSessions = await projectSessions(
+        let pageRevision = sessionListRevision
+        let loadedSessions = try? await projectSessions(
             canonicalKey: projectCanonicalKey,
             ensuring: loadedSelectedSession.session,
             database: database
@@ -1777,7 +1918,7 @@ final class TraceModel: ObservableObject {
                 in: loadedProjects,
                 missingProject: projectReconciliation.globalMissingProjectPolicy
             )
-            mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+            mainProjectFilterReconciliation = hasSearchReturnContext ? .unchanged : mainSearch.resolveProjectFilter(
                 in: loadedProjects,
                 missingProject: projectReconciliation.mainMissingProjectPolicy
             )
@@ -1794,7 +1935,7 @@ final class TraceModel: ObservableObject {
                 globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
                     in: projects, missingProject: .retain
                 )
-                mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+                mainProjectFilterReconciliation = hasSearchReturnContext ? .unchanged : mainSearch.resolveProjectFilter(
                     in: projects, missingProject: .retain
                 )
             }
@@ -1811,8 +1952,10 @@ final class TraceModel: ObservableObject {
             scheduleAutomaticSearch()
         }
         if selectedProjectCanonicalKey == projectCanonicalKey,
-           projectRequestID == projectRequest {
-            sessions = loadedSessions
+           projectRequestID == projectRequest, sessionListRevision == pageRevision,
+           let loadedSessions {
+            sessionListProjectKey = projectCanonicalKey
+            applySessionPages(loadedSessions)
         }
         if projectReconciliation != .ongoing,
            let reveal = sidebarRevealRequest {
@@ -1836,6 +1979,7 @@ final class TraceModel: ObservableObject {
             let loadedSession = loadedSelectedSession.session
             if let loadedSession {
                 let changed = selectedSession?.sourceGeneration != loadedSession.sourceGeneration
+                    || selectedSession?.sourcePath != loadedSession.sourcePath
                 selectedSession = loadedSession
                 if changed || loadedSession.messageCount != messages.count {
                     let rows = (try? await database.messages(sessionID: sessionID)) ?? []
@@ -1852,7 +1996,7 @@ final class TraceModel: ObservableObject {
                     }
                 }
             } else {
-                clearSession()
+                returnFromSession()
             }
         }
         if lightweight || summaryRequestID != refresh { return }

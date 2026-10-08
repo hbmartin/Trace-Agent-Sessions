@@ -31,3 +31,19 @@ Trace treats agent session files as read-only, versionless external formats. Ada
 ## Drift policy
 
 Malformed individual records are skipped while complete neighboring records remain indexable. File-level read failures are surfaced in Source Health. Synthetic fixtures cover known variants, unknown fields, failures, duplicate usage, and both Gemini layouts; local real-corpus checks are opt-in through `TraceBench`.
+
+## Timestamp recovery
+
+Adapters carry the last valid timestamp through each source stream, including
+metadata and non-displayable records. Missing or malformed timestamps inherit
+that value. Before the first valid timestamp, records use the file mtime captured
+when that content is first indexed; byte offsets and message ordinals never
+change dates. The fallback and last valid timestamp are committed with the byte
+checkpoint, so appends and restarts preserve the same context. Replacing source
+contents resets it. A full rebuild can change the fallback for wholly undated
+files, which have no known event date.
+
+Codex message identities include the response-item type, so a tool call and its
+output can share a call ID without either being discarded. Gemini info, warning,
+and error messages use the system role; error messages also mark the session as
+having an error. Unknown Gemini types are skipped.

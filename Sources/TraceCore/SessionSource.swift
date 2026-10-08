@@ -12,6 +12,9 @@ public protocol SessionSource: Sendable {
     func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error>
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error>
+    /// Reads from a committed boundary using its durable identity and timestamp context.
+    /// The default implementation bridges sources implementing the existing overloads.
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error>
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage
 }
 
@@ -197,6 +200,11 @@ public enum SessionSourceError: LocalizedError, Sendable {
 }
 
 public extension SessionSource {
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+                 initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialSessionID: initialContext.sessionID)
+    }
+
     func discoverResult(scopedTo paths: Set<String>? = nil) throws -> DiscoveryResult {
         .init(files: try paths.map(discover(scopedTo:)) ?? discover())
     }

@@ -388,6 +388,16 @@ final class SessionSearchModel: ObservableObject {
             + "cursor:\(cursor == nil ? "none" : "present")"
     }
 
+    func suspendForNavigation() {
+        task?.cancel()
+        task = nil
+        requestID = UUID()
+        isSearching = false
+        loadingAdditionalPage = false
+        activeTaskIsReset = false
+        pendingLoadMore = false
+    }
+
     func resetForIndexReset(awaitsProjectResolution: Bool = false) {
         task?.cancel()
         task = nil

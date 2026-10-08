@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import TraceCore
 
 final class TraceCoreTests: XCTestCase {
@@ -347,7 +348,7 @@ final class TraceCoreTests: XCTestCase {
         XCTAssertEqual(usage.reduce(0) { $0 + $1.outputTokens }, 6)
     }
 
-    func testMissingTimestampsUseStableFileMtimeAndRecordOffset() async throws {
+    func testMissingTimestampsUseFixedFileMtime() async throws {
         let directory = try temporaryDirectory()
         let codexRoot = directory.appendingPathComponent("codex")
         let claudeRoot = directory.appendingPathComponent("claude")
@@ -374,7 +375,7 @@ final class TraceCoreTests: XCTestCase {
         let codexMessage = try XCTUnwrap(codexMessages.first)
         XCTAssertEqual(
             codexMessage.timestampMilliseconds,
-            TraceFileIO.modificationMilliseconds(url: codexFile) + (codexMessage.locator.offset ?? 0)
+            TraceFileIO.modificationMilliseconds(url: codexFile)
         )
 
         let claudeSource = ClaudeCodeSource(roots: [claudeRoot])
@@ -563,5 +564,407 @@ private final class ProgressErrorRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return total
+    }
+}
+
+extension TraceCoreTests {
+    func testTimestampOnlyCheckpointsResumeAllJSONLAdapters() async throws {
+        let directory = try temporaryDirectory()
+        let timestamp: Int64 = 1_700_006_399_000
+        for format in [SourceFormat.claudeJSONL, .codexJSONL, .geminiJSONL] {
+            let root = directory.appendingPathComponent(format.rawValue)
+            let parent = format == .geminiJSONL ? root.appendingPathComponent("project/chats") : root
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            let file = parent.appendingPathComponent(format == .codexJSONL ? "rollout-context.jsonl" : "session-context.jsonl")
+            var metadata: [String: Any] = ["type": "unknown_metadata", "timestamp": timestamp]
+            if format == .codexJSONL {
+                metadata = ["type": "session_meta", "payload": ["id": "context", "cwd": "/tmp/context", "timestamp": timestamp]]
+            } else if format == .geminiJSONL { metadata["sessionId"] = "context" }
+            let initial = try JSONSerialization.data(withJSONObject: metadata) + Data([10])
+            try initial.write(to: file)
+            let source: any SessionSource
+            switch format {
+            case .claudeJSONL: source = ClaudeCodeSource(roots: [root])
+            case .codexJSONL: source = CodexSource(root: root)
+            default: source = GeminiSource(root: root)
+            }
+            let url = root.appendingPathComponent("index.sqlite")
+            let database = try IndexDatabase(url: url)
+            await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .everything)
+            let state = try await database.sourceState(agent: source.agent, path: file.path)
+            XCTAssertEqual(state?.scannedBytes, Int64(initial.count), format.rawValue)
+            XCTAssertEqual(state?.lastValidTimestampMilliseconds, timestamp, format.rawValue)
+            let firstSessions = try await database.sessions()
+            XCTAssertTrue(firstSessions.allSatisfy { $0.messageCount == 0 })
+            let message: [String: Any]
+            if format == .codexJSONL {
+                message = ["type": "response_item", "timestamp": "invalid", "payload": ["type": "message", "id": "undated", "role": "user", "content": "undated"]]
+            } else if format == .geminiJSONL {
+                message = ["$set": ["messages": [["id": "undated", "type": "user", "timestamp": "invalid", "content": "undated"]]]]
+            } else {
+                message = ["type": "user", "uuid": "undated", "sessionId": "context", "timestamp": "invalid", "message": ["content": "undated"]]
+            }
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: JSONSerialization.data(withJSONObject: message) + Data([10]))
+            try handle.close()
+            let reopened = try IndexDatabase(url: url)
+            await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .everything)
+            let sessions = try await reopened.sessions()
+            let session = try XCTUnwrap(sessions.first)
+            let messages = try await reopened.messages(sessionID: session.id)
+            XCTAssertEqual(messages.map(\.timestampMilliseconds), [timestamp], format.rawValue)
+        }
+    }
+
+    func testPunctuationOnlyTermsDoNotPoisonSearch() async throws {
+        for query in ["foo ->", "-> foo ::", "foo &&", "foo \"->\"", "foo \\&\\&", "foo \u{0301}"] {
+            XCTAssertEqual(FTSQueryParser.parse(query), "\"foo\"*")
+        }
+        for query in ["-> :: &&", "\"&&\"", "🙂", "\\", "\u{0301}", "\"\u{0301}\""] { XCTAssertNil(FTSQueryParser.parse(query)) }
+        XCTAssertEqual(FTSQueryParser.parse("修复 123 ->"), "\"修复\"* AND \"123\"*")
+        XCTAssertEqual(FTSQueryParser.parse("foo \"exact phrase\""), "\"foo\"* AND \"exact phrase\"")
+        let root = try temporaryDirectory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data(#"{"type":"user","uuid":"one","sessionId":"s","cwd":"/tmp/search","timestamp":1700000000000,"message":{"content":"foo exact phrase"}}"#.utf8).write(to: file)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data([10])); try handle.close()
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]).indexAll(scope: .proseOnly)
+        for query in ["foo", "foo ->", "foo ::", "foo &&"] {
+            let page = try await database.search(query: query)
+            XCTAssertEqual(page.results.count, 1)
+        }
+    }
+
+    func testAllAdaptersCarryTimestampAcrossIgnoredAndMalformedRecords() async throws {
+        XCTAssertNil(JSONHelpers.explicitTimestampMilliseconds(Int64.min))
+        XCTAssertNil(JSONHelpers.explicitTimestampMilliseconds(Double.infinity))
+        let directory = try temporaryDirectory()
+        let mtime: Int64 = 1_800_000_000_000
+        let historical: Int64 = 1_700_006_399_000
+        let large = String(repeating: "padding ", count: 20_000)
+        for format in [SourceFormat.claudeJSONL, .codexJSONL, .geminiJSONL, .geminiJSON] {
+            let root = directory.appendingPathComponent(format.rawValue)
+            let parent = format == .geminiJSON || format == .geminiJSONL ? root.appendingPathComponent("project/chats") : root
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            let file = parent.appendingPathComponent(format == .codexJSONL ? "rollout-time.jsonl" : "session-time.\(format == .geminiJSON ? "json" : "jsonl")")
+            func message(_ id: String, timestamp: Any? = nil) -> [String: Any] {
+                var value: [String: Any]
+                if format == .codexJSONL {
+                    value = ["type": "response_item", "payload": ["type": "message", "id": id, "role": "user", "content": id == "first" ? large : id]]
+                } else if format == .claudeJSONL {
+                    value = ["type": "user", "uuid": id, "sessionId": "s", "cwd": "/tmp/time", "message": ["content": id == "first" ? large : id]]
+                } else {
+                    value = ["type": "user", "id": id, "content": id == "first" ? large : id]
+                }
+                if let timestamp { value["timestamp"] = timestamp }
+                return value
+            }
+            let ignored: [String: Any] = ["type": "unknown_metadata", "timestamp": historical]
+            let records = [message("first"), ignored, message("second"),
+                           message("third", timestamp: "invalid-date"), message("fourth", timestamp: true)]
+            var data = Data()
+            if format == .geminiJSON {
+                data = try JSONSerialization.data(withJSONObject: ["sessionId": "s", "messages": records])
+            } else {
+                if format == .codexJSONL {
+                    data.append(try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": "s", "cwd": "/tmp/time"]])); data.append(10)
+                }
+                for record in records {
+                    let object: [String: Any] = format == .geminiJSONL ? ["sessionId": "s", "$set": ["messages": [record]]] : record
+                    data.append(try JSONSerialization.data(withJSONObject: object)); data.append(10)
+                }
+            }
+            try data.write(to: file)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(mtime) / 1_000)], ofItemAtPath: file.path)
+            let source: any SessionSource
+            switch format {
+            case .claudeJSONL: source = ClaudeCodeSource(roots: [root])
+            case .codexJSONL: source = CodexSource(root: root)
+            default: source = GeminiSource(root: root)
+            }
+            let discovered = try XCTUnwrap(try source.discover().first)
+            let parsed = messages(in: try await collect(source.records(in: discovered, from: 0)))
+            XCTAssertEqual(parsed.map(\.timestampMilliseconds), [mtime, historical, historical, historical], format.rawValue)
+            if format != .geminiJSON {
+                let messageOffset = try XCTUnwrap(parsed[1].locator.offset)
+                let offset = format == .geminiJSONL
+                    ? Int64(data.prefix(Int(messageOffset)).lastIndex(of: 10).map { $0 + 1 } ?? 0)
+                    : messageOffset
+                let resumed = messages(in: try await collect(source.records(in: discovered, from: offset)))
+                XCTAssertEqual(resumed.map(\.timestampMilliseconds), [historical, historical, historical], "direct offset \(format)")
+            }
+        }
+    }
+
+    func testTimestampCheckpointSurvivesAppendRestartAndRewrite() async throws {
+        let root = try temporaryDirectory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let url = root.appendingPathComponent("index.sqlite")
+        let timestamp: Int64 = 1_700_006_399_000
+        func row(_ id: String, timestamp: Int64? = nil) throws -> Data {
+            var object: [String: Any] = ["type": "assistant", "uuid": id, "sessionId": "s", "cwd": "/tmp/time",
+                "message": ["id": id, "model": "claude-sonnet-5", "content": id, "usage": ["input_tokens": 3, "output_tokens": 1]]]
+            if let timestamp { object["timestamp"] = timestamp }
+            var data = try JSONSerialization.data(withJSONObject: object); data.append(10); return data
+        }
+        var initial = try row("first", timestamp: timestamp)
+        initial.append(try row("missing"))
+        try initial.write(to: file)
+        let source = ClaudeCodeSource(roots: [root])
+        let database = try IndexDatabase(url: url)
+        await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .everything)
+        let state = try await database.sourceState(agent: .claudeCode, path: file.path)
+        XCTAssertEqual(state?.lastValidTimestampMilliseconds, timestamp)
+        XCTAssertEqual(state?.scannedBytes, Int64(initial.count))
+        let handle = try FileHandle(forWritingTo: file); try handle.seekToEnd()
+        try handle.write(contentsOf: row("appended")); try handle.close()
+        let reopened = try IndexDatabase(url: url)
+        await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .everything)
+        let sessionRows = try await reopened.sessions()
+        let session = try XCTUnwrap(sessionRows.first)
+        let values = try await reopened.messages(sessionID: session.id)
+        XCTAssertEqual(values.map(\.timestampMilliseconds), [timestamp, timestamp, timestamp])
+        let cold = try IndexDatabase(url: root.appendingPathComponent("cold.sqlite"))
+        await IndexCoordinator(database: cold, sources: [source]).indexAll(scope: .everything)
+        let coldSessionRows = try await cold.sessions()
+        let coldSession = try XCTUnwrap(coldSessionRows.first)
+        let coldValues = try await cold.messages(sessionID: coldSession.id)
+        XCTAssertEqual(coldValues.map(\.timestampMilliseconds), values.map(\.timestampMilliseconds))
+        try await reopened.rebuildUsageRollupsIfDirty(timeZoneID: "UTC")
+        let usage = try await reopened.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
+        XCTAssertEqual(usage.count, 1)
+        XCTAssertEqual(usage.first?.day, "2023-11-14", "undated usage must remain before midnight")
+        XCTAssertEqual(usage.first?.inputTokens, 9)
+        try row("replacement").write(to: file, options: .atomic)
+        await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .everything)
+        let replaced = try await reopened.sourceState(agent: .claudeCode, path: file.path)
+        XCTAssertNil(replaced?.lastValidTimestampMilliseconds)
+        let replacedSessionRows = try await reopened.sessions()
+        let replacedSession = try XCTUnwrap(replacedSessionRows.first)
+        let replacement = try await reopened.messages(sessionID: replacedSession.id)
+        XCTAssertEqual(replacement.first?.timestampMilliseconds, replaced?.fallbackTimestampMilliseconds)
+    }
+
+    func testUndatedFileFallbackDoesNotChangeOnAppend() async throws {
+        let root = try temporaryDirectory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data("{\"type\":\"user\",\"uuid\":\"one\",\"sessionId\":\"s\",\"message\":{\"content\":\"one\"}}\n".utf8).write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: file.path)
+        let source = ClaudeCodeSource(roots: [root])
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let handle = try FileHandle(forWritingTo: file); try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"user\",\"uuid\":\"two\",\"sessionId\":\"s\",\"message\":{\"content\":\"two\"}}\n".utf8)); try handle.close()
+        await coordinator.indexAll(scope: .proseOnly)
+        let sessionRows = try await database.sessions()
+        let session = try XCTUnwrap(sessionRows.first)
+        let values = try await database.messages(sessionID: session.id)
+        XCTAssertEqual(values.map(\.timestampMilliseconds), [1_700_000_000_000, 1_700_000_000_000])
+    }
+
+    func testInitiallyEmptySourcesKeepFallbackAcrossAppendAndRestart() async throws {
+        let directory = try temporaryDirectory()
+        let fallback: Int64 = 1_700_000_000_000
+        for format in [SourceFormat.claudeJSONL, .codexJSONL, .geminiJSONL] {
+            let root = directory.appendingPathComponent(format.rawValue)
+            let parent = format == .geminiJSONL ? root.appendingPathComponent("project/chats") : root
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            let file = parent.appendingPathComponent(format == .codexJSONL ? "rollout-empty.jsonl" : "session-empty.jsonl")
+            try Data().write(to: file)
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: Double(fallback) / 1_000)], ofItemAtPath: file.path
+            )
+            let source: any SessionSource
+            let message: [String: Any]
+            switch format {
+            case .claudeJSONL:
+                source = ClaudeCodeSource(roots: [root])
+                message = ["type": "user", "uuid": "one", "sessionId": "s", "message": ["content": "first append"]]
+            case .codexJSONL:
+                source = CodexSource(root: root)
+                message = ["type": "response_item", "payload": ["type": "message", "id": "one", "role": "user",
+                    "content": [["type": "input_text", "text": "first append"]]]]
+            default:
+                source = GeminiSource(root: root)
+                message = ["messages": [["type": "user", "id": "one", "content": "first append"]]]
+            }
+            let url = root.appendingPathComponent("index.sqlite")
+            let database = try IndexDatabase(url: url)
+            await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .proseOnly)
+            let initial = try await database.sourceState(agent: source.agent, path: file.path)
+            XCTAssertEqual(initial?.scannedBytes, 0, format.rawValue)
+            XCTAssertEqual(initial?.fallbackTimestampMilliseconds, fallback, format.rawValue)
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: JSONSerialization.data(withJSONObject: message) + Data([10]))
+            try handle.close()
+            let reopened = try IndexDatabase(url: url)
+            await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .proseOnly)
+            let sessionRows = try await reopened.sessions()
+            let session = try XCTUnwrap(sessionRows.first)
+            let values = try await reopened.messages(sessionID: session.id)
+            XCTAssertEqual(values.map(\.timestampMilliseconds), [fallback], format.rawValue)
+        }
+    }
+
+    func testGeminiSnapshotKeepsFallbackOnAppendButResetsOnRewrite() async throws {
+        let root = try temporaryDirectory()
+        let chats = root.appendingPathComponent("project/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let file = chats.appendingPathComponent("session-undated.json")
+        func document(_ contents: [String]) throws -> Data {
+            let messages = contents.enumerated().map { index, content in
+                ["id": "\(index)", "type": "user", "content": content]
+            }
+            return try JSONSerialization.data(withJSONObject: ["sessionId": "undated", "messages": messages], options: .sortedKeys)
+        }
+        let original = String(repeating: "original undated message ", count: 1_000)
+        try document([original]).write(to: file)
+        let fallback: Int64 = 1_700_000_000_000
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: Double(fallback) / 1_000)], ofItemAtPath: file.path
+        )
+        let source = GeminiSource(root: root)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .proseOnly)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n  \n".utf8))
+        try handle.close()
+        let reopened = try IndexDatabase(url: url)
+        await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .proseOnly)
+        let sessionRows = try await reopened.sessions()
+        let session = try XCTUnwrap(sessionRows.first)
+        let values = try await reopened.messages(sessionID: session.id)
+        XCTAssertEqual(values.map(\.timestampMilliseconds), [fallback])
+        // A growing snapshot rewrite can share its old 4 KiB prefix and inode.
+        try document([original, "added undated message"]).write(to: file)
+        let rewriteFallback: Int64 = 1_750_000_000_000
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: Double(rewriteFallback) / 1_000)], ofItemAtPath: file.path
+        )
+        await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .proseOnly)
+        let rewrittenRows = try await reopened.sessions()
+        let rewrittenSession = try XCTUnwrap(rewrittenRows.first)
+        let rewritten = try await reopened.messages(sessionID: rewrittenSession.id)
+        XCTAssertEqual(rewritten.map(\.timestampMilliseconds), [rewriteFallback, rewriteFallback])
+        try document(["replacement undated message"]).write(to: file, options: .atomic)
+        let replacementFallback: Int64 = 1_800_000_000_000
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: Double(replacementFallback) / 1_000)], ofItemAtPath: file.path
+        )
+        await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .proseOnly)
+        let replacementRows = try await reopened.sessions()
+        let replacementSession = try XCTUnwrap(replacementRows.first)
+        let replacement = try await reopened.messages(sessionID: replacementSession.id)
+        XCTAssertEqual(replacement.map(\.timestampMilliseconds), [replacementFallback])
+    }
+
+    func testCodexCallAndOutputHaveSeparateStableSourceKeys() async throws {
+        let root = try temporaryDirectory()
+        let file = root.appendingPathComponent("rollout-tools.jsonl")
+        let contents = """
+        {"type":"session_meta","timestamp":1700000000000,"payload":{"id":"s","cwd":"/tmp/tools"}}
+        {"type":"response_item","payload":{"type":"function_call","call_id":"call","name":"exec_command","arguments":"pwd"}}
+        {"type":"response_item","payload":{"type":"function_call_output","call_id":"call","output":"preserved output"}}
+        {"type":"response_item","payload":{"type":"function_call_output","call_id":"call","output":"preserved output"}}
+
+        """
+        try Data(contents.utf8).write(to: file)
+        let source = CodexSource(root: root)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .everything)
+        let sessionRows = try await database.sessions()
+        let session = try XCTUnwrap(sessionRows.first)
+        let values = try await database.messages(sessionID: session.id)
+        XCTAssertEqual(values.map(\.role), [.toolUse, .toolResult])
+        let call = try await coordinator.hydrate(try XCTUnwrap(values.first))
+        XCTAssertEqual(call.toolName, "exec_command")
+        XCTAssertTrue(call.sections.toolInvocation.contains("pwd"))
+        let hydrated = try await coordinator.hydrate(try XCTUnwrap(values.last))
+        XCTAssertEqual(hydrated.sections.toolOutput, "preserved output")
+        let page = try await database.search(query: "preserved")
+        XCTAssertEqual(page.results.count, 1)
+    }
+
+    func testGeminiDiagnosticsUseSystemRoleAndMarkErrors() async throws {
+        let root = try temporaryDirectory()
+        let chats = root.appendingPathComponent("project/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        let file = chats.appendingPathComponent("session-diagnostics.json")
+        let objects = ["user", "gemini", "assistant", "info", "warning", "error", "future_type"].map {
+            ["id": $0, "type": $0, "content": "diagnostic \($0)", "timestamp": "2026-09-14T23:59:59Z"]
+        }
+        try JSONSerialization.data(withJSONObject: ["sessionId": "s", "messages": objects]).write(to: file)
+        let source = GeminiSource(root: root)
+        let parsed = messages(in: try await collect(source.records(in: try XCTUnwrap(try source.discover().first), from: 0)))
+        XCTAssertEqual(parsed.map(\.role), [.user, .assistant, .assistant, .system, .system, .system])
+        XCTAssertEqual(parsed.map(\.hasError), [false, false, false, false, false, true])
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .proseOnly)
+        let errors = try await database.search(query: "diagnostic error", filters: .init(errorsOnly: true))
+        XCTAssertEqual(errors.results.count, 1)
+        XCTAssertEqual(errors.results.first?.role, .system)
+    }
+
+    func testSessionKeysetPagesCoverAllRowsAndRejectDifferentProject() async throws {
+        let root = try temporaryDirectory()
+        let file = root.appendingPathComponent("sessions.jsonl")
+        var data = Data()
+        for i in 0..<605 {
+            data.append(try JSONSerialization.data(withJSONObject: ["type": "user", "uuid": "m-\(i)", "sessionId": "s-\(i)",
+                "cwd": "/tmp/paged", "timestamp": 1_700_000_000_000 + i / 3, "message": ["content": "session \(i)"]]))
+            data.append(10)
+        }
+        try data.write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]).indexAll(scope: .proseOnly)
+        let projectRows = try await database.projects()
+        let project = try XCTUnwrap(projectRows.first)
+        var cursor: SessionCursor?
+        var rows: [SessionSummary] = []
+        repeat {
+            let page = try await database.sessionsPage(projectCanonicalKey: project.canonicalKey, cursor: cursor)
+            XCTAssertEqual(page.totalCount, 605)
+            XCTAssertLessThanOrEqual(page.sessions.count, 200)
+            rows += page.sessions
+            cursor = page.nextCursor
+        } while cursor != nil
+        XCTAssertEqual(rows.count, 605)
+        XCTAssertEqual(Set(rows.map(\.id)).count, 605)
+        XCTAssertEqual(rows.map(\.id), rows.sorted { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }.map(\.id))
+        let first = try await database.sessionsPage(projectCanonicalKey: project.canonicalKey)
+        do {
+            _ = try await database.sessionsPage(projectCanonicalKey: "/tmp/other", cursor: first.nextCursor)
+            XCTFail("A cursor must not cross project scopes")
+        } catch IndexDatabaseError.invalidSessionCursor {}
+    }
+
+    func testUsageSessionIndexAndV17UpgradeRebuildDerivedContent() async throws {
+        let root = try temporaryDirectory()
+        let url = root.appendingPathComponent("index.sqlite")
+        _ = try IndexDatabase(url: url)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
+            try db.execute(sql: "ALTER TABLE source_file DROP COLUMN fallback_ts")
+            try db.execute(sql: "ALTER TABLE source_file DROP COLUMN last_valid_ts")
+            try db.execute(sql: "DROP INDEX idx_usage_session")
+            try db.execute(sql: "UPDATE trace_meta SET value='17' WHERE key='schema_version'")
+            try db.execute(sql: "UPDATE trace_meta SET value='6' WHERE key='index_format_version'")
+        }
+        let upgraded = try IndexDatabase(url: url)
+        XCTAssertTrue(upgraded.contentWasResetOnOpen)
+        try await raw.read { db in
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"), "18")
+            let plan = try Row.fetchAll(db, sql: "EXPLAIN QUERY PLAN DELETE FROM session WHERE id=1").map { $0["detail"] as String }
+            XCTAssertTrue(plan.contains { $0.contains("idx_usage_session") })
+            XCTAssertFalse(plan.contains { $0.contains("SCAN usage_observation") })
+        }
     }
 }
