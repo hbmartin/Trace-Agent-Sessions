@@ -265,11 +265,22 @@ candidate during measurements. A subsequent code change requires a new frozen
 candidate and three fresh pairs.
 
 Attempts retain raw samples, signed memory growth, hashes, logs, and failed-run
-evidence. Missing cached dependencies are initialized after validating the root
-and existing dependencies; dependency drift is rejected. Interrupted attempts
-stop their owned process group and detached app/test executables under that
-attempt's derived-data directory, with bounded SIGINT, SIGTERM, and SIGKILL
-escalation. Unrelated processes and artifacts are preserved.
+evidence. Both entry points validate candidate drift before applying the recognized
+GRDB configuration and freezing inputs. Finder metadata does not change those inputs;
+unexpected build settings and sources still fail validation.
+
+New or incomplete baseline caches are prepared in a sibling staging directory under
+a cache-specific advisory lock. The cache is published only after dependency checkout,
+harness synchronization, configuration, and validation succeed. Interrupted staging
+trees and their external preparation records are preserved; the next attempt prepares
+a fresh tree. Missing and clone-without-checkout dependencies can recover this way;
+wrong revisions and modified initialized dependencies remain errors.
+
+Interrupted attempts stop their owned process group and detached app/test executables
+under that attempt's derived-data directory, with bounded SIGINT, SIGTERM, and SIGKILL
+escalation. Cancellation is deferred through cleanup and invalid host-record writing,
+then propagated with its original signal exit code. Unrelated processes and artifacts
+are preserved.
 
 The defaults are three attempts per pair, a five-minute quiet-desktop timeout,
 and a one-hour attempt timeout. Positive CLI overrides are `--max-attempts`,

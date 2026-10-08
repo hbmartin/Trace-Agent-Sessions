@@ -187,8 +187,19 @@ public enum TraceFileIO {
         )
     }
 
-    static func unsignedDevice(_ device: dev_t) -> UInt64 {
+    public static func unsignedDevice(_ device: dev_t) -> UInt64 {
         UInt64(UInt32(bitPattern: device))
+    }
+
+    /// Follow supported sidecar symlinks, but never read a device or named pipe.
+    static func requireRegularMetadataFile(_ url: URL) throws {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard info.st_mode & S_IFMT == S_IFREG else {
+            throw SessionSourceError.unreadableFile("\(url.path): metadata target is not a regular file")
+        }
     }
 }
 

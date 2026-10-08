@@ -347,9 +347,17 @@ sys.exit(23)
             root = Path(directory)
             candidate, baseline = self.baseline_fixture(root)
             scripts = candidate / 'Scripts'
-            for name in ['benchmark-transcript-comparison.sh', 'validate-benchmark-baseline.py', 'compare-transcript-scroll-metrics.py']:
+            for name in ['benchmark-transcript-comparison.sh', 'validate-benchmark-baseline.py', 'prepare-benchmark-baseline.py', 'compare-transcript-scroll-metrics.py']:
                 shutil.copy2(SCRIPTS / name, scripts / name)
-            (scripts / 'configure-grdb.sh').write_text('#!/bin/sh\nexit 0\n')
+            config = candidate / 'GRDBCustomSQLite/SQLiteLib-USER.xcconfig'
+            config.parent.mkdir(parents=True)
+            config.write_text('GRDB_SQLITE_ENABLE_FTS5 = YES\n')
+            (candidate / '.gitignore').write_text('Vendor/\n.DS_Store\n')
+            (scripts / 'configure-grdb.sh').write_text(
+                '#!/bin/sh\ncd "$(dirname "$0")/.."\n'
+                'mkdir -p Vendor/GRDB.swift/SQLiteCustom/src\n'
+                'cp GRDBCustomSQLite/SQLiteLib-USER.xcconfig Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig\n'
+                'printf metadata > Config/.DS_Store\n')
             fixture = root / 'fixture'
             fixture.mkdir()
             self.complete_reports(fixture)
@@ -422,6 +430,9 @@ sys.exit(23)
             root = Path(directory)
             candidate, _ = self.baseline_fixture(root)
             command = candidate / 'Scripts/benchmark-transcript-comparison.sh'
+            configure = candidate / 'Scripts/configure-grdb.sh'
+            configure.write_text('#!/bin/sh\nexit 0\n')
+            configure.chmod(0o755)
             command.write_text('#!/bin/sh\nmkdir -p "$TRACE_SCROLL_COMPARISON_OUTPUT_DIR/runs/run-failed"\n'
                                'printf "%s\\n" "$TRACE_SCROLL_COMPARISON_DERIVED_DATA_ROOT" > "$TRACE_SCROLL_COMPARISON_OUTPUT_DIR/derived-data-root.txt"\n'
                                'printf "build failed\\n"\nexit 23\n')

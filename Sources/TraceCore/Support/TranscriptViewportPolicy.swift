@@ -2,6 +2,9 @@ import Foundation
 
 /// Shared geometry decisions, independent of AppKit's asynchronous notifications.
 public enum TranscriptViewportPolicy {
+    public static func clampedRestoreOffset(_ offset: CGFloat, rowHeight: CGFloat) -> CGFloat {
+        max(offset, min(0, 1 - max(1, rowHeight)))
+    }
     public static func maximumOrigin(frameHeight: CGFloat, lastRowBottom: CGFloat, viewportHeight: CGFloat) -> CGFloat {
         max(0, max(frameHeight, lastRowBottom) - viewportHeight)
     }

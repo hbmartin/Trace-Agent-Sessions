@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run three uncontaminated local Release pairs, then apply local acceptance."""
 import argparse
+from contextlib import contextmanager
 import importlib.util
 import json
 import math
@@ -16,6 +17,23 @@ class RunInterrupted(BaseException):
     def __init__(self, signum):
         self.signum = signum
         super().__init__(f'Interrupted by signal {signum}')
+
+
+@contextmanager
+def defer_interruptions():
+    """Keep bounded cleanup and its evidence indivisible from cancellation."""
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    received = []
+    def deferred(signum, frame):
+        if not received:
+            received.append(signum)
+    try:
+        for sig in previous:
+            signal.signal(sig, deferred)
+        yield received
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def process_records():
@@ -125,6 +143,8 @@ def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600
         raise ValueError('Benchmark limits must be positive')
     output.mkdir(parents=True, exist_ok=False)
     candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    snapshot(root, candidate)  # Reject drift before applying the recognized dependency configuration.
+    subprocess.run([str(root / 'Scripts/configure-grdb.sh')], cwd=root, check=True)
     frozen = snapshot(root, candidate)
     write_json(output / 'candidate-inputs.json', frozen)
     pairs = []
@@ -171,21 +191,36 @@ def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600
             except BaseException as error:
                 failure = error
             finally:
-                if process is not None:
+                with defer_interruptions() as interruptions:
+                    cleanup_failure = None
                     try:
-                        stop_owned_processes(process, derived_data)
-                    except Exception as cleanup_error:
+                        if process is not None:
+                            stop_owned_processes(process, derived_data)
+                    except BaseException as cleanup_error:
+                        cleanup_failure = str(cleanup_error)
                         if failure is None: failure = cleanup_error
                         else: print(f'Benchmark cleanup failed: {cleanup_error}', file=sys.stderr, flush=True)
-                runs = list((destination / 'runs').glob('run-*'))
-                directory = runs[0] if len(runs) == 1 else destination
-                host = {'valid': failure is None and not observations and process is not None and process.returncode == 0,
-                        'sampleCount': samples, 'checkIntervalSeconds': 2, 'ownedDerivedDataPath': str(derived_data),
-                        'quietBeforeStartSeconds': 10, 'elapsedSeconds': time.monotonic() - started,
-                        'competingSessionObservations': observations,
-                        'processExitCode': process.returncode if process else None,
-                        'failure': str(failure) if failure else None}
-                write_json(directory / 'host-session-check.json', host)
+                    finally:
+                        runs = list((destination / 'runs').glob('run-*'))
+                        directory = runs[0] if len(runs) == 1 else destination
+                        host = {'valid': failure is None and not interruptions and not observations and process is not None and process.returncode == 0,
+                                'sampleCount': samples, 'checkIntervalSeconds': 2, 'ownedDerivedDataPath': str(derived_data),
+                                'quietBeforeStartSeconds': 10, 'elapsedSeconds': time.monotonic() - started,
+                                'competingSessionObservations': observations,
+                                'processExitCode': process.returncode if process else None,
+                                'failure': str(failure) if failure else None,
+                                'cleanupFailure': cleanup_failure}
+                        first_cancellation = (failure.signum if isinstance(failure, RunInterrupted) else
+                                              signal.SIGINT if isinstance(failure, KeyboardInterrupt) else
+                                              interruptions[0] if interruptions else None)
+                        if first_cancellation is not None:
+                            host.update(valid=False, interruptionSignal=first_cancellation)
+                        write_json(directory / 'host-session-check.json', host)
+                        if interruptions:
+                            host.update(valid=False, interruptionSignal=first_cancellation or interruptions[0])
+                            write_json(directory / 'host-session-check.json', host)
+                    if interruptions and not isinstance(failure, (KeyboardInterrupt, RunInterrupted)):
+                        failure = RunInterrupted(interruptions[0])
             if failure is not None:
                 if isinstance(failure, (KeyboardInterrupt, RunInterrupted)): raise failure
                 raise SystemExit(f'{failure}; evidence: {directory}; log: {log}') from failure

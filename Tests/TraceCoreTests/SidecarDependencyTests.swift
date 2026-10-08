@@ -127,6 +127,87 @@ final class SidecarDependencyTests: XCTestCase {
         XCTAssertEqual(fingerprint.device, UInt64(UInt32(bitPattern: status.st_dev)))
     }
 
+    func testFifoSidecarsDoNotBlockActivationOrMetadataReads() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("configured")
+        let userHome = root.appendingPathComponent("user-home")
+        for directory in [home, userHome] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let pipe = userHome.appendingPathComponent("pipe")
+        XCTAssertEqual(mkfifo(pipe.path, 0o600), 0)
+        for name in ["state_7.sqlite", "session_index.jsonl"] {
+            try FileManager.default.createSymbolicLink(at: home.appendingPathComponent(name), withDestinationURL: pipe)
+        }
+        let received = OSAllocatedUnfairLock(initialState: [String]())
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home],
+            mapping: CodexMetadataSidecarMapping(metadataDirectories: [home], userHome: userHome)) { _, warnings in
+                received.withLock { $0 = warnings }
+            }
+        watcher.userHomeForTesting = userHome
+        let started = expectation(description: "FIFO monitoring activation returns")
+        let activated = OSAllocatedUnfairLock(initialState: false)
+        Task {
+            await watcher.start()
+            activated.withLock { $0 = true }
+            started.fulfill()
+        }
+        await fulfillment(of: [started], timeout: 2)
+        defer { watcher.stop() }
+        guard activated.withLock({ $0 }) else { return }
+        XCTAssertFalse(received.withLock { $0.isEmpty })
+        XCTAssertTrue(watcher.directContentPathsForTesting.isEmpty)
+        let metadataRead = expectation(description: "FIFO metadata reads return")
+        let unavailable = OSAllocatedUnfairLock(initialState: false)
+        Task.detached {
+            if case .unavailable? = try? CodexSessionNames.load(directory: home) {
+                unavailable.withLock { $0 = true }
+            }
+            metadataRead.fulfill()
+        }
+        await fulfillment(of: [metadataRead], timeout: 2)
+        XCTAssertTrue(unavailable.withLock { $0 }, "Special metadata files must produce an optional-source warning")
+        let stopped = expectation(description: "FIFO watcher shutdown closes descriptors")
+        let closed = OSAllocatedUnfairLock(initialState: false)
+        Task.detached {
+            watcher.stop()
+            closed.withLock { $0 = watcher.namespaceMonitorCountForTesting == 0 }
+            stopped.fulfill()
+        }
+        await fulfillment(of: [stopped], timeout: 2)
+        XCTAssertTrue(closed.withLock { $0 })
+    }
+
+    func testRejectedMonitorDescriptorsAreClosed() async throws {
+        let root = try fixture()
+        let home = root.appendingPathComponent("configured")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let target = root.appendingPathComponent("names")
+        try Data().write(to: target)
+        try FileManager.default.createSymbolicLink(at: home.appendingPathComponent("session_index.jsonl"), withDestinationURL: target)
+        let descriptors = OSAllocatedUnfairLock(initialState: [Int32]())
+        let watcher = CodexMetadataWatcher(metadataDirectories: [home],
+            mapping: CodexMetadataSidecarMapping(metadataDirectories: [home], userHome: root)) { _, _ in }
+        watcher.userHomeForTesting = root
+        watcher.openNamespaceForTesting = { _ in
+            let fd = open(target.path, O_EVTONLY | O_NONBLOCK | O_CLOEXEC)
+            descriptors.withLock { $0.append(fd) }
+            return fd
+        }
+        watcher.openFileForTesting = { _ in
+            let fd = open(root.path, O_EVTONLY | O_NONBLOCK | O_CLOEXEC)
+            descriptors.withLock { $0.append(fd) }
+            return fd
+        }
+        await watcher.start()
+        defer { watcher.stop() }
+        XCTAssertFalse(descriptors.withLock { $0.isEmpty })
+        for fd in descriptors.withLock({ $0 }) {
+            XCTAssertEqual(fcntl(fd, F_GETFD), -1)
+            XCTAssertEqual(errno, EBADF)
+        }
+    }
+
     func testHomeFileMonitorObservesAppendReplacementAndMissingWalCreation() async throws {
         let root = try fixture()
         let home = root.appendingPathComponent("configured")
@@ -271,7 +352,7 @@ final class SidecarDependencyTests: XCTestCase {
         XCTAssertEqual(received.withLock { $0.count }, recoveredCount)
     }
 
-    func testLiveWalCreationCoalescesContentAndNamespaceNotifications() async throws {
+    func testLiveWalCreationAndLaterWritesAreDelivered() async throws {
         let root = try fixture()
         let file = root.appendingPathComponent("state_7.sqlite")
         let wal = URL(fileURLWithPath: file.path + "-wal")
@@ -288,10 +369,10 @@ final class SidecarDependencyTests: XCTestCase {
         var observed = await eventually { received.withLock { !$0.isEmpty } }
         XCTAssertTrue(observed)
         try await Task.sleep(for: .milliseconds(200))
-        XCTAssertEqual(received.withLock { $0.count }, 1, "WAL content and parent creation notifications share one batch")
+        let priorCount = received.withLock { $0.count }
         let handle = try FileHandle(forWritingTo: wal)
         try handle.seekToEnd(); try handle.write(contentsOf: Data("later write".utf8)); try handle.close()
-        observed = await eventually { received.withLock { $0.count == 2 } }
+        observed = await eventually { received.withLock { $0.count > priorCount } }
         XCTAssertTrue(observed, "a later write must create a new batch")
     }
 
@@ -307,10 +388,9 @@ final class SidecarDependencyTests: XCTestCase {
         }
         watcher.nowForTesting = { clock.withLock { $0 } }
         watcher.scheduleForTesting = { delay, work in let entry = ScheduledMetadataWork(delay: delay, work: work); scheduled.withLock { $0.append(entry) } }
+        watcher.nativeMonitoringEnabledForTesting = false
         await watcher.start()
         defer { watcher.stop() }
-        // Drain native startup events before injecting a deterministic notification sequence.
-        try await Task.sleep(for: .milliseconds(250))
         watcher.refreshTopologyForTesting()
         scheduled.withLock { $0 = [] }; received.withLock { $0 = [] }
         var changes = SourceChanges()

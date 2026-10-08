@@ -24,7 +24,7 @@ def harness_files(root):
 
 def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=False):
     candidate, baseline = candidate.resolve(), baseline.resolve()
-    role = role or ('candidate' if candidate == baseline else 'baseline')
+    role = role or ('candidate' if candidate.samefile(baseline) else 'baseline')
     label = 'Candidate checkout' if role == 'candidate' else 'Cached baseline'
     expected = git(candidate, 'rev-parse', revision + '^{commit}').strip()
     if git(baseline, 'rev-parse', 'HEAD').strip() != expected:
@@ -34,8 +34,7 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
     missing = []
 
     def signing_configuration(path):
-        text = re.sub(r'/\*.*?\*/', '', path.read_text(), flags=re.S)
-        for line in text.splitlines():
+        for line in path.read_text().splitlines():
             line = line.split('//', 1)[0].strip()
             if line and not re.fullmatch(r'DEVELOPMENT_TEAM\s*=\s*[A-Za-z0-9]*\s*;?', line):
                 raise ValueError(label + ' signing configuration contains an unsupported build setting')
@@ -51,7 +50,7 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
     def inspect(checkout, prefix='', expected_revision=None):
         # Git walks upward from an uninitialized submodule, returning the parent
         # HEAD. Establish repository ownership before asking for its revision.
-        if not checkout.exists() or Path(git(checkout, 'rev-parse', '--show-toplevel').decode().strip()).resolve() != checkout.resolve():
+        if not checkout.exists() or not checkout.samefile(Path(git(checkout, 'rev-parse', '--show-toplevel').decode().strip())):
             if not allow_uninitialized:
                 raise ValueError(label + ' has an uninitialized dependency: ' + prefix)
             if checkout.exists() and any(checkout.iterdir()):
@@ -61,6 +60,19 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
         head = git(checkout, 'rev-parse', 'HEAD').decode().strip()
         if expected_revision and head != expected_revision:
             raise ValueError(label + ': Dependency revision differs: ' + prefix)
+        index = Path(git(checkout, 'rev-parse', '--git-path', 'index').decode().strip())
+        if not index.is_absolute():
+            index = checkout / index
+        if expected_revision and not index.exists():
+            # git clone --no-checkout has the right HEAD but no index or worktree.
+            # Only recognize that narrow interrupted state; modified initialized
+            # dependencies must still fail validation.
+            if any(p.name != '.git' for p in checkout.iterdir()):
+                raise ValueError(label + ' has files in an incomplete dependency: ' + prefix)
+            if not allow_uninitialized:
+                raise ValueError(label + ' has an uninitialized dependency: ' + prefix)
+            missing.append(prefix.rstrip('/'))
+            return
         entries = git(checkout, 'ls-tree', '-r', '-z', 'HEAD').decode().split('\0')
         modules = {}
         for entry in entries:
@@ -115,8 +127,9 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
         if (baseline / output).exists() and (baseline / output).read_bytes() != (baseline / source).read_bytes():
             raise ValueError(label + ': Unexpected generated dependency configuration: ' + output)
     inputs = ['project.yml', 'Trace.xcodeproj/project.pbxproj', '.gitmodules', '.mise.toml']
-    inputs += [str(p.relative_to(baseline)) for folder in ['Config', 'GRDBCustomSQLite']
-               for p in (baseline / folder).glob('*') if p.is_file()]
+    inputs += list(filter(None, git(baseline, 'ls-files', '-z', '--', 'Config', 'GRDBCustomSQLite').decode().split('\0')))
+    if role == 'candidate' and (baseline / 'Config/Signing.xcconfig').is_file():
+        inputs.append('Config/Signing.xcconfig')
     inputs += [p for p in generated if (baseline / p).exists()]
     patched = 'Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig'
     if (baseline / patched).exists(): inputs.append(patched)
@@ -150,7 +163,7 @@ def initialize_missing(candidate, baseline, revision):
             else:
                 # Locate the nearest initialized repository that owns this gitlink.
                 owner = baseline / parent
-                while not owner.exists() or Path(git(owner, 'rev-parse', '--show-toplevel').decode().strip()).resolve() != owner.resolve():
+                while not owner.exists() or not owner.samefile(Path(git(owner, 'rev-parse', '--show-toplevel').decode().strip())):
                     owner = owner.parent
                 name = str((baseline / path).relative_to(owner))
             subprocess.run(['git', '-C', str(owner), 'submodule', 'update', '--init', '--', name], check=True)

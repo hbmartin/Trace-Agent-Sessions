@@ -41,6 +41,7 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
     var userHomeForTesting: URL?
     var nowForTesting: (@Sendable () -> TimeInterval)?
     var scheduleForTesting: (@Sendable (TimeInterval, DispatchWorkItem) -> Void)?
+    var nativeMonitoringEnabledForTesting = true
     var retryIntervalForTesting: TimeInterval = 5
 
     public init(metadataDirectories: [URL], mapping: CodexMetadataSidecarMapping,
@@ -214,6 +215,13 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
         let previous = mapping.withLock { $0 }
         let oldFailures = monitoringFailures
         filterMappings.withLock { $0 = [previous, next] }
+        if !nativeMonitoringEnabledForTesting {
+            mapping.withLock { $0 = next }
+            filterMappings.withLock { $0 = [next] }
+            var changes = SourceChanges()
+            changes.paths = refresh ? next.configuredSidecars : previous.configuredSidecarsWithChangedDependencies(comparedTo: next)
+            return changes
+        }
         let desired = Set(next.targetDirectories.map { "stream:" + $0.path })
             .union(next.namespaceDirectories.map { "namespace:" + $0.path })
             .union(next.directContentFiles.map { "file:" + $0.path })
@@ -258,8 +266,14 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
             if namespaces[path] != nil && !restart { failures.removeValue(forKey: key); continue }
             guard shouldAttempt(key, changed: restart) else { continue }
             namespaces.removeValue(forKey: path)?.cancel()
-            let fd = openNamespaceForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC)
+            let fd = openNamespaceForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK)
             if fd >= 0 {
+                var info = stat()
+                guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
+                    close(fd)
+                    failed(key, path: path)
+                    continue
+                }
                 namespaces[path] = VnodeMonitor(fd: fd, queue: queue) { [weak self] invalidated in
                     self?.namespaceChanged(path: path, invalidated: invalidated)
                 }
@@ -273,13 +287,20 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
             if files[path] != nil && !restart { failures.removeValue(forKey: key); continue }
             guard shouldAttempt(key, changed: restart) else { continue }
             files.removeValue(forKey: path)?.cancel()
-            let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC)
+            let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK)
+            let openError = errno
             if fd >= 0 {
+                var info = stat()
+                guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
+                    close(fd)
+                    failed(key, path: path)
+                    continue
+                }
                 files[path] = VnodeMonitor(fd: fd, queue: queue) { [weak self] invalidated in
                     self?.fileChanged(path: path, invalidated: invalidated)
                 }
                 failures.removeValue(forKey: key)
-            } else if errno == ENOENT && !FileManager.default.fileExists(atPath: path) {
+            } else if openError == ENOENT && !FileManager.default.fileExists(atPath: path) {
                 // Missing targets are watched through their parent namespace.
                 failures.removeValue(forKey: key)
             } else { failed(key, path: path) }
