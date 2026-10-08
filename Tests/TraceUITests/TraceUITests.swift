@@ -369,7 +369,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_SEED_STARTUP_ERROR"] = "Unrelated startup failure"
         app.launch()
         XCTAssertTrue(app.staticTexts["Unrelated startup failure"].firstMatch.waitForExistence(timeout: 15))
-        app.buttons["OK"].click()
+        app.sheets.firstMatch.buttons["OK"].click()
         let status = app.buttons["indexProgress"]
         XCTAssertTrue(status.waitForExistence(timeout: 15))
         status.click()
@@ -410,7 +410,7 @@ final class TraceUITests: XCTestCase {
         app.descendants(matching: .any)["Sources"].firstMatch.click()
         app.buttons["removeAdditionalClaudeRoot-0"].click()
         app.descendants(matching: .any)["General"].firstMatch.click()
-        XCTAssertTrue(app.checkBoxes["Open Trace when I log in"].waitForExistence(timeout: 3),
+        XCTAssertTrue(app.descendants(matching: .any)["clearGlobalSearchOnClose"].firstMatch.waitForExistence(timeout: 3),
                       "main actor must remain responsive while old callbacks drain")
         XCTAssertFalse(FileManager.default.fileExists(atPath: release.path))
         try Data().write(to: release)
@@ -1670,6 +1670,8 @@ final class TraceUITests: XCTestCase {
                 let completions = lines.filter {
                     $0.hasPrefix("finished,") && starts.contains($0.dropFirst(9))
                 }
+                guard let latestStart = lines.last(where: { $0.hasPrefix("started,") })?.dropFirst(8),
+                      completions.contains(where: { $0.dropFirst(9) == latestStart }) else { return nil }
                 return completions.count >= count ? true : nil
             }
             return lines.filter { $0 == line }.count >= count ? true : nil
@@ -2920,6 +2922,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
         let search = app.textFields["Search all sessions"]
+        if !search.waitForExistence(timeout: 3) { ensurePopoverOpen(app) }
         XCTAssertTrue(search.waitForExistence(timeout: 15))
         search.click(); search.typeText("Find the sample answer")
         let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
@@ -2949,7 +2952,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
         XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 5))
         if titleBar {
-            let window = app.windows["Trace"]
+            let window = app.windows.containing(.scrollView, identifier: "transcriptScroll").firstMatch
+            XCTAssertTrue(window.waitForExistence(timeout: 10))
             let point = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0)).withOffset(CGVector(dx: 200, dy: 12))
             point.click(forDuration: 0.1, thenDragTo: point.withOffset(CGVector(dx: 30, dy: 20)))
         } else { app.staticTexts["Sessions"].firstMatch.click() }
@@ -4936,7 +4940,8 @@ final class TraceUITests: XCTestCase {
         let restorationStarted = directory.appendingPathComponent("forced-restoration-started")
         let restorationCancelled = directory.appendingPathComponent("forced-restoration-cancelled")
         let bookmarkSaved = directory.appendingPathComponent("forced-bookmark-saved")
-        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"] = "5000"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RELEASE_PATH"] =
+            directory.appendingPathComponent("forced-restoration-release").path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"] = "3000"
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] = restorationStarted.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"] = restorationCancelled.path
