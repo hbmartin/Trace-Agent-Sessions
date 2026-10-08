@@ -2319,12 +2319,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private func correctEstablishedAnchor() {
             guard pendingAnchorCorrection else { return }
             if var request = pendingRestore, request.revealedTargetRow,
+               request.sessionID == sessionID, request.inputGeneration == userInputGeneration,
                positionEstablished, !applyingProgrammaticScroll, !isUserInteracting,
-               restoreGateTask == nil, let row = rowByMessageID[request.effectiveBookmark.messageID],
+               let row = rowByMessageID[request.effectiveBookmark.messageID],
                let table, let scrollView {
                 // Native hosted-size changes can arrive after update(). Correct
                 // the retained intent before drawing that frame, without polling
-                // hydration or spending a full-content geometry attempt.
+                // hydration or spending a full-content geometry attempt. A gate
+                // on refinement must not suppress this already-established anchor.
                 let rect = table.rect(ofRow: row)
                 let target = items[row].summary
                 let collapsed = TranscriptRowContent.isLazyAuxiliary(role: target.role, visibility: visibility)
