@@ -3700,6 +3700,9 @@ final class TraceUITests: XCTestCase {
     func testFinalRowFailedLoadKeepsIntentUntilManualRetry() throws {
         try runHydrationRestore(delay: 0, bookmarkIndex: 29, failedRead: true)
     }
+    func testShortenedContentNormalizesBookmarkAfterHydrationSettles() throws {
+        try runHydrationRestore(delay: 15_000, timeout: true, shortenedContent: true)
+    }
     func testDensityChangeDuringGatedGeometryResetsRefinement() throws {
         try runHydrationRestore(delay: 0, geometryGate: true)
     }
@@ -3810,11 +3813,25 @@ final class TraceUITests: XCTestCase {
                                      neverCompletes: Bool = false, passiveAndVisibility: Bool = false,
                                      oversized: Bool = false, switchSession: Bool = false, bookmarkIndex: Int = 12,
                                      lateChanges: Bool = false, failedRead: Bool = false, geometryGate: Bool = false,
-                                     exhaustGeometryBudget: Bool = false) throws {
+                                     exhaustGeometryBudget: Bool = false, shortenedContent: Bool = false) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let name = "Hydration restore"
         try addLongSession(name, project: "HydrationProject", directory: directory, count: 30, contentRepeats: 300)
         if switchSession { try addLongSession("Other restore", project: "HydrationProject", directory: directory, count: 2) }
+        if shortenedContent {
+            // The saved -450 bookmark belongs to the original long content.
+            // Rewrite it while the app is closed, then gate opening the shorter
+            // source so placeholder geometry cannot normalize that old intent.
+            let source = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+            var lines = try String(contentsOf: source, encoding: .utf8).split(separator: "\n").map(String.init)
+            var record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[bookmarkIndex + 1].utf8)) as? [String: Any])
+            var message = try XCTUnwrap(record["message"] as? [String: Any])
+            XCTAssertGreaterThan(try XCTUnwrap(message["content"] as? String).count, 450)
+            message["content"] = "\(name) message \(bookmarkIndex)\nShortened answer."
+            record["message"] = message
+            lines[bookmarkIndex + 1] = String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+            try (lines.joined(separator: "\n") + "\n").write(to: source, atomically: true, encoding: .utf8)
+        }
         if collapsed || hidden {
             let file = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
             var lines = try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map(String.init)
@@ -3998,6 +4015,16 @@ final class TraceUITests: XCTestCase {
             XCTAssertTrue(waitForFile(hydrated, timeout: 10))
             assertSavedAnchorOnScreen(index: 0, in: scroll, expectedY: 10, stage: "session switch cancels late refinement")
             XCTAssertEqual(fileLines(in: savedReader).last, "0")
+        } else if shortenedContent {
+            XCTAssertTrue(waitForFile(completed, timeout: 10))
+            let offset = try XCTUnwrap(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10))
+            XCTAssertGreaterThan(offset, -450, "the rewritten content must really be too short for the old offset")
+            let fields = try XCTUnwrap(fileLines(in: persisted).last?.split(separator: ","))
+            XCTAssertEqual(fields.first.map(String.init), String(bookmarkIndex))
+            XCTAssertEqual(try XCTUnwrap(Double(fields[1])), offset, accuracy: 2,
+                           "only settled full-content geometry can normalize the intended bookmark")
+            app.buttons["testProbeTranscriptPosition"].click()
+            XCTAssertEqual(fileLines(in: position).last?.split(separator: ",").last, "false")
         } else if oversized {
             XCTAssertTrue(waitForFile(completed, timeout: 10))
             XCTAssertGreaterThan(try XCTUnwrap(savedAnchorY(index: bookmarkIndex, in: scroll, timeout: 10)), -100000)
