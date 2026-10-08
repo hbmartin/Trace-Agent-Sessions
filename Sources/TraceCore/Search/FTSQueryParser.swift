@@ -9,10 +9,16 @@ public enum FTSQueryParser {
 
         func appendCurrent() {
             let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
+            current = ""
+            guard trimmed.unicodeScalars.contains(where: { scalar in
+                switch scalar.properties.generalCategory {
+                case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+                     .decimalNumber, .letterNumber, .otherNumber: true
+                default: false
+                }
+            }) else { return }
             let safe = trimmed.replacingOccurrences(of: "\"", with: "\"\"")
             terms.append(quoted ? "\"\(safe)\"" : "\"\(safe)\"*")
-            current = ""
         }
 
         for character in input {

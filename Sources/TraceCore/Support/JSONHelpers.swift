@@ -25,15 +25,26 @@ enum JSONHelpers {
     }
 
     static func timestampMilliseconds(_ value: Any?, fallback: Int64) -> Int64 {
-        if let numeric = int64(value) {
-            return numeric > 10_000_000_000 ? numeric : numeric * 1_000
+        explicitTimestampMilliseconds(value) ?? fallback
+    }
+
+    static func explicitTimestampMilliseconds(_ value: Any?) -> Int64? {
+        if let number = value as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite,
+                  number.doubleValue >= Double(Int64.min),
+                  number.doubleValue < Double(Int64.max) else { return nil }
         }
-        guard let string = value as? String else { return fallback }
+        if let numeric = int64(value) {
+            if numeric > 10_000_000_000 { return numeric }
+            let (milliseconds, overflow) = numeric.multipliedReportingOverflow(by: 1_000)
+            return overflow ? nil : milliseconds
+        }
+        guard let string = value as? String else { return nil }
         if let date = ISO8601DateFormatter.traceWithFractional.date(from: string)
             ?? ISO8601DateFormatter.traceBasic.date(from: string) {
             return Int64(date.timeIntervalSince1970 * 1_000)
         }
-        return fallback
+        return nil
     }
 
     static func compactJSON(_ value: Any?) -> String {

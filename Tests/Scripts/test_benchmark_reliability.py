@@ -208,7 +208,13 @@ class BenchmarkReliabilityTests(unittest.TestCase):
             derived = root / 'attempt/derived-data'
             derived.mkdir(parents=True)
             binary = derived / 'TracePerformanceTests-Runner'
-            shutil.copyfile('/bin/sleep', binary)
+            # A copied Apple platform binary can be killed on older macOS even
+            # after ad-hoc signing. Build an ordinary executable for this fixture.
+            subprocess.run(
+                ['cc', '-x', 'c', '-o', str(binary), '-'],
+                input='#include <unistd.h>\nint main(void) { sleep(60); return 0; }\n',
+                text=True, check=True, capture_output=True,
+            )
             binary.chmod(0o755)
             if sys.platform == 'darwin':
                 subprocess.run(['codesign', '-f', '-s', '-', str(binary)], check=True, capture_output=True)

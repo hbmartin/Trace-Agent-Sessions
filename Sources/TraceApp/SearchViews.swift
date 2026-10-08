@@ -197,7 +197,7 @@ struct LauncherView: View {
             HStack {
                 IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings)
                 Spacer()
-                if TraceTestHooks.isUITesting {
+                if TraceTestHooks.showsTestControls {
                     Button("Rebuild Index") { model.rebuildIndex() }
                         .accessibilityIdentifier("testRebuildIndex")
                 }
@@ -348,7 +348,7 @@ struct SearchResultList: View {
             ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try another word or project."))
         } else {
             VStack(spacing: 0) {
-                if TraceTestHooks.isUITesting,
+                if TraceTestHooks.showsTestControls,
                    TraceTestHooks.environment["TRACE_TEST_PAGINATION_LIVE_QUERY"] != nil {
                     Button("Test pagination criteria") {
                         search.mutateLiveCriteriaAndLoadMoreForTesting()
@@ -411,6 +411,13 @@ struct SearchResultList: View {
                         }
                     }
                     .accessibilityIdentifier("searchResultsScroll")
+                    .onAppear {
+                        if isMainSearch, let anchor = model.mainSearchReturnAnchor {
+                            model.mainSearchReturnAnchor = nil
+                            savedAnchor = anchor
+                            restoreAnchor(using: proxy)
+                        }
+                    }
                     .onChange(of: search.automaticRefreshToken) { _, _ in captureAnchor() }
                     .onChange(of: search.automaticResultRevision) { _, _ in
                         restoreAnchor(using: proxy)
@@ -527,8 +534,8 @@ struct SearchResultList: View {
                 .padding(.top, 3)
                 ForEach(session.results) { result in
                     Button {
-                        if isMainSearch { search.query = ""; search.search() }
-                        model.openSearchResult(result)
+                        if isMainSearch { captureAnchor() }
+                        model.openSearchResult(result, fromMainSearch: isMainSearch, anchor: savedAnchor)
                     } label: {
                         HStack(alignment: .top, spacing: 10) {
                             Text(result.role.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
@@ -740,7 +747,7 @@ extension Notification.Name {
     static let traceFocusPopover = Notification.Name("traceFocusPopover")
 }
 
-private struct SearchResultAnchor {
+struct SearchResultAnchor {
     let id: Int64?
     let offset: CGFloat
     let oldOrder: [Int64]

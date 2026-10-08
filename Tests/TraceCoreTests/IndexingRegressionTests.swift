@@ -242,6 +242,7 @@ final class IndexingRegressionTests: XCTestCase {
         await run.value
         let state = try await database.sourceState(agent: .claudeCode, path: file.path)
         let checkpoint = try XCTUnwrap(state?.scannedBytes)
+        XCTAssertEqual(state?.lastValidTimestampMilliseconds, 1_789_380_000_000)
         XCTAssertGreaterThan(checkpoint, 0)
         XCTAssertLessThan(checkpoint, Int64(try Data(contentsOf: file).count))
         let before = try await database.statistics().messageCount
@@ -253,6 +254,41 @@ final class IndexingRegressionTests: XCTestCase {
         let sessions = try await database.sessions()
         let messages = try await database.messages(sessionID: try XCTUnwrap(sessions.first?.id))
         XCTAssertEqual(Set(messages.map(\.id)).count, 600)
+    }
+
+    func testCancelledTimestampOnlyBatchCommitsContextWithItsByteBoundary() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        let timestamp: Int64 = 1_700_006_399_000
+        var data = Data()
+        for index in 0..<250 {
+            data.append(Data("{\"type\":\"unknown_metadata\",\"timestamp\":\(timestamp - 249 + Int64(index))}\n".utf8))
+        }
+        let boundary = Int64(data.count)
+        data.append(Data("{\"type\":\"unknown_metadata\",\"timestamp\":\"invalid\"}\n{\"type\":\"user\",\"uuid\":\"undated\",\"sessionId\":\"session\",\"message\":{\"content\":\"undated\"}}\n".utf8))
+        try data.write(to: file)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let source = ClaudeCodeSource(roots: [root])
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        let latch = BatchLatch()
+        let run = Task {
+            await coordinator.indexAll(scope: .proseOnly) { progress in
+                if progress.phase == .indexing && progress.currentFileBytes > 0 { await latch.pauseOnce() }
+            }
+        }
+        try await latch.waitForPause()
+        run.cancel()
+        await latch.release()
+        await run.value
+        let state = try await database.sourceState(agent: .claudeCode, path: file.path)
+        XCTAssertEqual(state?.scannedBytes, boundary)
+        XCTAssertEqual(state?.lastValidTimestampMilliseconds, timestamp)
+        let reopened = try IndexDatabase(url: url)
+        await IndexCoordinator(database: reopened, sources: [source]).indexAll(scope: .proseOnly)
+        let sessions = try await reopened.sessions()
+        let messages = try await reopened.messages(sessionID: try XCTUnwrap(sessions.first?.id))
+        XCTAssertEqual(messages.map(\.timestampMilliseconds), [timestamp])
     }
 
     func testSchedulerCoalescesEventsAndRebuildWaitsForCancellation() async throws {
@@ -855,6 +891,7 @@ final class IndexingRegressionTests: XCTestCase {
             )
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
             try db.execute(sql: "DROP VIEW IF EXISTS supported_agent")
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
@@ -865,7 +902,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "17")
+        XCTAssertEqual(schema, String(IndexDatabase.schemaVersion))
     }
 
     func testV13MigratesShippedV12SourceIdentityAndResetsDerivedContent() async throws {
@@ -932,6 +969,7 @@ final class IndexingRegressionTests: XCTestCase {
                     WHERE identifier='trace-v16-temporary-supported-agent-view';
                     DELETE FROM grdb_migrations
                     WHERE identifier='trace-v17-codex-name-provenance';
+                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                     DROP VIEW IF EXISTS supported_agent;
                     UPDATE trace_meta SET value='5' WHERE key='index_format_version';
                     UPDATE trace_meta SET value='12' WHERE key='schema_version';
@@ -959,7 +997,7 @@ final class IndexingRegressionTests: XCTestCase {
         let schema = try await raw.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'")
         }
-        XCTAssertEqual(schema, "17")
+        XCTAssertEqual(schema, String(IndexDatabase.schemaVersion))
         let migratedSchema = try await raw.read { db in
             let sourceFileSQL = try String.fetchOne(
                 db, sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name='source_file'"
@@ -1026,6 +1064,7 @@ final class IndexingRegressionTests: XCTestCase {
                 WHERE identifier='trace-v16-temporary-supported-agent-view';
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v17-codex-name-provenance';
+                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                 DROP VIEW IF EXISTS supported_agent;
                 UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty';
                 UPDATE trace_meta SET value='13' WHERE key='schema_version';
@@ -1053,7 +1092,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertNotNil(state)
         XCTAssertEqual(migrationState.0, 0)
         XCTAssertEqual(migrationState.1, "1")
-        XCTAssertEqual(migrationState.2, "17")
+        XCTAssertEqual(migrationState.2, String(IndexDatabase.schemaVersion))
     }
 
     func testV15AndV16ReplaceSupportedAgentViewWithoutResettingContent() async throws {
@@ -1081,6 +1120,7 @@ final class IndexingRegressionTests: XCTestCase {
                 WHERE identifier='trace-v16-temporary-supported-agent-view';
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v17-codex-name-provenance';
+                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                 UPDATE trace_meta SET value='14' WHERE key='schema_version';
                 """)
         }
@@ -1102,7 +1142,7 @@ final class IndexingRegressionTests: XCTestCase {
 
         XCTAssertFalse(migrated.contentWasResetOnOpen)
         XCTAssertEqual(migratedState.0, "supported_agent")
-        XCTAssertEqual(migratedState.1, "17")
+        XCTAssertEqual(migratedState.1, String(IndexDatabase.schemaVersion))
         XCTAssertEqual(migratedState.2.0, originalIDs.0)
         XCTAssertEqual(migratedState.2.1, originalIDs.1)
         let legacyAgents = try await raw.read {
@@ -1121,6 +1161,7 @@ final class IndexingRegressionTests: XCTestCase {
         try await raw.write { db in
             try db.execute(sql: "DROP VIEW main.supported_agent")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
             try db.execute(sql: "UPDATE trace_meta SET value='16' WHERE key='schema_version'")
         }
         _ = try IndexDatabase(url: url)
@@ -1130,7 +1171,7 @@ final class IndexingRegressionTests: XCTestCase {
             return (agent, schema)
         }
         XCTAssertNotNil(recovered.0)
-        XCTAssertEqual(recovered.1, "17")
+        XCTAssertEqual(recovered.1, String(IndexDatabase.schemaVersion))
     }
 
     func testV16ReplacesStaleV15AgentListOnExistingDatabase() async throws {
@@ -1153,6 +1194,7 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "CREATE VIEW supported_agent(agent) AS SELECT 'claude_code'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
             try db.execute(sql: "UPDATE trace_meta SET value='15' WHERE key='schema_version'")
             return (sessionID, messageID)
         }
@@ -1173,7 +1215,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(sessions.first?.agent, .codex)
         XCTAssertEqual(search.results.count, 1)
         XCTAssertEqual(persisted.0, "supported_agent")
-        XCTAssertEqual(persisted.1, "17")
+        XCTAssertEqual(persisted.1, String(IndexDatabase.schemaVersion))
         XCTAssertEqual(persisted.2, originalIDs.0)
         XCTAssertEqual(persisted.3, originalIDs.1)
     }
@@ -1193,6 +1235,7 @@ final class IndexingRegressionTests: XCTestCase {
                     DELETE FROM grdb_migrations WHERE identifier='trace-v15-supported-agent-view';
                     DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view';
                     DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance';
+                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                     UPDATE trace_meta SET value='14' WHERE key='schema_version';
                     """)
                 return .commit
@@ -1208,7 +1251,7 @@ final class IndexingRegressionTests: XCTestCase {
                 try Int.fetchOne(db, sql: "SELECT count(*) FROM source_scan_error WHERE root_id=987654321")
             )
         }
-        XCTAssertEqual(persisted.0, "17")
+        XCTAssertEqual(persisted.0, String(IndexDatabase.schemaVersion))
         XCTAssertEqual(persisted.1, 1)
     }
 

@@ -1210,6 +1210,16 @@ public actor IndexCoordinator {
         }
 
         if file.format == .geminiJSON {
+            var fallbackTimestamp = initialFingerprint.modificationNanoseconds / 1_000_000
+            if let state, !promotedPlaceholder {
+                let comparison = try TraceFileIO.fingerprint(url: file.url, preferredHeadLength: state.headLength)
+                if comparison.inode == state.inode, comparison.device == state.device,
+                   comparison.size >= state.scannedBytes, comparison.headHash == state.headHash,
+                   comparison.size > state.size,
+                   try Self.snapshotAppendIsWhitespace(file.url, from: state.size, through: comparison.size) {
+                    fallbackTimestamp = state.fallbackTimestampMilliseconds ?? fallbackTimestamp
+                }
+            }
             let sourceID = if let state {
                 state.id
             } else {
@@ -1221,6 +1231,7 @@ public actor IndexCoordinator {
                 rootID: rootID,
                 sourceID: sourceID,
                 initialFingerprint: initialFingerprint,
+                fallbackTimestamp: fallbackTimestamp,
                 scope: scope,
                 attempt: attempt,
                 mutation: mutation
@@ -1231,6 +1242,7 @@ public actor IndexCoordinator {
 
         let sourceID: Int64
         let startOffset: Int64
+        var resumesTimestampContext = false
         if let state {
             let comparison = try TraceFileIO.fingerprint(url: file.url, preferredHeadLength: state.headLength)
             let appendable = comparison.inode == state.inode
@@ -1244,6 +1256,7 @@ public actor IndexCoordinator {
                 startOffset = 0
             } else if appendable {
                 startOffset = state.scannedBytes
+                resumesTimestampContext = true
             } else {
                 try await database.replaceSourceContents(id: state.id)
                 await mutation()
@@ -1265,6 +1278,13 @@ public actor IndexCoordinator {
             }
         }
         var batch: [ParsedRecord] = []
+        var readContext = SourceReadContext(
+            sessionID: contentSessionID,
+            fallbackTimestampMilliseconds: resumesTimestampContext
+                ? (state?.fallbackTimestampMilliseconds ?? initialFingerprint.modificationNanoseconds / 1_000_000)
+                : initialFingerprint.modificationNanoseconds / 1_000_000,
+            lastValidTimestampMilliseconds: resumesTimestampContext ? state?.lastValidTimestampMilliseconds : nil
+        )
         var checkpoint = startOffset
         var persistedCheckpoint = startOffset
         var completedLines = 0
@@ -1275,10 +1295,11 @@ public actor IndexCoordinator {
         )
         for try await record in source.records(
             in: file, from: startOffset, through: initialFingerprint.size,
-            initialSessionID: contentSessionID
+            initialContext: readContext
         ) {
             try Task.checkCancellation()
             if case .sessionContext(let id) = record { contentSessionID = id }
+            if case .timestampContext(let timestamp) = record { readContext.lastValidTimestampMilliseconds = timestamp }
             if case .message(let message) = record, projectName == nil {
                 projectName = ProjectCanonicalizer.canonicalProject(for: message.cwd).name
             }
@@ -1287,6 +1308,8 @@ public actor IndexCoordinator {
                 completedLines += 1
             } else if case .sessionContext = record {
                 // The inherited identity is committed with the next checkpoint.
+            } else if case .timestampContext = record {
+                // Timestamp-only records belong to the same durable byte boundary.
             } else {
                 batch.append(record)
             }
@@ -1297,7 +1320,7 @@ public actor IndexCoordinator {
                 let batchChanged = !batch.isEmpty
                 try await database.insert(
                     records: batch, sourceFileID: sourceID, scope: scope,
-                    checkpoint: checkpoint, contentSessionID: contentSessionID
+                    checkpoint: checkpoint, contentSessionID: contentSessionID, readContext: readContext
                 )
                 batch.removeAll(keepingCapacity: true)
                 completedLines = 0
@@ -1312,11 +1335,12 @@ public actor IndexCoordinator {
                 }
             }
         }
-        if !batch.isEmpty || checkpoint > persistedCheckpoint {
+        if !batch.isEmpty || checkpoint > persistedCheckpoint
+            || (!resumesTimestampContext && persistedCheckpoint == startOffset) {
             let batchChanged = !batch.isEmpty
             try await database.insert(
                 records: batch, sourceFileID: sourceID, scope: scope,
-                checkpoint: checkpoint, contentSessionID: contentSessionID
+                checkpoint: checkpoint, contentSessionID: contentSessionID, readContext: readContext
             )
             if batchChanged { await mutation() }
         }
@@ -1358,16 +1382,21 @@ public actor IndexCoordinator {
         rootID: Int64,
         sourceID: Int64,
         initialFingerprint: SourceFingerprint,
+        fallbackTimestamp: Int64,
         scope: IndexScope,
         attempt: Int,
         mutation: @escaping @Sendable () async -> Void
     ) async throws {
         var records: [ParsedRecord] = []
         var checkpoint: Int64 = 0
+        // Snapshots replay their records from the beginning, so only the fallback
+        // survives an append. Their explicit timestamp context is reconstructed.
+        var readContext = SourceReadContext(fallbackTimestampMilliseconds: fallbackTimestamp)
         do {
-            for try await record in source.records(in: file, from: 0) {
+            for try await record in source.records(in: file, from: 0, through: nil, initialContext: readContext) {
                 try Task.checkCancellation()
                 if case .checkpoint(let offset) = record { checkpoint = offset }
+                if case .timestampContext(let timestamp) = record { readContext.lastValidTimestampMilliseconds = timestamp }
                 records.append(record)
             }
         } catch is CancellationError {
@@ -1427,9 +1456,23 @@ public actor IndexCoordinator {
             records: records,
             scope: scope,
             fingerprint: finalFingerprint,
-            scannedBytes: checkpoint
+            scannedBytes: checkpoint, readContext: readContext
         )
         await mutation()
+    }
+
+    private static func snapshotAppendIsWhitespace(_ url: URL, from offset: Int64, through boundary: Int64) throws -> Bool {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(offset))
+        var remaining = boundary - offset
+        while remaining > 0 {
+            try Task.checkCancellation()
+            let data = try handle.read(upToCount: Int(min(remaining, 65_536))) ?? Data()
+            guard !data.isEmpty, data.allSatisfy({ $0 == 0x20 || $0 == 0x09 || $0 == 0x0A || $0 == 0x0D }) else { return false }
+            remaining -= Int64(data.count)
+        }
+        return true
     }
 
     private func source(for agent: AgentKind) -> (any SessionSource)? {

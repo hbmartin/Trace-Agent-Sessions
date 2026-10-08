@@ -21,9 +21,9 @@ struct MainView: View {
             VStack(spacing: 0) {
                 HStack {
                     if model.selectedSessionID != nil {
-                        Button("Back to project", systemImage: "chevron.left") { model.clearSession() }
+                        Button(model.hasSearchReturnContext ? "Back to results" : "Back to project", systemImage: "chevron.left") { model.returnFromSession() }
                             .accessibilityIdentifier("backToProject")
-                        if TraceTestHooks.isUITesting {
+                        if TraceTestHooks.showsTestControls {
                             Button("Open search", systemImage: "magnifyingglass") {
                                 NotificationCenter.default.post(name: .traceShowLauncher, object: nil)
                             }
@@ -288,7 +288,7 @@ private struct SessionSidebar: View {
                             ForEach(filteredProjects) { project in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(project.displayName).lineLimit(1)
-                                    Text("\(project.sessionCount.formatted()) sessions").font(.caption2).foregroundStyle(.secondary)
+                                    Text("\(project.sessionCount.formatted()) \(project.sessionCount == 1 ? "session" : "sessions")").font(.caption2).foregroundStyle(.secondary)
                                 }
                                 .accessibilityElement(children: .contain)
                                 .accessibilityIdentifier("projectSidebarRow-\(project.id)")
@@ -359,7 +359,8 @@ private struct SessionSidebar: View {
                     HStack {
                         Text("Sessions").font(.headline)
                         Spacer()
-                        Text("\(sessions.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Text("\(model.totalSessionCount.formatted())").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("sessionTotalCount")
                     }.padding(12)
                     ScrollViewReader { proxy in
                         List(selection: Binding(get: { model.selectedSessionID }, set: { id in
@@ -375,6 +376,18 @@ private struct SessionSidebar: View {
                                     )
                                     .id(session.id)
                                     .tag(Optional(session.id))
+                            }
+                            if model.isLoadingSessions {
+                                ProgressView().controlSize(.small)
+                            } else if let error = model.sessionListError {
+                                VStack(alignment: .leading) {
+                                    Text(error).font(.caption).foregroundStyle(.secondary)
+                                    Button("Retry") { model.loadMoreSessions() }
+                                        .accessibilityIdentifier("retrySessionPage")
+                                }
+                            } else if model.hasMoreSessions {
+                                Button("Load more") { model.loadMoreSessions() }
+                                    .accessibilityIdentifier("loadMoreSessions")
                             }
                         }
                         .accessibilityIdentifier("sessionSidebarList")
@@ -513,12 +526,12 @@ private struct TranscriptRowConfiguration: Equatable {
     let hydratedSections: MessageSections?
     let hydratedToolName: String?
     let hydratedHasError: Bool?
-    let hydrationFailed: Bool
+    let hydrationError: String?
     let visibility: TranscriptVisibility
     let reasoningExpanded: Bool
 
     init(
-        message: MessageSummary, hydrated: HydratedMessage?, hydrationFailed: Bool,
+        message: MessageSummary, hydrated: HydratedMessage?, hydrationError: String?,
         visibility: TranscriptVisibility, reasoningExpanded: Bool
     ) {
         messageID = message.id
@@ -536,7 +549,7 @@ private struct TranscriptRowConfiguration: Equatable {
         hydratedSections = hydrated?.sections
         hydratedToolName = hydrated?.toolName
         hydratedHasError = hydrated?.hasError
-        self.hydrationFailed = hydrationFailed
+        self.hydrationError = hydrationError
         self.visibility = visibility
         self.reasoningExpanded = reasoningExpanded
     }
@@ -806,7 +819,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var contentRevision = -1
         private var scrollRequest: UUID?
         private var hydratedIDs: Set<Int64> = []
-        private var failedIDs: Set<Int64> = []
+        private var failedMessages: [Int64: String] = [:]
         private var expandedIDs: Set<Int64> = []
         private var expansionStates: [Int64: TranscriptExpansionState] = [:]
         private let observers = NotificationObserverBag()
@@ -1158,11 +1171,13 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     }
                     ?? capturePosition()
                 let newHydrated = Set(model.hydratedMessages.keys)
+                let changedFailures = Set(failedMessages.keys).union(model.hydrationFailures.keys)
+                    .filter { failedMessages[$0] != model.hydrationFailures[$0] }
                 let changed = hydratedIDs.symmetricDifference(newHydrated)
-                    .union(failedIDs.symmetricDifference(model.hydrationFailures))
+                    .union(changedFailures)
                     .union(expandedIDs.symmetricDifference(model.expandedReasoningIDs))
                 hydratedIDs = newHydrated
-                failedIDs = model.hydrationFailures
+                failedMessages = model.hydrationFailures
                 expandedIDs = model.expandedReasoningIDs
                 self.contentRevision = contentRevision
                 let rows = IndexSet(changed.compactMap { rowByMessageID[$0] })
@@ -1301,11 +1316,11 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let message = item.summary
             let expansion = expansionState(for: message.id)
             let hydrated = model.hydratedMessages[message.id]
-            let hydrationFailed = model.hydrationFailures.contains(message.id)
+            let hydrationError = model.hydrationFailures[message.id]
             let rowView = MessageRow(
                 summary: message,
                 hydrated: hydrated,
-                hydrationFailed: hydrationFailed,
+                hydrationError: hydrationError,
                 reasoningExpanded: Binding(
                     get: { [weak model] in model?.expandedReasoningIDs.contains(message.id) == true },
                     set: { [weak self, weak model] expanded in
@@ -1318,6 +1333,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 expansion: expansion,
                 visibility: visibility,
                 hydrate: { [weak model] in model?.hydrate(message) },
+                retryHydration: { [weak model] in model?.retryHydration(message) },
                 copyMessage: { [weak model] in model?.copyMessage(id: message.id) },
                 heightChanged: { [weak self] in self?.invalidateHeight(messageID: message.id) },
                 selectionTrackingChanged: { [weak self] tracking in
@@ -1338,7 +1354,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 configuration: TranscriptRowConfiguration(
                     message: message,
                     hydrated: hydrated,
-                    hydrationFailed: hydrationFailed,
+                    hydrationError: hydrationError,
                     visibility: visibility,
                     reasoningExpanded: model.expandedReasoningIDs.contains(message.id)
                 ),
@@ -1618,7 +1634,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 return
             }
             let target = items[row].summary
-            if model?.hydratedMessages[target.id] != nil || model?.hydrationFailures.contains(target.id) == true {
+            if model?.hydratedMessages[target.id] != nil || model?.hydrationFailures[target.id] != nil {
                 if let pendingRestore {
                     scheduleRestore(token: pendingRestore.token, delayMilliseconds: 0)
                 } else {
@@ -1687,7 +1703,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let collapsed = TranscriptRowContent.isLazyAuxiliary(role: target.role, visibility: visibility)
                 && !expansionState(for: target.id).auxiliary
             let contentReady = collapsed || model?.hydratedMessages[target.id] != nil
-                || model?.hydrationFailures.contains(target.id) == true
+                || model?.hydrationFailures[target.id] != nil
             if !contentReady {
                 if exact != nil { deferContentRestore(request) }
                 model?.hydrate(target)
@@ -2898,11 +2914,13 @@ private final class TranscriptHostingCell: NSTableCellView {
 private struct MessageRow: View {
     let summary: MessageSummary
     let hydrated: HydratedMessage?
-    let hydrationFailed: Bool
+    let hydrationError: String?
+    private var hydrationFailed: Bool { hydrationError != nil }
     @Binding var reasoningExpanded: Bool
     @ObservedObject var expansion: TranscriptExpansionState
     let visibility: TranscriptVisibility
     let hydrate: () -> Void
+    let retryHydration: () -> Void
     let copyMessage: () -> Void
     let heightChanged: () -> Void
     let selectionTrackingChanged: (Bool) -> Void
@@ -2928,6 +2946,14 @@ private struct MessageRow: View {
                             .foregroundStyle(.tertiary)
                     }
                     content
+                    if let hydrationError {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Unable to read this message: \(hydrationError)")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button("Retry", action: retryHydration)
+                                .accessibilityIdentifier("retryMessage-\(summary.id)")
+                        }
+                    }
                 }
             }
             .padding(12)

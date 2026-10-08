@@ -26,7 +26,9 @@ updater, telemetry upload, or runtime network feature.
 ## Showcase
 
 These screenshots were captured from the real app using an isolated, generated
-fixture. They contain no private session data.
+fixture. They contain no private session data. The UI test
+`testCaptureReadmeShowcaseWithoutTestControls` regenerates all four images below
+`/tmp/trace-readme-showcase/`, with test controls and the mouse cursor excluded.
 
 <table>
   <tr>

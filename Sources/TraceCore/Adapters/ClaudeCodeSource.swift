@@ -29,17 +29,41 @@ public struct ClaudeCodeSource: SessionSource {
     public func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64? = nil
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
-        let fallback = TraceFileIO.modificationMilliseconds(url: file.url)
+        records(in: file, from: offset, through: boundary, context: .init(
+            fallbackTimestampMilliseconds: TraceFileIO.modificationMilliseconds(url: file.url)
+        ), recoverPrefix: true)
+    }
+
+    public func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+                        initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, context: initialContext, recoverPrefix: false)
+    }
+
+    private func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+                         context initialContext: SourceReadContext, recoverPrefix: Bool) -> AsyncThrowingStream<ParsedRecord, Error> {
+        var context = initialContext
+        var loadedContext = offset == 0 || !recoverPrefix
         return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
-            guard let object = try? JSONHelpers.object(from: line.data),
-                  let message = parseClaudeMessage(
+            if !loadedContext {
+                let cursor = try JSONLineCursor(url: file.url, from: 0, through: offset)
+                while let preceding = try cursor.next() {
+                    if let object = try? JSONHelpers.object(from: preceding.data) {
+                        _ = context.observeTimestamp(object["timestamp"])
+                    }
+                }
+                loadedContext = true
+            }
+            guard let object = try? JSONHelpers.object(from: line.data) else { return [] }
+            var records: [ParsedRecord] = []
+            if let timestamp = context.observeTimestamp(object["timestamp"]) { records.append(timestamp) }
+            if let message = parseClaudeMessage(
                     object,
                     fallbackSessionID: file.url.deletingPathExtension().lastPathComponent,
-                    fallbackTimestamp: fallback + line.offset,
+                    fallbackTimestamp: context.timestampMilliseconds,
                     locator: .byteRange(offset: line.offset, length: Int64(line.data.count)),
                     sourceKey: "\(line.offset)"
-                  ) else { return [] }
-            return [.message(message)]
+                  ) { records.append(.message(message)) }
+            return records
         }
     }
 
