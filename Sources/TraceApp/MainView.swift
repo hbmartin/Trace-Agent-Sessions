@@ -877,8 +877,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private var pendingBottomFollow = false
         private var pendingAnchorRestore: TranscriptBookmark?
         private var pendingIdleSaveAfterRestore = false
-        private var scrollIdleCycle: UInt64 = 0
-        private var pendingScrollIdleCycle: UInt64?
+        private var pendingScrollIdleCycle: UUID?
         private var scrollIdleReadyToSave = false
 
         deinit {
@@ -1462,10 +1461,10 @@ private struct TranscriptRenderer: NSViewRepresentable {
             guard !applyingProgrammaticScroll else { return }
             bookmarkWorkItem?.cancel()
             if reportStart {
-                scrollIdleCycle &+= 1
-                pendingScrollIdleCycle = scrollIdleCycle
+                let cycle = UUID()
+                pendingScrollIdleCycle = cycle
                 scrollIdleReadyToSave = false
-                TraceTestHooks.appendLine("started,\(scrollIdleCycle)",
+                TraceTestHooks.appendLine("started,\(cycle)",
                     pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH")
                 TraceTestHooks.appendLine(
                     "started", pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"
