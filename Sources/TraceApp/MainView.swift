@@ -2410,8 +2410,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
             case "disclosure-position":
                 guard let table, !items.isEmpty else { return }
                 applyingProgrammaticScroll = true
-                table.scrollRowToVisible(items.count - 1)
+                let row = items.count - 1
+                table.scrollRowToVisible(row)
+                (table.view(atColumn: 0, row: row, makeIfNecessary: true)
+                    as? TranscriptHostingCell)?.refreshHostedSize()
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
                 table.layoutSubtreeIfNeeded()
+                invalidateDocumentExtent()
+                _ = scrollToBottom()
                 rememberProgrammaticOrigin()
                 applyingProgrammaticScroll = false
             case "focus-text":

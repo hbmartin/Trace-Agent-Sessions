@@ -4288,7 +4288,7 @@ final class TraceUITests: XCTestCase {
         let searchRelease = directory.appendingPathComponent("search-release")
         let restoreAudit = directory.appendingPathComponent("cancelled-search-restores")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = searchRelease.path
-        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] = searchStarted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = searchStarted.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_CANCELLED_PATH"] = searchCancelled.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = restoreAudit.path
         app.launch()
@@ -4315,8 +4315,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(hit.waitForExistence(timeout: 10))
         hit.click()
         XCTAssertTrue(waitForFile(searchStarted, timeout: 10))
-        app.buttons["testSimulateTranscriptScroll"].click()
-        XCTAssertTrue(disclosure.isHittable, "programmatic setup must leave the disclosure visible without cancelling search")
+        XCTAssertNotNil(poll(timeout: 10) {
+            app.buttons["testSimulateTranscriptScroll"].click()
+            guard disclosure.isHittable, scroll.frame.contains(disclosure.frame) else { return nil }
+            return true
+        }, "the entire disclosure must be visible without cancelling search; button=\(disclosure.frame), viewport=\(scroll.frame)")
         disclosure.click()
         XCTAssertTrue(waitForFile(searchCancelled, timeout: 5))
         app.checkBoxes["System"].click()
