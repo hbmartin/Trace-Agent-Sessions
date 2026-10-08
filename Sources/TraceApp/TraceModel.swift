@@ -1721,7 +1721,7 @@ final class TraceModel: ObservableObject {
             forKeys: [.volumeUUIDStringKey]
         ).volumeUUIDString { return identifier }
         var info = stat()
-        if stat(candidate.path, &info) == 0 { return "device-\(UInt64(info.st_dev))" }
+        if stat(candidate.path, &info) == 0 { return "device-\(TraceFileIO.unsignedDevice(info.st_dev))" }
         return "volume-unknown"
     }
 

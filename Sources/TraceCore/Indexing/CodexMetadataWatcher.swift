@@ -258,8 +258,14 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
             if namespaces[path] != nil && !restart { failures.removeValue(forKey: key); continue }
             guard shouldAttempt(key, changed: restart) else { continue }
             namespaces.removeValue(forKey: path)?.cancel()
-            let fd = openNamespaceForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC)
+            let fd = openNamespaceForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK)
             if fd >= 0 {
+                var info = stat()
+                guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
+                    close(fd)
+                    failed(key, path: path)
+                    continue
+                }
                 namespaces[path] = VnodeMonitor(fd: fd, queue: queue) { [weak self] invalidated in
                     self?.namespaceChanged(path: path, invalidated: invalidated)
                 }
@@ -273,9 +279,15 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
             if files[path] != nil && !restart { failures.removeValue(forKey: key); continue }
             guard shouldAttempt(key, changed: restart) else { continue }
             files.removeValue(forKey: path)?.cancel()
-            let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC)
+            let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK)
             let openError = errno
             if fd >= 0 {
+                var info = stat()
+                guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
+                    close(fd)
+                    failed(key, path: path)
+                    continue
+                }
                 files[path] = VnodeMonitor(fd: fd, queue: queue) { [weak self] invalidated in
                     self?.fileChanged(path: path, invalidated: invalidated)
                 }
