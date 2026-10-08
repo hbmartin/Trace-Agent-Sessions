@@ -10,9 +10,27 @@ import sys
 import tempfile
 from pathlib import Path
 
+SQLITE_PATCHES = {
+    'Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj': (
+        'SQLiteLib.xcodeproj/project.pbxproj', 'GRDBCustomSQLite/SQLiteRegularFiles.patch', 'regular-file build dependency'),
+    'Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig': (
+        'SQLiteLib.xcconfig', 'GRDBCustomSQLite/SQLiteLib-macOS15.patch', 'configuration'),
+    'Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c': (
+        'sqlite/src/os_unix.c', 'GRDBCustomSQLite/SQLiteRegularFiles.patch', 'regular-file'),
+}
+
 
 def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args])
+
+
+def owns_checkout(checkout):
+    if not checkout.exists():
+        return False
+    try:
+        return checkout.samefile(Path(git(checkout, 'rev-parse', '--show-toplevel').decode().strip()))
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 
 def harness_files(root):
@@ -50,7 +68,7 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
     def inspect(checkout, prefix='', expected_revision=None):
         # Git walks upward from an uninitialized submodule, returning the parent
         # HEAD. Establish repository ownership before asking for its revision.
-        if not checkout.exists() or not checkout.samefile(Path(git(checkout, 'rev-parse', '--show-toplevel').decode().strip())):
+        if not owns_checkout(checkout):
             if not allow_uninitialized:
                 raise ValueError(label + ' has an uninitialized dependency: ' + prefix)
             if checkout.exists() and any(checkout.iterdir()):
@@ -79,7 +97,9 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
             if entry.startswith('160000 '):
                 descriptor, name = entry.split('\t', 1)
                 modules[name] = descriptor.split()[2]
-        changed = set(filter(None, git(checkout, 'diff', '--name-only', 'HEAD', '-z').decode().split('\0')))
+        # Dependencies are inspected below. Let their ownership policy handle
+        # partial repositories instead of having the parent diff fail first.
+        changed = set(filter(None, git(checkout, 'diff', '--ignore-submodules=all', '--name-only', 'HEAD', '-z').decode().split('\0')))
         extra = set(filter(None, git(checkout, 'ls-files', '--others', '--exclude-standard', '-z').decode().split('\0')))
         for name in changed | extra:
             full = prefix + name
@@ -90,16 +110,18 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
             if role == 'candidate' and full == 'Config/Signing.xcconfig' and name not in changed:
                 signing_configuration(checkout / name)
                 continue
-            if full == 'Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig':
+            if full in SQLITE_PATCHES:
+                patched_name, patch_name, patch_label = SQLITE_PATCHES[full]
                 original = git(checkout, 'show', 'HEAD:' + name)
                 with tempfile.TemporaryDirectory() as tmp:
                     directory = Path(tmp)
-                    patched = directory / 'SQLiteLib.xcconfig'
+                    patched = directory / patched_name
+                    patched.parent.mkdir(parents=True, exist_ok=True)
                     patched.write_bytes(original)
-                    subprocess.run(['git', 'apply', '--unidiff-zero', str(baseline / 'GRDBCustomSQLite/SQLiteLib-macOS15.patch')],
+                    subprocess.run(['git', 'apply', '--unidiff-zero', '--include=' + patched_name, str(baseline / patch_name)],
                                    cwd=directory, check=True, capture_output=True)
                     if (checkout / name).read_bytes() != patched.read_bytes():
-                        raise ValueError(label + ': Unexpected SQLite configuration patch')
+                        raise ValueError(label + ': Unexpected SQLite ' + patch_label + ' patch')
                 continue
             # Ignored generated dependency files are checked separately below.
             if name in changed or Path(name).suffix in {'.swift', '.yml', '.yaml', '.xcconfig', '.pbxproj', '.sh', '.py', '.h', '.c'}:
@@ -131,8 +153,7 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
     if role == 'candidate' and (baseline / 'Config/Signing.xcconfig').is_file():
         inputs.append('Config/Signing.xcconfig')
     inputs += [p for p in generated if (baseline / p).exists()]
-    patched = 'Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig'
-    if (baseline / patched).exists(): inputs.append(patched)
+    inputs += [name for name in SQLITE_PATCHES if (baseline / name).exists()]
     records['build_input_sha256'] = {name: hashlib.sha256((baseline / name).read_bytes()).hexdigest()
                                    for name in sorted(inputs) if (baseline / name).exists()}
     production = hashlib.sha256()
@@ -149,6 +170,7 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
 
 def initialize_missing(candidate, baseline, revision):
     """Repair missing clones only, after checking all initialized dependency drift."""
+    candidate, baseline = candidate.resolve(), baseline.resolve()
     while True:
         records = validate(candidate, baseline, revision, role='baseline', allow_uninitialized=True)
         missing = records.get('uninitialized_submodules', [])
@@ -163,7 +185,9 @@ def initialize_missing(candidate, baseline, revision):
             else:
                 # Locate the nearest initialized repository that owns this gitlink.
                 owner = baseline / parent
-                while not owner.exists() or not owner.samefile(Path(git(owner, 'rev-parse', '--show-toplevel').decode().strip())):
+                while not owns_checkout(owner):
+                    if owner == baseline:
+                        raise ValueError('Cached baseline has no initialized owner for dependency: ' + path)
                     owner = owner.parent
                 name = str((baseline / path).relative_to(owner))
             subprocess.run(['git', '-C', str(owner), 'submodule', 'update', '--init', '--', name], check=True)

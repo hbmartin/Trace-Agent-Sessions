@@ -300,8 +300,7 @@ enum CodexSessionNames {
         var indexReadFailed = false
         if hasSessionIndex {
             do {
-                try TraceFileIO.requireRegularMetadataFile(sessionIndex)
-                let cursor = try JSONLineCursor(url: sessionIndex, from: 0)
+                let cursor = try JSONLineCursor(url: sessionIndex, from: 0, allowingNullSessionIndex: true)
                 while let line = try cursor.next() {
                     try Task.checkCancellation()
                     guard let object = try? JSONHelpers.object(from: line.data),
@@ -341,7 +340,7 @@ enum CodexSessionNames {
         config.readonly = true
         config.busyMode = .timeout(0.2)
         do {
-            try TraceFileIO.requireRegularMetadataFile(newestDatabase)
+            // Trace's SQLite VFS opens nonblocking and validates its own descriptor.
             let queue = try DatabaseQueue(path: newestDatabase.path, configuration: config)
             let rows = try queue.read { db in
                 let columns = try db.columns(in: "threads").map(\.name)

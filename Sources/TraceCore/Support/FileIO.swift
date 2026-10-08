@@ -191,15 +191,31 @@ public enum TraceFileIO {
         UInt64(UInt32(bitPattern: device))
     }
 
-    /// Follow supported sidecar symlinks, but never read a device or named pipe.
-    static func requireRegularMetadataFile(_ url: URL) throws {
-        var info = stat()
-        guard stat(url.path, &info) == 0 else {
+    /// Validate the opened file, allowing the actual null device only for a session index.
+    static func openRegularMetadataFile(
+        _ url: URL, allowingNullSessionIndex: Bool = false,
+        openFile: (String, Int32) -> Int32 = { open($0, $1) }
+    ) throws -> FileHandle {
+        let fd = openFile(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        guard info.st_mode & S_IFMT == S_IFREG else {
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            close(fd)
+            throw error
+        }
+        var nullDevice = stat()
+        let isNullIndex = allowingNullSessionIndex && info.st_mode & S_IFMT == S_IFCHR
+            && stat("/dev/null", &nullDevice) == 0
+            && nullDevice.st_mode & S_IFMT == S_IFCHR
+            && info.st_rdev == nullDevice.st_rdev
+        guard info.st_mode & S_IFMT == S_IFREG || isNullIndex else {
+            close(fd)
             throw SessionSourceError.unreadableFile("\(url.path): metadata target is not a regular file")
         }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }
 }
 
@@ -504,8 +520,13 @@ final class JSONLineCursor {
     private var buffer = Data()
     private(set) var checkpoint: Int64
 
-    init(url: URL, from offset: Int64, through boundary: Int64? = nil) throws {
-        handle = try FileHandle(forReadingFrom: url)
+    init(
+        url: URL, from offset: Int64, through boundary: Int64? = nil,
+        allowingNullSessionIndex: Bool = false,
+        openFile: (String, Int32) -> Int32 = { open($0, $1) }
+    ) throws {
+        handle = try TraceFileIO.openRegularMetadataFile(url,
+            allowingNullSessionIndex: allowingNullSessionIndex, openFile: openFile)
         let size = Int64(try handle.seekToEnd())
         endOffset = min(size, boundary ?? size)
         readOffset = max(0, offset)

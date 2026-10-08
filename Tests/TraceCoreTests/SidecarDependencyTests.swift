@@ -1,6 +1,7 @@
 import CoreServices
 import Darwin
 import Foundation
+import GRDB
 import os
 import XCTest
 @testable import TraceCore
@@ -188,6 +189,181 @@ final class SidecarDependencyTests: XCTestCase {
         }
         await fulfillment(of: [stopped], timeout: 3)
         XCTAssertTrue(closed.withLock { $0 })
+    }
+
+    func testJSONMetadataOpenRejectsRetargetedFifoAndClosesItsDescriptor() throws {
+        let root = try fixture()
+        let original = root.appendingPathComponent("names")
+        try Data("original\n".utf8).write(to: original)
+        let pipe = root.appendingPathComponent("pipe")
+        XCTAssertEqual(mkfifo(pipe.path, 0o600), 0)
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: original)
+        var descriptor: Int32 = -1
+        XCTAssertThrowsError(try JSONLineCursor(url: sidecar, from: 0, openFile: { path, flags in
+            XCTAssertNotEqual(flags & O_NONBLOCK, 0)
+            XCTAssertEqual(unlink(path), 0)
+            XCTAssertEqual(symlink(pipe.path, path), 0)
+            // Keep this regression bounded even if nonblocking behavior regresses.
+            descriptor = open(path, flags | O_NONBLOCK)
+            XCTAssertGreaterThanOrEqual(descriptor, 0)
+            return descriptor
+        })) { error in
+            guard case SessionSourceError.unreadableFile(let message) = error else {
+                return XCTFail("Expected descriptor type rejection, got \(error)")
+            }
+            XCTAssertTrue(message.contains("not a regular file"))
+        }
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        XCTAssertEqual(fcntl(descriptor, F_GETFD), -1)
+        XCTAssertEqual(errno, EBADF)
+    }
+
+    func testJSONMetadataCursorReadsTheOpenedFileAfterSymlinkRetarget() throws {
+        let root = try fixture()
+        let original = root.appendingPathComponent("names")
+        let data = Data("original names\n".utf8)
+        try data.write(to: original)
+        let pipe = root.appendingPathComponent("pipe")
+        XCTAssertEqual(mkfifo(pipe.path, 0o600), 0)
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: original)
+        let cursor = try JSONLineCursor(url: sidecar, from: 0, openFile: { path, flags in
+            let fd = open(path, flags)
+            XCTAssertGreaterThanOrEqual(fd, 0)
+            XCTAssertEqual(unlink(path), 0)
+            XCTAssertEqual(symlink(pipe.path, path), 0)
+            return fd
+        })
+        XCTAssertEqual(try cursor.next()?.data, Data("original names".utf8))
+        XCTAssertNil(try cursor.next())
+    }
+
+    func testSQLiteVFSRejectsAFileReplacedByFifoDuringOpen() throws {
+        let root = try fixture()
+        let target = root.appendingPathComponent("state_7.sqlite")
+        try Data().write(to: target)
+        let vfs = try XCTUnwrap(sqlite3_vfs_find(nil))
+        let setSystemCall = try XCTUnwrap(vfs.pointee.xSetSystemCall)
+        let getSystemCall = try XCTUnwrap(vfs.pointee.xGetSystemCall)
+        let originalOpen = try XCTUnwrap(getSystemCall(vfs, "open"))
+        SQLiteMetadataOpenRace.state.withLock { $0 = .init(path: target.path) }
+        let injectedOpen = unsafeBitCast(SQLiteMetadataOpenRace.open, to: sqlite3_syscall_ptr.self)
+        XCTAssertEqual(setSystemCall(vfs, "open", injectedOpen), SQLITE_OK)
+        defer {
+            XCTAssertEqual(setSystemCall(vfs, "open", originalOpen), SQLITE_OK)
+            SQLiteMetadataOpenRace.state.withLock { $0 = .init() }
+        }
+        let storage = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(vfs.pointee.szOsFile), alignment: MemoryLayout<sqlite3_file>.alignment)
+        defer { storage.deallocate() }
+        storage.initializeMemory(as: UInt8.self, repeating: 0, count: Int(vfs.pointee.szOsFile))
+        let file = storage.assumingMemoryBound(to: sqlite3_file.self)
+        // SQLite's VFS requires a filename terminated by two zero bytes.
+        let filename = target.path.utf8.map { CChar(bitPattern: $0) } + [0, 0]
+        try filename.withUnsafeBufferPointer { name in
+            let openFile = try XCTUnwrap(vfs.pointee.xOpen)
+            let result = openFile(vfs, name.baseAddress, file, SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, nil)
+            defer { if let methods = file.pointee.pMethods { _ = methods.pointee.xClose?(file) } }
+            XCTAssertEqual(result & 0xff, SQLITE_CANTOPEN)
+            let observed = SQLiteMetadataOpenRace.state.withLock { $0 }
+            XCTAssertNotEqual(observed.flags & O_NONBLOCK, 0, "SQLite must pass nonblocking flags to its actual open")
+            XCTAssertEqual(observed.retargetResult, 0)
+            XCTAssertGreaterThanOrEqual(observed.descriptor, 0, "Exercise fstat rejection of a successfully opened FIFO")
+            XCTAssertEqual(fcntl(observed.descriptor, F_GETFD), -1)
+            XCTAssertEqual(errno, EBADF)
+        }
+    }
+
+    func testSQLiteSpecialCompanionsRejectWithoutBlockingOrLeakingDescriptors() throws {
+        // Link the exact static SQLite archive used by this test host into a
+        // child-loadable library; system SQLite would not exercise our VFS.
+        let build = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+        let library = try fixture().appendingPathComponent("sqlite-probe.dylib").path
+        let compiler = Process()
+        compiler.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+        compiler.arguments = ["-dynamiclib", "-fprofile-instr-generate", "-Wl,-force_load," + build.appendingPathComponent("libsqlitecustom.a").path,
+                              "-framework", "Foundation", "-o", library]
+        try compiler.run(); compiler.waitUntilExit()
+        XCTAssertEqual(compiler.terminationStatus, 0)
+        let script = #"""
+        import ctypes, json, os, sys
+        sqlite = ctypes.CDLL(sys.argv[1])
+        sqlite.sqlite3_open_v2.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.c_char_p]
+        sqlite.sqlite3_exec.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        sqlite.sqlite3_close.argtypes = [ctypes.c_void_p]
+        before = len(os.listdir('/dev/fd'))
+        db = ctypes.c_void_p()
+        rc = sqlite.sqlite3_open_v2(sys.argv[2].encode(), ctypes.byref(db), 1 | 64, None)
+        if rc == 0: rc = sqlite.sqlite3_exec(db, b'SELECT * FROM threads', None, None, None)
+        sqlite.sqlite3_close(db)
+        print(json.dumps({'result': rc, 'before': before, 'after': len(os.listdir('/dev/fd'))}))
+        sys.exit(0 if rc != 0 else 2)
+        """#
+        for suffix in ["", "-journal", "-wal", "-shm", "-shm-readonly"] {
+            for symlinked in [false, true] {
+                let root = try fixture()
+                let database = root.appendingPathComponent("state_7.sqlite")
+                let queue = try DatabaseQueue(path: database.path)
+                if suffix.hasPrefix("-shm") || suffix == "-wal" {
+                    try queue.writeWithoutTransaction { db in
+                        XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA journal_mode=WAL"), "wal")
+                    }
+                }
+                try queue.write { db in
+                    try db.execute(sql: "CREATE TABLE threads(id TEXT, title TEXT)")
+                    try db.execute(sql: "INSERT INTO threads VALUES ('id', 'Preserved title')")
+                }
+                let target = URL(fileURLWithPath: database.path + (suffix == "-shm-readonly" ? "-shm" : suffix))
+                try? FileManager.default.removeItem(at: target)
+                if symlinked {
+                    let pipe = root.appendingPathComponent("pipe")
+                    XCTAssertEqual(mkfifo(pipe.path, 0o400), 0)
+                    try FileManager.default.createSymbolicLink(at: target, withDestinationURL: pipe)
+                } else {
+                    XCTAssertEqual(mkfifo(target.path, suffix == "-shm-readonly" ? 0o400 : 0o600), 0)
+                }
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                let uri = "file:" + database.path + (suffix == "-shm-readonly" ? "?readonly_shm=1" : "")
+                process.arguments = ["-c", script, library, uri]
+                let output = Pipe(); process.standardOutput = output; process.standardError = output
+                try process.run()
+                let deadline = Date().addingTimeInterval(4)
+                while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
+                let evidence = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                XCTAssertEqual(process.terminationStatus, 0, "\(suffix), symlink=\(symlinked): bounded SQLite rejection; \(evidence)")
+                if let data = evidence.data(using: .utf8),
+                   let values = try? JSONSerialization.jsonObject(with: data) as? [String: Int] {
+                    XCTAssertLessThanOrEqual(values["after"] ?? 1000, (values["before"] ?? 0) + 1,
+                        "Rejected SQLite descriptors must close")
+                }
+                withExtendedLifetime(queue) {}
+            }
+        }
+    }
+
+    func testNullSessionIndexIsCompleteAndLoadsAllStateTitles() throws {
+        let root = try fixture()
+        try FileManager.default.createSymbolicLink(atPath: root.appendingPathComponent("session_index.jsonl").path,
+                                                   withDestinationPath: "/dev/null")
+        let queue = try DatabaseQueue(path: root.appendingPathComponent("state_7.sqlite").path)
+        try queue.write { db in
+            try db.execute(sql: "CREATE TABLE threads(id TEXT, name TEXT, title TEXT)")
+            try db.execute(sql: "INSERT INTO threads VALUES ('one', NULL, 'First title'), ('two', NULL, 'Second title')")
+        }
+        guard case .loaded(let names) = try CodexSessionNames.load(directory: root) else {
+            return XCTFail("Null session index should be an empty successful provider")
+        }
+        XCTAssertTrue(names.complete)
+        XCTAssertNil(names.warning)
+        XCTAssertEqual(names.names["one"]?.value, "First title")
+        XCTAssertEqual(names.names["two"]?.value, "Second title")
+        XCTAssertThrowsError(try TraceFileIO.openRegularMetadataFile(URL(fileURLWithPath: "/dev/null")))
+        XCTAssertThrowsError(try JSONLineCursor(url: URL(fileURLWithPath: "/dev/zero"), from: 0,
+                                              allowingNullSessionIndex: true))
     }
 
     func testRejectedMonitorDescriptorsAreClosed() async throws {
@@ -679,6 +855,28 @@ final class SidecarDependencyTests: XCTestCase {
         try Data("updated\n".utf8).write(to: final)
         let updated = await eventually { calls.withLock { $0 > 0 } }
         XCTAssertTrue(updated, "the recreated namespace must monitor subsequent target writes; streams=\(watcher.contentDirectoryPathsForTesting)")
+    }
+}
+
+private enum SQLiteMetadataOpenRace {
+    struct State: Sendable {
+        var path: String? = nil
+        var flags: Int32 = 0
+        var descriptor: Int32 = -1
+        var retargetResult: Int32 = -1
+    }
+    static let state = OSAllocatedUnfairLock(initialState: State())
+    static let open: @convention(c) (UnsafePointer<CChar>?, Int32, Int32) -> Int32 = { path, flags, mode in
+        guard let path else { errno = EINVAL; return -1 }
+        let filename = String(cString: path)
+        let inject = state.withLock { $0.path == filename }
+        guard inject else { return Darwin.open(path, flags, mode_t(truncatingIfNeeded: mode)) }
+        let removed = unlink(path)
+        let replaced = removed == 0 ? mkfifo(path, 0o600) : removed
+        // Avoid hanging the test if the VFS loses its nonblocking flag.
+        let fd = Darwin.open(path, flags | O_NONBLOCK, mode_t(truncatingIfNeeded: mode))
+        state.withLock { $0.flags = flags; $0.descriptor = fd; $0.retargetResult = replaced }
+        return fd
     }
 }
 

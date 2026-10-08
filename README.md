@@ -136,6 +136,9 @@ continue updating while indexing runs.
 Metadata backfills preserve existing message IDs and search checkpoints.
 Subsequent JSONL appends scan only the new metadata tail. Codex title sidecars
 are read-only inputs, and SQLite WAL/SHM activity does not trigger index passes.
+JSON metadata and SQLite database companions are opened nonblocking and checked
+through their descriptors. A session index linked to `/dev/null` is an empty,
+successful index; title databases can still supply complete metadata.
 
 ## Privacy and local data
 
