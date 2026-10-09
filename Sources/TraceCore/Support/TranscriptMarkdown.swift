@@ -15,13 +15,25 @@ public enum TranscriptMarkdown {
 
     private static func protectingCode(in source: String) -> String {
         var fence: (marker: Character, length: Int)?
-        var indentedBlock = false
-        var previousLineWasBlank = true
+        // Let Foundation's block parser distinguish list continuation paragraphs
+        // from actual code, then preserve the original characters in our inline renderer.
+        var codeLines = Set<Int>()
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.contains(where: { $0.hasPrefix("    ") || $0.hasPrefix("\t") }),
+           let blocks = try? AttributedString(markdown: source,
+                options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true)) {
+            for run in blocks.runs {
+                guard let position = run.markdownSourcePosition,
+                      run.presentationIntent?.components.contains(where: {
+                          if case .codeBlock = $0.kind { return true }
+                          return false
+                      }) == true else { continue }
+                codeLines.formUnion(position.startLine...position.endLine)
+            }
+        }
         let escapable = Set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
-        return source.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+        return lines.enumerated().map { index, line in
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            let blank = trimmed.isEmpty
-            let indented = line.hasPrefix("    ") || line.hasPrefix("\t")
             let marker = trimmed.first
             let length = marker.map { first in trimmed.prefix(while: { $0 == first }).count } ?? 0
             let insideFence = fence != nil
@@ -37,9 +49,7 @@ public enum TranscriptMarkdown {
                 fence = (marker, length)
                 isFence = true
             }
-            if !blank { indentedBlock = indented && (indentedBlock || previousLineWasBlank) }
-            previousLineWasBlank = blank
-            guard insideFence || isFence || indentedBlock else { return String(line) }
+            guard insideFence || isFence || codeLines.contains(index + 1) else { return String(line) }
             return line.map { escapable.contains($0) ? "\\\($0)" : String($0) }.joined()
         }.joined(separator: "\n")
     }

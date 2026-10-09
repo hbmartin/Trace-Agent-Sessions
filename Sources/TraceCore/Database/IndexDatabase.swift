@@ -490,6 +490,7 @@ public actor IndexDatabase {
             guard stored != String(indexFormatVersion) else { return false }
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM message_fts")
+                try db.execute(sql: "DELETE FROM trace_meta WHERE key='message_id_overflow'")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM source_root")
@@ -571,6 +572,7 @@ public actor IndexDatabase {
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM message_fts")
+                try db.execute(sql: "DELETE FROM trace_meta WHERE key='message_id_overflow'")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM source_scan_error")
@@ -1940,8 +1942,10 @@ public actor IndexDatabase {
         }
     }
 
+    public nonisolated static let sessionPageSize = 200
+
     public func sessionsPage(projectCanonicalKey: String? = nil, cursor: SessionCursor? = nil,
-                             limit: Int = 200) throws -> SessionPage {
+                             limit: Int = IndexDatabase.sessionPageSize) throws -> SessionPage {
         guard cursor == nil || cursor?.projectCanonicalKey == projectCanonicalKey else {
             throw IndexDatabaseError.invalidSessionCursor
         }
@@ -2030,8 +2034,9 @@ public actor IndexDatabase {
     private nonisolated func sessionListSnapshot(projectCanonicalKey: String?, pageCount: Int,
                                      ensuringSessionID: Int64?, total: Int,
                                      in db: Database) throws -> SessionListSnapshot {
-        let pages = max(1, min(pageCount, max(1, (total + 199) / 200)))
-        let limit = pages * 200
+        let pageSize = Self.sessionPageSize
+        let pages = max(1, min(pageCount, max(1, (total + pageSize - 1) / pageSize)))
+        let limit = pages * pageSize
         let rows = try sessionRows(projectCanonicalKey: projectCanonicalKey, cursor: nil, limit: limit + 1, in: db)
         var sessions = Array(rows.prefix(limit))
         let cursor = sessionCursor(after: sessions, hasMore: rows.count > limit, projectCanonicalKey: projectCanonicalKey)

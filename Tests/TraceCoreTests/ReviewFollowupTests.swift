@@ -25,6 +25,15 @@ final class ReviewFollowupTests: XCTestCase {
                        "~~~swift\nobj.__dict__\n~~~")
     }
 
+    func testListContinuationFormattingAndNestedLiteralCode() {
+        let input = "1. Step\n\n    Run **this** with `make`\n\n        obj.__dict__\n\n    *Continue*\n\nOutside\n\n    a*b*c"
+        XCTAssertEqual(String(TranscriptMarkdown.render(input).characters),
+                       "1. Step\n\n    Run this with make\n\n        obj.__dict__\n\n    Continue\n\nOutside\n\n    a*b*c")
+        let nested = "- Parent\n  1. Child\n\n     Run **this**\n\n         a*b*c"
+        XCTAssertEqual(String(TranscriptMarkdown.render(nested).characters),
+                       "- Parent\n  1. Child\n\n     Run this\n\n         a*b*c")
+    }
+
     func testSymbolQueriesMatchTheActualConfiguredTokenizer() async throws {
         let root = try directory()
         let source = root.appendingPathComponent("session.jsonl")
@@ -114,6 +123,11 @@ final class ReviewFollowupTests: XCTestCase {
         XCTAssertEqual(results.map(\.prefix), ["OverflowNeedle newer", "OverflowNeedle overflow-next", "OverflowNeedle overflow",
                                                "OverflowNeedle saturated", "OverflowNeedle older"])
         XCTAssertLessThan(try XCTUnwrap(results.first { $0.prefix == "OverflowNeedle overflow" }).id, 0)
+        try await restarted.clearIndex()
+        let overflowAfterClear = try await queue.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='message_id_overflow'")
+        }
+        XCTAssertNil(overflowAfterClear, "a full index clear must restore streaming rowid recency searches")
         let health = try await restarted.sourceHealth()
         XCTAssertTrue(health.allSatisfy { $0.error == nil })
     }
