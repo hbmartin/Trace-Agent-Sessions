@@ -1663,19 +1663,33 @@ final class TraceUITests: XCTestCase {
     private func waitForLineCount(_ url: URL, line: String, count: Int,
                                   timeout: TimeInterval = 10) -> Bool {
         poll(timeout: timeout) {
-            let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            let lines = content.split(whereSeparator: \.isNewline)
+            let lines = fileLines(in: url)
             if line == "finished" {
-                let starts = Set(lines.filter { $0.hasPrefix("started,") }.map { $0.dropFirst(8) })
-                let completions = lines.filter {
-                    $0.hasPrefix("finished,") && starts.contains($0.dropFirst(9))
-                }
-                guard let latestStart = lines.last(where: { $0.hasPrefix("started,") })?.dropFirst(8),
-                      completions.contains(where: { $0.dropFirst(9) == latestStart }) else { return nil }
+                let completions = completedInputCycles(in: lines)
+                guard let latestStart = lines.last(where: { $0.hasPrefix("started,") }).map({ String($0.dropFirst(8)) }),
+                      completions.contains(latestStart) else { return nil }
                 return completions.count >= count ? true : nil
+            }
+            if line == "started" {
+                let cycles = Set(lines.compactMap { entry -> String? in
+                    guard entry.hasPrefix("started,") else { return nil }
+                    let cycle = String(entry.dropFirst(8))
+                    return UUID(uuidString: cycle) == nil ? nil : cycle
+                })
+                if !cycles.isEmpty { return cycles.count >= count ? true : nil }
             }
             return lines.filter { $0 == line }.count >= count ? true : nil
         } ?? false
+    }
+
+    private func completedInputCycles(in lines: [String]) -> Set<String> {
+        let starts = Set(lines.filter { $0.hasPrefix("started,") }.map { String($0.dropFirst(8)) })
+        let completions = Set(lines.filter { $0.hasPrefix("finished,") }.map { String($0.dropFirst(9)) })
+        return completions.intersection(starts)
+    }
+
+    private func completedInputCycleCount(in url: URL) -> Int {
+        completedInputCycles(in: fileLines(in: url)).count
     }
 
     private func numericLine(in url: URL) -> Double? {
@@ -3273,7 +3287,7 @@ final class TraceUITests: XCTestCase {
         app.activate()
         let initialOffset = numericLine(in: offsets) ?? 0
 
-        let firstFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let firstFinishCount = completedInputCycleCount(in: idleAudit)
         // The accessibility frame spans the proposed text width, including blank
         // space. Aim at the visible glyphs so this exercises NSTextView routing.
         let textPoint = first.coordinate(withNormalizedOffset: .zero)
@@ -3296,7 +3310,7 @@ final class TraceUITests: XCTestCase {
         let gapOffset = try XCTUnwrap(poll(timeout: 5) {
             numericLine(in: gapOffsets)
         }, "the table must expose a visible gap between messages")
-        let gapFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let gapFinishCount = completedInputCycleCount(in: idleAudit)
         let gapPoint = scroll.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: scroll.frame.width / 2, dy: gapOffset))
         gapPoint.hover()
@@ -3309,7 +3323,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(fileLines(in: wheelRoute).contains("table"),
                       "wheel input in a row gap must traverse the table responder")
 
-        let paddingFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let paddingFinishCount = completedInputCycleCount(in: idleAudit)
         let paddingPoint = scroll.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 14, dy: scroll.frame.height / 2))
         paddingPoint.hover()
@@ -3320,7 +3334,7 @@ final class TraceUITests: XCTestCase {
         let afterPadding = try XCTUnwrap(numericLine(in: offsets))
         XCTAssertGreaterThan(afterPadding, afterGap + 30)
 
-        let secondFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let secondFinishCount = completedInputCycleCount(in: idleAudit)
         let gutterPoint = scroll.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 4, dy: scroll.frame.height / 2))
         gutterPoint.hover()
@@ -3419,7 +3433,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(Double(upwardPosition[1])) - XCTUnwrap(Double(upwardPosition[0])), 50,
             "upward wheel input must move above the current measured bottom")
 
-        let settledFinishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let settledFinishes = completedInputCycleCount(in: idleAudit)
         transcriptPoint.hover()
         transcriptPoint.scroll(byDeltaX: 0, deltaY: -100_000)
         try appendMessage(70, content: "Append while the bottom scroll settles")
@@ -3477,7 +3491,7 @@ final class TraceUITests: XCTestCase {
             .wait(for: \.isHittable, toEqual: true, timeout: 15),
             "resizing the window must retain live bottom follow")
 
-        let upwardFinishCount = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let upwardFinishCount = completedInputCycleCount(in: idleAudit)
         transcriptPoint.hover()
         transcriptPoint.scroll(byDeltaX: 0, deltaY: 1_100)
         XCTAssertTrue(waitForLineCount(
@@ -4390,12 +4404,12 @@ final class TraceUITests: XCTestCase {
         let scroll = app.scrollViews["transcriptScroll"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         XCTAssertTrue(waitForFile(directory.appendingPathComponent("native-restore-completed"), timeout: 10))
-        let initialFinishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let initialFinishes = completedInputCycleCount(in: idleAudit)
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: initialFinishes + 1, timeout: 10))
         let bottomIndex = try XCTUnwrap(waitForStableBookmarkIndex(bookmarkSaved))
         XCTAssertGreaterThan(bottomIndex, 50, "the initial wheel must reach the end of the 70-message transcript")
-        let finishes = fileLines(in: idleAudit).filter { $0 == "finished" }.count
+        let finishes = completedInputCycleCount(in: idleAudit)
 
         app.buttons["testSimulateTranscriptScroll"].click()
         XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: finishes + 1, timeout: 10),
@@ -4806,6 +4820,12 @@ final class TraceUITests: XCTestCase {
         let idleAudit = directory.appendingPathComponent("keyboard-scroll-idle-audit")
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmarkSaved.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idleAudit.path
+        defer {
+            let attachment = XCTAttachment(string: fileLines(in: idleAudit).joined(separator: "\n"))
+            attachment.name = "keyboard-input-cycles"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
@@ -4819,12 +4839,12 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         try? FileManager.default.removeItem(at: bookmarkSaved)
         focusTranscript("Keyboard scroll", in: scroll)
-        try? FileManager.default.removeItem(at: idleAudit)
+        let firstFinishBaseline = completedInputCycleCount(in: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.activate()
         app.typeKey(.pageDown, modifierFlags: [])
         let firstBookmarkIndex = try XCTUnwrap(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
-        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 10))
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: firstFinishBaseline + 1, timeout: 10))
         let visibleAfterFirstPage = transcriptMessage(
             "Keyboard scroll", index: firstBookmarkIndex, in: scroll
         )
@@ -4833,10 +4853,8 @@ final class TraceUITests: XCTestCase {
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.activate()
         app.typeKey(.pageDown, modifierFlags: [])
-        XCTAssertNotNil(waitForBookmarkIndex(bookmarkSaved, greaterThan: 0))
-        let finishesBeforeWheel = fileLines(in: idleAudit).filter {
-            $0 == "finished"
-        }.count
+        XCTAssertNotNil(waitForBookmarkIndex(bookmarkSaved, greaterThan: firstBookmarkIndex))
+        let finishesBeforeWheel = completedInputCycleCount(in: idleAudit)
         scroll.scroll(byDeltaX: 0, deltaY: -100_000)
         XCTAssertTrue(waitForLineCount(
             idleAudit, line: "finished", count: finishesBeforeWheel + 1, timeout: 10
@@ -4852,13 +4870,15 @@ final class TraceUITests: XCTestCase {
             after: pasteboardChangeCount, contains: ["Keyboard scroll message"],
             message: "the boundary case must run with selectable message text as first responder"
         )
-        try? FileManager.default.removeItem(at: idleAudit)
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: completedInputCycleCount(in: idleAudit), timeout: 10))
+        let boundaryStarts = fileLines(in: idleAudit).filter { $0.hasPrefix("started,") }.count
+        let boundaryFinishes = completedInputCycleCount(in: idleAudit)
         try? FileManager.default.removeItem(at: bookmarkSaved)
         app.activate()
         app.typeKey(.pageDown, modifierFlags: [])
-        XCTAssertTrue(waitForLineCount(idleAudit, line: "started", count: 1, timeout: 3),
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "started", count: boundaryStarts + 1, timeout: 3),
                       "a boundary Page Down must schedule idle completion directly")
-        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: 1, timeout: 3),
+        XCTAssertTrue(waitForLineCount(idleAudit, line: "finished", count: boundaryFinishes + 1, timeout: 3),
                       "a boundary Page Down must clear user scrolling without geometry changes")
         XCTAssertTrue(waitForFile(bookmarkSaved, timeout: 3),
                       "a boundary Page Down must still finish user scrolling and save its bookmark")
