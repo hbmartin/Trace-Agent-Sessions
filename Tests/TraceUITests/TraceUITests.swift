@@ -4454,6 +4454,8 @@ final class TraceUITests: XCTestCase {
 
     func testDelayedResizePreservesBottomFollow() throws { try runViewportRegression("delayed-resize") }
     func testMultiStageResizePreservesBottomFollowDuringAppend() throws { try runViewportRegression("multi-stage-resize") }
+    func testNativeDocumentAdjustmentsPreserveBottomFollowDuringIdleAppend() throws { try runViewportRegression("multi-stage-document") }
+    func testUserInputInvalidatesNativeDocumentAdjustment() throws { try runViewportRegression("interrupted-document") }
     func testExpiredResizeDoesNotSuppressUpwardMotion() throws { try runViewportRegression("expired-resize") }
     func testUserInputInvalidatesResizeTransaction() throws { try runViewportRegression("interrupted-resize") }
     func testUnchangedGeometryScrollingUsesCachedExtentAndLazyRows() throws { try runViewportRegression("cached-extent") }
@@ -4462,6 +4464,7 @@ final class TraceUITests: XCTestCase {
 
     private func runViewportRegression(_ simulation: String) throws {
         let expectedFollowing = simulation != "expired-resize" && simulation != "interrupted-resize"
+            && simulation != "interrupted-document"
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         try addLongSession("Viewport regression", project: "ViewportProject", directory: directory,
             count: simulation == "cached-extent" ? 2_000 : 70)
@@ -4474,6 +4477,9 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH"] = audit.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_JUMP_DONE_PATH"] = jump.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_POSITION_PROBE_PATH"] = probe.path
+        if simulation == "multi-stage-document" {
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_DELAY_MS"] = "1500"
+        }
         defer {
             let attachment = XCTAttachment(string: fileLines(in: audit).joined(separator: "\n"))
             attachment.name = "viewport-regression-\(simulation)"
@@ -4511,7 +4517,8 @@ final class TraceUITests: XCTestCase {
         } else {
             XCTAssertTrue(fileLines(in: audit).contains("simulation-classified-bottom=\(expectedFollowing)"))
         }
-        if simulation == "rubber-band-return" || simulation == "multi-stage-resize" {
+        if simulation == "rubber-band-return" || simulation == "multi-stage-resize"
+            || simulation == "multi-stage-document" {
             let source = directory.appendingPathComponent("Sources/Claude/Viewport regression.jsonl")
             let record: [String: Any] = ["type": "assistant", "uuid": "viewport-append", "sessionId": "Viewport regression",
                 "cwd": "/tmp/ViewportProject", "message": ["content": "Viewport regression message 70\nAppend after viewport adjustment"]]

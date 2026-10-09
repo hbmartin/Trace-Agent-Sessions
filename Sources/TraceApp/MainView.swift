@@ -2132,6 +2132,20 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 documentHeight.map { abs(before - $0) > 0.5 }
             } ?? false
             if documentResized, followsBottom, let table, !items.isEmpty {
+                if pendingRestore == nil, deferredContentRestore == nil,
+                   !isUserInteracting || settledBottomInputGeneration == userInputGeneration {
+                    // Automatic row measurement can resize the document and then
+                    // deliver several origin-only adjustments. A measured bottom
+                    // in this input generation owns those later layout motions;
+                    // every new physical input invalidates the transaction first.
+                    if resizeTransaction?.initiallyFollowing != true
+                        || resizeTransaction?.inputGeneration != userInputGeneration
+                        || resizeTransaction.map({ ContinuousClock.now >= $0.expires }) != false {
+                        resizeTransaction = ResizeTransaction(initiallyFollowing: true,
+                            viewportDelta: 0, expires: .now.advanced(by: .milliseconds(500)),
+                            inputGeneration: userInputGeneration)
+                    }
+                }
                 // A synchronous native resize can deliver its padding adjustment
                 // before our coalesced row-extent refresh runs. Preserve the last
                 // measured trailing padding, rather than using a stale row bottom.
@@ -2482,6 +2496,29 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 boundsDidChange()
                 let intermediate = scrollView.contentView.bounds.origin
                 scrollView.contentView.setBoundsOrigin(NSPoint(x: intermediate.x, y: intermediate.y + viewportDelta))
+                boundsDidChange()
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                TraceTestHooks.appendLine("simulation-classified-bottom=\(followsBottom)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_SCROLL_SIMULATION_DONE_PATH")
+            case "multi-stage-document", "interrupted-document":
+                guard let table else { return }
+                let origin = scrollView.contentView.bounds.origin
+                let oldHeight = table.frame.height
+                let oldSize = scrollView.contentView.bounds.size
+                beginUserScrolling()
+                recordUserViewportMotion(from: NSPoint(x: origin.x, y: origin.y - 1), to: origin)
+                scrollView.contentView.postsBoundsChangedNotifications = false
+                table.setFrameSize(NSSize(width: table.frame.width, height: max(0, oldHeight - 264)))
+                lastObservedOrigin = origin
+                lastObservedViewportSize = oldSize
+                lastObservedDocumentHeight = oldHeight
+                expectedProgrammaticOrigin = nil
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y - 264))
+                boundsDidChange()
+                if simulation == "interrupted-document" { beginUserScrolling() }
+                let intermediate = scrollView.contentView.bounds.origin
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: intermediate.x, y: intermediate.y - 289))
                 boundsDidChange()
                 scrollView.contentView.postsBoundsChangedNotifications = true
                 TraceTestHooks.appendLine("simulation-classified-bottom=\(followsBottom)",
