@@ -2579,8 +2579,13 @@ final class TraceUITests: XCTestCase {
     private func ensurePopoverOpen(_ app: XCUIApplication) {
         let search = app.textFields["Search all sessions"]
         if search.exists { return }
+        app.activate()
+        XCTAssertEqual(app.state, .runningForeground,
+                       "popover observation requires the test app to own the foreground")
+        if search.exists { return }
         let status = app.statusItems["Trace"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertTrue(status.isHittable, "the menu-bar item must be visible before opening the popover")
         status.click()
         XCTAssertTrue(search.waitForExistence(timeout: 10))
     }
