@@ -16,6 +16,22 @@ configFiles:
 projectReferences:
   GRDBCustom:
     path: Vendor/GRDB.swift/GRDBCustom.xcodeproj
+packages:
+  Clocks:
+    url: https://github.com/pointfreeco/swift-clocks
+    exactVersion: 1.1.0
+  SnapshotTesting:
+    url: https://github.com/pointfreeco/swift-snapshot-testing
+    exactVersion: 1.19.6
+  CustomDump:
+    url: https://github.com/pointfreeco/swift-custom-dump
+    exactVersion: 1.7.0
+  ConcurrencyExtras:
+    url: https://github.com/pointfreeco/swift-concurrency-extras
+    exactVersion: 1.4.1
+  XCTestDynamicOverlay:
+    url: https://github.com/pointfreeco/xctest-dynamic-overlay
+    exactVersion: 1.11.0
 settings:
   base:
     ARCHS: arm64
@@ -37,6 +53,7 @@ targets:
         DEFINES_MODULE: true
         GENERATE_INFOPLIST_FILE: true
     dependencies:
+      - package: Clocks
       - target: GRDBCustom/GRDBCustom
 
   Trace:
@@ -72,6 +89,7 @@ targets:
         Release:
           CODE_SIGN_INJECT_BASE_ENTITLEMENTS: false
     dependencies:
+      - package: Clocks
       - target: TraceCore
         embed: true
       - target: GRDBCustom/GRDBCustom
@@ -122,24 +140,46 @@ targets:
     platform: macOS
     sources:
       - Tests/TraceCoreTests
-      - Sources/TraceApp/AppSettings.swift
-      - Sources/TraceApp/NavigationState.swift
-      - Sources/TraceApp/SessionSearchModel.swift
-      - Sources/TraceApp/TraceModel.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.CoreTests
         GENERATE_INFOPLIST_FILE: true
         ENABLE_HARDENED_RUNTIME: false
     dependencies:
+      - package: Clocks
+      - package: CustomDump
+      - package: XCTestDynamicOverlay
+        product: IssueReportingTestSupport
       - target: TraceCore
       - target: GRDBCustom/GRDBCustom
+
+  TraceAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/TraceAppTests
+      - path: Sources/TraceApp
+        excludes: [TraceApp.swift]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.AppTests
+        GENERATE_INFOPLIST_FILE: true
+        ENABLE_HARDENED_RUNTIME: false
+        TEST_HOST: ""
+    dependencies:
+      - target: TraceCore
+      - target: GRDBCustom/GRDBCustom
+      - package: Clocks
+      - package: CustomDump
+      - package: XCTestDynamicOverlay
+        product: IssueReportingTestSupport
 
   TraceUITests:
     type: bundle.ui-testing
     platform: macOS
     sources:
       - Tests/TraceUITests
+      - Tests/TraceUITestSupport
     entitlements:
       path: Config/TraceUITests.entitlements
     settings:
@@ -151,6 +191,32 @@ targets:
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: true
     dependencies:
       - target: Trace
+
+  TraceSnapshotTests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/TraceSnapshotTests
+        excludes: [__Snapshots__]
+      - path: Tests/TraceSnapshotTests/__Snapshots__
+        type: folder
+        buildPhase: resources
+      - Tests/TraceUITestSupport
+    entitlements:
+      path: Config/TraceUITests.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.SnapshotTests
+        # Xcode's UI-test default aliases Testing to _Testing_Unavailable, but
+        # SnapshotTesting exports Swift Testing types alongside its XCTest API.
+        OTHER_SWIFT_FLAGS: ""
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Trace
+        ENABLE_HARDENED_RUNTIME: false
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: true
+    dependencies:
+      - target: Trace
+      - package: SnapshotTesting
 
   TracePerformanceTests:
     type: bundle.ui-testing
@@ -175,6 +241,7 @@ schemes:
       targets:
         Trace: all
         TraceCoreTests: [test]
+        TraceAppTests: [test]
         TraceUITests: [test]
       preActions:
         - name: Configure GRDB custom SQLite
@@ -190,6 +257,8 @@ schemes:
           parallelizable: true
           randomExecutionOrder: true
         - name: TraceUITests
+          parallelizable: false
+        - name: TraceAppTests
           parallelizable: false
     profile:
       config: Release
@@ -225,6 +294,44 @@ schemes:
         - name: Configure GRDB custom SQLite
           script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
           settingsTarget: TraceExternalClientFixture
+
+  TraceSnapshots:
+    build:
+      targets:
+        Trace: all
+        TraceSnapshotTests: [test]
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: Trace
+    test:
+      config: Debug
+      environmentVariables:
+        TRACE_SNAPSHOT_RECORD: "0"
+        TRACE_SNAPSHOT_XCODE_VERSION: "$(XCODE_VERSION_ACTUAL)"
+        TRACE_SNAPSHOT_XCODE_BUILD: "$(XCODE_PRODUCT_BUILD_VERSION)"
+      targets:
+        - name: TraceSnapshotTests
+          parallelizable: false
+
+  TraceSnapshotsRecord:
+    build:
+      targets:
+        Trace: all
+        TraceSnapshotTests: [test]
+      preActions:
+        - name: Configure GRDB custom SQLite
+          script: '"$PROJECT_DIR/Scripts/configure-grdb.sh"'
+          settingsTarget: Trace
+    test:
+      config: Debug
+      environmentVariables:
+        TRACE_SNAPSHOT_RECORD: "1"
+        TRACE_SNAPSHOT_XCODE_VERSION: "$(XCODE_VERSION_ACTUAL)"
+        TRACE_SNAPSHOT_XCODE_BUILD: "$(XCODE_PRODUCT_BUILD_VERSION)"
+      targets:
+        - name: TraceSnapshotTests
+          parallelizable: false
 
   TracePerformance:
     build:

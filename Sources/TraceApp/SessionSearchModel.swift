@@ -1,3 +1,4 @@
+import Clocks
 import Combine
 import Foundation
 import TraceCore
@@ -41,6 +42,7 @@ final class SessionSearchModel: ObservableObject {
     @Published private(set) var automaticRefreshToken: UUID?
     @Published private(set) var automaticResultRevision = 0
     private var database: IndexDatabase?
+    private let clock: any Clock<Duration>
     private var coordinator: IndexCoordinator?
     private var task: Task<Void, Never>?
     private var requestID = UUID()
@@ -70,6 +72,10 @@ final class SessionSearchModel: ObservableObject {
     private(set) var automaticResultWaitingForTesting = false
     func gateAutomaticResultsForTesting(_ gate: Task<Void, Never>?) { automaticResultGateForTesting = gate }
     #endif
+
+    init(clock: any Clock<Duration> = ContinuousClock()) {
+        self.clock = clock
+    }
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
     var projectFilterCanonicalKey: String? { filters.projectCanonicalKey }
@@ -275,10 +281,11 @@ final class SessionSearchModel: ObservableObject {
             ),
             pathKey: "TRACE_TEST_SEARCH_CRITERIA_AUDIT_PATH"
         )
+        let clock = clock
         task = Task { [weak self] in
             defer { if !reset { self?.ignoredAutomaticQueryValueForTesting = nil } }
             do {
-                if reset { try await Task.sleep(for: .milliseconds(100)) }
+                if reset { try await clock.sleep(for: .milliseconds(100)) }
                 if reset, trigger == .automatic {
                     if let delay = TraceTestHooks.delayMilliseconds(
                         for: "TRACE_TEST_AUTOMATIC_SEARCH_DELAY_MS",

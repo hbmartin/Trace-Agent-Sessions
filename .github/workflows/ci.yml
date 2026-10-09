@@ -25,7 +25,7 @@ jobs:
         run: Scripts/check-signing-settings.sh
       - name: Audit first-party network surface
         run: Scripts/check-network-surface.sh
-      - name: Build and run core tests
+      - name: Build and run unit tests
         run: >-
           xcodebuild test
           -project Trace.xcodeproj
@@ -33,6 +33,7 @@ jobs:
           -configuration Debug
           -destination 'platform=macOS,arch=arm64'
           -only-testing:TraceCoreTests
+          -only-testing:TraceAppTests
           CODE_SIGNING_ALLOWED=NO
       - name: Run complete UI suite
         run: >-

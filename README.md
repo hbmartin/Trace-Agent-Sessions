@@ -27,8 +27,10 @@ updater, telemetry upload, or runtime network feature.
 
 These screenshots were captured from the real app using an isolated, generated
 fixture. They contain no private session data. The UI test
-`testCaptureReadmeShowcaseWithoutTestControls` regenerates all four images below
-`/tmp/trace-readme-showcase/`, with test controls and the mouse cursor excluded.
+`testCaptureReadmeShowcaseWithoutTestControls` regenerates all four JPEGs in the
+UI runner’s temporary `trace-readme-showcase/` folder, with test controls and the
+mouse cursor excluded. Its console output prints `TRACE_README_SHOWCASE_DIRECTORY`
+with the full capture path.
 
 <table>
   <tr>
@@ -193,7 +195,7 @@ drift from `project.yml`; CI also checks the Debug and Release signing settings.
 
 ### Test
 
-Run the core test suite with:
+Run the core and headless app-model test suites with:
 
 ```sh
 xcodebuild test \
@@ -202,6 +204,7 @@ xcodebuild test \
   -configuration Debug \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:TraceCoreTests \
+  -only-testing:TraceAppTests \
   CODE_SIGNING_ALLOWED=NO
 ```
 
@@ -211,6 +214,34 @@ diagnostics. Set `TRACE_TEST_DIRECTORY` to use a fixed test directory whose
 `--index-smoke` argument indexes that directory, prints a JSON summary, and
 exits; it requires an isolated test directory and cannot use the production
 cache.
+
+Timing tests inject `TestClock` into the indexing and app models. Advance the
+clock to release debounce, retry, and refresh delays, then await the separate
+database or published-state completion. App-model tests compile without the
+application entry point and use disposable databases, settings, and diagnostics.
+
+Visual comparisons are local opt-in tests, separate from the normal Trace scheme
+and CI. The generated showcase corpus covers project browsing, search, and both
+transcript densities in light and dark mode:
+
+```sh
+Scripts/run-snapshot-tests.sh
+# Explicitly replace references after an intentional visual/environment change:
+Scripts/run-snapshot-tests.sh --record
+```
+
+Review all eight PNGs under `Tests/TraceSnapshotTests/__Snapshots__`, then run
+comparison again. Comparisons never record missing or changed references. The
+recorded environment includes macOS/Xcode versions, architecture, backing scale,
+and window size; a mismatch requires reviewing and re-recording the full set.
+Failure images and pixel diffs are attached to the `.xcresult` under
+`build/snapshots/`. Keep the Trace window unobscured while captures run, and run
+desktop test jobs serially because they share keyboard and mouse input. The
+README JPEG capture remains a separate workflow.
+
+Snapshot setup hydrates the complete fixture transcript before returning to the
+initial viewport. Its native scrollbar is hidden while retaining its layout
+space; scrolling behavior remains covered by the existing UI suite.
 
 ### Performance development
 

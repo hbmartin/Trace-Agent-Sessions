@@ -1,3 +1,5 @@
+import Clocks
+import CustomDump
 import CoreServices
 import GRDB
 import XCTest
@@ -738,10 +740,10 @@ final class IndexingRegressionTests: XCTestCase {
                        "reset pages must also drop duplicate IDs")
         let unique = shiftedPage.uniqueResults(excluding: [first.id])
         XCTAssertEqual(unique.map(\.id), [second.id])
-        XCTAssertEqual(shiftedPage.nextCursor?.rowID, cursor.rowID)
+        expectNoDifference(cursor, shiftedPage.nextCursor)
         let duplicateOnly = SearchPage(results: [first, first], nextCursor: cursor)
         XCTAssertTrue(duplicateOnly.uniqueResults(excluding: [first.id]).isEmpty)
-        XCTAssertEqual(duplicateOnly.nextCursor?.rowID, cursor.rowID,
+        expectNoDifference(cursor, duplicateOnly.nextCursor,
                        "deduplication must retain the cursor needed to advance")
     }
 
@@ -1377,10 +1379,11 @@ final class IndexingRegressionTests: XCTestCase {
         await coordinator.indexAll(scope: .proseOnly)
         let progress = RunRecorder()
         let completions = CompletionRecorder()
+        let clock = TestClock()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
             progress: { await progress.receive($0) },
-            retryDelay: .milliseconds(20),
+            clock: clock,
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
             }
@@ -1414,11 +1417,11 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(failedPhases.last, .failed)
         XCTAssertEqual(failedCompletions.last?.watermarks["volume"], 1)
 
-        let retryDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while await progress.terminalPhases.count < 2, ContinuousClock.now < retryDeadline {
-            try await Task.sleep(for: .milliseconds(20))
-            await scheduler.waitUntilIdle()
-        }
+        let retryFinished = expectation(description: "Scheduled retry reaches a terminal phase")
+        await progress.observeNextTerminal(retryFinished)
+        await clock.advance(by: .seconds(5))
+        await fulfillment(of: [retryFinished], timeout: 5)
+        await scheduler.waitUntilIdle()
         let automaticallyRetriedPhases = await progress.terminalPhases
         XCTAssertEqual(Array(automaticallyRetriedPhases.suffix(2)), [.failed, .failed])
 
@@ -1426,13 +1429,13 @@ final class IndexingRegressionTests: XCTestCase {
         await scheduler.waitUntilIdle()
         let secondFailurePhases = await progress.terminalPhases
         let secondFailureCompletions = await completions.values
-        XCTAssertEqual(secondFailurePhases, automaticallyRetriedPhases,
+        expectNoDifference(automaticallyRetriedPhases, secondFailurePhases,
                        "watermark-only work must not reactivate a dormant failure")
         XCTAssertEqual(secondFailureCompletions.last?.watermarks["volume"], 1)
 
-        try await Task.sleep(for: .milliseconds(100))
+        await clock.advance(by: .seconds(5))
         let phasesAfterSecondFailure = await progress.terminalPhases
-        XCTAssertEqual(phasesAfterSecondFailure, secondFailurePhases,
+        expectNoDifference(secondFailurePhases, phasesAfterSecondFailure,
                        "a retained batch must not hot-loop after a second failure")
 
         try await raw.write { try $0.execute(sql: "DROP TRIGGER fail_incremental_root") }
@@ -1458,6 +1461,8 @@ final class IndexingRegressionTests: XCTestCase {
         let phasesAfterClearedRetry = await progress.terminalPhases
         XCTAssertEqual(phasesAfterClearedRetry, retriedPhases,
                        "successful retry must clear retained operation work")
+        await scheduler.stop()
+        try await clock.checkSuspension()
     }
 
     func testSchedulerCompletesCheckpointForPassWithDurablyRecordedFileFailures() async throws {
@@ -1477,11 +1482,16 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.write(contentsOf: Data(line(2).utf8))
         try handle.close()
         let terminal = ProgressRecorder()
+        let progress = RunRecorder()
         let completions = CompletionRecorder()
+        let clock = TestClock()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
-            progress: { terminal.receive($0) },
-            retryDelay: .milliseconds(20),
+            progress: { update in
+                terminal.receive(update)
+                await progress.receive(update)
+            },
+            clock: clock,
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
             }
@@ -1501,7 +1511,10 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(terminal.terminal?.phase, .complete)
         XCTAssertEqual(terminal.terminal?.failedFiles, 1)
         XCTAssertEqual(terminal.terminal?.unresolvedFailedFiles, 1)
-        try await Task.sleep(for: .milliseconds(100))
+        let retryFinished = expectation(description: "Failed-file retry reaches a terminal phase")
+        await progress.observeNextTerminal(retryFinished)
+        await clock.advance(by: .seconds(5))
+        await fulfillment(of: [retryFinished], timeout: 5)
         await scheduler.waitUntilIdle()
         var values = await completions.values
         XCTAssertFalse(values.contains { $0.watermarks["failed-volume"] != nil },
@@ -1522,6 +1535,8 @@ final class IndexingRegressionTests: XCTestCase {
                        "stop must discard retained work and reject later requests")
         let completionsAfterStop = await completions.values
         XCTAssertEqual(completionsAfterStop.count, values.count)
+        await scheduler.stop()
+        try await clock.checkSuspension()
     }
 
     func testCompletedSafetyPassAdvancesTimestampWithoutCheckpointingBlockedWatermark() async throws {
@@ -1820,10 +1835,12 @@ final class IndexingRegressionTests: XCTestCase {
         try handle.write(contentsOf: Data(line(2).utf8))
         try handle.close()
         let completions = CompletionRecorder()
+        let progress = RunRecorder()
+        let clock = TestClock()
         let scheduler = IndexScheduler(
             coordinator: coordinator, scope: .proseOnly,
-            progress: { _ in },
-            retryDelay: parkDormant ? .milliseconds(20) : .seconds(30),
+            progress: { await progress.receive($0) },
+            clock: clock,
             didComplete: { activity, watermarks in
                 await completions.receive(activity: activity, watermarks: watermarks)
             }
@@ -1835,7 +1852,10 @@ final class IndexingRegressionTests: XCTestCase {
         )
         await scheduler.waitUntilIdle()
         if parkDormant {
-            try await Task.sleep(for: .milliseconds(100))
+            let retryFinished = expectation(description: "Retry finishes before checking dormant coverage")
+            await progress.observeNextTerminal(retryFinished)
+            await clock.advance(by: .seconds(5))
+            await fulfillment(of: [retryFinished], timeout: 5)
             await scheduler.waitUntilIdle()
         }
 
@@ -1851,6 +1871,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertFalse(values.contains { $0.watermarks["volume"] != nil },
                        "rebuild must retain the failed root's coverage mapping")
         await scheduler.stop()
+        try await clock.checkSuspension()
     }
 
     func testFailedFileRecoveryDoesNotBlockLaterHealthyFile() async throws {
@@ -4536,10 +4557,14 @@ private final class ProgressRecorder: @unchecked Sendable {
 private actor RunRecorder {
     var terminalPhases: [IndexProgress.Phase] = []
     var terminalActivities: [IndexActivity] = []
+    private var nextTerminal: XCTestExpectation?
+    func observeNextTerminal(_ expectation: XCTestExpectation) { nextTerminal = expectation }
     func receive(_ progress: IndexProgress) {
         if [.complete, .cancelled, .failed].contains(progress.phase) {
             terminalPhases.append(progress.phase)
             terminalActivities.append(progress.activity)
+            nextTerminal?.fulfill()
+            nextTerminal = nil
         }
     }
 }

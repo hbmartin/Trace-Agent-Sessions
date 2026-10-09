@@ -1,3 +1,4 @@
+import Clocks
 import Foundation
 
 public enum IndexActivity: String, Equatable, Sendable {
@@ -142,10 +143,11 @@ public actor IndexCoordinator {
 
     private let database: IndexDatabase
     private let sources: [any SessionSource]
+    private let clock: AnyClock<Duration>
     private let gate = IndexRunGate()
     private struct CodexNameCacheEntry {
         let result: CodexSessionNamesLoadResult
-        let loadedAt: ContinuousClock.Instant
+        let loadedAt: AnyClock<Duration>.Instant
     }
     private struct EffectiveCodexNames {
         let names: [String: CodexName]
@@ -235,13 +237,16 @@ public actor IndexCoordinator {
         }
     }
 
+
     func codexNameLoadCountForTesting(directory: URL) -> Int {
         codexNameLoadCounts[directory.standardizedFileURL.path, default: 0]
     }
 
-    public init(database: IndexDatabase, sources: [any SessionSource]) {
+    public init(database: IndexDatabase, sources: [any SessionSource],
+                clock: any Clock<Duration> = ContinuousClock()) {
         self.database = database
         self.sources = sources
+        self.clock = AnyClock(clock)
     }
 
     private func codexNames(
@@ -249,13 +254,13 @@ public actor IndexCoordinator {
     ) async throws -> CodexSessionNamesLoadResult {
         let key = directory.standardizedFileURL.path
         if let cached = codexNameCache[key],
-           cached.loadedAt.duration(to: .now) < .seconds(30),
+           cached.loadedAt.duration(to: clock.now) < .seconds(30),
            !(retryIncomplete && cached.result.needsRetry) {
             return cached.result
         }
         let result = try await Self.loadCodexNames(directory: directory)
         codexNameLoadCounts[key, default: 0] += 1
-        codexNameCache[key] = .init(result: result, loadedAt: .now)
+        codexNameCache[key] = .init(result: result, loadedAt: clock.now)
         return result
     }
 
@@ -1289,7 +1294,7 @@ public actor IndexCoordinator {
         var checkpoint = startOffset
         var persistedCheckpoint = startOffset
         var completedLines = 0
-        var lastProgress: ContinuousClock.Instant?
+        var lastProgress: AnyClock<Duration>.Instant?
         var projectName: String?
         let testBatchDelay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_INDEX_BATCH_DELAY_MS", cappedAt: 5_000
@@ -1328,8 +1333,8 @@ public actor IndexCoordinator {
                 completedLines = 0
                 persistedCheckpoint = checkpoint
                 if batchChanged { await mutation() }
-                if lastProgress == nil || lastProgress!.duration(to: .now) >= .milliseconds(250) {
-                    lastProgress = .now
+                if lastProgress == nil || lastProgress!.duration(to: clock.now) >= .milliseconds(250) {
+                    lastProgress = clock.now
                     await committed(checkpoint, max(0, checkpoint - startOffset), projectName)
                 }
                 if isFirstBatch, TraceTestHooks.isUITesting,

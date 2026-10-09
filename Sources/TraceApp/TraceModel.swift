@@ -1,4 +1,5 @@
 import AppKit
+import Clocks
 import CryptoKit
 import Darwin
 import Foundation
@@ -124,8 +125,9 @@ final class TraceModel: ObservableObject {
         }
     }
     let settings: AppSettings
-    let globalSearch = SessionSearchModel()
-    var mainSearch = SessionSearchModel()
+    let globalSearch: SessionSearchModel
+    let mainSearch: SessionSearchModel
+    private let clock: AnyClock<Duration>
     let diagnostics: DiagnosticsStore
 
     @Published private(set) var progress = IndexProgress(phase: .waiting)
@@ -236,11 +238,12 @@ final class TraceModel: ObservableObject {
     private var sourceChangeTask: Task<Void, Never>?
     private var sourceConfigurationRevision: UInt64 = 0
     private var startupSetupComplete = false
-    private var lastSummaryRefresh = ContinuousClock.now
+    private var lastSummaryRefresh: AnyClock<Duration>.Instant
     private var incrementalProgressTask: Task<Void, Never>?
     private var pendingIncrementalProgress: IndexProgress?
     private var incrementalProgressVisible = false
     private var automaticSearchTask: Task<Void, Never>?
+    private var searchVisibilityTask: Task<Void, Never>?
     private var automaticSearchTaskID: UUID?
     private var globalSearchNeedsRefresh = false
     private var mainSearchNeedsRefresh = false
@@ -255,7 +258,7 @@ final class TraceModel: ObservableObject {
     private var deferredUsageRepairTask: Task<Void, Never>?
     private var indexWorkflow = IndexWorkflowState()
     private var indexingPassActive: Bool { indexWorkflow.isActive }
-    private var lastAutomaticSearchRefresh: ContinuousClock.Instant?
+    private var lastAutomaticSearchRefresh: AnyClock<Duration>.Instant?
     private var lastObservedPassID: UUID?
     private var lastObservedMutationRevision = 0
     private var lastSearchedPassID: UUID?
@@ -280,23 +283,27 @@ final class TraceModel: ObservableObject {
 
     init(
         settings: AppSettings = AppSettings(),
+        clock: any Clock<Duration> = ContinuousClock(),
+        diagnostics: DiagnosticsStore? = nil,
         watcherGroupingPolicy: WatcherGroupingPolicy = .byVolume,
         startupActivityObserver: @escaping (IndexActivity) -> Void = { _ in },
         diagnosticsURL: URL? = nil
     ) {
         self.settings = settings
+        let clock = AnyClock(clock)
+        self.clock = clock
+        lastSummaryRefresh = clock.now
+        globalSearch = SessionSearchModel(clock: clock)
+        mainSearch = SessionSearchModel(clock: clock)
         self.watcherGroupingPolicy = watcherGroupingPolicy
         self.startupActivityObserver = startupActivityObserver
-        diagnostics = DiagnosticsStore(url: diagnosticsURL ?? TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
+        self.diagnostics = diagnostics ?? DiagnosticsStore(url: diagnosticsURL ?? TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
     }
 
     #if DEBUG
     func attachForTesting(database: IndexDatabase, sources: [any SessionSource]) {
-        self.database = database
-        let coordinator = IndexCoordinator(database: database, sources: sources)
-        self.coordinator = coordinator
-        mainSearch.attach(database: database, coordinator: coordinator)
-        globalSearch.attach(database: database, coordinator: coordinator)
+        let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
+        attach(database: database, coordinator: coordinator)
     }
 
     func refreshSummariesForTesting(terminal: Bool = true, lightweight: Bool = true) async {
@@ -399,11 +406,8 @@ final class TraceModel: ObservableObject {
                     }
                     break
                 }
-                let coordinator = IndexCoordinator(database: database, sources: sources)
-                self.coordinator = coordinator
-                globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-                mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-                scheduler = makeScheduler(coordinator)
+                let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
+                attach(database: database, coordinator: coordinator)
                 timeZoneObserver = NotificationCenter.default.addObserver(
                     forName: Notification.Name.NSSystemTimeZoneDidChange,
                     object: nil, queue: .main
@@ -495,6 +499,7 @@ final class TraceModel: ObservableObject {
             progress: { [weak self] update in
                 await self?.receiveProgress(update)
             },
+            clock: clock,
             didComplete: { [weak self] _, watermarks in
                 try? await self?.database?.saveEventCheckpoints(watermarks)
             },
@@ -504,7 +509,16 @@ final class TraceModel: ObservableObject {
         )
     }
 
-    private func receiveProgress(_ update: IndexProgress) async {
+    /// Installs an already-open index without starting source discovery or filesystem watchers.
+    func attach(database: IndexDatabase, coordinator: IndexCoordinator) {
+        self.database = database
+        self.coordinator = coordinator
+        globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+        mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+        scheduler = makeScheduler(coordinator)
+    }
+
+    func receiveProgress(_ update: IndexProgress) async {
         let disposition = indexWorkflow.receive(update)
         if !disposition.passTerminal { usageSnapshotRequestID = UUID() }
         if disposition.passTerminal {
@@ -529,8 +543,9 @@ final class TraceModel: ObservableObject {
             } else {
                 pendingIncrementalProgress = update
                 if incrementalProgressTask == nil {
+                    let clock = clock
                     incrementalProgressTask = Task { [weak self] in
-                        do { try await Task.sleep(for: .milliseconds(300)) }
+                        do { try await clock.sleep(for: .milliseconds(300)) }
                         catch { return }
                         guard let self, let pending = self.pendingIncrementalProgress else { return }
                         self.progress = pending
@@ -557,9 +572,9 @@ final class TraceModel: ObservableObject {
 
         let shouldRefresh = disposition.passTerminal
             || ((!update.incremental || incrementalProgressVisible)
-                && lastSummaryRefresh.duration(to: .now) >= .milliseconds(250))
+                && lastSummaryRefresh.duration(to: clock.now) >= .milliseconds(250))
         if shouldRefresh {
-            lastSummaryRefresh = .now
+            lastSummaryRefresh = clock.now
             await reloadSummaries(
                 lightweight: !disposition.workflowTerminal,
                 projectReconciliation: disposition.projectReconciliation,
@@ -672,13 +687,19 @@ final class TraceModel: ObservableObject {
     }
 
     private func searchVisibilityChanged() {
+        searchVisibilityTask?.cancel()
+        searchVisibilityTask = nil
         if !hasVisibleAutomaticSearch {
             cancelAutomaticSearch()
             return
         }
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(20))
-            self?.scheduleAutomaticSearch()
+        let clock = clock
+        searchVisibilityTask = Task { @MainActor [weak self] in
+            do { try await clock.sleep(for: .milliseconds(20)) }
+            catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.searchVisibilityTask = nil
+            self.scheduleAutomaticSearch()
         }
     }
 
@@ -691,12 +712,13 @@ final class TraceModel: ObservableObject {
     private func scheduleAutomaticSearch() {
         guard hasVisibleAutomaticSearch else { return }
         guard automaticSearchTask == nil else { return }
-        let elapsed = lastAutomaticSearchRefresh?.duration(to: .now) ?? .seconds(1)
+        let elapsed = lastAutomaticSearchRefresh?.duration(to: clock.now) ?? .seconds(1)
         if elapsed >= .seconds(1) { performAutomaticSearch(); return }
         let id = UUID()
         automaticSearchTaskID = id
+        let clock = clock
         automaticSearchTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(1) - elapsed) }
+            do { try await clock.sleep(for: .seconds(1) - elapsed) }
             catch { return }
             guard let self, !Task.isCancelled, self.automaticSearchTaskID == id else { return }
             self.automaticSearchTaskID = nil
@@ -707,7 +729,7 @@ final class TraceModel: ObservableObject {
 
     private func performAutomaticSearch() {
         guard hasVisibleAutomaticSearch else { return }
-        lastAutomaticSearchRefresh = .now
+        lastAutomaticSearchRefresh = clock.now
         lastSearchedPassID = lastObservedPassID
         lastSearchedMutationRevision = lastObservedMutationRevision
         if globalSearchNeedsRefresh, !globalSearchSurfaces.isEmpty,
@@ -809,11 +831,8 @@ final class TraceModel: ObservableObject {
                 return
             }
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
-            let coordinator = IndexCoordinator(database: database, sources: sources)
-            self.coordinator = coordinator
-            globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-            mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-            scheduler = makeScheduler(coordinator)
+            let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
+            attach(database: database, coordinator: coordinator)
             initialIndexRequested = false
             startupSetupComplete = true
             guard await startWatching(sources, forceRootReconciliation: true) else { return }
@@ -1267,6 +1286,7 @@ final class TraceModel: ObservableObject {
         let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_DELAY_MS", cappedAt: 5_000
         ) ?? 5_000
+        let clock = clock
         if TraceTestHooks.isUITesting, TraceTestHooks.environment["TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH"] != nil {
             TraceTestHooks.touch(pathKey: "TRACE_TEST_PROJECT_AVAILABILITY_ENTERED_PATH")
             Task { @MainActor [weak self] in
@@ -1283,7 +1303,7 @@ final class TraceModel: ObservableObject {
                         try await TraceTestHooks.waitForRelease(pathKey: key, timeoutMilliseconds: 15_000)
                     }
                 }
-                try await Task.sleep(for: .milliseconds(delay))
+                try await clock.sleep(for: .milliseconds(delay))
             }
             catch { return }
             guard let self, self.sidebarRevealRequest?.token == request.token else { return }
@@ -1530,7 +1550,7 @@ final class TraceModel: ObservableObject {
             let delay = TraceTestHooks.delayMilliseconds(
                 for: "TRACE_TEST_USAGE_REPAIR_QUIET_DELAY_MS", cappedAt: 5_000
             ) ?? 1_000
-            do { try await Task.sleep(for: .milliseconds(delay)) }
+            do { try await self.clock.sleep(for: .milliseconds(delay)) }
             catch { return }
             guard !Task.isCancelled else { return }
             await self.scheduler?.waitUntilIdle()
@@ -1625,6 +1645,18 @@ final class TraceModel: ObservableObject {
         sessionListTask?.cancel()
         invalidateWatchers()
         sourceChangeTask?.cancel()
+        searchVisibilityTask?.cancel()
+        searchVisibilityTask = nil
+        incrementalProgressTask?.cancel()
+        incrementalProgressTask = nil
+        pendingIncrementalProgress = nil
+        deferredUsageRepairTask?.cancel()
+        deferredUsageRepairTask = nil
+        globalSearchSurfaces.removeAll()
+        mainWindowVisible = false
+        mainSearchPanelVisible = false
+        globalSearch.suspendForNavigation()
+        mainSearch.suspendForNavigation()
         cancelAutomaticSearch()
         invalidateSidebarRevealRequest()
         if let timeZoneObserver {

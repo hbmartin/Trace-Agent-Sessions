@@ -1,3 +1,5 @@
+import Clocks
+import CustomDump
 import Foundation
 import GRDB
 import CoreServices
@@ -1507,7 +1509,7 @@ final class SessionMetadataTests: XCTestCase {
         ], to: added)
         await nestedCoordinator.refresh(paths: [added.path], scope: .proseOnly)
         let titles = try await database.sessions().map(\.title)
-        XCTAssertEqual(Set(titles), ["Preserved nested title", "New nested title"])
+        expectNoDifference(Set(["Preserved nested title", "New nested title"]), Set(titles))
     }
 
     func testNestedRootInheritsDefaultRenamesAndDeletionsThroughSymlinkAlias() async throws {

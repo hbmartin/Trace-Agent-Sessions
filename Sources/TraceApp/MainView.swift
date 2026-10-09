@@ -693,6 +693,12 @@ private struct TranscriptRenderer: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         let scroller = TranscriptScroller()
         scroller.setAccessibilityIdentifier("transcriptScroller")
+        if TraceTestHooks.isUITesting,
+           TraceTestHooks.environment["TRACE_TEST_SNAPSHOT_APPEARANCE"] != nil {
+            // Offscreen row estimates vary the thumb geometry. Scrolling has its
+            // own UI coverage; omit this transient control from static snapshots.
+            scroller.alphaValue = 0
+        }
         scrollView.verticalScroller = scroller
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = !TraceTestHooks.isUITesting

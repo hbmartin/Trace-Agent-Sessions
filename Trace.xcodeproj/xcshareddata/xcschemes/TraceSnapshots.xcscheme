@@ -4,7 +4,8 @@
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
-      buildImplicitDependencies = "YES">
+      buildImplicitDependencies = "YES"
+      runPostActionsOnFailure = "NO">
       <PreActions>
          <ExecutionAction
             ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
@@ -46,37 +47,9 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "519CA1FF0D9A401525B0CC9D"
-               BuildableName = "TraceAppTests.xctest"
-               BlueprintName = "TraceAppTests"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "73D79764B2E675471C86DD9A"
-               BuildableName = "TraceCoreTests.xctest"
-               BlueprintName = "TraceCoreTests"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B18F9DC35F50099154E66D93"
-               BuildableName = "TraceUITests.xctest"
-               BlueprintName = "TraceUITests"
+               BlueprintIdentifier = "7088DEBAAFDCD3676E1049B3"
+               BuildableName = "TraceSnapshotTests.xctest"
+               BlueprintName = "TraceSnapshotTests"
                ReferencedContainer = "container:Trace.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -86,8 +59,8 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES"
-      codeCoverageEnabled = "YES">
+      shouldUseLaunchSchemeArgsEnv = "NO"
+      onlyGenerateCoverageForSpecifiedTargets = "NO">
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
@@ -100,37 +73,35 @@
       <Testables>
          <TestableReference
             skipped = "NO"
-            parallelizable = "YES"
-            testExecutionOrdering = "random">
+            parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "73D79764B2E675471C86DD9A"
-               BuildableName = "TraceCoreTests.xctest"
-               BlueprintName = "TraceCoreTests"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B18F9DC35F50099154E66D93"
-               BuildableName = "TraceUITests.xctest"
-               BlueprintName = "TraceUITests"
-               ReferencedContainer = "container:Trace.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "519CA1FF0D9A401525B0CC9D"
-               BuildableName = "TraceAppTests.xctest"
-               BlueprintName = "TraceAppTests"
+               BlueprintIdentifier = "7088DEBAAFDCD3676E1049B3"
+               BuildableName = "TraceSnapshotTests.xctest"
+               BlueprintName = "TraceSnapshotTests"
                ReferencedContainer = "container:Trace.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "TRACE_SNAPSHOT_RECORD"
+            value = "0"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "TRACE_SNAPSHOT_XCODE_BUILD"
+            value = "$(XCODE_PRODUCT_BUILD_VERSION)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "TRACE_SNAPSHOT_XCODE_VERSION"
+            value = "$(XCODE_VERSION_ACTUAL)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
