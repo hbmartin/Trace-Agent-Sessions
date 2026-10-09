@@ -382,7 +382,7 @@ private struct SessionSidebar: View {
                             } else if let error = model.sessionListError {
                                 VStack(alignment: .leading) {
                                     Text(error).font(.caption).foregroundStyle(.secondary)
-                                    Button("Retry") { model.loadMoreSessions() }
+                                    Button("Retry") { model.retrySessionLoad() }
                                         .accessibilityIdentifier("retrySessionPage")
                                 }
                             } else if model.hasMoreSessions {
@@ -504,12 +504,6 @@ struct TranscriptView: View {
     }
 }
 
-struct TranscriptBookmark {
-    let messageID: Int64
-    let offset: CGFloat
-    let index: Int
-}
-
 private struct TranscriptRowConfiguration: Equatable {
     let messageID: Int64
     let role: MessageRole
@@ -520,6 +514,7 @@ private struct TranscriptRowConfiguration: Equatable {
     let hasError: Bool
     let sourcePath: String
     let sourceFormat: SourceFormat
+    let sourceGeneration: Int64?
     let locator: RecordLocator
     let sectionFlags: Int?
     let hydratedRole: MessageRole?
@@ -532,7 +527,7 @@ private struct TranscriptRowConfiguration: Equatable {
 
     init(
         message: MessageSummary, hydrated: HydratedMessage?, hydrationError: String?,
-        visibility: TranscriptVisibility, reasoningExpanded: Bool
+        visibility: TranscriptVisibility, reasoningExpanded: Bool, sourceGeneration: Int64?
     ) {
         messageID = message.id
         role = message.role
@@ -543,6 +538,7 @@ private struct TranscriptRowConfiguration: Equatable {
         hasError = message.hasError
         sourcePath = message.sourcePath
         sourceFormat = message.sourceFormat
+        self.sourceGeneration = sourceGeneration
         locator = message.locator
         sectionFlags = message.sectionFlags
         hydratedRole = hydrated?.role
@@ -1343,6 +1339,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let hydrationError = model.hydrationFailures[message.id]
             let rowView = MessageRow(
                 summary: message,
+                sourceGeneration: model.selectedSession?.sourceGeneration,
                 hydrated: hydrated,
                 hydrationError: hydrationError,
                 reasoningExpanded: Binding(
@@ -1380,7 +1377,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     hydrated: hydrated,
                     hydrationError: hydrationError,
                     visibility: visibility,
-                    reasoningExpanded: model.expandedReasoningIDs.contains(message.id)
+                    reasoningExpanded: model.expandedReasoningIDs.contains(message.id),
+                    sourceGeneration: model.selectedSession?.sourceGeneration
                 ),
                 copyMessage: { [weak model] in model?.copyMessage(id: message.id) }
             )
@@ -3054,6 +3052,7 @@ private final class TranscriptHostingCell: NSTableCellView {
 
 private struct MessageRow: View {
     let summary: MessageSummary
+    let sourceGeneration: Int64?
     let hydrated: HydratedMessage?
     let hydrationError: String?
     private var hydrationFailed: Bool { hydrationError != nil }
@@ -3101,7 +3100,8 @@ private struct MessageRow: View {
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.58), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45)))
             .task(id: HydrationTaskID(
-                visibility: visibility, sourcePath: summary.sourcePath,
+                messageID: summary.id, visibility: visibility, sourcePath: summary.sourcePath,
+                sourceGeneration: sourceGeneration, sourceFormat: summary.sourceFormat, locator: summary.locator,
                 needsHydration: hydrated == nil,
                 lazyExpanded: expansion.auxiliary
             )) {
@@ -3230,8 +3230,12 @@ private struct MessageRow: View {
     }
 
     private struct HydrationTaskID: Hashable {
+        let messageID: Int64
         let visibility: TranscriptVisibility
         let sourcePath: String
+        let sourceGeneration: Int64?
+        let sourceFormat: SourceFormat
+        let locator: RecordLocator
         let needsHydration: Bool
         let lazyExpanded: Bool
     }

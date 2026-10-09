@@ -145,14 +145,14 @@ final class TraceModel: ObservableObject {
     private var mainSearchReturnContext: MainSearchReturnContext?
     private var sessionListProjectKey: String?
     private var loadedSessionPageCount = 1
-    private var sessionListRevision = UUID()
     private var nextSessionCursor: SessionCursor?
-    private struct LoadedSessionPages {
-        var sessions: [SessionSummary]
-        let total: Int
-        let nextCursor: SessionCursor?
-        let pageCount: Int
+    private typealias LoadedSessionPages = SessionListSnapshot
+    private var sessionListTask: Task<Void, Never>?
+    private enum SessionListRetry {
+        case reload(ensuringSessionID: Int64?)
+        case nextPage
     }
+    private var sessionListRetry: SessionListRetry?
     @Published private(set) var recentSessions: [SessionSummary] = []
     @Published private(set) var messages: [MessageSummary] = [] {
         didSet {
@@ -280,13 +280,33 @@ final class TraceModel: ObservableObject {
     init(
         settings: AppSettings = AppSettings(),
         watcherGroupingPolicy: WatcherGroupingPolicy = .byVolume,
-        startupActivityObserver: @escaping (IndexActivity) -> Void = { _ in }
+        startupActivityObserver: @escaping (IndexActivity) -> Void = { _ in },
+        diagnosticsURL: URL? = nil
     ) {
         self.settings = settings
         self.watcherGroupingPolicy = watcherGroupingPolicy
         self.startupActivityObserver = startupActivityObserver
-        diagnostics = DiagnosticsStore(url: TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
+        diagnostics = DiagnosticsStore(url: diagnosticsURL ?? TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
     }
+
+    #if DEBUG
+    func attachForTesting(database: IndexDatabase, sources: [any SessionSource]) {
+        self.database = database
+        let coordinator = IndexCoordinator(database: database, sources: sources)
+        self.coordinator = coordinator
+        mainSearch.attach(database: database, coordinator: coordinator)
+        globalSearch.attach(database: database, coordinator: coordinator)
+    }
+
+    func refreshSummariesForTesting(terminal: Bool = true) async {
+        await reloadSummaries(lightweight: true,
+                              projectReconciliation: terminal ? .terminalRetaining : .ongoing)
+    }
+
+    func queueMainSearchRefreshForTesting() { mainSearchNeedsRefresh = true }
+    private var sessionPageReadGateForTesting: Task<Void, Never>?
+    func gateSessionPagesForTesting(_ gate: Task<Void, Never>?) { sessionPageReadGateForTesting = gate }
+    #endif
 
     func start() {
         guard !started else { return }
@@ -875,6 +895,7 @@ final class TraceModel: ObservableObject {
             selectedProjectID = project?.id ?? context.projectID
             selectedProjectCanonicalKey = context.canonicalKey
             selectedProjectDisplayName = project?.displayName ?? context.displayName
+            if mainSearchNeedsRefresh { mainSearch.markResultsStale() }
             mainSearchNeedsRefresh = false
             loadProjectSessions()
         }
@@ -991,67 +1012,87 @@ final class TraceModel: ObservableObject {
     }
 
     private func loadProjectSessions(ensuring ensuringSessionID: Int64? = nil) {
-        if sessionListProjectKey != selectedProjectCanonicalKey {
-            resetSessionPagination()
-        }
+        if sessionListProjectKey != selectedProjectCanonicalKey { resetSessionPagination() }
         sessionListProjectKey = selectedProjectCanonicalKey
         let request = UUID()
         projectRequestID = request
-        let projectCanonicalKey = selectedProjectCanonicalKey
+        sessionListTask?.cancel()
+        let key = selectedProjectCanonicalKey
+        let pageCount = loadedSessionPageCount
         isLoadingSessions = true
         sessionListError = nil
-        guard let database else { isLoadingSessions = false; return }
-        Task {
-            defer { if projectRequestID == request { isLoadingSessions = false } }
+        sessionListRetry = nil
+        guard let database else { isLoadingSessions = false; sessionListTask = nil; return }
+        sessionListTask = Task {
+            defer { finishSessionListRequest(request) }
             do {
-                let page = try await projectSessions(
-                    canonicalKey: projectCanonicalKey, ensuring: ensuringSessionID, database: database
+                let page = try await database.sessionListSnapshot(
+                    projectCanonicalKey: key, pageCount: pageCount, ensuringSessionID: ensuringSessionID
                 )
-                guard projectRequestID == request, selectedProjectCanonicalKey == projectCanonicalKey else { return }
+                guard projectRequestID == request, selectedProjectCanonicalKey == key else { return }
                 applySessionPages(page)
-            } catch {
+            } catch is CancellationError { }
+            catch {
                 guard projectRequestID == request else { return }
                 sessionListError = error.localizedDescription
+                sessionListRetry = .reload(ensuringSessionID: ensuringSessionID)
             }
         }
     }
 
+    private func finishSessionListRequest(_ request: UUID) {
+        guard projectRequestID == request else { return }
+        isLoadingSessions = false
+        sessionListTask = nil
+    }
+
     private func resetSessionPagination() {
+        sessionListTask?.cancel()
+        sessionListTask = nil
         sessions = []
         totalSessionCount = 0
         nextSessionCursor = nil
         hasMoreSessions = false
         loadedSessionPageCount = 1
-        sessionListRevision = UUID()
         sessionListError = nil
+        sessionListRetry = nil
         isLoadingSessions = false
     }
 
     private func applySessionPages(_ page: LoadedSessionPages) {
         sessions = page.sessions
-        totalSessionCount = page.total
+        totalSessionCount = page.totalCount
         nextSessionCursor = page.nextCursor
         hasMoreSessions = page.nextCursor != nil
         loadedSessionPageCount = page.pageCount
-        sessionListRevision = UUID()
         sessionListError = nil
+        sessionListRetry = nil
+    }
+
+    func retrySessionLoad() {
+        guard !isLoadingSessions, let retry = sessionListRetry else { return }
+        switch retry {
+        case .reload(let sessionID): loadProjectSessions(ensuring: sessionID)
+        case .nextPage: loadMoreSessions()
+        }
     }
 
     func loadMoreSessions() {
-        guard !isLoadingSessions else { return }
-        guard let cursor = nextSessionCursor, let database else {
-            if sessionListError != nil { loadProjectSessions(ensuring: selectedSessionID) }
-            return
-        }
+        guard !isLoadingSessions, let cursor = nextSessionCursor, let database else { return }
         let key = selectedProjectCanonicalKey
-        let request = projectRequestID
-        let revision = sessionListRevision
+        let request = UUID()
+        projectRequestID = request
         isLoadingSessions = true
         sessionListError = nil
-        Task {
-            defer { if projectRequestID == request { isLoadingSessions = false } }
+        sessionListRetry = nil
+        sessionListTask = Task {
+            defer { finishSessionListRequest(request) }
             do {
                 let page = try await database.sessionsPage(projectCanonicalKey: key, cursor: cursor)
+                #if DEBUG
+                if let gate = sessionPageReadGateForTesting { await gate.value }
+                #endif
+                try Task.checkCancellation()
                 if let delay = TraceTestHooks.delayMilliseconds(
                     for: "TRACE_TEST_SESSION_PAGE_DELAY_MS", cappedAt: 5_000,
                     marker: .touch(pathKey: "TRACE_TEST_SESSION_PAGE_STARTED_PATH")
@@ -1059,8 +1100,7 @@ final class TraceModel: ObservableObject {
                     try await Task.sleep(for: .milliseconds(delay))
                     TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_PAGE_FINISHED_PATH")
                 }
-                guard projectRequestID == request, sessionListRevision == revision,
-                      selectedProjectCanonicalKey == key else { return }
+                guard projectRequestID == request, selectedProjectCanonicalKey == key else { return }
                 let existing = Set(sessions.map(\.id))
                 sessions.append(contentsOf: page.sessions.filter { !existing.contains($0.id) })
                 sessions.sort { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }
@@ -1068,63 +1108,24 @@ final class TraceModel: ObservableObject {
                 nextSessionCursor = page.nextCursor
                 hasMoreSessions = page.nextCursor != nil
                 loadedSessionPageCount += 1
-                sessionListRevision = UUID()
-            } catch {
-                guard projectRequestID == request, sessionListRevision == revision else { return }
+            } catch is CancellationError { }
+            catch {
+                guard projectRequestID == request else { return }
                 sessionListError = error.localizedDescription
+                sessionListRetry = .nextPage
             }
         }
     }
 
-    private func projectSessions(canonicalKey: String?, ensuring sessionID: Int64? = nil,
-                                 database: IndexDatabase) async throws -> LoadedSessionPages {
-        let lookup = await lookupSession(id: sessionID, database: database)
-        return try await projectSessions(canonicalKey: canonicalKey, ensuring: lookup.session, database: database)
-    }
-
-    private func projectSessions(canonicalKey: String?, ensuring session: SessionSummary?,
-                                 database: IndexDatabase) async throws -> LoadedSessionPages {
-        let pageBudget = sessionListProjectKey == canonicalKey ? loadedSessionPageCount : 1
-        var cursor: SessionCursor?
-        var rows: [SessionSummary] = []
-        var total = 0
-        var fetched = 0
-        repeat {
-            let page = try await database.sessionsPage(projectCanonicalKey: canonicalKey, cursor: cursor)
-            rows.append(contentsOf: page.sessions)
-            total = page.totalCount
-            cursor = page.nextCursor
-            fetched += 1
-        } while cursor != nil && fetched < pageBudget
-        if let session, !rows.contains(where: { $0.id == session.id }), session.projectCanonicalKey == canonicalKey {
-            rows.append(session)
-        }
-        var seen = Set<Int64>()
-        rows = rows.filter { seen.insert($0.id).inserted }
-        rows.sort { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }
-        return .init(sessions: rows, total: total, nextCursor: cursor, pageCount: fetched)
-    }
-
-    private func lookupSession(
-        id: Int64?, database: IndexDatabase
-    ) async -> SessionLookupResult {
-        guard let id else { return .init(succeeded: true, session: nil) }
-        do {
-            return .init(succeeded: true, session: try await database.session(id: id))
-        } catch {
-            return .init(succeeded: false, session: nil)
-        }
-    }
-
     func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil, preservingMainSearch: Bool = false) {
+        if selectedSessionID == sessionID, selectedSession != nil, messageID == nil {
+            if showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
+            return
+        }
         if !preservingMainSearch { mainSearchReturnContext = nil; hasSearchReturnContext = false; mainSearchReturnAnchor = nil }
         mayRestoreSession = false
         if sidebarRevealRequest?.sessionID != sessionID {
             invalidateSidebarRevealRequest()
-        }
-        if selectedSessionID == sessionID, selectedSession != nil, messageID == nil {
-            if showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
-            return
         }
         selectedSessionID = sessionID
         settings.lastSessionID = sessionID
@@ -1144,8 +1145,7 @@ final class TraceModel: ObservableObject {
         hydratingMessageIDs.removeAll(keepingCapacity: true)
         expandedReasoningIDs.removeAll()
         if !preservingMainSearch {
-            mainSearchNeedsRefresh = !mainSearch.query.isEmpty
-            syncMainSearchProjectFilter()
+            searchMain()
         }
         guard let database else { return }
         Task {
@@ -1155,7 +1155,7 @@ final class TraceModel: ObservableObject {
             let session = snapshot.session
             if let session,
                adoptProjectIdentity(from: session) {
-                if !preservingMainSearch { syncMainSearchProjectFilter() }
+                if !preservingMainSearch { searchMain() }
                 loadProjectSessions(ensuring: sessionID)
             }
             scrollRequest = UUID()
@@ -1179,6 +1179,7 @@ final class TraceModel: ObservableObject {
     func openSearchResult(_ result: SearchResult, fromMainSearch: Bool = false, anchor: SearchResultAnchor? = nil) {
         if fromMainSearch {
             cancelAutomaticSearch()
+            if mainSearchNeedsRefresh { mainSearch.markResultsStale() }
             mainSearch.suspendForNavigation()
             mainSearchReturnContext = .init(projectID: selectedProjectID,
                                            canonicalKey: selectedProjectCanonicalKey,
@@ -1593,6 +1594,7 @@ final class TraceModel: ObservableObject {
     }
 
     func prepareToTerminate() async {
+        sessionListTask?.cancel()
         invalidateWatchers()
         sourceChangeTask?.cancel()
         cancelAutomaticSearch()
@@ -1944,12 +1946,25 @@ final class TraceModel: ObservableObject {
         guard let database else { return }
         let refresh = UUID()
         summaryRequestID = refresh
-        let loadedProjects = try? await database.projects()
-        let loadedRecent = (try? await database.sessions(limit: 10)) ?? []
+        while let sessionListTask {
+            await sessionListTask.value
+            guard summaryRequestID == refresh else { return }
+        }
+        guard summaryRequestID == refresh else { return }
         let projectCanonicalKey = selectedProjectCanonicalKey
-        let projectRequest = projectRequestID
+        let projectRequest = UUID()
+        projectRequestID = projectRequest
+        isLoadingSessions = true
+        defer { finishSessionListRequest(projectRequest) }
         let ensuredSessionID = selectedSessionID
         let selectedSessionRequest = sessionRequestID
+        let pageCount = sessionListProjectKey == projectCanonicalKey ? loadedSessionPageCount : 1
+        let sidebar = try? await database.sidebarSnapshot(
+            projectCanonicalKey: projectCanonicalKey, pageCount: pageCount, ensuringSessionID: ensuredSessionID
+        )
+        let loadedProjects = sidebar?.projects
+        let loadedRecent = sidebar?.recentSessions ?? recentSessions
+        let loadedSessions = sidebar?.sessionList
         let loadedTranscript: SessionTranscriptSnapshot?
         if let ensuredSessionID {
             loadedTranscript = try? await database.transcriptSnapshot(
@@ -1961,12 +1976,6 @@ final class TraceModel: ObservableObject {
         let loadedSelectedSession = SessionLookupResult(
             succeeded: ensuredSessionID == nil || loadedTranscript != nil,
             session: loadedTranscript?.session
-        )
-        let pageRevision = sessionListRevision
-        let loadedSessions = try? await projectSessions(
-            canonicalKey: projectCanonicalKey,
-            ensuring: loadedSelectedSession.session,
-            database: database
         )
         if projectReconciliation != .ongoing,
            let delay = TraceTestHooks.delayMilliseconds(
@@ -1984,7 +1993,7 @@ final class TraceModel: ObservableObject {
                 in: loadedProjects,
                 missingProject: projectReconciliation.globalMissingProjectPolicy
             )
-            mainProjectFilterReconciliation = hasSearchReturnContext ? .unchanged : mainSearch.resolveProjectFilter(
+            mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
                 in: loadedProjects,
                 missingProject: projectReconciliation.mainMissingProjectPolicy
             )
@@ -2001,7 +2010,7 @@ final class TraceModel: ObservableObject {
                 globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
                     in: projects, missingProject: .retain
                 )
-                mainProjectFilterReconciliation = hasSearchReturnContext ? .unchanged : mainSearch.resolveProjectFilter(
+                mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
                     in: projects, missingProject: .retain
                 )
             }
@@ -2014,11 +2023,11 @@ final class TraceModel: ObservableObject {
         }
         if mainProjectFilterReconciliation.requiresSearchRefresh,
            !mainSearch.query.isEmpty {
-            mainSearchNeedsRefresh = true
-            scheduleAutomaticSearch()
+            if hasSearchReturnContext { mainSearch.markResultsStale() }
+            else { mainSearchNeedsRefresh = true; scheduleAutomaticSearch() }
         }
         if selectedProjectCanonicalKey == projectCanonicalKey,
-           projectRequestID == projectRequest, sessionListRevision == pageRevision,
+           projectRequestID == projectRequest,
            let loadedSessions {
             sessionListProjectKey = projectCanonicalKey
             applySessionPages(loadedSessions)

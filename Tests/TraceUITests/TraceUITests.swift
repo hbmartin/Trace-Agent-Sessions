@@ -5502,6 +5502,39 @@ extension TraceUITests {
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
+    func testFailedHydrationRestartsAfterGenerationChangeWithoutPendingRestore() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let requests = directory.appendingPathComponent("generation-hydration-requests")
+        let completed = directory.appendingPathComponent("generation-initial-restore-completed")
+        let pass = directory.appendingPathComponent("generation-index-pass")
+        app.launchEnvironment["TRACE_TEST_FAIL_HYDRATION_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_FAIL_HYDRATION_MESSAGE_INDEX"] = "0"
+        app.launchEnvironment["TRACE_TEST_HYDRATION_REQUESTS_PATH"] = requests.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_COMPLETED_PATH"] = completed.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = pass.path
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
+        let session = app.staticTexts["Find the sample answer"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 20)); session.click()
+        let retry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "retryMessage-")).firstMatch
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        let messageID = String(retry.identifier.dropFirst("retryMessage-".count))
+        XCTAssertTrue(waitForFile(completed, timeout: 15), "initial bottom restore must settle before changing a failed non-anchor row")
+        XCTAssertEqual(fileLines(in: requests).filter { $0 == messageID }.count, 1)
+        let database = directory.appendingPathComponent("index.sqlite")
+        _ = try sqliteInteger(database, sql: "UPDATE source_file SET content_generation=content_generation+1; SELECT max(content_generation) FROM source_file;")
+        try? FileManager.default.removeItem(at: pass)
+        let source = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        let handle = try FileHandle(forWritingTo: source)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data([10])); try handle.close()
+        XCTAssertTrue(waitForFile(pass, timeout: 15))
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 15))
+        let deadline = Date().addingTimeInterval(10)
+        while fileLines(in: requests).filter({ $0 == messageID }).count < 2, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        XCTAssertEqual(fileLines(in: requests).filter { $0 == messageID }.count, 2,
+                       "cleared failure must restart hydration without a Retry click or another restore")
+    }
+
     func testMarkdownPreservesParagraphWhitespaceAndNativeCopy() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let content = "First paragraph.\n\nSecond paragraph.\n\n- First item\n- Second item\n\n```swift\nlet value = 1\n```"
