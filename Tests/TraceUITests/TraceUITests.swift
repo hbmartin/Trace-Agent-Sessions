@@ -948,6 +948,9 @@ final class TraceUITests: XCTestCase {
     func testSearchUpdatesDuringControlledLongIndexPass() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let file = directory.appendingPathComponent("Sources/Claude/live-rebuild.jsonl")
+        let committed = directory.appendingPathComponent("index-batch-committed")
+        let release = directory.appendingPathComponent("index-batch-release")
+        defer { try? Data().write(to: release) }
         var data = Data()
         for index in 0..<750 {
             let row: [String: Any] = [
@@ -959,10 +962,12 @@ final class TraceUITests: XCTestCase {
             data.append(10)
         }
         try data.write(to: file)
-        app.launchEnvironment["TRACE_TEST_INDEX_BATCH_DELAY_MS"] = "5000"
+        app.launchEnvironment["TRACE_TEST_INDEX_BATCH_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_INDEX_BATCH_RELEASE_PATH"] = release.path
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
         app.buttons["Build Index"].click()
+        XCTAssertTrue(waitForFile(committed, timeout: 15), "the first batch must commit before search observation")
         let query = app.textFields["mainSearch"]
         XCTAssertTrue(query.waitForExistence(timeout: 10))
         query.click()
@@ -979,6 +984,8 @@ final class TraceUITests: XCTestCase {
         let newest = app.buttons.containing(NSPredicate(
             format: "label CONTAINS %@", "StreamingNeedle row 749"
         )).firstMatch
+        XCTAssertFalse(newest.exists, "the final batch must remain uncommitted while early results are observed")
+        try Data().write(to: release)
         XCTAssertTrue(newest.waitForExistence(timeout: 30))
     }
 
