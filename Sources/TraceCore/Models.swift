@@ -769,6 +769,13 @@ public struct SearchFilters: Equatable, Sendable {
 public struct SearchCursor: Codable, Hashable, Sendable {
     public let rowID: Int64
     public let rank: Double?
+    public let timestampMilliseconds: Int64?
+
+    public init(rowID: Int64, rank: Double?, timestampMilliseconds: Int64? = nil) {
+        self.rowID = rowID
+        self.rank = rank
+        self.timestampMilliseconds = timestampMilliseconds
+    }
 }
 
 public struct SearchResult: Identifiable, Sendable {
@@ -822,6 +829,19 @@ public struct SessionPage: Sendable {
     public let sessions: [SessionSummary]
     public let totalCount: Int
     public let nextCursor: SessionCursor?
+}
+
+public struct SessionListSnapshot: Sendable {
+    public let sessions: [SessionSummary]
+    public let totalCount: Int
+    public let nextCursor: SessionCursor?
+    public let pageCount: Int
+}
+
+public struct SidebarSnapshot: Sendable {
+    public let projects: [ProjectSummary]
+    public let recentSessions: [SessionSummary]
+    public let sessionList: SessionListSnapshot
 }
 
 public struct SessionSummary: Identifiable, Sendable {

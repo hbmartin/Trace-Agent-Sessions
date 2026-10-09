@@ -139,13 +139,11 @@ enum SessionMetadataReader {
         if file.format == .geminiJSON {
             let stream = GeminiSnapshotStream(file: file)
             var indexedSessionID: String?
-            while let record = try stream.next() {
-                try Task.checkCancellation()
-                guard case .message(let message) = record,
-                      let object = stream.currentMessageObject else { continue }
-                indexedSessionID = message.sessionExternalID
-                inspect(object, sessionID: message.sessionExternalID)
+            stream.observeMessageObject = { object, sessionID in
+                indexedSessionID = sessionID
+                inspect(object, sessionID: sessionID)
             }
+            while try stream.next() != nil { try Task.checkCancellation() }
             if let object = stream.rootObject {
                 // Use the same identity that the streaming adapter assigned to message rows.
                 inspect(object, sessionID: indexedSessionID ?? sessionID(in: object) ?? fallbackSessionID)

@@ -3860,6 +3860,11 @@ private struct CountingSource: SessionSource {
         counter.increment()
         return base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
     }
+
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        counter.increment()
+        return base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
         try base.hydrate(fileURL: fileURL, format: format, locator: locator)
     }
@@ -3884,6 +3889,21 @@ private struct ThrowAfterIncrementalEOFSource: SessionSource {
         initialSessionID: String?
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
         let source = base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
+        guard invocation.nextInvocation() > 1 else { return source }
+        let state: SyntheticIncrementalFailureState
+        do {
+            state = try SyntheticIncrementalFailureState(file: file, offset: offset, boundary: boundary)
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+        return AsyncThrowingStream(unfolding: { try state.next() })
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        let source = base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
         guard invocation.nextInvocation() > 1 else { return source }
         let state: SyntheticIncrementalFailureState
         do {
@@ -3921,6 +3941,23 @@ private struct SelectiveReadFailureSource: SessionSource {
             return base.records(
                 in: file, from: offset, through: boundary,
                 initialSessionID: initialSessionID
+            )
+        }
+        return AsyncThrowingStream { continuation in
+            continuation.finish(throwing: SessionSourceError.malformedRecord(
+                "synthetic permanent failure"
+            ))
+        }
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        guard file.url.lastPathComponent == failedName else {
+            return base.records(
+                in: file, from: offset, through: boundary,
+                initialContext: initialContext
             )
         }
         return AsyncThrowingStream { continuation in
@@ -3985,6 +4022,23 @@ private struct MutableSelectiveReadFailureSource: SessionSource {
         }
     }
 
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        guard failures.contains(file.url.lastPathComponent) else {
+            return base.records(
+                in: file, from: offset, through: boundary,
+                initialContext: initialContext
+            )
+        }
+        return AsyncThrowingStream { continuation in
+            continuation.finish(throwing: SessionSourceError.malformedRecord(
+                "synthetic selected failure"
+            ))
+        }
+    }
+
     func hydrate(
         fileURL: URL, format: SourceFormat, locator: RecordLocator
     ) throws -> HydratedMessage {
@@ -4019,6 +4073,17 @@ private struct DiscoveryAndFileFailureSource: SessionSource {
     func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
         initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: SessionSourceError.malformedRecord(
+                "\(file.url.lastPathComponent) failed"
+            ))
+        }
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
         AsyncThrowingStream { continuation in
             continuation.finish(throwing: SessionSourceError.malformedRecord(
@@ -4062,6 +4127,13 @@ private struct FrozenRootDiscoverySource: SessionSource {
         records(in: file, from: offset, through: boundary)
     }
 
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
+    }
+
     func hydrate(
         fileURL: URL, format: SourceFormat, locator: RecordLocator
     ) throws -> HydratedMessage {
@@ -4098,6 +4170,15 @@ private struct ScopedDiscoveryFailureSource: SessionSource {
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
         base.records(
             in: file, from: offset, through: boundary, initialSessionID: initialSessionID
+        )
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(
+            in: file, from: offset, through: boundary, initialContext: initialContext
         )
     }
 
@@ -4167,6 +4248,13 @@ private struct MultiScopeFailureSource: SessionSource {
     func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
         initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
         records(in: file, from: offset, through: boundary)
     }
@@ -4242,6 +4330,18 @@ private struct MutatingSnapshotSource: SessionSource {
         return AsyncThrowingStream(unfolding: { try state.next() })
     }
 
+    func records(
+        in discovered: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        let number = invocation.nextInvocation()
+        guard number == 2 else {
+            return base.records(in: discovered, from: offset, through: boundary, initialContext: initialContext)
+        }
+        let state = MutateThenFailState(file: file, replacement: replacement)
+        return AsyncThrowingStream(unfolding: { try state.next() })
+    }
+
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
         try base.hydrate(fileURL: fileURL, format: format, locator: locator)
     }
@@ -4291,6 +4391,13 @@ private struct QuietSnapshotSource: SessionSource {
     func records(
         in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
         initialSessionID: String?
+    ) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary)
+    }
+
+    func records(
+        in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
+        initialContext: SourceReadContext
     ) -> AsyncThrowingStream<ParsedRecord, Error> {
         records(in: file, from: offset, through: boundary)
     }

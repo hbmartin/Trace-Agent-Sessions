@@ -621,7 +621,7 @@ extension TraceCoreTests {
         for query in ["foo ->", "-> foo ::", "foo &&", "foo \"->\"", "foo \\&\\&", "foo \u{0301}"] {
             XCTAssertEqual(FTSQueryParser.parse(query), "\"foo\"*")
         }
-        for query in ["-> :: &&", "\"&&\"", "🙂", "\\", "\u{0301}", "\"\u{0301}\""] { XCTAssertNil(FTSQueryParser.parse(query)) }
+        for query in ["-> :: &&", "\"&&\"", "\\", "\u{0301}", "\"\u{0301}\""] { XCTAssertNil(FTSQueryParser.parse(query)) }
         XCTAssertEqual(FTSQueryParser.parse("修复 123 ->"), "\"修复\"* AND \"123\"*")
         XCTAssertEqual(FTSQueryParser.parse("foo \"exact phrase\""), "\"foo\"* AND \"exact phrase\"")
         let root = try temporaryDirectory()

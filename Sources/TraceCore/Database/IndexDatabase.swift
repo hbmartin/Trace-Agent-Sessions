@@ -8,7 +8,7 @@ public enum IndexDatabaseError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .timestampCollisionLimit:
-            "More than 1,048,576 messages share one millisecond timestamp."
+            "No message identifiers remain available."
         case .invalidSessionCursor:
             "The session page belongs to a different project."
         }
@@ -1205,8 +1205,14 @@ public actor IndexDatabase {
             arguments: [base, upper]
         )
         guard let current else { return base }
-        guard current < upper else { throw IndexDatabaseError.timestampCollisionLimit }
-        return current + 1
+        if current < upper { return current + 1 }
+        // Timestamp bits are an ordering optimization, not the event date. Keep
+        // saturated buckets indexable without changing ts or existing bookmarks.
+        let overflow = try Int64.fetchOne(db, sql: "SELECT max(id) FROM message WHERE id < 0")
+        let next = overflow.map { $0 + 1 } ?? Int64.min
+        guard next < 0 else { throw IndexDatabaseError.timestampCollisionLimit }
+        try db.execute(sql: "INSERT INTO trace_meta(key,value) VALUES ('message_id_overflow','1') ON CONFLICT(key) DO UPDATE SET value='1'")
+        return next
     }
 
     func finishSource(id: Int64, fingerprint: SourceFingerprint, scannedBytes: Int64, error: String? = nil) throws {
@@ -1577,10 +1583,26 @@ public actor IndexDatabase {
             let sql: String
             var arguments: StatementArguments = [pattern]
             if sort == .recency {
+                let usesOverflowIDs = try String.fetchOne(
+                    db, sql: "SELECT value FROM trace_meta WHERE key='message_id_overflow'"
+                ) == "1"
                 var cursorSQL = ""
                 if let cursor {
-                    cursorSQL = " AND message_fts.rowid < ?"
-                    arguments += [cursor.rowID]
+                    if usesOverflowIDs {
+                        let timestamp = try cursor.timestampMilliseconds
+                            ?? Int64.fetchOne(db, sql: "SELECT ts FROM message WHERE id=?", arguments: [cursor.rowID])
+                        guard let timestamp else { throw SessionSourceError.missingRecord(String(cursor.rowID)) }
+                        // Overflow entries follow the original bucket in allocation
+                        // order, and must precede it in descending recency order.
+                        let identifiers = cursor.rowID < 0
+                            ? "(m.id >= 0 OR m.id < ?)"
+                            : "(m.id >= 0 AND m.id < ?)"
+                        cursorSQL = " AND (m.ts < ? OR (m.ts = ? AND \(identifiers)))"
+                        arguments += [timestamp, timestamp, cursor.rowID]
+                    } else {
+                        cursorSQL = " AND message_fts.rowid < ?"
+                        arguments += [cursor.rowID]
+                    }
                 }
                 arguments += filterArguments
                 arguments += [limit + 1]
@@ -1597,7 +1619,7 @@ public actor IndexDatabase {
                     JOIN project p ON p.id = s.project_id
                     JOIN source_file sf ON sf.id = m.source_file_id
                     WHERE message_fts MATCH ?\(cursorSQL)\(filterSQL)
-                    ORDER BY message_fts.rowid DESC
+                    ORDER BY \(usesOverflowIDs ? "m.ts DESC, (m.id < 0) DESC, m.id DESC" : "message_fts.rowid DESC")
                     LIMIT ?
                     """
             } else {
@@ -1635,7 +1657,7 @@ public actor IndexDatabase {
             let hasMore = rows.count > limit
             if hasMore { rows.removeLast(rows.count - limit) }
             let results = rows.compactMap(searchResult(from:))
-            let next = hasMore ? results.last.map { SearchCursor(rowID: $0.id, rank: $0.rank) } : nil
+            let next = hasMore ? results.last.map { SearchCursor(rowID: $0.id, rank: $0.rank, timestampMilliseconds: $0.timestampMilliseconds) } : nil
             return SearchPage(results: results, nextCursor: next)
         }
     }
@@ -1873,22 +1895,24 @@ public actor IndexDatabase {
     }
 
     public func projects() throws -> [ProjectSummary] {
-        try pool.read { db in
-            try Row.fetchAll(db, sql: """
-                SELECT p.id, p.canonical_key, p.display_name, p.root_path,
-                       count(s.id) AS session_count,
-                       coalesce(max(s.last_activity_at), 0) AS last_activity
-                FROM project p JOIN session s ON s.project_id=p.id
-                    AND s.agent IN (SELECT agent FROM supported_agent)
-                GROUP BY p.id ORDER BY last_activity DESC
-                """).map {
-                    .init(
-                        id: $0["id"], canonicalKey: $0["canonical_key"],
-                        displayName: $0["display_name"], rootPath: $0["root_path"],
-                        sessionCount: $0["session_count"], lastActivityMilliseconds: $0["last_activity"]
-                    )
-                }
-        }
+        try pool.read { try projects(in: $0) }
+    }
+
+    private nonisolated func projects(in db: Database) throws -> [ProjectSummary] {
+        try Row.fetchAll(db, sql: """
+            SELECT p.id, p.canonical_key, p.display_name, p.root_path,
+                   count(s.id) AS session_count,
+                   coalesce(max(s.last_activity_at), 0) AS last_activity
+            FROM project p JOIN session s ON s.project_id=p.id
+                AND s.agent IN (SELECT agent FROM supported_agent)
+            GROUP BY p.id ORDER BY last_activity DESC
+            """).map {
+                .init(
+                    id: $0["id"], canonicalKey: $0["canonical_key"],
+                    displayName: $0["display_name"], rootPath: $0["root_path"],
+                    sessionCount: $0["session_count"], lastActivityMilliseconds: $0["last_activity"]
+                )
+            }
     }
 
     public func sessions(
@@ -1923,33 +1947,122 @@ public actor IndexDatabase {
         }
         let pageSize = max(1, min(limit, 1_000))
         return try pool.read { db in
-            var predicates = ["s.agent IN (SELECT agent FROM supported_agent)"]
-            var arguments = StatementArguments()
-            if let projectCanonicalKey {
-                predicates.append("p.canonical_key=?")
-                arguments += [projectCanonicalKey]
-            }
-            let joins = "FROM session s JOIN source_file sf ON sf.id=s.source_file_id JOIN project p ON p.id=s.project_id"
-            let total = try Int.fetchOne(db, sql: "SELECT count(*) \(joins) WHERE \(predicates.joined(separator: " AND "))", arguments: arguments) ?? 0
-            if let cursor {
-                predicates.append("(s.last_activity_at < ? OR (s.last_activity_at = ? AND s.id < ?))")
-                arguments += [cursor.lastActivityMilliseconds, cursor.lastActivityMilliseconds, cursor.sessionID]
-            }
-            arguments += [pageSize + 1]
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
-                    sf.path AS source_path, sf.content_generation AS source_generation,
-                    p.canonical_key AS project_canonical_key
-                \(joins) WHERE \(predicates.joined(separator: " AND "))
-                ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
-                """, arguments: arguments).compactMap(sessionSummary(from:))
+            let total = try sessionCount(projectCanonicalKey: projectCanonicalKey, in: db)
+            let rows = try sessionRows(projectCanonicalKey: projectCanonicalKey, cursor: cursor,
+                                       limit: pageSize + 1, in: db)
             let sessions = Array(rows.prefix(pageSize))
-            let next = rows.count > pageSize ? sessions.last.map {
-                SessionCursor(projectCanonicalKey: projectCanonicalKey,
-                              lastActivityMilliseconds: $0.lastActivityMilliseconds, sessionID: $0.id)
-            } : nil
-            return SessionPage(sessions: sessions, totalCount: total, nextCursor: next)
+            return .init(sessions: sessions, totalCount: total,
+                         nextCursor: sessionCursor(after: sessions, hasMore: rows.count > pageSize,
+                                                   projectCanonicalKey: projectCanonicalKey))
         }
+    }
+
+    /// Refresh all loaded pages in one read transaction. The cursor and optional
+    /// revealed session come from that same snapshot.
+    public func sessionListSnapshot(projectCanonicalKey: String?, pageCount: Int = 1,
+                                    ensuringSessionID: Int64? = nil) async throws -> SessionListSnapshot {
+        try await waitForSessionListReadForTesting()
+        return try await pool.read { db in
+            try sessionListSnapshot(projectCanonicalKey: projectCanonicalKey, pageCount: pageCount,
+                                    ensuringSessionID: ensuringSessionID,
+                                    total: sessionCount(projectCanonicalKey: projectCanonicalKey, in: db), in: db)
+        }
+    }
+
+    /// Reuse project counts when refreshing the sidebar instead of counting all
+    /// sessions again for every loaded page.
+    public func sidebarSnapshot(projectCanonicalKey: String?, pageCount: Int = 1,
+                                ensuringSessionID: Int64? = nil) async throws -> SidebarSnapshot {
+        try await waitForSessionListReadForTesting()
+        return try await pool.read { db in
+            let projects = try projects(in: db)
+            let total = projectCanonicalKey.map { key in
+                projects.first { $0.canonicalKey == key }?.sessionCount ?? 0
+            } ?? projects.reduce(0) { $0 + $1.sessionCount }
+            return .init(projects: projects,
+                         recentSessions: try sessionRows(projectCanonicalKey: nil, cursor: nil, limit: 10, in: db),
+                         sessionList: try sessionListSnapshot(projectCanonicalKey: projectCanonicalKey,
+                            pageCount: pageCount, ensuringSessionID: ensuringSessionID, total: total, in: db))
+        }
+    }
+
+    private nonisolated func sessionCount(projectCanonicalKey: String?, in db: Database) throws -> Int {
+        var predicate = "agent IN (SELECT agent FROM supported_agent)"
+        var arguments = StatementArguments()
+        if let projectCanonicalKey {
+            predicate += " AND project_id=(SELECT id FROM project WHERE canonical_key=?)"
+            arguments += [projectCanonicalKey]
+        }
+        return try Int.fetchOne(db, sql: "SELECT count(*) FROM session WHERE \(predicate)",
+                                arguments: arguments) ?? 0
+    }
+
+    private nonisolated func sessionRows(projectCanonicalKey: String?, cursor: SessionCursor?, limit: Int,
+                             in db: Database) throws -> [SessionSummary] {
+        var predicates = ["s.agent IN (SELECT agent FROM supported_agent)"]
+        var arguments = StatementArguments()
+        if let projectCanonicalKey {
+            predicates.append("p.canonical_key=?")
+            arguments += [projectCanonicalKey]
+        }
+        if let cursor {
+            predicates.append("(s.last_activity_at < ? OR (s.last_activity_at = ? AND s.id < ?))")
+            arguments += [cursor.lastActivityMilliseconds, cursor.lastActivityMilliseconds, cursor.sessionID]
+        }
+        arguments += [limit]
+        return try Row.fetchAll(db, sql: """
+            SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
+                   sf.path AS source_path, sf.content_generation AS source_generation,
+                   p.canonical_key AS project_canonical_key
+            FROM session s JOIN source_file sf ON sf.id=s.source_file_id JOIN project p ON p.id=s.project_id
+            WHERE \(predicates.joined(separator: " AND "))
+            ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
+            """, arguments: arguments).compactMap(sessionSummary(from:))
+    }
+
+    private nonisolated func sessionCursor(after sessions: [SessionSummary], hasMore: Bool,
+                               projectCanonicalKey: String?) -> SessionCursor? {
+        guard hasMore, let last = sessions.last else { return nil }
+        return .init(projectCanonicalKey: projectCanonicalKey,
+                     lastActivityMilliseconds: last.lastActivityMilliseconds, sessionID: last.id)
+    }
+
+    private nonisolated func sessionListSnapshot(projectCanonicalKey: String?, pageCount: Int,
+                                     ensuringSessionID: Int64?, total: Int,
+                                     in db: Database) throws -> SessionListSnapshot {
+        let pages = max(1, min(pageCount, max(1, (total + 199) / 200)))
+        let limit = pages * 200
+        let rows = try sessionRows(projectCanonicalKey: projectCanonicalKey, cursor: nil, limit: limit + 1, in: db)
+        var sessions = Array(rows.prefix(limit))
+        let cursor = sessionCursor(after: sessions, hasMore: rows.count > limit, projectCanonicalKey: projectCanonicalKey)
+        if let ensuringSessionID, !sessions.contains(where: { $0.id == ensuringSessionID }),
+           let ensured = try transcriptSession(id: ensuringSessionID, in: db),
+           (projectCanonicalKey == nil || ensured.projectCanonicalKey == projectCanonicalKey) {
+            sessions.append(ensured)
+            sessions.sort { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }
+        }
+        return .init(sessions: sessions, totalCount: total, nextCursor: cursor, pageCount: pages)
+    }
+
+    #if DEBUG
+    private var sessionListReadGate: Task<Void, Never>?
+    private var sessionListReadCount = 0
+    private var failsNextSessionListRead = false
+    func gateSessionListReadsForTesting(_ gate: Task<Void, Never>?) { sessionListReadGate = gate }
+    func sessionListReadCountForTesting() -> Int { sessionListReadCount }
+    func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }
+    #endif
+
+    private func waitForSessionListReadForTesting() async throws {
+        #if DEBUG
+        sessionListReadCount += 1
+        if let gate = sessionListReadGate { await gate.value }
+        if failsNextSessionListRead {
+            failsNextSessionListRead = false
+            throw SessionSourceError.unreadableFile("Synthetic session-list read failure")
+        }
+        #endif
+        try Task.checkCancellation()
     }
 
     public func session(id: Int64) throws -> SessionSummary? {
@@ -1975,7 +2088,7 @@ public actor IndexDatabase {
         }
     }
 
-    private func transcriptSession(id: Int64, in db: Database) throws -> SessionSummary? {
+    private nonisolated func transcriptSession(id: Int64, in db: Database) throws -> SessionSummary? {
         try Row.fetchOne(db, sql: """
             SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                    sf.path AS source_path,

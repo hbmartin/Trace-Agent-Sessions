@@ -46,4 +46,18 @@ files, which have no known event date.
 Codex message identities include the response-item type, so a tool call and its
 output can share a call ID without either being discarded. Gemini info, warning,
 and error messages use the system role; error messages also mark the session as
-having an error. Unknown Gemini types are skipped.
+having an error. Unknown Gemini types are skipped for transcript and usage rows.
+Both JSON and JSONL inspect raw message objects for explicit titles and submitted
+plans, including objects with unknown types. Existing JSON metadata is backfilled
+without rebuilding content rows.
+
+Source wrappers must forward the `initialContext` overload to preserve durable
+timestamp recovery; the legacy `initialSessionID` bridge carries identity only.
+Direct legacy Gemini tail reads recover both values from the prefix and share the
+same cancellation and test instrumentation as coordinator prefix recovery.
+
+Zero and negative Unix timestamps remain valid. Message IDs normally use bounded
+timestamp buckets, independently of the stored event date. A saturated bucket
+uses the reserved negative ID range; recency search then orders by event timestamp
+and ID with a matching cursor, placing overflow entries before the original
+bucket when their timestamps tie. Existing IDs and bookmark encoding are unchanged.

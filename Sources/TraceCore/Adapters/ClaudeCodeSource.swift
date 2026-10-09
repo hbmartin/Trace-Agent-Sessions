@@ -59,7 +59,7 @@ public struct ClaudeCodeSource: SessionSource {
             if let message = parseClaudeMessage(
                     object,
                     fallbackSessionID: file.url.deletingPathExtension().lastPathComponent,
-                    fallbackTimestamp: context.timestampMilliseconds,
+                    fallbackTimestamp: context.timestampMilliseconds, resolvedTimestamp: context.timestampMilliseconds,
                     locator: .byteRange(offset: line.offset, length: Int64(line.data.count)),
                     sourceKey: "\(line.offset)"
                   ) { records.append(.message(message)) }
@@ -97,6 +97,7 @@ private func parseClaudeMessage(
     _ object: [String: Any],
     fallbackSessionID: String,
     fallbackTimestamp: Int64,
+    resolvedTimestamp: Int64? = nil,
     locator: RecordLocator,
     sourceKey: String
 ) -> ParsedMessage? {
@@ -161,7 +162,7 @@ private func parseClaudeMessage(
         externalID: externalID,
         sessionExternalID: object["sessionId"] as? String ?? object["session_id"] as? String ?? fallbackSessionID,
         cwd: object["cwd"] as? String ?? "Unknown",
-        timestampMilliseconds: JSONHelpers.timestampMilliseconds(object["timestamp"], fallback: fallbackTimestamp),
+        timestampMilliseconds: resolvedTimestamp ?? JSONHelpers.timestampMilliseconds(object["timestamp"], fallback: fallbackTimestamp),
         role: role,
         sections: sections,
         locator: locator,
