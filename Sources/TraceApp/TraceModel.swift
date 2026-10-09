@@ -155,6 +155,9 @@ final class TraceModel: ObservableObject {
         case nextPage
     }
     private var sessionListRetry: SessionListRetry?
+    private var backgroundSidebarRequest: UUID?
+    private enum PendingSidebarAction { case loadMore, retry(SessionListRetry) }
+    private var pendingSidebarAction: (project: String?, action: PendingSidebarAction)?
     @Published private(set) var recentSessions: [SessionSummary] = []
     @Published private(set) var messages: [MessageSummary] = [] {
         didSet {
@@ -314,6 +317,7 @@ final class TraceModel: ObservableObject {
     func queueMainSearchRefreshForTesting() { mainSearchNeedsRefresh = true }
     var selectionTranscriptGateForTesting: Task<Void, Never>?
     var summaryTranscriptGateForTesting: Task<Void, Never>?
+    var summaryProjectsForTesting: [ProjectSummary]?
     var summaryTailGateForTesting: Task<Void, Never>?
     private(set) var selectionTranscriptWaitingForTesting = false
     private(set) var summaryTranscriptWaitingForTesting = false
@@ -932,7 +936,11 @@ final class TraceModel: ObservableObject {
             mainSearchNeedsRefresh = false
             loadProjectSessions()
         } else if mainSearchNeedsRefresh {
-            searchMain()
+            if mainSearch.matchesCurrentCriteria(sort: settings.searchSort) {
+                mainSearch.markResultsStale()
+                mainSearchNeedsRefresh = false
+                loadProjectSessions()
+            } else { searchMain() }
         }
     }
 
@@ -1081,7 +1089,21 @@ final class TraceModel: ObservableObject {
         sessionListTask = nil
     }
 
+    private func finishBackgroundSidebarRequest(_ request: UUID) {
+        guard backgroundSidebarRequest == request else { return }
+        backgroundSidebarRequest = nil
+        guard let pending = pendingSidebarAction else { return }
+        pendingSidebarAction = nil
+        guard pending.project == selectedProjectCanonicalKey else { return }
+        switch pending.action {
+        case .loadMore: loadMoreSessions()
+        case .retry(let retry): performSidebarRetry(retry)
+        }
+    }
+
     private func resetSessionPagination() {
+        backgroundSidebarRequest = nil
+        pendingSidebarAction = nil
         sessionListTask?.cancel()
         sessionListTask = nil
         sessions = []
@@ -1105,14 +1127,29 @@ final class TraceModel: ObservableObject {
     }
 
     func retrySessionLoad() {
-        guard !isLoadingSessions, let retry = sessionListRetry else { return }
+        guard let retry = sessionListRetry else { return }
+        if backgroundSidebarRequest != nil {
+            pendingSidebarAction = (selectedProjectCanonicalKey, .retry(retry))
+            return
+        }
+        guard !isLoadingSessions else { return }
+        performSidebarRetry(retry)
+    }
+
+    private func performSidebarRetry(_ retry: SessionListRetry) {
         switch retry {
-        case .reload(let sessionID): loadProjectSessions(ensuring: sessionID)
+        case .reload: loadProjectSessions(ensuring: selectedSessionID)
         case .nextPage: loadMoreSessions()
         }
     }
 
     func loadMoreSessions() {
+        if backgroundSidebarRequest != nil {
+            if pendingSidebarAction == nil {
+                pendingSidebarAction = (selectedProjectCanonicalKey, .loadMore)
+            }
+            return
+        }
         guard !isLoadingSessions, let cursor = nextSessionCursor, let database else { return }
         let key = selectedProjectCanonicalKey
         let request = UUID()
@@ -1143,7 +1180,9 @@ final class TraceModel: ObservableObject {
                 nextSessionCursor = page.nextCursor
                 hasMoreSessions = page.nextCursor != nil
                 loadedSessionPageCount += 1
-            } catch is CancellationError { }
+            } catch is CancellationError {
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_PAGE_CANCELLED_PATH")
+            }
             catch {
                 guard projectRequestID == request else { return }
                 sessionListError = error.localizedDescription
@@ -1642,9 +1681,12 @@ final class TraceModel: ObservableObject {
     }
 
     func prepareToTerminate() async {
-        sessionListTask?.cancel()
         invalidateWatchers()
         sourceChangeTask?.cancel()
+        sessionListTask?.cancel()
+        sessionListTask = nil
+        backgroundSidebarRequest = nil
+        pendingSidebarAction = nil
         searchVisibilityTask?.cancel()
         searchVisibilityTask = nil
         incrementalProgressTask?.cancel()
@@ -2014,17 +2056,71 @@ final class TraceModel: ObservableObject {
         let projectCanonicalKey = selectedProjectCanonicalKey
         let projectRequest = UUID()
         projectRequestID = projectRequest
-        isLoadingSessions = true
-        defer { finishSessionListRequest(projectRequest) }
+        backgroundSidebarRequest = projectRequest
+        defer { finishBackgroundSidebarRequest(projectRequest) }
         let ensuredSessionID = selectedSessionID
         let selectedSessionRequest = sessionRequestID
         let pageCount = sessionListProjectKey == projectCanonicalKey ? loadedSessionPageCount : 1
         let sidebar = try? await database.sidebarSnapshot(
             projectCanonicalKey: projectCanonicalKey, pageCount: pageCount, ensuringSessionID: ensuredSessionID
         )
+        #if DEBUG
+        let loadedProjects = summaryProjectsForTesting ?? sidebar?.projects
+        #else
         let loadedProjects = sidebar?.projects
+        #endif
         let loadedRecent = sidebar?.recentSessions ?? recentSessions
         let loadedSessions = sidebar?.sessionList
+        guard summaryRequestID == refresh else { return }
+        let globalProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
+        let mainProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
+        if let loadedProjects {
+            globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
+                in: loadedProjects,
+                missingProject: projectReconciliation.globalMissingProjectPolicy
+            )
+            mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+                in: loadedProjects,
+                missingProject: projectReconciliation.mainMissingProjectPolicy,
+                preservingResults: hasSearchReturnContext && !mainSearch.results.isEmpty
+            )
+            projects = loadedProjects
+            reconcileSelectedProject(in: loadedProjects)
+        } else {
+            switch projectReconciliation {
+            case .ongoing:
+                globalProjectFilterReconciliation = .unchanged
+                mainProjectFilterReconciliation = .unchanged
+            case .completed, .terminalRetaining:
+                // A failed summary read cannot establish that a canonical project was
+                // deleted. Retain both filters, but do not leave either search blocked.
+                globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
+                    in: projects, missingProject: .retain
+                )
+                mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+                    in: projects, missingProject: .retain,
+                    preservingResults: hasSearchReturnContext && !mainSearch.results.isEmpty
+                )
+            }
+        }
+        recentSessions = loadedRecent
+        if globalProjectFilterReconciliation.requiresSearchRefresh,
+           !globalSearch.query.isEmpty {
+            globalSearchNeedsRefresh = true
+            scheduleAutomaticSearch()
+        }
+        if mainProjectFilterReconciliation.requiresSearchRefresh,
+           !mainSearch.query.isEmpty {
+            if hasSearchReturnContext { mainSearch.markResultsStale() }
+            else { mainSearchNeedsRefresh = true; scheduleAutomaticSearch() }
+        }
+        if selectedProjectCanonicalKey == projectCanonicalKey,
+           projectRequestID == projectRequest,
+           let loadedSessions {
+            sessionListProjectKey = projectCanonicalKey
+            applySessionPages(loadedSessions)
+        }
+        finishBackgroundSidebarRequest(projectRequest)
         let loadedTranscript: SessionTranscriptSnapshot?
         let transcriptEpoch = transcriptPublicationEpoch
         if let ensuredSessionID {
@@ -2054,52 +2150,6 @@ final class TraceModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(delay))
         }
         guard summaryRequestID == refresh else { return }
-        let globalProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
-        let mainProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
-        if let loadedProjects {
-            globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
-                in: loadedProjects,
-                missingProject: projectReconciliation.globalMissingProjectPolicy
-            )
-            mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
-                in: loadedProjects,
-                missingProject: projectReconciliation.mainMissingProjectPolicy
-            )
-            projects = loadedProjects
-            reconcileSelectedProject(in: loadedProjects)
-        } else {
-            switch projectReconciliation {
-            case .ongoing:
-                globalProjectFilterReconciliation = .unchanged
-                mainProjectFilterReconciliation = .unchanged
-            case .completed, .terminalRetaining:
-                // A failed summary read cannot establish that a canonical project was
-                // deleted. Retain both filters, but do not leave either search blocked.
-                globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
-                    in: projects, missingProject: .retain
-                )
-                mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
-                    in: projects, missingProject: .retain
-                )
-            }
-        }
-        recentSessions = loadedRecent
-        if globalProjectFilterReconciliation.requiresSearchRefresh,
-           !globalSearch.query.isEmpty {
-            globalSearchNeedsRefresh = true
-            scheduleAutomaticSearch()
-        }
-        if mainProjectFilterReconciliation.requiresSearchRefresh,
-           !mainSearch.query.isEmpty {
-            if hasSearchReturnContext { mainSearch.markResultsStale() }
-            else { mainSearchNeedsRefresh = true; scheduleAutomaticSearch() }
-        }
-        if selectedProjectCanonicalKey == projectCanonicalKey,
-           projectRequestID == projectRequest,
-           let loadedSessions {
-            sessionListProjectKey = projectCanonicalKey
-            applySessionPages(loadedSessions)
-        }
         if projectReconciliation != .ongoing,
            let reveal = sidebarRevealRequest {
             let projectUnavailable = loadedProjects.map { projects in
@@ -2125,7 +2175,6 @@ final class TraceModel: ObservableObject {
                 returnFromSession()
             }
         }
-        finishSessionListRequest(projectRequest)
         if lightweight || summaryRequestID != refresh { return }
         #if DEBUG
         if let gate = summaryTailGateForTesting {

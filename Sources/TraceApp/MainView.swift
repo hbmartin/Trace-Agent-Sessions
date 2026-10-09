@@ -663,7 +663,7 @@ private final class NotificationObserverBag: @unchecked Sendable {
     deinit { removeAll() }
 }
 
-private struct TranscriptRenderer: NSViewRepresentable {
+struct TranscriptRenderer: NSViewRepresentable {
     @ObservedObject var model: TraceModel
     let sessionID: Int64
     let visibility: TranscriptVisibility
@@ -726,6 +726,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
         private struct Item {
             let summary: MessageSummary
             let sourceIndex: Int
+            let sourceGeneration: Int64?
         }
 
         private struct PositionSnapshot {
@@ -1142,7 +1143,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 visibilityChanged = self.visibility != visibility
                 self.visibility = visibility
                 let replacement = model.messages.enumerated().compactMap { index, summary in
-                    visibility.includes(summary) ? Item(summary: summary, sourceIndex: index) : nil
+                    visibility.includes(summary) ? Item(summary: summary, sourceIndex: index, sourceGeneration: model.selectedSession?.sourceGeneration) : nil
                 }
                 if !sessionChanged, self.messageRevision >= 0 {
                     let oldIDs = items.map { $0.summary.id }
@@ -1253,6 +1254,14 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
         }
 
+        #if DEBUG
+        func updateRowsForTesting(_ messages: [MessageSummary], generation: Int64) {
+            updateRows(with: messages.enumerated().map {
+                Item(summary: $0.element, sourceIndex: $0.offset, sourceGeneration: generation)
+            }, sessionChanged: false, reloadExisting: false)
+        }
+        #endif
+
         private func updateRows(
             with replacement: [Item], sessionChanged: Bool, reloadExisting: Bool
         ) {
@@ -1260,6 +1269,15 @@ private struct TranscriptRenderer: NSViewRepresentable {
             let newIDs = replacement.map { $0.summary.id }
             let appendsExistingRows = !sessionChanged && newIDs.count > oldIDs.count
                 && newIDs.starts(with: oldIDs)
+            let changedRows = IndexSet(oldIDs.indices.filter { row in
+                guard appendsExistingRows else { return false }
+                let old = items[row], new = replacement[row]
+                return old.sourceGeneration != new.sourceGeneration
+                    || old.summary.sourcePath != new.summary.sourcePath
+                    || old.summary.sourceFormat != new.summary.sourceFormat
+                    || old.summary.locator != new.summary.locator
+                    || old.sourceIndex != new.sourceIndex
+            })
             items = replacement
             if appendsExistingRows {
                 for row in oldIDs.count..<newIDs.count {
@@ -1296,12 +1314,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                     at: IndexSet(integersIn: oldIDs.count..<newIDs.count), withAnimation: []
                 )
                 table.endUpdates()
-                if reloadExisting, !oldIDs.isEmpty {
-                    table.reloadData(
-                        forRowIndexes: IndexSet(integersIn: 0..<oldIDs.count),
-                        columnIndexes: IndexSet(integer: 0)
-                    )
-                }
+                let rows = reloadExisting ? IndexSet(integersIn: 0..<oldIDs.count) : changedRows
+                reloadRows(rows)
             } else if !sessionChanged, oldIDs == newIDs {
                 reloadRows(IndexSet(integersIn: replacement.indices))
             } else {

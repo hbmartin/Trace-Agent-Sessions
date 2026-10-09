@@ -5,41 +5,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trace_root="$(cd "${script_dir}/.." && pwd)"
 grdb_root="${trace_root}/Vendor/GRDB.swift"
 sqlite_root="${grdb_root}/SQLiteCustom/src"
-sqlite_patch="${trace_root}/GRDBCustomSQLite/SQLiteLib-macOS15.patch"
-regular_files_patch="${trace_root}/GRDBCustomSQLite/SQLiteRegularFiles.patch"
-terminal_patch="${trace_root}/GRDBCustomSQLite/SQLiteNoControllingTerminal.patch"
 
 if [[ ! -d "${grdb_root}/GRDBCustom.xcodeproj" || ! -f "${sqlite_root}/SQLiteLib.xcconfig" ]]; then
   echo "error: GRDB submodule is missing; run git submodule update --init --recursive" >&2
   exit 1
 fi
 
-if git -C "${sqlite_root}" apply --unidiff-zero --reverse --check "${sqlite_patch}" >/dev/null 2>&1; then
-  : # The deployment-target patch is already applied.
-elif git -C "${sqlite_root}" apply --unidiff-zero --check "${sqlite_patch}"; then
-  git -C "${sqlite_root}" apply --unidiff-zero "${sqlite_patch}"
-else
-  echo "error: SQLiteLib's deployment-target patch no longer applies cleanly" >&2
-  exit 1
-fi
-
-if git -C "${sqlite_root}" apply --unidiff-zero --reverse --check "${regular_files_patch}" >/dev/null 2>&1; then
-  : # Descriptor validation is already applied.
-elif git -C "${sqlite_root}" apply --unidiff-zero --check "${regular_files_patch}"; then
-  git -C "${sqlite_root}" apply --unidiff-zero "${regular_files_patch}"
-else
-  echo "error: SQLite's regular-file patch no longer applies cleanly" >&2
-  exit 1
-fi
-
-if git -C "${sqlite_root}" apply --reverse --check "${terminal_patch}" >/dev/null 2>&1; then
-  : # Terminal acquisition prevention is already applied.
-elif git -C "${sqlite_root}" apply --check "${terminal_patch}"; then
-  git -C "${sqlite_root}" apply "${terminal_patch}"
-else
-  echo "error: SQLite's terminal protection patch no longer applies cleanly" >&2
-  exit 1
-fi
+python3 "${trace_root}/Scripts/validate-benchmark-baseline.py" --configure-sqlite "${trace_root}"
 
 install_if_changed() {
   # Preserve dependency timestamps when configuring another test invocation.

@@ -5324,10 +5324,10 @@ extension TraceUITests {
         }
         try data.write(to: directory.appendingPathComponent("Sources/Claude/race.jsonl"))
         let started = directory.appendingPathComponent("page-started")
-        let finished = directory.appendingPathComponent("page-finished")
+        let finished = directory.appendingPathComponent("page-cancelled")
         app.launchEnvironment["TRACE_TEST_SESSION_PAGE_DELAY_MS"] = "5000"
         app.launchEnvironment["TRACE_TEST_SESSION_PAGE_STARTED_PATH"] = started.path
-        app.launchEnvironment["TRACE_TEST_SESSION_PAGE_FINISHED_PATH"] = finished.path
+        app.launchEnvironment["TRACE_TEST_SESSION_PAGE_CANCELLED_PATH"] = finished.path
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
         let project = app.staticTexts["RaceProject"].firstMatch

@@ -1,3 +1,4 @@
+import CustomDump
 import XCTest
 import GRDB
 @testable import TraceCore
@@ -23,6 +24,22 @@ final class ReviewFollowupTests: XCTestCase {
                        "Prose\n\n" + indented + "\n\nafter")
         XCTAssertEqual(String(TranscriptMarkdown.render("~~~swift\nobj.__dict__\n~~~").characters),
                        "~~~swift\nobj.__dict__\n~~~")
+    }
+
+    func testQuotedMixedIndentAndIndentedFencesPreserveCodeAndRenderFollowingProse() {
+        for code in [">\n>     obj.__dict__\n>     a*b*c", " \tobj.__dict__", "- Item\n\n      obj.__dict__"] {
+            expectNoDifference(code, String(TranscriptMarkdown.render(code).characters))
+        }
+        let code = "    ```\n    obj.__dict__\n\n**after**"
+        expectNoDifference("    ```\n    obj.__dict__\n\nafter", String(TranscriptMarkdown.render(code).characters))
+        let quoted = "> ```swift\n>     obj.__dict__\n> ```\n\n**after**"
+        expectNoDifference(quoted.replacingOccurrences(of: "**after**", with: "after"),
+                           String(TranscriptMarkdown.render(quoted).characters))
+        for marker in ["```", "~~~"] {
+            let fenced = "   " + marker + "swift\n    obj.__dict__\n   " + marker + "\n\n**after**"
+            expectNoDifference(fenced.replacingOccurrences(of: "**after**", with: "after"),
+                               String(TranscriptMarkdown.render(fenced).characters))
+        }
     }
 
     func testListContinuationFormattingAndNestedLiteralCode() {

@@ -22,7 +22,8 @@ class CancellationController:
     """Record the first signal continuously; raise only at normal checkpoints."""
     signals = (signal.SIGINT, signal.SIGTERM)
 
-    def __init__(self):
+    def __init__(self, *, process_lifetime=False):
+        self.process_lifetime = process_lifetime
         self.signum = None
         self.evidence = None
         self.acceptance = None
@@ -71,23 +72,21 @@ class CancellationController:
             write_json(self.acceptance, report)
 
     def __exit__(self, kind, error, traceback):
-        # Deliver signals queued at the final unblock to our recording handlers.
-        # Installing the previous handlers while blocked would hand a late signal
-        # to the default handler before interrupted evidence can be published.
-        published_signal = None
-        try:
-            mask = signal.pthread_sigmask(signal.SIG_BLOCK, self.signals)
-            try:
-                self._drain_pending()
-            finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
-            published_signal = self.signum
+        # The CLI owns these handlers until process exit. Handing a signal to a
+        # restored default handler could terminate before invalidating evidence.
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, self.signals)
+        self._drain_pending()
+        self._invalidate_interrupted_evidence()
+        # Include signals queued during final evidence publication in the final
+        # blocked drain. Signals remain blocked after this completion boundary.
+        first = self.signum
+        self._drain_pending()
+        if self.signum != first:
             self._invalidate_interrupted_evidence()
-        finally:
-            for sig, handler in self.previous.items():
-                signal.signal(sig, handler)
-        # A recording handler may have run while handing back the handlers.
-        if self.signum != published_signal:
+        if not self.process_lifetime:
+            # Imported test callers keep recording handlers through the unblock;
+            # their fixture restores its own handlers after inspecting evidence.
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
             self._invalidate_interrupted_evidence()
         if self.signum is not None:
             preserves_first = isinstance(error, RunInterrupted) and error.signum == self.signum
@@ -178,11 +177,11 @@ def wait_for_quiet(root, timeout=300, cancellation=None):
         time.sleep(2)
 
 
-def snapshot(root, candidate):
+def snapshot(root, candidate, *, preparation=False):
     spec = importlib.util.spec_from_file_location('benchmark_inputs', Path(__file__).with_name('validate-benchmark-baseline.py'))
     validator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(validator)
-    return validator.validate(root, root, candidate, role='candidate')
+    return validator.validate(root, root, candidate, role='candidate', preparation=preparation)
 
 
 def foreign_interruptions(destination):
@@ -199,8 +198,8 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n')
 
 
-def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600):
-    with CancellationController() as cancellation:
+def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600, process_lifetime=False):
+    with CancellationController(process_lifetime=process_lifetime) as cancellation:
         return run_controlled(root, output, cancellation, max_attempts=max_attempts,
                               quiet_timeout=quiet_timeout, attempt_timeout=attempt_timeout)
 
@@ -212,7 +211,7 @@ def run_controlled(root, output, cancellation, *, max_attempts, quiet_timeout, a
     output.mkdir(parents=True, exist_ok=False)
     cancellation.acceptance = output / 'local-acceptance.json'
     candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
-    snapshot(root, candidate)  # Reject drift before applying the recognized dependency configuration.
+    snapshot(root, candidate, preparation=True)  # Reject drift before applying the recognized dependency configuration.
     subprocess.run([str(root / 'Scripts/configure-grdb.sh')], cwd=root, check=True)
     frozen = snapshot(root, candidate)
     write_json(output / 'candidate-inputs.json', frozen)
@@ -336,7 +335,8 @@ if __name__ == '__main__':
     output = args.output or root / 'build' / ('local-release-' + time.strftime('%Y%m%d-%H%M%S'))
     try:
         result = run(root, output.resolve(), max_attempts=args.max_attempts,
-                     quiet_timeout=args.quiet_timeout_seconds, attempt_timeout=args.attempt_timeout_seconds)
+                     quiet_timeout=args.quiet_timeout_seconds, attempt_timeout=args.attempt_timeout_seconds,
+                     process_lifetime=True)
     except RunInterrupted as error: result = 128 + error.signum
     except KeyboardInterrupt: result = 130
     raise SystemExit(result)

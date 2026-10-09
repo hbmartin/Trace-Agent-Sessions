@@ -450,6 +450,31 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(moved.messages).allSatisfy { $0.sourcePath == renamed.path })
     }
 
+    func testSameIDAndSameCountReplacementReloadsGenerationAndLocators() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        let original = line(1) + line(2)
+        try Data(original.utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let sessions = try await database.sessions()
+        let id = try XCTUnwrap(sessions.first).id
+        let initial = try await database.transcriptSnapshot(sessionID: id)
+        try Data(original.replacingOccurrences(of: "searchable", with: "replacement with longer locators").utf8)
+            .write(to: file, options: .atomic)
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let current = try await database.transcriptSnapshot(sessionID: id)
+        XCTAssertEqual(current.session?.id, initial.session?.id, "isolate the generation guard from the ID guard")
+        XCTAssertEqual(current.session?.messageCount, initial.session?.messageCount)
+        XCTAssertNotEqual(current.session?.sourceGeneration, initial.session?.sourceGeneration)
+        expectNoDifference(initial.messages?.map(\.id), current.messages?.map(\.id))
+        let refreshed = try await database.transcriptSnapshot(sessionID: id,
+            knownSession: initial.session, knownMessageCount: initial.messages?.count)
+        let rows = try XCTUnwrap(refreshed.messages, "same ID/count with a new generation must refetch locators")
+        expectNoDifference(current.messages?.map(\.locator), rows.map(\.locator))
+        XCTAssertNotEqual(rows.map(\.locator), initial.messages?.map(\.locator))
+    }
+
     func testSourceGenerationChangesOnlyForReplacement() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")

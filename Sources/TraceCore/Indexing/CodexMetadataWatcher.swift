@@ -266,7 +266,7 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
             if namespaces[path] != nil && !restart { failures.removeValue(forKey: key); continue }
             guard shouldAttempt(key, changed: restart) else { continue }
             namespaces.removeValue(forKey: path)?.cancel()
-            let fd = openNamespaceForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK)
+            let fd = openNamespaceForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY)
             if fd >= 0 {
                 var info = stat()
                 guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
@@ -287,7 +287,7 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
             if files[path] != nil && !restart { failures.removeValue(forKey: key); continue }
             guard shouldAttempt(key, changed: restart) else { continue }
             files.removeValue(forKey: path)?.cancel()
-            let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK)
+            let fd = openFileForTesting?(path) ?? open(path, O_EVTONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY)
             let openError = errno
             if fd >= 0 {
                 var info = stat()

@@ -14,6 +14,8 @@ import test_transcript_benchmark_scripts as fixtures
 
 class BenchmarkReliabilityTests(unittest.TestCase):
     def setUp(self):
+        previous_signals = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        self.addCleanup(lambda: [signal.signal(sig, handler) for sig, handler in previous_signals.items()])
         self.fixture = fixtures.TranscriptBenchmarkScriptTests()
 
     def test_candidate_signing_is_allowed_hashed_and_restricted(self):

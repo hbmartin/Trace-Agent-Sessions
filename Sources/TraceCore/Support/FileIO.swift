@@ -154,10 +154,10 @@ public enum TraceFileIO {
     }
 
     public static func read(url: URL, offset: Int64, length: Int64) throws -> Data {
-        guard length >= 0, length <= Int64(Int.max) else {
+        guard offset >= 0, length >= 0, length <= Int64(Int.max) else {
             throw SessionSourceError.unreadableFile(url.path)
         }
-        let handle = try FileHandle(forReadingFrom: url)
+        let handle = try openRegularSessionFile(url)
         defer { try? handle.close() }
         try handle.seek(toOffset: UInt64(offset))
         guard let data = try handle.read(upToCount: Int(length)) else { return Data() }
@@ -166,13 +166,15 @@ public enum TraceFileIO {
 
     public static func fingerprint(url: URL, preferredHeadLength: Int? = nil) throws -> SourceFingerprint {
         var status = stat()
-        guard lstat(url.path, &status) == 0 else {
+        let handle = try openRegularSessionFile(url)
+        defer { try? handle.close() }
+        guard fstat(handle.fileDescriptor, &status) == 0 else {
             throw SessionSourceError.unreadableFile(url.path)
         }
 
         let fileSize = Int64(status.st_size)
         let headLength = max(0, min(preferredHeadLength ?? 4_096, 4_096, Int(fileSize)))
-        let head = try read(url: url, offset: 0, length: Int64(headLength))
+        let head = try handle.read(upToCount: headLength) ?? Data()
         let digest = Data(SHA256.hash(data: head))
         let modificationNanoseconds = Int64(status.st_mtimespec.tv_sec) * 1_000_000_000
             + Int64(status.st_mtimespec.tv_nsec)
@@ -196,6 +198,19 @@ public enum TraceFileIO {
         _ url: URL, allowingNullSessionIndex: Bool = false,
         openFile: (String, Int32) -> Int32 = { open($0, $1) }
     ) throws -> FileHandle {
+        try openRegularFile(url, allowingNullSessionIndex: allowingNullSessionIndex, openFile: openFile)
+    }
+
+    static func openRegularSessionFile(
+        _ url: URL, openFile: (String, Int32) -> Int32 = { open($0, $1) }
+    ) throws -> FileHandle {
+        try openRegularFile(url, allowingNullSessionIndex: false, openFile: openFile)
+    }
+
+    private static func openRegularFile(
+        _ url: URL, allowingNullSessionIndex: Bool,
+        openFile: (String, Int32) -> Int32
+    ) throws -> FileHandle {
         let fd = openFile(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOCTTY)
         guard fd >= 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -213,7 +228,7 @@ public enum TraceFileIO {
             && info.st_rdev == nullDevice.st_rdev
         guard info.st_mode & S_IFMT == S_IFREG || isNullIndex else {
             close(fd)
-            throw SessionSourceError.unreadableFile("\(url.path): metadata target is not a regular file")
+            throw SessionSourceError.unreadableFile("\(url.path): target is not a regular file")
         }
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }

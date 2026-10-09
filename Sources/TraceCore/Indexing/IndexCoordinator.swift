@@ -1476,7 +1476,7 @@ public actor IndexCoordinator {
     }
 
     private static func snapshotAppendIsWhitespace(_ url: URL, from offset: Int64, through boundary: Int64) throws -> Bool {
-        let handle = try FileHandle(forReadingFrom: url)
+        let handle = try TraceFileIO.openRegularSessionFile(url)
         defer { try? handle.close() }
         try handle.seek(toOffset: UInt64(offset))
         var remaining = boundary - offset
