@@ -1696,6 +1696,21 @@ private struct TranscriptRenderer: NSViewRepresentable {
             )
         }
 
+        // Reserve the placeholder's loading/error action area in both restore paths.
+        private static let placeholderFooterAllowance: CGFloat = 63
+
+        private func restorationContentReady(_ request: RestoreRequest, target: MessageSummary) -> Bool {
+            let collapsed = TranscriptRowContent.isLazyAuxiliary(role: target.role, visibility: visibility)
+                && !expansionState(for: target.id).auxiliary
+            let initialTop = request.reason.priority == RestoreRequest.Reason.navigation.priority
+                && model?.scrollPositions[sessionID] == nil && request.bookmark.index == 0 && request.bookmark.offset == 0
+            return initialTop || collapsed || model?.hydratedMessages[target.id] != nil
+        }
+
+        private func restorationHeight(_ height: CGFloat, ready: Bool) -> CGFloat {
+            ready ? height : max(1, height - Self.placeholderFooterAllowance)
+        }
+
         private func applyRestore(token: UUID) {
             guard !items.isEmpty else {
                 cancelPendingRestore(reportCancellation: true, cause: .lifecycle)
@@ -1740,11 +1755,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 request.revealedTargetRow = true
             }
             let target = items[row].summary
-            let collapsed = TranscriptRowContent.isLazyAuxiliary(role: target.role, visibility: visibility)
-                && !expansionState(for: target.id).auxiliary
-            let initialTop = request.reason.priority == RestoreRequest.Reason.navigation.priority
-                && model?.scrollPositions[sessionID] == nil && bookmark.index == 0 && bookmark.offset == 0
-            let contentReady = initialTop || collapsed || model?.hydratedMessages[target.id] != nil
+            let contentReady = restorationContentReady(request, target: target)
             if !contentReady {
                 if exact != nil { deferContentRestore(request) }
                 model?.hydrate(target)
@@ -1768,7 +1779,7 @@ private struct TranscriptRenderer: NSViewRepresentable {
             // A placeholder is usable immediately, but never replaces intent.
             // Leave the placeholder footer visible so an inline Retry remains
             // usable without scrolling away from the retained restoration intent.
-            let usableHeight = contentReady ? rowRect.height : max(1, rowRect.height - 63)
+            let usableHeight = restorationHeight(rowRect.height, ready: contentReady)
             bookmark = .init(messageID: target.id,
                 offset: TranscriptViewportPolicy.clampedRestoreOffset(bookmark.offset, rowHeight: usableHeight),
                 index: items[row].sourceIndex)
@@ -2337,10 +2348,8 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 // on refinement must not suppress this already-established anchor.
                 let rect = table.rect(ofRow: row)
                 let target = items[row].summary
-                let collapsed = TranscriptRowContent.isLazyAuxiliary(role: target.role, visibility: visibility)
-                    && !expansionState(for: target.id).auxiliary
-                let ready = collapsed || model?.hydratedMessages[target.id] != nil
-                let height = ready ? rect.height : max(1, rect.height - 63)
+                let ready = restorationContentReady(request, target: target)
+                let height = restorationHeight(rect.height, ready: ready)
                 let offset = TranscriptViewportPolicy.clampedRestoreOffset(request.bookmark.offset, rowHeight: height)
                 request.effectiveBookmark = .init(messageID: target.id, offset: offset, index: items[row].sourceIndex)
                 pendingRestore = request

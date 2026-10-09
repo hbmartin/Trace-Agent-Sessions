@@ -62,16 +62,78 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { !model.mainSearch.isSearching && model.mainSearch.results.count == 200 }
     }
 
+    func testSelectionCannotOverwriteRefreshAndBreakAnUnchangedSnapshot() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        let selectionGate = ReviewReadGate()
+        let selectionTask = Task { await selectionGate.wait() }
+        let refreshGate = ReviewReadGate()
+        let refreshTask = Task { await refreshGate.wait() }
+        defer {
+            selectionTask.cancel(); refreshTask.cancel()
+            Task { await selectionGate.open(); await refreshGate.open() }
+        }
+        f.model.selectionTranscriptGateForTesting = selectionTask
+        f.model.selectSession(session.id)
+        try await wait { f.model.selectionTranscriptWaitingForTesting }
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        var data = Data()
+        for index in 0..<6 {
+            data.append(try line(index, project: index < 2 ? "NavigationReview" : "OtherReview"))
+        }
+        let rewritten = String(decoding: data, as: UTF8.self).replacingOccurrences(
+            of: "NavigationNeedle", with: "RewrittenNavigationNeedle with longer locators")
+        try Data(rewritten.utf8).write(to: file, options: .atomic)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let current = try await f.database.transcriptSnapshot(sessionID: session.id)
+        XCTAssertNotNil(current.session, "exercise a replacement with a reused session ID")
+        await f.model.refreshSummariesForTesting()
+        let expectedRows = f.model.messages
+        XCTAssertEqual(expectedRows.map(\.locator), current.messages?.map(\.locator))
+        f.model.summaryTranscriptGateForTesting = refreshTask
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { f.model.summaryTranscriptWaitingForTesting }
+        await selectionGate.open()
+        try await wait { !f.model.selectionTranscriptWaitingForTesting }
+        await refreshGate.open()
+        await refresh.value
+        XCTAssertEqual(f.model.selectedSession?.sourceGeneration, current.session?.sourceGeneration)
+        XCTAssertEqual(f.model.messages.map(\.locator), expectedRows.map(\.locator), "unchanged metadata must keep the rows it actually described")
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.hydrate(message)
+        try await wait { f.model.hydratedMessages[message.id] != nil }
+        XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RewrittenNavigationNeedle"))
+    }
+
+    func testSidebarPaginationIsAvailableDuringTheSlowSummaryTail() async throws {
+        let f = try await fixture()
+        let gate = ReviewReadGate()
+        let gateTask = Task { await gate.wait() }
+        defer { gateTask.cancel(); Task { await gate.open() } }
+        f.model.summaryTailGateForTesting = gateTask
+        let refresh = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+        try await wait { f.model.summaryTailWaitingForTesting }
+        XCTAssertFalse(f.model.isLoadingSessions)
+        f.model.loadMoreSessions()
+        try await wait { f.model.sessions.count == 400 && !f.model.isLoadingSessions }
+        await gate.open()
+        await refresh.value
+        XCTAssertEqual(Set(f.model.sessions.map(\.id)).count, 400)
+    }
+
     func testOutsideSearchSelectionReplacesProtectedResultsWithNewScope() async throws {
         let f = try await fixture()
         try await search(f.model)
         f.model.mainSearch.search(reset: false)
         try await wait { f.model.mainSearch.hasLoadedAdditionalPages }
         XCTAssertTrue(f.model.mainSearch.results.contains { $0.projectCanonicalKey != f.project.canonicalKey })
+        let retainedSet = f.model.mainSearch.resultSetID
         let rows = try await f.database.sessions(projectCanonicalKey: f.project.canonicalKey)
         f.model.openSession(try XCTUnwrap(rows.first))
         try await wait { f.model.selectedSession != nil && !f.model.mainSearch.isSearching }
+        XCTAssertEqual(f.model.mainSearch.resultSetID, retainedSet, "hidden navigation must defer the FTS reset")
         f.model.returnFromSession()
+        try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.results.count == 200 }
         XCTAssertEqual(f.model.mainSearch.projectFilterCanonicalKey, f.project.canonicalKey)
         XCTAssertFalse(f.model.mainSearch.hasLoadedAdditionalPages)
         XCTAssertEqual(f.model.mainSearch.results.count, 200)

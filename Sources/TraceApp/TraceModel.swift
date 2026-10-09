@@ -262,6 +262,7 @@ final class TraceModel: ObservableObject {
     private var lastSearchedMutationRevision = 0
     private var timeZoneObserver: NSObjectProtocol?
     private var sessionRequestID = UUID()
+    private var transcriptPublicationEpoch = UUID()
     private var projectRequestID = UUID()
     private var summaryRequestID = UUID()
     var scrollPositions: [Int64: TranscriptBookmark] = [:]
@@ -298,12 +299,18 @@ final class TraceModel: ObservableObject {
         globalSearch.attach(database: database, coordinator: coordinator)
     }
 
-    func refreshSummariesForTesting(terminal: Bool = true) async {
-        await reloadSummaries(lightweight: true,
+    func refreshSummariesForTesting(terminal: Bool = true, lightweight: Bool = true) async {
+        await reloadSummaries(lightweight: lightweight,
                               projectReconciliation: terminal ? .terminalRetaining : .ongoing)
     }
 
     func queueMainSearchRefreshForTesting() { mainSearchNeedsRefresh = true }
+    var selectionTranscriptGateForTesting: Task<Void, Never>?
+    var summaryTranscriptGateForTesting: Task<Void, Never>?
+    var summaryTailGateForTesting: Task<Void, Never>?
+    private(set) var selectionTranscriptWaitingForTesting = false
+    private(set) var summaryTranscriptWaitingForTesting = false
+    private(set) var summaryTailWaitingForTesting = false
     private var sessionPageReadGateForTesting: Task<Void, Never>?
     func gateSessionPagesForTesting(_ gate: Task<Void, Never>?) { sessionPageReadGateForTesting = gate }
     #endif
@@ -827,6 +834,13 @@ final class TraceModel: ObservableObject {
         mainSearch.search(sort: settings.searchSort)
     }
 
+    private func deferMainSearchForSessionNavigation() {
+        mainSearch.suspendForNavigation()
+        syncMainSearchProjectFilter()
+        mainSearch.markResultsStale()
+        mainSearchNeedsRefresh = true
+    }
+
     private func syncMainSearchProjectFilter() {
         guard !hasSearchReturnContext else { return }
         mainSearch.setProjectFilter(
@@ -898,6 +912,8 @@ final class TraceModel: ObservableObject {
             if mainSearchNeedsRefresh { mainSearch.markResultsStale() }
             mainSearchNeedsRefresh = false
             loadProjectSessions()
+        } else if mainSearchNeedsRefresh {
+            searchMain()
         }
     }
 
@@ -1144,18 +1160,27 @@ final class TraceModel: ObservableObject {
         hydrationEpoch = UUID()
         hydratingMessageIDs.removeAll(keepingCapacity: true)
         expandedReasoningIDs.removeAll()
-        if !preservingMainSearch {
-            searchMain()
-        }
+        if !preservingMainSearch { deferMainSearchForSessionNavigation() }
         guard let database else { return }
         Task {
-            guard let snapshot = try? await database.transcriptSnapshot(sessionID: sessionID),
-                  sessionRequestID == request, selectedSessionID == sessionID else { return }
-            publishTranscript(snapshot)
-            let session = snapshot.session
+            guard sessionRequestID == request, selectedSessionID == sessionID else { return }
+            let publicationEpoch = transcriptPublicationEpoch
+            guard let snapshot = try? await database.transcriptSnapshot(sessionID: sessionID) else { return }
+            #if DEBUG
+            if let gate = selectionTranscriptGateForTesting {
+                selectionTranscriptWaitingForTesting = true
+                await gate.value
+                selectionTranscriptWaitingForTesting = false
+            }
+            #endif
+            guard sessionRequestID == request, selectedSessionID == sessionID else { return }
+            if transcriptPublicationEpoch == publicationEpoch {
+                publishTranscript(snapshot)
+            }
+            let session = selectedSession
             if let session,
                adoptProjectIdentity(from: session) {
-                if !preservingMainSearch { searchMain() }
+                if !preservingMainSearch { deferMainSearchForSessionNavigation() }
                 loadProjectSessions(ensuring: sessionID)
             }
             scrollRequest = UUID()
@@ -1325,15 +1350,14 @@ final class TraceModel: ObservableObject {
     }
 
     func hydrate(_ message: MessageSummary) {
-        guard messageIdentities[message.id] == MessageIdentity(message) else { return }
+        let identity = MessageIdentity(message)
+        guard messageIdentities[message.id] == identity else { return }
         if hydratedMessages[message.id] != nil {
             hydrationOrder.removeAll { $0 == message.id }
             hydrationOrder.append(message.id)
             return
         }
         guard hydrationFailures[message.id] == nil, let coordinator else { return }
-        let identity = MessageIdentity(message)
-        guard messageIdentities[message.id] == identity else { return }
         if let active = hydratingMessageIDs[message.id],
            active.epoch == hydrationEpoch, active.identity == identity { return }
         let active = HydrationRequest(epoch: hydrationEpoch, identity: identity)
@@ -1397,7 +1421,11 @@ final class TraceModel: ObservableObject {
 
     /// Called on the main actor without suspension: no hydration request can
     /// observe new source metadata paired with the old locator rows.
-    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot) {
+    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot, expectedEpoch: UUID? = nil) {
+        // An unchanged read describes the rows present when it started. It may
+        // retain them only if no other snapshot has been published since then.
+        guard snapshot.messages != nil || expectedEpoch == transcriptPublicationEpoch else { return }
+        transcriptPublicationEpoch = UUID()
         let changed = selectedSession?.id != snapshot.session?.id
             || selectedSession?.sourceGeneration != snapshot.session?.sourceGeneration
             || selectedSession?.sourcePath != snapshot.session?.sourcePath
@@ -1966,6 +1994,7 @@ final class TraceModel: ObservableObject {
         let loadedRecent = sidebar?.recentSessions ?? recentSessions
         let loadedSessions = sidebar?.sessionList
         let loadedTranscript: SessionTranscriptSnapshot?
+        let transcriptEpoch = transcriptPublicationEpoch
         if let ensuredSessionID {
             loadedTranscript = try? await database.transcriptSnapshot(
                 sessionID: ensuredSessionID, knownSession: selectedSession, knownMessageCount: messages.count
@@ -1973,6 +2002,13 @@ final class TraceModel: ObservableObject {
         } else {
             loadedTranscript = nil
         }
+        #if DEBUG
+        if loadedTranscript != nil, let gate = summaryTranscriptGateForTesting {
+            summaryTranscriptWaitingForTesting = true
+            await gate.value
+            summaryTranscriptWaitingForTesting = false
+        }
+        #endif
         let loadedSelectedSession = SessionLookupResult(
             succeeded: ensuredSessionID == nil || loadedTranscript != nil,
             session: loadedTranscript?.session
@@ -2052,12 +2088,20 @@ final class TraceModel: ObservableObject {
            summaryRequestID == refresh,
            loadedSelectedSession.succeeded {
             if let loadedTranscript, loadedTranscript.session != nil {
-                publishTranscript(loadedTranscript)
+                publishTranscript(loadedTranscript, expectedEpoch: transcriptEpoch)
             } else {
                 returnFromSession()
             }
         }
+        finishSessionListRequest(projectRequest)
         if lightweight || summaryRequestID != refresh { return }
+        #if DEBUG
+        if let gate = summaryTailGateForTesting {
+            summaryTailWaitingForTesting = true
+            await gate.value
+            summaryTailWaitingForTesting = false
+        }
+        #endif
         sourceHealth = (try? await database.sourceHealth()) ?? []
         statistics = try? await database.statistics()
         if let bytes = statistics?.databaseBytes { try? await diagnostics.recordIndexSize(bytes: bytes) }
