@@ -424,16 +424,25 @@ final class IndexingRegressionTests: XCTestCase {
             knownSession: initial.session, knownMessageCount: 1)
         XCTAssertEqual(appended.messages?.count, 2)
         XCTAssertEqual(appended.session?.sourceGeneration, initial.session?.sourceGeneration)
+        // Keep a larger row ID alive so replacement cannot accidentally reuse id.
+        let otherFile = root.appendingPathComponent("other-session.jsonl")
+        try Data(line(4).replacingOccurrences(of: "\"session\"", with: "\"other-session\"").utf8).write(to: otherFile)
+        await coordinator.refresh(paths: [otherFile.path], scope: .proseOnly)
         try Data((line(1).replacingOccurrences(of: "searchable", with: "changed locator prefix") + line(3)).utf8).write(to: file, options: .atomic)
         await coordinator.refresh(paths: [file.path], scope: .proseOnly)
-        let replaced = try await database.transcriptSnapshot(sessionID: id,
+        let replacementSessions = try await database.sessions()
+        let replacementID = try XCTUnwrap(replacementSessions.first { $0.sourcePath == file.path }?.id)
+        XCTAssertNotEqual(replacementID, id, "fixture must not rely on SQLite reusing a deleted row ID")
+        let replaced = try await database.transcriptSnapshot(sessionID: replacementID,
             knownSession: appended.session, knownMessageCount: 2)
         XCTAssertEqual(replaced.messages?.count, 2, "same-count replacement must reload locators")
         XCTAssertNotEqual(replaced.session?.sourceGeneration, appended.session?.sourceGeneration)
         let renamed = root.appendingPathComponent("renamed.jsonl")
         try FileManager.default.moveItem(at: file, to: renamed)
         await coordinator.refresh(paths: [file.path, renamed.path], scope: .proseOnly)
-        let moved = try await database.transcriptSnapshot(sessionID: id,
+        let movedSessions = try await database.sessions()
+        let movedID = try XCTUnwrap(movedSessions.first { $0.sourcePath == renamed.path }?.id)
+        let moved = try await database.transcriptSnapshot(sessionID: movedID,
             knownSession: replaced.session, knownMessageCount: 2)
         XCTAssertEqual(moved.session?.sourcePath, renamed.path)
         XCTAssertTrue(try XCTUnwrap(moved.messages).allSatisfy { $0.sourcePath == renamed.path })

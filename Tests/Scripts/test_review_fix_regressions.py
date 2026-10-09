@@ -378,27 +378,95 @@ class ReviewFixRegressionTests(unittest.TestCase):
             host = json.loads((root / 'results/pair-3-attempt-1/runs/run-fixture/host-session-check.json').read_text())
             self.assertFalse(host['valid'])
 
-    def test_signal_pending_during_final_handler_restoration_invalidates_evidence(self):
+    def test_interrupted_acceptance_tolerates_damaged_or_nonobject_reports(self):
         runner = self.fixture.module('run-local-benchmark-comparisons')
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = Path(directory) / 'host-session-check.json'
-            original_signal = signal.signal
-            previous = signal.getsignal(signal.SIGTERM)
-            injected = False
-            def restore(sig, handler):
-                nonlocal injected
-                result = original_signal(sig, handler)
-                if sig == signal.SIGTERM and handler == previous and not injected:
-                    injected = True
-                    os.kill(os.getpid(), signal.SIGTERM)
-                return result
-            with patch.object(runner.signal, 'signal', side_effect=restore):
-                with self.assertRaises(runner.RunInterrupted) as interruption:
+        for content in [b'{"status":', b'[]', b'null', b'"passed"', b'\xff', b'unreadable', None]:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                report = root / 'local-acceptance.json'
+                evidence = root / 'host-session-check.json'
+                if content is not None:
+                    report.write_bytes(content)
+                read_text = Path.read_text
+                def read_report(path, *args, **kwargs):
+                    if path == report and content == b'unreadable':
+                        raise OSError('Fixture report read failed')
+                    return read_text(path, *args, **kwargs)
+                with patch.object(Path, 'read_text', read_report), self.assertRaises(runner.RunInterrupted) as interruption:
                     with runner.CancellationController() as cancellation:
+                        cancellation.acceptance = report
                         cancellation.publish(evidence, {'valid': True})
-            self.assertEqual(interruption.exception.signum, signal.SIGTERM)
-            self.assertFalse(json.loads(evidence.read_text())['valid'])
-            self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+                        cancellation.record(signal.SIGTERM)
+                        cancellation.checkpoint()
+                self.assertEqual(interruption.exception.signum, signal.SIGTERM)
+                result = json.loads(report.read_text())
+                self.assertEqual(result['status'], 'interrupted')
+                self.assertFalse(result['valid'])
+                self.assertEqual(result['interruptionSignal'], signal.SIGTERM)
+                self.assertFalse(json.loads(evidence.read_text())['valid'])
+
+    def test_foreground_signal_at_final_unblocking_invalidates_evidence(self):
+        runner_source = fixtures.SCRIPTS / 'run-local-benchmark-comparisons.py'
+        for first in [signal.SIGINT, signal.SIGTERM]:
+            with self.subTest(signal=first), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                wrapper = root / 'wrapper.py'
+                wrapper.write_text("import fcntl,importlib.util,json,os,pathlib,signal,sys,termios,time\n"
+                    "fcntl.ioctl(sys.stdin.fileno(),termios.TIOCSCTTY,0)\n"
+                    "os.tcsetpgrp(sys.stdin.fileno(),os.getpgrp())\n"
+                    f"r=pathlib.Path({str(root)!r})\n"
+                    f"s=importlib.util.spec_from_file_location('runner',{str(runner_source)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
+                    "previous={sig:signal.getsignal(sig) for sig in m.CancellationController.signals}\n"
+                    "mask=signal.pthread_sigmask\n"
+                    "def unblock(how,signals):\n"
+                    " if how==signal.SIG_SETMASK:\n"
+                    "  (r/'unblock').touch();deadline=time.monotonic()+5\n"
+                    "  while not (r/'resume').exists():\n"
+                    "   if time.monotonic()>deadline:raise RuntimeError('Unblock gate timed out')\n"
+                    "   time.sleep(.01)\n"
+                    "  (r/'pending.json').write_text(json.dumps(list(signal.sigpending())))\n"
+                    " return mask(how,signals)\n"
+                    "m.signal.pthread_sigmask=unblock\n"
+                    "try:\n"
+                    " with m.CancellationController() as c:\n"
+                    "  c.acceptance=r/'local-acceptance.json';c.acceptance.write_text('{\"status\":\"passed\"}')\n"
+                    "  c.publish(r/'host-session-check.json',{'valid':True})\n"
+                    "except m.RunInterrupted as e:\n"
+                    " assert all(signal.getsignal(sig)==old for sig,old in previous.items())\n"
+                    " sys.exit(128+e.signum)\n")
+                unrelated = subprocess.Popen(['sleep', '60'], start_new_session=True)
+                master, slave = pty.openpty()
+                settings = termios.tcgetattr(slave)
+                settings[3] = (settings[3] | termios.ISIG) & ~termios.ECHO
+                settings[6][termios.VINTR] = b'\x03'
+                termios.tcsetattr(slave, termios.TCSANOW, settings)
+                with (root / 'signal-test.log').open('w') as log:
+                    child = subprocess.Popen([sys.executable, str(wrapper)], stdin=slave,
+                        stdout=log, stderr=log, start_new_session=True)
+                    os.close(slave)
+                    try:
+                        deadline = time.monotonic() + 5
+                        while not (root / 'unblock').exists() and child.poll() is None and time.monotonic() < deadline:
+                            time.sleep(.01)
+                        self.assertTrue((root / 'unblock').exists(), (root / 'signal-test.log').read_text())
+                        self.assertEqual(os.tcgetpgrp(master), child.pid)
+                        for _ in range(2):
+                            if first == signal.SIGINT:
+                                os.write(master, b'\x03')
+                            else:
+                                os.killpg(os.tcgetpgrp(master), first)
+                        (root / 'resume').touch()
+                        self.assertEqual(child.wait(timeout=8), 128 + first)
+                        self.assertIn(first, json.loads((root / 'pending.json').read_text()))
+                        self.assertIsNone(unrelated.poll())
+                        for name in ['host-session-check.json', 'local-acceptance.json']:
+                            result = json.loads((root / name).read_text())
+                            self.assertFalse(result['valid'])
+                            self.assertEqual(result['interruptionSignal'], first)
+                    finally:
+                        if child.poll() is None: child.kill();child.wait(timeout=5)
+                        unrelated.terminate();unrelated.wait(timeout=5)
+                        os.close(master)
 
     def test_initial_interrupt_during_cleanup_is_deferred_until_evidence_is_written(self):
         runner = self.fixture.module('run-local-benchmark-comparisons')
