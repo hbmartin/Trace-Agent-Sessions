@@ -315,10 +315,12 @@ final class TraceModel: ObservableObject {
     }
 
     func queueMainSearchRefreshForTesting() { mainSearchNeedsRefresh = true }
+    var selectionTranscriptReadGateForTesting: Task<Void, Never>?
     var selectionTranscriptGateForTesting: Task<Void, Never>?
     var summaryTranscriptGateForTesting: Task<Void, Never>?
     var summaryProjectsForTesting: [ProjectSummary]?
     var summaryTailGateForTesting: Task<Void, Never>?
+    private(set) var selectionTranscriptReadWaitingForTesting = false
     private(set) var selectionTranscriptWaitingForTesting = false
     private(set) var summaryTranscriptWaitingForTesting = false
     private(set) var summaryTailWaitingForTesting = false
@@ -1223,6 +1225,13 @@ final class TraceModel: ObservableObject {
         Task {
             guard sessionRequestID == request, selectedSessionID == sessionID else { return }
             let publicationEpoch = transcriptPublicationEpoch
+            #if DEBUG
+            if let gate = selectionTranscriptReadGateForTesting {
+                selectionTranscriptReadWaitingForTesting = true
+                await gate.value
+                selectionTranscriptReadWaitingForTesting = false
+            }
+            #endif
             guard let snapshot = try? await database.transcriptSnapshot(sessionID: sessionID) else { return }
             #if DEBUG
             if let gate = selectionTranscriptGateForTesting {
@@ -1232,9 +1241,7 @@ final class TraceModel: ObservableObject {
             }
             #endif
             guard sessionRequestID == request, selectedSessionID == sessionID else { return }
-            if transcriptPublicationEpoch == publicationEpoch {
-                publishTranscript(snapshot)
-            }
+            publishTranscript(snapshot, expectedEpoch: publicationEpoch)
             let session = selectedSession
             if let session,
                adoptProjectIdentity(from: session) {
@@ -1480,10 +1487,10 @@ final class TraceModel: ObservableObject {
 
     /// Called on the main actor without suspension: no hydration request can
     /// observe new source metadata paired with the old locator rows.
-    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot, expectedEpoch: UUID? = nil) {
-        // An unchanged read describes the rows present when it started. It may
-        // retain them only if no other snapshot has been published since then.
-        guard snapshot.messages != nil || expectedEpoch == transcriptPublicationEpoch else { return }
+    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot, expectedEpoch: UUID) {
+        // Every read describes the transcript when it started, including reads
+        // with rows. A newer publication makes that snapshot obsolete.
+        guard expectedEpoch == transcriptPublicationEpoch else { return }
         transcriptPublicationEpoch = UUID()
         let changed = selectedSession?.id != snapshot.session?.id
             || selectedSession?.sourceGeneration != snapshot.session?.sourceGeneration

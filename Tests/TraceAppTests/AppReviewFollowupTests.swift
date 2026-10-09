@@ -112,6 +112,54 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RewrittenNavigationNeedle"))
     }
 
+    func testRowBearingSummaryCannotOverwriteNewerSelectionAfterSourceReplacement() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        let selectionGate = ReviewReadGate()
+        let selectionTask = Task { await selectionGate.wait() }
+        let summaryGate = ReviewReadGate()
+        let summaryTask = Task { await summaryGate.wait() }
+        defer {
+            selectionTask.cancel(); summaryTask.cancel()
+            Task { await selectionGate.open(); await summaryGate.open() }
+        }
+        f.model.selectionTranscriptReadGateForTesting = selectionTask
+        f.model.summaryTranscriptGateForTesting = summaryTask
+        f.model.selectSession(session.id)
+        try await wait { f.model.selectionTranscriptReadWaitingForTesting }
+        XCTAssertTrue(f.model.messages.isEmpty)
+        let old = try await f.database.transcriptSnapshot(sessionID: session.id,
+            knownSession: f.model.selectedSession, knownMessageCount: f.model.messages.count)
+        XCTAssertFalse(try XCTUnwrap(old.messages).isEmpty, "the delayed summary must contain old rows")
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { f.model.summaryTranscriptWaitingForTesting }
+
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let rewritten = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(
+            of: "NavigationNeedle", with: "RewrittenNavigationNeedle with longer locators")
+        try Data(rewritten.utf8).write(to: file, options: .atomic)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let current = try await f.database.transcriptSnapshot(sessionID: session.id)
+        let currentSession = try XCTUnwrap(current.session)
+        let currentRows = try XCTUnwrap(current.messages)
+        XCTAssertNotEqual(currentSession.sourceGeneration, old.session?.sourceGeneration)
+        XCTAssertNotEqual(currentRows.map(\.locator), old.messages?.map(\.locator))
+        await selectionGate.open()
+        try await wait { !f.model.selectionTranscriptReadWaitingForTesting && !f.model.messages.isEmpty }
+        XCTAssertEqual(f.model.selectedSession?.sourceGeneration, currentSession.sourceGeneration)
+        XCTAssertEqual(f.model.messages.map(\.locator), currentRows.map(\.locator))
+
+        await summaryGate.open()
+        await refresh.value
+        XCTAssertEqual(f.model.selectedSession?.sourceGeneration, currentSession.sourceGeneration)
+        XCTAssertEqual(f.model.messages.map(\.locator), currentRows.map(\.locator),
+                       "a stale row-bearing summary must not replace the newer selection")
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.hydrate(message)
+        try await wait { f.model.hydratedMessages[message.id] != nil }
+        XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RewrittenNavigationNeedle"))
+    }
+
     func testSidebarPaginationIsAvailableDuringTheSlowSummaryTail() async throws {
         let f = try await fixture()
         let gate = ReviewReadGate()

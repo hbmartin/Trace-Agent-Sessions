@@ -42,6 +42,23 @@ final class ReviewFollowupTests: XCTestCase {
         }
     }
 
+    func testBlockquotedCodePreservesLiteralTextAndLineBreaks() {
+        let cases = [
+            "> ```\n> a*b*c\n> ```",
+            "> ~~~swift\n> obj.__dict__\n> ~~~",
+            ">     a*b*c\n>     obj.__dict__",
+            "> > ```\n> > a*b*c\n> > ```"
+        ]
+        for code in cases {
+            for ending in ["\n", "\r\n", "\r"] {
+                let input = ("**Before**\n\n" + code + "\n\n*After*")
+                    .replacingOccurrences(of: "\n", with: ending)
+                XCTAssertEqual(String(TranscriptMarkdown.render(input).characters),
+                               "Before\n\n" + code + "\n\nAfter")
+            }
+        }
+    }
+
     func testListContinuationFormattingAndNestedLiteralCode() {
         let input = "1. Step\n\n    Run **this** with `make`\n\n        obj.__dict__\n\n    *Continue*\n\nOutside\n\n    a*b*c"
         XCTAssertEqual(String(TranscriptMarkdown.render(input).characters),
