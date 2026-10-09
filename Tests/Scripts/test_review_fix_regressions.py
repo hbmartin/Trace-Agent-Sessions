@@ -1,4 +1,5 @@
 import json
+import pty
 import os
 import shutil
 import signal
@@ -7,6 +8,7 @@ import sys
 import time
 import subprocess
 import tempfile
+import termios
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -220,7 +222,9 @@ class ReviewFixRegressionTests(unittest.TestCase):
                         "os.execv('/bin/ps',['ps',*__import__('sys').argv[1:]])\n")
                     fake_ps.chmod(0o755)
                     wrapper = root / 'wrapper.py'
-                    wrapper.write_text("import importlib.util,pathlib,signal,sys,time\n"
+                    wrapper.write_text("import fcntl,importlib.util,os,pathlib,signal,sys,termios,time\n"
+                        "fcntl.ioctl(sys.stdin.fileno(),termios.TIOCSCTTY,0)\n"
+                        "os.tcsetpgrp(sys.stdin.fileno(),os.getpgrp())\n"
                         f"r=pathlib.Path({str(root)!r})\n"
                         f"s=importlib.util.spec_from_file_location('runner',{str(runner_source)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
                         "m.wait_for_quiet=lambda *a:None\n"
@@ -235,16 +239,31 @@ class ReviewFixRegressionTests(unittest.TestCase):
                         "except m.RunInterrupted as e:sys.exit(128+e.signum)\n")
                     unrelated = subprocess.Popen(['sleep', '60'], start_new_session=True)
                     log = (root / 'signal-test.log').open('w')
-                    child = subprocess.Popen([sys.executable, str(wrapper)], stdout=log, stderr=log,
+                    master, slave = pty.openpty()
+                    settings = termios.tcgetattr(slave)
+                    settings[3] = (settings[3] | termios.ISIG) & ~termios.ECHO
+                    settings[6][termios.VINTR] = b'\x03'
+                    termios.tcsetattr(slave, termios.TCSANOW, settings)
+                    child = subprocess.Popen([sys.executable, str(wrapper)], stdin=slave, stdout=log, stderr=log,
                         start_new_session=True, env=dict(os.environ, PATH=str(tools) + ':' + os.environ['PATH']))
+                    os.close(slave)
                     try:
                         deadline = time.monotonic() + 12
                         while not (root / phase).exists() and child.poll() is None and time.monotonic() < deadline:
                             time.sleep(.01)
                         self.assertTrue((root / phase).exists(), 'Must reach the real cancellation phase')
-                        os.killpg(child.pid, first)
+                        self.assertEqual(os.tcgetpgrp(master), child.pid,
+                            'The cancellation target must own the real terminal foreground group')
+                        def send(signum):
+                            if signum == signal.SIGINT:
+                                os.write(master, b'\x03')
+                            else:
+                                os.killpg(os.tcgetpgrp(master), signum)
+                        send(first)
                         time.sleep(.04)
-                        os.killpg(child.pid, signal.SIGTERM if first == signal.SIGINT else signal.SIGINT)
+                        send(signal.SIGTERM if first == signal.SIGINT else signal.SIGINT)
+                        time.sleep(.04)
+                        send(first)
                         self.assertEqual(child.wait(timeout=35), 128 + first)
                         self.assertIsNone(unrelated.poll(), 'An unrelated session must survive')
                         host = json.loads(next((root / 'results').rglob('host-session-check.json')).read_text())
@@ -255,6 +274,7 @@ class ReviewFixRegressionTests(unittest.TestCase):
                     finally:
                         if child.poll() is None: child.kill();child.wait(timeout=5)
                         unrelated.terminate();unrelated.wait(timeout=5)
+                        os.close(master)
                         log.close()
 
     def test_empty_root_cache_is_quarantined_before_default_head_comparison(self):
