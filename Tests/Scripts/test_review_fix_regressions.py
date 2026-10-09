@@ -34,6 +34,33 @@ class ReviewFixRegressionTests(unittest.TestCase):
         self.fixture.git(baseline, 'reset', '--hard', revision)
         return candidate, baseline, revision
 
+    def test_direct_empty_cache_cannot_checkout_its_parent_repository(self):
+        validator = self.fixture.module('validate-benchmark-baseline')
+        with tempfile.TemporaryDirectory() as directory:
+            candidate, _, pinned = self.prepared_fixture(Path(directory))
+            source = candidate / 'Sources/TraceApp/MainView.swift'
+            source.write_text('new developer HEAD')
+            self.fixture.git(candidate, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                             'commit', '--quiet', '-am', 'new developer HEAD')
+            head = self.fixture.git(candidate, 'rev-parse', 'HEAD')
+            cache = candidate / 'build/local-release-baseline'
+            cache.mkdir(parents=True)
+            (cache / '.DS_Store').write_bytes(b'Finder')
+            with self.assertRaises(ValueError) as error:
+                validator.initialize_missing(candidate, cache, pinned)
+            self.assertEqual(self.fixture.git(candidate, 'rev-parse', 'HEAD'), head)
+            self.assertIn('own repository', str(error.exception))
+            self.assertEqual(source.read_text(), 'new developer HEAD')
+
+    def test_complete_harness_manifest_rejects_an_omitted_instrumentation_file(self):
+        validator = self.fixture.module('validate-benchmark-baseline')
+        with tempfile.TemporaryDirectory() as directory:
+            candidate, baseline, revision = self.prepared_fixture(Path(directory))
+            (baseline / 'Sources/TraceCore/Diagnostics/TracePerformance.swift').unlink()
+            records = validator.validate(candidate, baseline, revision)
+            with self.assertRaisesRegex(ValueError, 'Missing synchronized harness'):
+                validator.require_complete_harness(candidate, records)
+
     def test_signing_rejects_comment_delimiter_bypass_and_directives(self):
         validator = self.fixture.module('validate-benchmark-baseline')
         with tempfile.TemporaryDirectory() as directory:
@@ -301,17 +328,19 @@ class ReviewFixRegressionTests(unittest.TestCase):
             dependency = root / 'dependency'; dependency.mkdir()
             self.fixture.git(dependency, 'init', '--quiet')
             source = dependency / 'SQLiteCustom/src/sqlite/src/os_unix.c'
-            source.parent.mkdir(parents=True); source.write_text('original\n')
+            source.parent.mkdir(parents=True); source.write_text('original\nterminal\n')
             self.fixture.git(dependency, 'add', '.')
             self.fixture.git(dependency, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'SQLite fixture')
             self.fixture.git(candidate, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', str(dependency), 'Vendor/GRDB.swift')
             patch_path = 'GRDBCustomSQLite/SQLiteRegularFiles.patch'
             old_patch = '--- a/sqlite/src/os_unix.c\n+++ b/sqlite/src/os_unix.c\n@@ -1 +1 @@\n-original\n+protected\n'
             (candidate / patch_path).write_text(old_patch)
+            terminal_patch = candidate / 'GRDBCustomSQLite/SQLiteNoControllingTerminal.patch'
+            terminal_patch.write_text('--- a/sqlite/src/os_unix.c\n+++ b/sqlite/src/os_unix.c\n@@ -2 +2 @@\n-terminal\n+no-controlling-terminal\n')
             configure = candidate / 'Scripts/configure-grdb.sh'
             configure.write_text('#!/bin/sh\nset -eu\ncd "$(dirname "$0")/../Vendor/GRDB.swift/SQLiteCustom/src"\n'
-                'patch="../../../../GRDBCustomSQLite/SQLiteRegularFiles.patch"\n'
-                'git apply --unidiff-zero --reverse --check "$patch" 2>/dev/null || git apply --unidiff-zero "$patch"\n')
+                'for patch in ../../../../GRDBCustomSQLite/SQLiteRegularFiles.patch ../../../../GRDBCustomSQLite/SQLiteNoControllingTerminal.patch; do\n'
+                'git apply --unidiff-zero --reverse --check "$patch" 2>/dev/null || git apply --unidiff-zero "$patch"\ndone\n')
             configure.chmod(0o755)
             self.fixture.git(candidate, 'add', '.')
             self.fixture.git(candidate, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'recognized overlay')
@@ -319,12 +348,12 @@ class ReviewFixRegressionTests(unittest.TestCase):
             with patch.dict(os.environ, GIT_ALLOW_PROTOCOL='file'):
                 preparer.prepare(candidate, root / 'cache', revision)
             cache = root / 'cache'
-            self.assertEqual((cache / 'Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c').read_text(), 'protected\n')
+            self.assertEqual((cache / 'Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c').read_text(), 'protected\nno-controlling-terminal\n')
             (candidate / patch_path).write_text(old_patch.replace('+protected', '+extended protection'))
             self.fixture.git(candidate, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-am', 'extend overlay')
             preparer.prepare(candidate, cache, revision)
             target = cache / 'Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c'
-            self.assertEqual(target.read_text(), 'extended protection\n')
+            self.assertEqual(target.read_text(), 'extended protection\nno-controlling-terminal\n')
             target.write_text('unexpected source change\n')
             with self.assertRaisesRegex(ValueError, 'Unexpected SQLite'):
                 preparer.prepare(candidate, cache, revision)
