@@ -54,9 +54,22 @@ final class SessionSearchModel: ObservableObject {
     private var diagnostics: DiagnosticsStore?
     private var loadingAdditionalPage = false
     private var activeTaskIsReset = false
+    private var activeTaskIsAutomatic = false
+    private struct AutomaticRefreshBackup {
+        let cursor: SearchCursor?
+        let criteria: SearchRequestCriteria?
+        let hasLoadedAdditionalPages: Bool
+    }
+    private var automaticRefreshBackup: AutomaticRefreshBackup?
     private var pendingLoadMore = false
     private var injectedDuplicateAdditionalPage = false
     private var ignoredAutomaticQueryValueForTesting: String?
+
+    #if DEBUG
+    private var automaticResultGateForTesting: Task<Void, Never>?
+    private(set) var automaticResultWaitingForTesting = false
+    func gateAutomaticResultsForTesting(_ gate: Task<Void, Never>?) { automaticResultGateForTesting = gate }
+    #endif
 
     var protectsPagination: Bool { loadingAdditionalPage || hasLoadedAdditionalPages }
     var projectFilterCanonicalKey: String? { filters.projectCanonicalKey }
@@ -176,6 +189,9 @@ final class SessionSearchModel: ObservableObject {
 
     func search(sort: SearchSort? = nil, reset: Bool = true,
                 trigger: SearchTrigger = .user) {
+        #if DEBUG
+        automaticResultWaitingForTesting = false
+        #endif
         if let sort { self.sort = sort }
         let criteria: SearchRequestCriteria
         if reset {
@@ -187,6 +203,12 @@ final class SessionSearchModel: ObservableObject {
             resultsMayBeStale = false
             let criteriaChanged = query != lastQuery || filters != lastFilters
                 || datePreset != lastDatePreset || self.sort != lastSort
+            if trigger == .automatic, !criteriaChanged {
+                if automaticRefreshBackup == nil {
+                    automaticRefreshBackup = .init(cursor: nextCursor, criteria: activeRequestCriteria,
+                                                   hasLoadedAdditionalPages: hasLoadedAdditionalPages)
+                }
+            } else { automaticRefreshBackup = nil }
             if trigger == .user || criteriaChanged { resultSetID = UUID() }
             if trigger == .user || criteriaChanged { pendingLoadMore = false }
             task?.cancel()
@@ -241,6 +263,7 @@ final class SessionSearchModel: ObservableObject {
         let initialCursor = reset ? nil : nextCursor
         loadingAdditionalPage = !reset
         activeTaskIsReset = reset
+        activeTaskIsAutomatic = trigger == .automatic
         isSearching = true
         error = nil
         TraceTestHooks.appendLine(trigger == .automatic ? "automatic" : reset ? "reset" : "more",
@@ -284,6 +307,12 @@ final class SessionSearchModel: ObservableObject {
                             query: query, filters: filters, sort: sort, cursor: cursor
                         )
                     }
+                    #if DEBUG
+                    if reset, trigger == .automatic, let gate = self.automaticResultGateForTesting {
+                        self.automaticResultWaitingForTesting = true
+                        await gate.value
+                    }
+                    #endif
                     try Task.checkCancellation()
                     guard self.requestID == id else { return }
                     var effectiveResults = page.results
@@ -330,6 +359,7 @@ final class SessionSearchModel: ObservableObject {
                         if unique.count != effectiveResults.count { self.resultsMayBeStale = true }
                     }
                     self.nextCursor = effectiveNextCursor
+                    if reset { self.automaticRefreshBackup = nil }
                     if !reset, !injectedTestPage, let next = effectiveNextCursor,
                        !visitedCursors.insert(next).inserted {
                         self.resultsMayBeStale = true
@@ -348,6 +378,7 @@ final class SessionSearchModel: ObservableObject {
                 self.task = nil
                 self.loadingAdditionalPage = false
                 self.activeTaskIsReset = false
+                self.activeTaskIsAutomatic = false
                 self.isSearching = false
                 if reset, self.pendingLoadMore {
                     self.pendingLoadMore = false
@@ -358,18 +389,22 @@ final class SessionSearchModel: ObservableObject {
                 try? await self.diagnostics?.recordSearch(milliseconds: milliseconds)
             } catch is CancellationError {
                 guard let self, self.requestID == id else { return }
+                self.restoreInterruptedAutomaticRefresh()
                 self.task = nil
                 self.loadingAdditionalPage = false
                 self.activeTaskIsReset = false
+                self.activeTaskIsAutomatic = false
                 self.isSearching = false
                 self.pendingLoadMore = false
             }
             catch {
                 guard let self, self.requestID == id else { return }
                 self.error = error.localizedDescription
+                self.restoreInterruptedAutomaticRefresh()
                 self.task = nil
                 self.loadingAdditionalPage = false
                 self.activeTaskIsReset = false
+                self.activeTaskIsAutomatic = false
                 self.isSearching = false
                 self.pendingLoadMore = false
             }
@@ -389,13 +424,26 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func suspendForNavigation() {
+        restoreInterruptedAutomaticRefresh()
         task?.cancel()
         task = nil
         requestID = UUID()
         isSearching = false
         loadingAdditionalPage = false
         activeTaskIsReset = false
+        activeTaskIsAutomatic = false
         pendingLoadMore = false
+    }
+
+    private func restoreInterruptedAutomaticRefresh() {
+        guard activeTaskIsAutomatic else { return }
+        if let backup = automaticRefreshBackup {
+            nextCursor = backup.cursor
+            activeRequestCriteria = backup.criteria
+            hasLoadedAdditionalPages = backup.hasLoadedAdditionalPages
+        }
+        automaticRefreshBackup = nil
+        markResultsStale()
     }
 
     func resetForIndexReset(awaitsProjectResolution: Bool = false) {
@@ -416,10 +464,14 @@ final class SessionSearchModel: ObservableObject {
         hasLoadedAdditionalPages = false
         resultsMayBeStale = false
         automaticRefreshToken = nil
+        automaticRefreshBackup = nil
+        activeTaskIsAutomatic = false
         activeRequestCriteria = nil
     }
 
     private func invalidateActiveRequest(markStale: Bool) {
+        automaticRefreshBackup = nil
+        activeTaskIsAutomatic = false
         task?.cancel()
         task = nil
         requestID = UUID()

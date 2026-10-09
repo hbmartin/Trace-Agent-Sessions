@@ -57,17 +57,8 @@ public struct GeminiSource: SessionSource {
         var loadedContext = offset == 0 || !recoverPrefix
         return ParsedRecordStream.jsonLines(url: file.url, from: offset, through: boundary) { line in
             if !loadedContext {
-                let cursor = try JSONLineCursor(url: file.url, from: 0, through: offset)
-                while let preceding = try cursor.next() {
-                    guard let root = try? JSONHelpers.object(from: preceding.data) else { continue }
-                    if let explicitID = GeminiJSONLSessionIdentity.explicitID(in: root) { currentSessionID = explicitID }
-                    _ = context.observeTimestamp(root["timestamp"])
-                    for range in JSONDocumentScanner.objectRanges(in: preceding.data, arrayKey: "messages") {
-                        if let object = try? JSONHelpers.object(from: preceding.data.subdata(in: range)) {
-                            _ = context.observeTimestamp(object["timestamp"])
-                        }
-                    }
-                }
+                try GeminiJSONLSessionIdentity.recover(before: offset, in: file.url,
+                    sessionID: &currentSessionID, context: &context)
                 loadedContext = true
             }
             guard let root = try? JSONHelpers.object(from: line.data) else { return [] }
@@ -83,7 +74,7 @@ public struct GeminiSource: SessionSource {
                 let absoluteOffset = line.offset + Int64(range.lowerBound)
                 if let message = parseGeminiMessage(
                     object, sessionID: currentSessionID, cwd: metadata.cwd,
-                    fallbackTimestamp: context.timestampMilliseconds,
+                    fallbackTimestamp: context.timestampMilliseconds, resolvedTimestamp: context.timestampMilliseconds,
                     locator: .byteRange(offset: absoluteOffset, length: Int64(range.count), key: object["id"] as? String),
                     sourceKey: object["id"] as? String ?? "\(absoluteOffset)"
                 ) { records.append(.message(message)) }
@@ -142,11 +133,18 @@ enum GeminiJSONLSessionIdentity {
     }
 
     static func id(before offset: Int64, in url: URL) throws -> String? {
+        var sessionID = ""
+        var context = SourceReadContext(fallbackTimestampMilliseconds: 0)
+        try recover(before: offset, in: url, sessionID: &sessionID, context: &context, recoverTimestamp: false)
+        return sessionID.isEmpty ? nil : sessionID
+    }
+
+    static func recover(before offset: Int64, in url: URL,
+                        sessionID: inout String, context: inout SourceReadContext, recoverTimestamp: Bool = true) throws {
         #if DEBUG
         prefixScanLock.withLock { prefixScans += 1 }
         #endif
         let cursor = try JSONLineCursor(url: url, from: 0, through: offset)
-        var inherited: String?
         while let line = try cursor.next() {
             try Task.checkCancellation()
             #if DEBUG
@@ -156,10 +154,16 @@ enum GeminiJSONLSessionIdentity {
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
             #endif
             guard let root = try? JSONHelpers.object(from: line.data) else { continue }
-            inherited = explicitID(in: root) ?? inherited
+            sessionID = explicitID(in: root) ?? sessionID
+            guard recoverTimestamp else { continue }
+            _ = context.observeTimestamp(root["timestamp"])
+            for range in JSONDocumentScanner.objectRanges(in: line.data, arrayKey: "messages") {
+                if let object = try? JSONHelpers.object(from: line.data.subdata(in: range)) {
+                    _ = context.observeTimestamp(object["timestamp"])
+                }
+            }
         }
         try Task.checkCancellation()
-        return inherited
     }
 }
 
@@ -178,6 +182,7 @@ private func parseGeminiMessage(
     sessionID: String,
     cwd: String,
     fallbackTimestamp: Int64,
+    resolvedTimestamp: Int64? = nil,
     locator: RecordLocator,
     sourceKey: String
 ) -> ParsedMessage? {
@@ -246,7 +251,7 @@ private func parseGeminiMessage(
         externalID: externalID,
         sessionExternalID: sessionID,
         cwd: cwd,
-        timestampMilliseconds: JSONHelpers.timestampMilliseconds(object["timestamp"], fallback: fallbackTimestamp),
+        timestampMilliseconds: resolvedTimestamp ?? JSONHelpers.timestampMilliseconds(object["timestamp"], fallback: fallbackTimestamp),
         role: role,
         sections: sections,
         locator: locator,
@@ -283,7 +288,7 @@ final class GeminiSnapshotStream: @unchecked Sendable {
     private var rootClosed = false
     private var validationDocument = Data()
     private(set) var rootObject: [String: Any]?
-    private(set) var currentMessageObject: [String: Any]?
+    var observeMessageObject: (([String: Any], String) -> Void)?
 
     init(file: DiscoveredSourceFile, initialContext: SourceReadContext? = nil) {
         self.file = file
@@ -333,10 +338,11 @@ final class GeminiSnapshotStream: @unchecked Sendable {
             case .messages:
                 if let objectRecord = try nextMessageObject() {
                     guard let object = try? JSONHelpers.object(from: objectRecord.data) else { continue }
-                    currentMessageObject = object
+                    observeMessageObject?(object, sessionID)
                     let timestampRecord = readContext.observeTimestamp(object["timestamp"])
                     if let message = parseGeminiMessage(
                         object, sessionID: sessionID, cwd: cwd, fallbackTimestamp: readContext.timestampMilliseconds,
+                        resolvedTimestamp: readContext.timestampMilliseconds,
                         locator: .byteRange(
                             offset: objectRecord.offset, length: Int64(objectRecord.data.count),
                             key: object["id"] as? String

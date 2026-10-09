@@ -28,10 +28,14 @@ python3 "$repo_dir/Scripts/prepare-benchmark-baseline.py" "$repo_dir" "$baseline
 # Preparation already synchronizes, initializes, configures, and validates.
 cp "$comparison_dir/baseline-cache-validation.json" "$comparison_dir/baseline-build-inputs.json"
 cp "$comparison_dir/baseline-cache-validation.json" "$comparison_dir/baseline-prepared-dependencies.json"
-python3 - "$comparison_dir" <<'PY_HASHES'
-import json, pathlib, sys
-output = pathlib.Path(sys.argv[1])
+python3 - "$comparison_dir" "$repo_dir" <<'PY_HASHES'
+import importlib.util, json, pathlib, sys
+output, candidate = map(pathlib.Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location('validator', candidate / 'Scripts/validate-benchmark-baseline.py')
+validator = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validator)
 records = json.loads((output / 'baseline-cache-validation.json').read_text())
+validator.require_complete_harness(candidate, records)
 (output / 'harness-hashes.json').write_text(json.dumps(records['harness_sha256'], indent=2) + '\n')
 PY_HASHES
 python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_dir" "$candidate_commit" --role candidate \

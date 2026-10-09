@@ -53,27 +53,42 @@ class CancellationController:
             self.record(signal.sigwait(pending))
             pending = signal.sigpending().intersection(self.signals)
 
+    def _invalidate_interrupted_evidence(self):
+        if self.signum is None:
+            return
+        if self.evidence is not None:
+            path, host = self.evidence
+            host.update(valid=False, interruptionSignal=self.signum)
+            write_json(path, host)
+        if self.acceptance is not None:
+            try:
+                report = json.loads(self.acceptance.read_text())
+            except (OSError, ValueError):
+                report = {}
+            if not isinstance(report, dict):
+                report = {}
+            report.update(status='interrupted', valid=False, interruptionSignal=self.signum)
+            write_json(self.acceptance, report)
+
     def __exit__(self, kind, error, traceback):
-        # Block delivery while restoring handlers. Pending signals still count
-        # as cancellation and are consumed before the caller's mask is restored.
-        mask = signal.pthread_sigmask(signal.SIG_BLOCK, self.signals)
+        # Deliver signals queued at the final unblock to our recording handlers.
+        # Installing the previous handlers while blocked would hand a late signal
+        # to the default handler before interrupted evidence can be published.
+        published_signal = None
         try:
-            self._drain_pending()
+            mask = signal.pthread_sigmask(signal.SIG_BLOCK, self.signals)
+            try:
+                self._drain_pending()
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+            published_signal = self.signum
+            self._invalidate_interrupted_evidence()
+        finally:
             for sig, handler in self.previous.items():
                 signal.signal(sig, handler)
-            self._drain_pending()
-            if self.signum is not None and self.evidence is not None:
-                path, host = self.evidence
-                host.update(valid=False, interruptionSignal=self.signum)
-                write_json(path, host)
-                self._drain_pending()
-            if self.signum is not None and self.acceptance is not None:
-                report = json.loads(self.acceptance.read_text()) if self.acceptance.exists() else {}
-                report.update(status='interrupted', valid=False, interruptionSignal=self.signum)
-                write_json(self.acceptance, report)
-                self._drain_pending()
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        # A recording handler may have run while handing back the handlers.
+        if self.signum != published_signal:
+            self._invalidate_interrupted_evidence()
         if self.signum is not None:
             preserves_first = isinstance(error, RunInterrupted) and error.signum == self.signum
             preserves_keyboard = isinstance(error, KeyboardInterrupt) and self.signum == signal.SIGINT

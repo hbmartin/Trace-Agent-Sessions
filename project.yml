@@ -122,6 +122,10 @@ targets:
     platform: macOS
     sources:
       - Tests/TraceCoreTests
+      - Sources/TraceApp/AppSettings.swift
+      - Sources/TraceApp/NavigationState.swift
+      - Sources/TraceApp/SessionSearchModel.swift
+      - Sources/TraceApp/TraceModel.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.haroldmartin.Trace.CoreTests

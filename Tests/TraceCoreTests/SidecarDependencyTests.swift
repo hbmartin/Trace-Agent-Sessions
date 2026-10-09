@@ -14,6 +14,29 @@ final class SidecarDependencyTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
     }
+    private func assertClosed(_ descriptor: OpenedMetadataDescriptor,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        guard descriptor.number >= 0 else {
+            return XCTFail("Expected a successfully opened descriptor", file: file, line: line)
+        }
+        let result = fcntl(descriptor.number, F_GETFD)
+        let savedErrno = errno
+        if result == -1 {
+            XCTAssertEqual(savedErrno, EBADF, file: file, line: line)
+        } else {
+            // Another queue may reuse the number after close. The descriptor
+            // must no longer identify the file captured while it was open.
+            var current = stat()
+            let status = fstat(descriptor.number, &current)
+            let statusErrno = errno
+            if status == -1 {
+                XCTAssertEqual(statusErrno, EBADF, file: file, line: line)
+            } else {
+                XCTAssertFalse(descriptor.matches(current), "Original descriptor remains open", file: file, line: line)
+            }
+        }
+    }
+
     func testSymlinkedHomeRelativeChainAndAncestorRetargeting() throws {
         let root = try fixture()
         let home = root.appendingPathComponent("real/home")
@@ -200,12 +223,15 @@ final class SidecarDependencyTests: XCTestCase {
         let sidecar = root.appendingPathComponent("session_index.jsonl")
         try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: original)
         var descriptor: Int32 = -1
+        var openedDescriptor: OpenedMetadataDescriptor?
         XCTAssertThrowsError(try JSONLineCursor(url: sidecar, from: 0, openFile: { path, flags in
             XCTAssertNotEqual(flags & O_NONBLOCK, 0)
+            XCTAssertNotEqual(flags & O_NOCTTY, 0)
             XCTAssertEqual(unlink(path), 0)
             XCTAssertEqual(symlink(pipe.path, path), 0)
             // Keep this regression bounded even if nonblocking behavior regresses.
             descriptor = open(path, flags | O_NONBLOCK)
+            openedDescriptor = OpenedMetadataDescriptor(descriptor)
             XCTAssertGreaterThanOrEqual(descriptor, 0)
             return descriptor
         })) { error in
@@ -215,8 +241,7 @@ final class SidecarDependencyTests: XCTestCase {
             XCTAssertTrue(message.contains("not a regular file"))
         }
         XCTAssertGreaterThanOrEqual(descriptor, 0)
-        XCTAssertEqual(fcntl(descriptor, F_GETFD), -1)
-        XCTAssertEqual(errno, EBADF)
+        assertClosed(try XCTUnwrap(openedDescriptor))
     }
 
     func testJSONMetadataCursorReadsTheOpenedFileAfterSymlinkRetarget() throws {
@@ -268,10 +293,10 @@ final class SidecarDependencyTests: XCTestCase {
             XCTAssertEqual(result & 0xff, SQLITE_CANTOPEN)
             let observed = SQLiteMetadataOpenRace.state.withLock { $0 }
             XCTAssertNotEqual(observed.flags & O_NONBLOCK, 0, "SQLite must pass nonblocking flags to its actual open")
+            XCTAssertNotEqual(observed.flags & O_NOCTTY, 0, "SQLite must not acquire a controlling terminal during open")
             XCTAssertEqual(observed.retargetResult, 0)
             XCTAssertGreaterThanOrEqual(observed.descriptor, 0, "Exercise fstat rejection of a successfully opened FIFO")
-            XCTAssertEqual(fcntl(observed.descriptor, F_GETFD), -1)
-            XCTAssertEqual(errno, EBADF)
+            assertClosed(try XCTUnwrap(observed.openedDescriptor))
         }
     }
 
@@ -287,21 +312,38 @@ final class SidecarDependencyTests: XCTestCase {
         try compiler.run(); compiler.waitUntilExit()
         XCTAssertEqual(compiler.terminationStatus, 0)
         let script = #"""
-        import ctypes, json, os, sys
+        import ctypes, json, os, pty, subprocess, sys
+        filename = sys.argv[2]
+        tty_probe = filename == 'tty'
+        if tty_probe and os.getsid(0) != os.getpid():
+            child = subprocess.run([sys.executable, '-c', sys.argv[3], sys.argv[1], 'tty', sys.argv[3]],
+                                   start_new_session=True, timeout=3)
+            sys.exit(child.returncode)
+        if tty_probe:
+            master, slave = pty.openpty()
+            filename = os.ttyname(slave)
+            os.close(slave)
         sqlite = ctypes.CDLL(sys.argv[1])
         sqlite.sqlite3_open_v2.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.c_char_p]
         sqlite.sqlite3_exec.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         sqlite.sqlite3_close.argtypes = [ctypes.c_void_p]
         before = len(os.listdir('/dev/fd'))
         db = ctypes.c_void_p()
-        rc = sqlite.sqlite3_open_v2(sys.argv[2].encode(), ctypes.byref(db), 1 | 64, None)
+        rc = sqlite.sqlite3_open_v2(filename.encode(), ctypes.byref(db), 1 | 64, None)
         if rc == 0: rc = sqlite.sqlite3_exec(db, b'SELECT * FROM threads', None, None, None)
         sqlite.sqlite3_close(db)
+        if tty_probe:
+            try:
+                fd = os.open('/dev/tty', os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+                os.close(fd)
+                sys.exit(3)  # Rejection must not leave a controlling terminal.
+            except OSError:
+                pass
         print(json.dumps({'result': rc, 'before': before, 'after': len(os.listdir('/dev/fd'))}))
         sys.exit(0 if rc != 0 else 2)
         """#
-        for suffix in ["", "-journal", "-wal", "-shm", "-shm-readonly"] {
-            for symlinked in [false, true] {
+        for suffix in ["", "-journal", "-wal", "-shm", "-shm-readonly", "tty"] {
+            for symlinked in suffix == "tty" ? [false] : [false, true] {
                 let root = try fixture()
                 let database = root.appendingPathComponent("state_7.sqlite")
                 let queue = try DatabaseQueue(path: database.path)
@@ -325,8 +367,8 @@ final class SidecarDependencyTests: XCTestCase {
                 }
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                let uri = "file:" + database.path + (suffix == "-shm-readonly" ? "?readonly_shm=1" : "")
-                process.arguments = ["-c", script, library, uri]
+                let uri = suffix == "tty" ? "tty" : "file:" + database.path + (suffix == "-shm-readonly" ? "?readonly_shm=1" : "")
+                process.arguments = ["-c", script, library, uri, script]
                 let output = Pipe(); process.standardOutput = output; process.standardError = output
                 try process.run()
                 let deadline = Date().addingTimeInterval(4)
@@ -373,27 +415,24 @@ final class SidecarDependencyTests: XCTestCase {
         let target = root.appendingPathComponent("names")
         try Data().write(to: target)
         try FileManager.default.createSymbolicLink(at: home.appendingPathComponent("session_index.jsonl"), withDestinationURL: target)
-        let descriptors = OSAllocatedUnfairLock(initialState: [Int32]())
+        let descriptors = OSAllocatedUnfairLock(initialState: [OpenedMetadataDescriptor]())
         let watcher = CodexMetadataWatcher(metadataDirectories: [home],
             mapping: CodexMetadataSidecarMapping(metadataDirectories: [home], userHome: root)) { _, _ in }
         watcher.userHomeForTesting = root
         watcher.openNamespaceForTesting = { _ in
             let fd = open(target.path, O_EVTONLY | O_NONBLOCK | O_CLOEXEC)
-            descriptors.withLock { $0.append(fd) }
+            descriptors.withLock { $0.append(OpenedMetadataDescriptor(fd)) }
             return fd
         }
         watcher.openFileForTesting = { _ in
             let fd = open(root.path, O_EVTONLY | O_NONBLOCK | O_CLOEXEC)
-            descriptors.withLock { $0.append(fd) }
+            descriptors.withLock { $0.append(OpenedMetadataDescriptor(fd)) }
             return fd
         }
         await watcher.start()
         defer { watcher.stop() }
         XCTAssertFalse(descriptors.withLock { $0.isEmpty })
-        for fd in descriptors.withLock({ $0 }) {
-            XCTAssertEqual(fcntl(fd, F_GETFD), -1)
-            XCTAssertEqual(errno, EBADF)
-        }
+        for descriptor in descriptors.withLock({ $0 }) { assertClosed(descriptor) }
     }
 
     func testHomeFileMonitorObservesAppendReplacementAndMissingWalCreation() async throws {
@@ -864,6 +903,7 @@ private enum SQLiteMetadataOpenRace {
         var flags: Int32 = 0
         var descriptor: Int32 = -1
         var retargetResult: Int32 = -1
+        var openedDescriptor: OpenedMetadataDescriptor?
     }
     static let state = OSAllocatedUnfairLock(initialState: State())
     static let open: @convention(c) (UnsafePointer<CChar>?, Int32, Int32) -> Int32 = { path, flags, mode in
@@ -875,7 +915,7 @@ private enum SQLiteMetadataOpenRace {
         let replaced = removed == 0 ? mkfifo(path, 0o600) : removed
         // Avoid hanging the test if the VFS loses its nonblocking flag.
         let fd = Darwin.open(path, flags | O_NONBLOCK, mode_t(truncatingIfNeeded: mode))
-        state.withLock { $0.flags = flags; $0.descriptor = fd; $0.retargetResult = replaced }
+        state.withLock { $0.flags = flags; $0.descriptor = fd; $0.retargetResult = replaced; $0.openedDescriptor = OpenedMetadataDescriptor(fd) }
         return fd
     }
 }
@@ -883,4 +923,22 @@ private enum SQLiteMetadataOpenRace {
 private struct ScheduledMetadataWork: @unchecked Sendable {
     let delay: TimeInterval
     let work: DispatchWorkItem
+}
+
+private struct OpenedMetadataDescriptor: Sendable {
+    let number: Int32
+    let device: UInt64
+    let inode: UInt64
+
+    init(_ number: Int32) {
+        self.number = number
+        var info = stat()
+        _ = fstat(number, &info)
+        device = TraceFileIO.unsignedDevice(info.st_dev)
+        inode = UInt64(info.st_ino)
+    }
+
+    func matches(_ info: stat) -> Bool {
+        device == TraceFileIO.unsignedDevice(info.st_dev) && inode == UInt64(info.st_ino)
+    }
 }

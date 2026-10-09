@@ -1043,13 +1043,14 @@ public actor IndexCoordinator {
         ) else { return false }
         let storedRevision = try await database.metadataRevision(sourceID: state.id)
         let stored = storedRevision.flatMap(MetadataRevision.init)
-        if stored?.version == 2,
+        let metadataVersion = file.format == .geminiJSON ? 3 : 2
+        if stored?.version == metadataVersion,
            stored?.contentGeneration == state.contentGeneration,
            stored?.checkpoint == state.scannedBytes {
             return false
         }
         let canMerge = file.format != .geminiJSON
-            && stored?.version == 2
+            && stored?.version == metadataVersion
             && stored?.contentGeneration == state.contentGeneration
             && (stored?.checkpoint ?? -1) >= 0
             && (stored?.checkpoint ?? .max) <= state.scannedBytes
@@ -1071,7 +1072,7 @@ public actor IndexCoordinator {
             initialSessionID: initialSessionID
         )
         guard before == (try TraceFileIO.fingerprint(url: file.url)) else { return false }
-        let revision = "2:\(state.contentGeneration):\(scan.checkpoint)"
+        let revision = "\(metadataVersion):\(state.contentGeneration):\(scan.checkpoint)"
         return try await database.updateMetadata(sourceID: state.id, revision: revision, scan: scan, mode: mode)
     }
 

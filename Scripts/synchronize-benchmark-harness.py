@@ -14,6 +14,7 @@ FILES = [
     'Scripts/synchronize-benchmark-harness.py',
     'Scripts/configure-grdb.sh',
     'GRDBCustomSQLite/SQLiteRegularFiles.patch',
+    'GRDBCustomSQLite/SQLiteNoControllingTerminal.patch',
     'Sources/TraceCore/Diagnostics/TracePerformance.swift',
 ]
 

@@ -215,11 +215,7 @@ private actor MarkdownRenderCache {
         if let cached = values[source] { return cached }
         let prose = source.replacingOccurrences(of: "<proposed_plan>", with: "")
             .replacingOccurrences(of: "</proposed_plan>", with: "")
-        let parsed = try? AttributedString(
-            markdown: preservingFencedBlocks(prose),
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )
-        let rendered = parsed?.characters.isEmpty == false ? parsed! : AttributedString(prose)
+        let rendered = TranscriptMarkdown.render(prose)
         values[source] = rendered
         order.append(source)
         if order.count > limit {
@@ -229,33 +225,6 @@ private actor MarkdownRenderCache {
             for key in evicted { values.removeValue(forKey: key) }
         }
         return rendered
-    }
-
-    // Inline Markdown treats backtick fences as multiline inline code and collapses
-    // their whitespace. Keep fences and their contents literal until block rendering.
-    private func preservingFencedBlocks(_ source: String) -> String {
-        var fence: (marker: Character, length: Int)?
-        let escapable = Set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
-        return source.split(separator: "\n", omittingEmptySubsequences: false).map { line in
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            let marker = trimmed.first
-            let length = marker.map { first in trimmed.prefix(while: { $0 == first }).count } ?? 0
-            let insideFence = fence != nil
-            var isFence = false
-            if let current = fence {
-                if marker == current.marker, length >= current.length,
-                   trimmed.dropFirst(length).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    fence = nil
-                    isFence = true
-                }
-            } else if let marker, (marker == "`" || marker == "~"), length >= 3,
-                      marker != "`" || !trimmed.dropFirst(length).contains("`") {
-                fence = (marker, length)
-                isFence = true
-            }
-            guard insideFence || isFence else { return String(line) }
-            return line.map { escapable.contains($0) ? "\\\($0)" : String($0) }.joined()
-        }.joined(separator: "\n")
     }
 }
 
@@ -336,12 +305,6 @@ final class ShortcutRecorderView: NSView {
     private func updateAppearance() {
         layer?.borderColor = (recording ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-    }
-}
-
-extension Int64 {
-    var traceDate: String {
-        Date(timeIntervalSince1970: Double(self) / 1_000).formatted(date: .abbreviated, time: .shortened)
     }
 }
 

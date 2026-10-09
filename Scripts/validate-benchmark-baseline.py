@@ -16,7 +16,8 @@ SQLITE_PATCHES = {
     'Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig': (
         'SQLiteLib.xcconfig', 'GRDBCustomSQLite/SQLiteLib-macOS15.patch', 'configuration'),
     'Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c': (
-        'sqlite/src/os_unix.c', 'GRDBCustomSQLite/SQLiteRegularFiles.patch', 'regular-file'),
+        'sqlite/src/os_unix.c', ('GRDBCustomSQLite/SQLiteRegularFiles.patch',
+                              'GRDBCustomSQLite/SQLiteNoControllingTerminal.patch'), 'regular-file'),
 }
 
 
@@ -121,8 +122,15 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
                     patched = directory / patched_name
                     patched.parent.mkdir(parents=True, exist_ok=True)
                     patched.write_bytes(original)
-                    subprocess.run(['git', 'apply', '--unidiff-zero', '--include=' + patched_name, str(baseline / patch_name)],
-                                   cwd=directory, check=True, capture_output=True)
+                    patch_names = patch_name if isinstance(patch_name, tuple) else (patch_name,)
+                    for recognized_patch in patch_names:
+                        patch_path = baseline / recognized_patch
+                        # Older prepared caches have the previous recognized VFS
+                        # overlay; preparation adds the independent terminal patch.
+                        if not patch_path.exists() and recognized_patch.endswith('SQLiteNoControllingTerminal.patch') and role == 'baseline':
+                            continue
+                        subprocess.run(['git', 'apply', '--unidiff-zero', '--include=' + patched_name, str(patch_path)],
+                                       cwd=directory, check=True, capture_output=True)
                     if (checkout / name).read_bytes() != patched.read_bytes():
                         raise ValueError(label + ': Unexpected SQLite ' + patch_label + ' patch')
                 continue
@@ -171,6 +179,15 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
     return records
 
 
+def require_complete_harness(candidate, records):
+    expected = harness_files(candidate)
+    missing = expected - records['harness_sha256'].keys()
+    extra = records['harness_sha256'].keys() - expected
+    if missing or extra:
+        raise ValueError('Missing synchronized harness files: ' + ', '.join(sorted(missing))
+                         + '; unexpected files: ' + ', '.join(sorted(extra)))
+
+
 def initialize_missing(candidate, baseline, revision):
     """Repair missing clones only, after checking all initialized dependency drift."""
     candidate, baseline = candidate.resolve(), baseline.resolve()
@@ -187,6 +204,8 @@ def initialize_missing(candidate, baseline, revision):
         # dependency could otherwise hide a mismatched nested checkout.
         for path in missing:
             if path == '.':
+                if not owns_checkout(baseline):
+                    raise ValueError('Cached baseline must be its own repository before direct initialization')
                 pinned = git(candidate, 'rev-parse', revision + '^{commit}').decode().strip()
                 subprocess.run(['git', '-C', str(baseline), 'checkout', '--detach', pinned], check=True)
                 continue

@@ -13,7 +13,8 @@ public protocol SessionSource: Sendable {
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error>
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error>
     /// Reads from a committed boundary using its durable identity and timestamp context.
-    /// The default implementation bridges sources implementing the existing overloads.
+    /// The compatibility bridge supplies identity only. Adapters and forwarding
+    /// wrappers must implement this overload to preserve durable timestamp context.
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error>
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage
 }

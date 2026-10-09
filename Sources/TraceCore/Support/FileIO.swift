@@ -196,7 +196,7 @@ public enum TraceFileIO {
         _ url: URL, allowingNullSessionIndex: Bool = false,
         openFile: (String, Int32) -> Int32 = { open($0, $1) }
     ) throws -> FileHandle {
-        let fd = openFile(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        let fd = openFile(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOCTTY)
         guard fd >= 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
