@@ -1314,7 +1314,8 @@ public actor IndexCoordinator {
                 batch.append(record)
             }
             if case .checkpoint = record, batch.count >= 250 || completedLines >= 250 {
-                if persistedCheckpoint == startOffset, let testBatchDelay {
+                let isFirstBatch = persistedCheckpoint == startOffset
+                if isFirstBatch, let testBatchDelay {
                     try await Task.sleep(for: .milliseconds(testBatchDelay))
                 }
                 let batchChanged = !batch.isEmpty
@@ -1329,6 +1330,13 @@ public actor IndexCoordinator {
                 if lastProgress == nil || lastProgress!.duration(to: .now) >= .milliseconds(250) {
                     lastProgress = .now
                     await committed(checkpoint, max(0, checkpoint - startOffset), projectName)
+                }
+                if isFirstBatch, TraceTestHooks.isUITesting,
+                   TraceTestHooks.environment["TRACE_TEST_INDEX_BATCH_RELEASE_PATH"] != nil {
+                    TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_BATCH_COMMITTED_PATH")
+                    try await TraceTestHooks.waitForRelease(
+                        pathKey: "TRACE_TEST_INDEX_BATCH_RELEASE_PATH", timeoutMilliseconds: 90_000
+                    )
                 }
                 if let testBatchDelay {
                     try await Task.sleep(for: .milliseconds(testBatchDelay))

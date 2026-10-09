@@ -356,6 +356,9 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
         }
     }
 
+    var monitorDescriptorsForTesting: [Int32] {
+        queue.sync { Array(namespaces.values).map(\.descriptor) + Array(files.values).map(\.descriptor) }
+    }
     var namespaceMonitorCountForTesting: Int { queue.sync { namespaces.count } }
     var contentDirectoryPathsForTesting: Set<String> { queue.sync { Set(streams.keys) } }
     var directContentPathsForTesting: Set<String> { queue.sync { Set(files.keys) } }
@@ -376,8 +379,10 @@ public final class CodexMetadataWatcher: @unchecked Sendable {
 }
 
 private final class VnodeMonitor {
+    let descriptor: Int32
     private let source: any DispatchSourceFileSystemObject
     init(fd: Int32, queue: DispatchQueue, changed: @escaping @Sendable (Bool) -> Void) {
+        descriptor = fd
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd,
             eventMask: [.write, .extend, .rename, .delete, .revoke, .attrib, .link], queue: queue)
         self.source = source

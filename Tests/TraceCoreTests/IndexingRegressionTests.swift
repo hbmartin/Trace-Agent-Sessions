@@ -403,6 +403,42 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertFalse(all.includes(emptyReasoning))
     }
 
+    func testTranscriptSnapshotReusesUnchangedRowsAndReloadsAppendReplacementAndRename() async throws {
+        let root = try directory()
+        let file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let sessions = try await database.sessions()
+        let id = try XCTUnwrap(sessions.first?.id)
+        let initial = try await database.transcriptSnapshot(sessionID: id)
+        XCTAssertEqual(initial.messages?.count, initial.session?.messageCount)
+        let unchanged = try await database.transcriptSnapshot(sessionID: id,
+            knownSession: initial.session, knownMessageCount: initial.messages?.count)
+        XCTAssertNil(unchanged.messages, "unchanged refresh must not refetch the transcript")
+        let writer = try FileHandle(forWritingTo: file)
+        try writer.seekToEnd(); try writer.write(contentsOf: Data(line(2).utf8)); try writer.close()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let appended = try await database.transcriptSnapshot(sessionID: id,
+            knownSession: initial.session, knownMessageCount: 1)
+        XCTAssertEqual(appended.messages?.count, 2)
+        XCTAssertEqual(appended.session?.sourceGeneration, initial.session?.sourceGeneration)
+        try Data((line(1).replacingOccurrences(of: "searchable", with: "changed locator prefix") + line(3)).utf8).write(to: file, options: .atomic)
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let replaced = try await database.transcriptSnapshot(sessionID: id,
+            knownSession: appended.session, knownMessageCount: 2)
+        XCTAssertEqual(replaced.messages?.count, 2, "same-count replacement must reload locators")
+        XCTAssertNotEqual(replaced.session?.sourceGeneration, appended.session?.sourceGeneration)
+        let renamed = root.appendingPathComponent("renamed.jsonl")
+        try FileManager.default.moveItem(at: file, to: renamed)
+        await coordinator.refresh(paths: [file.path, renamed.path], scope: .proseOnly)
+        let moved = try await database.transcriptSnapshot(sessionID: id,
+            knownSession: replaced.session, knownMessageCount: 2)
+        XCTAssertEqual(moved.session?.sourcePath, renamed.path)
+        XCTAssertTrue(try XCTUnwrap(moved.messages).allSatisfy { $0.sourcePath == renamed.path })
+    }
+
     func testSourceGenerationChangesOnlyForReplacement() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")

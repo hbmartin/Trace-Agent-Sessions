@@ -309,7 +309,7 @@ sys.exit(23)
             self.git(dependency, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'sqlite')
             self.git(candidate, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', str(dependency), 'Vendor/GRDB.swift')
             patch = candidate / 'GRDBCustomSQLite/SQLiteLib-macOS15.patch'
-            patch.parent.mkdir()
+            patch.parent.mkdir(exist_ok=True)
             shutil.copy2(SCRIPTS.parent / 'GRDBCustomSQLite/SQLiteLib-macOS15.patch', patch)
             generated = {
                 'SQLiteCustom/src/SQLiteLib-USER.xcconfig': 'SQLiteLib-USER.xcconfig',
@@ -350,7 +350,7 @@ sys.exit(23)
             for name in ['benchmark-transcript-comparison.sh', 'validate-benchmark-baseline.py', 'prepare-benchmark-baseline.py', 'compare-transcript-scroll-metrics.py']:
                 shutil.copy2(SCRIPTS / name, scripts / name)
             config = candidate / 'GRDBCustomSQLite/SQLiteLib-USER.xcconfig'
-            config.parent.mkdir(parents=True)
+            config.parent.mkdir(parents=True, exist_ok=True)
             config.write_text('GRDB_SQLITE_ENABLE_FTS5 = YES\n')
             (candidate / '.gitignore').write_text('Vendor/\n.DS_Store\n')
             (scripts / 'configure-grdb.sh').write_text(

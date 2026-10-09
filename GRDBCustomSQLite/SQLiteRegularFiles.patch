@@ -1,0 +1,56 @@
+diff --git a/SQLiteLib.xcodeproj/project.pbxproj b/SQLiteLib.xcodeproj/project.pbxproj
+index a56266e..74af20c 100755
+--- a/SQLiteLib.xcodeproj/project.pbxproj
++++ b/SQLiteLib.xcodeproj/project.pbxproj
+@@ -186,0 +187 @@
++				"$(SRCROOT)/sqlite/src/os_unix.c",
+diff --git a/sqlite/src/os_unix.c b/sqlite/src/os_unix.c
+index c13c5ce..f80d28b 100644
+--- a/sqlite/src/os_unix.c
++++ b/sqlite/src/os_unix.c
+@@ -4734 +4734 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
+-        pShmNode->hShm = robust_open(zShm, O_RDWR|O_CREAT|O_NOFOLLOW,
++        pShmNode->hShm = robust_open(zShm, O_RDWR|O_CREAT|O_NOFOLLOW|O_NONBLOCK,
+@@ -4738 +4738 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
+-        pShmNode->hShm = robust_open(zShm, O_RDONLY|O_NOFOLLOW,
++        pShmNode->hShm = robust_open(zShm, O_RDONLY|O_NOFOLLOW|O_NONBLOCK,
+@@ -4746,0 +4747,17 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
++      /* Validate either writable or read-only SHM descriptors before locks,
++      ** reads, or mappings. Nonblocking opens also cover FIFO substitution.
++      ** unixShmPurge() closes the rejected descriptor on shm_open_err.
++      */
++      {
++        struct stat st;
++        if( osFstat(pShmNode->hShm, &st)!=0 ){
++          rc = unixLogError(SQLITE_IOERR_FSTAT, "fstat", zShm);
++          goto shm_open_err;
++        }
++        if( !S_ISREG(st.st_mode) ){
++          errno = EINVAL;
++          rc = unixLogError(SQLITE_CANTOPEN_BKPT, "open", zShm);
++          goto shm_open_err;
++        }
++      }
++
+@@ -6355 +6372 @@ static int unixOpen(
+-  openFlags |= (O_LARGEFILE|O_BINARY|O_NOFOLLOW);
++  openFlags |= (O_LARGEFILE|O_BINARY|O_NOFOLLOW|O_NONBLOCK);
+@@ -6413,0 +6431,18 @@ static int unixOpen(
++  /* Trace only accepts regular SQLite files. Validate the descriptor actually
++  ** opened (including a reusable descriptor), before SQLite reads from it.
++  ** O_NONBLOCK above prevents a concurrently substituted FIFO from blocking.
++  */
++  {
++    struct stat st;
++    if( osFstat(fd, &st)!=0 ){
++      rc = unixLogError(SQLITE_IOERR_FSTAT, "fstat", zName);
++      robust_close(p, fd, __LINE__);
++      goto open_finished;
++    }
++    if( !S_ISREG(st.st_mode) ){
++      errno = EINVAL;
++      rc = unixLogError(SQLITE_CANTOPEN_BKPT, "open", zName);
++      robust_close(p, fd, __LINE__);
++      goto open_finished;
++    }
++  }

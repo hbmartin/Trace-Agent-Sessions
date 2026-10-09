@@ -13,6 +13,7 @@ FILES = [
     'Scripts/export-benchmark-samples.py',
     'Scripts/synchronize-benchmark-harness.py',
     'Scripts/configure-grdb.sh',
+    'GRDBCustomSQLite/SQLiteRegularFiles.patch',
     'Sources/TraceCore/Diagnostics/TracePerformance.swift',
 ]
 

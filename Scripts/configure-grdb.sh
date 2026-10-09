@@ -6,6 +6,7 @@ trace_root="$(cd "${script_dir}/.." && pwd)"
 grdb_root="${trace_root}/Vendor/GRDB.swift"
 sqlite_root="${grdb_root}/SQLiteCustom/src"
 sqlite_patch="${trace_root}/GRDBCustomSQLite/SQLiteLib-macOS15.patch"
+regular_files_patch="${trace_root}/GRDBCustomSQLite/SQLiteRegularFiles.patch"
 
 if [[ ! -d "${grdb_root}/GRDBCustom.xcodeproj" || ! -f "${sqlite_root}/SQLiteLib.xcconfig" ]]; then
   echo "error: GRDB submodule is missing; run git submodule update --init --recursive" >&2
@@ -18,6 +19,15 @@ elif git -C "${sqlite_root}" apply --unidiff-zero --check "${sqlite_patch}"; the
   git -C "${sqlite_root}" apply --unidiff-zero "${sqlite_patch}"
 else
   echo "error: SQLiteLib's deployment-target patch no longer applies cleanly" >&2
+  exit 1
+fi
+
+if git -C "${sqlite_root}" apply --unidiff-zero --reverse --check "${regular_files_patch}" >/dev/null 2>&1; then
+  : # Descriptor validation is already applied.
+elif git -C "${sqlite_root}" apply --unidiff-zero --check "${regular_files_patch}"; then
+  git -C "${sqlite_root}" apply --unidiff-zero "${regular_files_patch}"
+else
+  echo "error: SQLite's regular-file patch no longer applies cleanly" >&2
   exit 1
 fi
 

@@ -840,6 +840,13 @@ public struct SessionSummary: Identifiable, Sendable {
     public var errorRevision: Int64 = 0
 }
 
+/// Metadata and rows read from one database snapshot. Nil rows mean that the
+/// caller's known generation, source path, and row count are still current.
+public struct SessionTranscriptSnapshot: Sendable {
+    public let session: SessionSummary?
+    public let messages: [MessageSummary]?
+}
+
 public struct MessageSummary: Identifiable, Sendable {
     public let id: Int64
     public let role: MessageRole

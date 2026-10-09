@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Run three uncontaminated local Release pairs, then apply local acceptance."""
 import argparse
-from contextlib import contextmanager
 import importlib.util
 import json
 import math
@@ -19,25 +18,71 @@ class RunInterrupted(BaseException):
         super().__init__(f'Interrupted by signal {signum}')
 
 
-@contextmanager
-def defer_interruptions():
-    """Keep bounded cleanup and its evidence indivisible from cancellation."""
-    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
-    received = []
-    def deferred(signum, frame):
-        if not received:
-            received.append(signum)
-    try:
-        for sig in previous:
-            signal.signal(sig, deferred)
-        yield received
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+class CancellationController:
+    """Record the first signal continuously; raise only at normal checkpoints."""
+    signals = (signal.SIGINT, signal.SIGTERM)
+
+    def __init__(self):
+        self.signum = None
+        self.evidence = None
+        self.acceptance = None
+
+    def record(self, signum, frame=None):
+        if self.signum is None:
+            self.signum = signum
+
+    def checkpoint(self):
+        if self.signum is not None:
+            raise RunInterrupted(self.signum)
+
+    def __enter__(self):
+        self.previous = {sig: signal.getsignal(sig) for sig in self.signals}
+        for sig in self.signals:
+            signal.signal(sig, self.record)
+        return self
+
+    def publish(self, path, host):
+        self.evidence = (path, host)
+        if self.signum is not None:
+            host.update(valid=False, interruptionSignal=self.signum)
+        write_json(path, host)
+
+    def _drain_pending(self):
+        pending = signal.sigpending().intersection(self.signals)
+        while pending:
+            self.record(signal.sigwait(pending))
+            pending = signal.sigpending().intersection(self.signals)
+
+    def __exit__(self, kind, error, traceback):
+        # Block delivery while restoring handlers. Pending signals still count
+        # as cancellation and are consumed before the caller's mask is restored.
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, self.signals)
+        try:
+            self._drain_pending()
+            for sig, handler in self.previous.items():
+                signal.signal(sig, handler)
+            self._drain_pending()
+            if self.signum is not None and self.evidence is not None:
+                path, host = self.evidence
+                host.update(valid=False, interruptionSignal=self.signum)
+                write_json(path, host)
+                self._drain_pending()
+            if self.signum is not None and self.acceptance is not None:
+                report = json.loads(self.acceptance.read_text()) if self.acceptance.exists() else {}
+                report.update(status='interrupted', valid=False, interruptionSignal=self.signum)
+                write_json(self.acceptance, report)
+                self._drain_pending()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        if self.signum is not None:
+            preserves_first = isinstance(error, RunInterrupted) and error.signum == self.signum
+            preserves_keyboard = isinstance(error, KeyboardInterrupt) and self.signum == signal.SIGINT
+            if not preserves_first and not preserves_keyboard: raise RunInterrupted(self.signum)
 
 
 def process_records():
-    records = subprocess.check_output(['ps', '-axo', 'pid=,pgid=,comm='], text=True)
+    records = subprocess.check_output(['ps', '-axo', 'pid=,pgid=,comm='], text=True,
+                                      start_new_session=True, timeout=5)
     result = []
     for line in records.splitlines():
         fields = line.strip().split(None, 2)
@@ -99,10 +144,11 @@ def stop_owned_processes(process, derived_data):
         raise RuntimeError('Owned benchmark processes did not stop')
 
 
-def wait_for_quiet(root, timeout=300):
+def wait_for_quiet(root, timeout=300, cancellation=None):
     quiet_since, last_message = None, 0
     deadline = time.monotonic() + timeout
     while quiet_since is None or time.monotonic() - quiet_since < 10:
+        if cancellation is not None: cancellation.checkpoint()
         if time.monotonic() >= deadline:
             raise SystemExit('Quiet-desktop timeout; close competing builds/tests/profilers and retry')
         active = competitors(root)
@@ -139,18 +185,28 @@ def write_json(path, value):
 
 
 def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600):
+    with CancellationController() as cancellation:
+        return run_controlled(root, output, cancellation, max_attempts=max_attempts,
+                              quiet_timeout=quiet_timeout, attempt_timeout=attempt_timeout)
+
+
+def run_controlled(root, output, cancellation, *, max_attempts, quiet_timeout, attempt_timeout):
     if max_attempts < 1 or quiet_timeout <= 0 or attempt_timeout <= 0:
         raise ValueError('Benchmark limits must be positive')
+    cancellation.checkpoint()
     output.mkdir(parents=True, exist_ok=False)
+    cancellation.acceptance = output / 'local-acceptance.json'
     candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     snapshot(root, candidate)  # Reject drift before applying the recognized dependency configuration.
     subprocess.run([str(root / 'Scripts/configure-grdb.sh')], cwd=root, check=True)
     frozen = snapshot(root, candidate)
     write_json(output / 'candidate-inputs.json', frozen)
+    cancellation.checkpoint()
     pairs = []
     for index, order in enumerate(['baseline-first', 'candidate-first', 'baseline-first'], 1):
         for attempt in range(1, max_attempts + 1):
-            wait_for_quiet(root, quiet_timeout)
+            wait_for_quiet(root, quiet_timeout, cancellation)
+            cancellation.checkpoint()
             if snapshot(root, candidate) != frozen:
                 raise SystemExit('Candidate build inputs changed before measurements')
             destination = output / f'pair-{index}-attempt-{attempt}'
@@ -170,6 +226,7 @@ def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600
                     process = subprocess.Popen([str(root / 'Scripts/benchmark-transcript-comparison.sh')], cwd=root,
                                                env=environment, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
                     while process.poll() is None:
+                        cancellation.checkpoint()
                         active = competitors(root, process.pid, derived_data)
                         samples += 1
                         if active:
@@ -183,6 +240,7 @@ def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600
                         if time.monotonic() - started >= attempt_timeout:
                             raise SystemExit('Benchmark attempt timeout')
                         time.sleep(2)
+                cancellation.checkpoint()
                 observations.extend(foreign_interruptions(destination))
                 after = snapshot(root, candidate)
                 write_json(destination / 'candidate-inputs.after.json', after)
@@ -190,37 +248,30 @@ def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600
                     raise SystemExit('Candidate build inputs changed during measurements')
             except BaseException as error:
                 failure = error
+                if isinstance(error, RunInterrupted): cancellation.record(error.signum)
+                elif isinstance(error, KeyboardInterrupt): cancellation.record(signal.SIGINT)
             finally:
-                with defer_interruptions() as interruptions:
-                    cleanup_failure = None
-                    try:
-                        if process is not None:
-                            stop_owned_processes(process, derived_data)
-                    except BaseException as cleanup_error:
-                        cleanup_failure = str(cleanup_error)
-                        if failure is None: failure = cleanup_error
-                        else: print(f'Benchmark cleanup failed: {cleanup_error}', file=sys.stderr, flush=True)
-                    finally:
-                        runs = list((destination / 'runs').glob('run-*'))
-                        directory = runs[0] if len(runs) == 1 else destination
-                        host = {'valid': failure is None and not interruptions and not observations and process is not None and process.returncode == 0,
-                                'sampleCount': samples, 'checkIntervalSeconds': 2, 'ownedDerivedDataPath': str(derived_data),
-                                'quietBeforeStartSeconds': 10, 'elapsedSeconds': time.monotonic() - started,
-                                'competingSessionObservations': observations,
-                                'processExitCode': process.returncode if process else None,
-                                'failure': str(failure) if failure else None,
-                                'cleanupFailure': cleanup_failure}
-                        first_cancellation = (failure.signum if isinstance(failure, RunInterrupted) else
-                                              signal.SIGINT if isinstance(failure, KeyboardInterrupt) else
-                                              interruptions[0] if interruptions else None)
-                        if first_cancellation is not None:
-                            host.update(valid=False, interruptionSignal=first_cancellation)
-                        write_json(directory / 'host-session-check.json', host)
-                        if interruptions:
-                            host.update(valid=False, interruptionSignal=first_cancellation or interruptions[0])
-                            write_json(directory / 'host-session-check.json', host)
-                    if interruptions and not isinstance(failure, (KeyboardInterrupt, RunInterrupted)):
-                        failure = RunInterrupted(interruptions[0])
+                cleanup_failure = None
+                try:
+                    if process is not None:
+                        stop_owned_processes(process, derived_data)
+                except BaseException as cleanup_error:
+                    cleanup_failure = str(cleanup_error)
+                    if failure is None: failure = cleanup_error
+                    else: print(f'Benchmark cleanup failed: {cleanup_error}', file=sys.stderr, flush=True)
+                finally:
+                    runs = list((destination / 'runs').glob('run-*'))
+                    directory = runs[0] if len(runs) == 1 else destination
+                    host = {'valid': failure is None and cancellation.signum is None and not observations
+                                    and process is not None and process.returncode == 0,
+                            'sampleCount': samples, 'checkIntervalSeconds': 2, 'ownedDerivedDataPath': str(derived_data),
+                            'quietBeforeStartSeconds': 10, 'elapsedSeconds': time.monotonic() - started,
+                            'competingSessionObservations': observations,
+                            'processExitCode': process.returncode if process else None,
+                            'failure': str(failure) if failure else None, 'cleanupFailure': cleanup_failure}
+                    cancellation.publish(directory / 'host-session-check.json', host)
+                if not isinstance(failure, (KeyboardInterrupt, RunInterrupted)):
+                    cancellation.checkpoint()
             if failure is not None:
                 if isinstance(failure, (KeyboardInterrupt, RunInterrupted)): raise failure
                 raise SystemExit(f'{failure}; evidence: {directory}; log: {log}') from failure
@@ -237,6 +288,7 @@ def run(root, output, *, max_attempts=3, quiet_timeout=300, attempt_timeout=3600
                 continue
             pairs.append(directory)
             break
+    cancellation.checkpoint()
     if snapshot(root, candidate) != frozen:
         raise SystemExit('Candidate build inputs changed after final pair')
     write_json(output / 'pair-manifest.json', {'candidateCommit': candidate, 'pairs': [str(p) for p in pairs]})
@@ -267,17 +319,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     output = args.output or root / 'build' / ('local-release-' + time.strftime('%Y%m%d-%H%M%S'))
-    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
-    def interrupted(signum, frame):
-        # A second cancellation must not interrupt bounded cleanup.
-        for sig in previous: signal.signal(sig, signal.SIG_IGN)
-        raise RunInterrupted(signum)
     try:
-        for sig in previous: signal.signal(sig, interrupted)
         result = run(root, output.resolve(), max_attempts=args.max_attempts,
                      quiet_timeout=args.quiet_timeout_seconds, attempt_timeout=args.attempt_timeout_seconds)
     except RunInterrupted as error: result = 128 + error.signum
     except KeyboardInterrupt: result = 130
-    finally:
-        for sig, handler in previous.items(): signal.signal(sig, handler)
     raise SystemExit(result)

@@ -12,8 +12,8 @@ check_configuration() {
   local hardened_runtime
 
   settings="$(xcodebuild -project "${trace_root}/Trace.xcodeproj" -target Trace -configuration "${configuration}" -showBuildSettings 2>/dev/null)"
-  injection="$(printf '%s\n' "${settings}" | awk '$1 == "CODE_SIGN_INJECT_BASE_ENTITLEMENTS" && $2 == "=" { print $3; exit }')"
-  hardened_runtime="$(printf '%s\n' "${settings}" | awk '$1 == "ENABLE_HARDENED_RUNTIME" && $2 == "=" { print $3; exit }')"
+  injection="$(printf '%s\n' "${settings}" | awk '$1 == "CODE_SIGN_INJECT_BASE_ENTITLEMENTS" && $2 == "=" && !found { print $3; found=1 }')"
+  hardened_runtime="$(printf '%s\n' "${settings}" | awk '$1 == "ENABLE_HARDENED_RUNTIME" && $2 == "=" && !found { print $3; found=1 }')"
 
   if [[ "${injection}" != "${expected_injection}" ]]; then
     echo "error: ${configuration} CODE_SIGN_INJECT_BASE_ENTITLEMENTS is '${injection}', expected '${expected_injection}'" >&2

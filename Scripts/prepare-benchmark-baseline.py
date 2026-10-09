@@ -28,6 +28,16 @@ def prepare(candidate, cache, revision):
         fcntl.flock(lock, fcntl.LOCK_EX)
         records = validator.validate(candidate, cache, revision, role='baseline', allow_uninitialized=True) if cache.exists() else None
         if records is not None and not records.get('uninitialized_submodules'):
+            # Validation above recognizes only exact dependency patches. Remove
+            # an older recognized overlay before replacing its patch file, so a
+            # newly extended VFS patch can apply to the pinned pristine source.
+            patch_name = 'GRDBCustomSQLite/SQLiteRegularFiles.patch'
+            previous_patch, current_patch = cache / patch_name, candidate / patch_name
+            if previous_patch.exists() and previous_patch.read_bytes() != current_patch.read_bytes():
+                sqlite = cache / 'Vendor/GRDB.swift/SQLiteCustom/src'
+                check = ['git', '-C', str(sqlite), 'apply', '--unidiff-zero', '--reverse']
+                if subprocess.run([*check, '--check', str(previous_patch)], capture_output=True).returncode == 0:
+                    subprocess.run([*check, str(previous_patch)], check=True)
             synchronize(candidate, cache)
             subprocess.run([str(cache / 'Scripts/configure-grdb.sh')], check=True, stdout=subprocess.DEVNULL)
             return validator.validate(candidate, cache, revision, role='baseline')
