@@ -2132,20 +2132,6 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 documentHeight.map { abs(before - $0) > 0.5 }
             } ?? false
             if documentResized, followsBottom, let table, !items.isEmpty {
-                if pendingRestore == nil, deferredContentRestore == nil,
-                   !isUserInteracting || settledBottomInputGeneration == userInputGeneration {
-                    // Automatic row measurement can resize the document and then
-                    // deliver several origin-only adjustments. A measured bottom
-                    // in this input generation owns those later layout motions;
-                    // every new physical input invalidates the transaction first.
-                    if resizeTransaction?.initiallyFollowing != true
-                        || resizeTransaction?.inputGeneration != userInputGeneration
-                        || resizeTransaction.map({ ContinuousClock.now >= $0.expires }) != false {
-                        resizeTransaction = ResizeTransaction(initiallyFollowing: true,
-                            viewportDelta: 0, expires: .now.advanced(by: .milliseconds(500)),
-                            inputGeneration: userInputGeneration)
-                    }
-                }
                 // A synchronous native resize can deliver its padding adjustment
                 // before our coalesced row-extent refresh runs. Preserve the last
                 // measured trailing padding, rather than using a stale row bottom.
@@ -2186,13 +2172,23 @@ private struct TranscriptRenderer: NSViewRepresentable {
             }
             if !ignored, !viewportResized, !documentResized,
                let pending = pendingDocumentBottomShift {
-                pendingDocumentBottomShift = nil
                 // Every new wheel/key input clears this pending adjustment. The
-                // idle debounce can still be active while layout finishes.
-                if followsBottom, !scrollerTracking, !selectionTracking, ContinuousClock.now < pending.expires,
-                   abs(actual.y - pending.origin) <= 1 {
-                    passiveLayoutMotion = true
+                // idle debounce can still be active while layout finishes. AppKit
+                // may clamp to the newly measured row extent before its estimated
+                // document frame catches up; unrelated origins remain reader motion.
+                let measuredBottom = table.flatMap { table -> CGFloat? in
+                    guard !items.isEmpty else { return nil }
+                    return max(0, table.rect(ofRow: items.count - 1).maxY - viewportSize.height)
                 }
+                if followsBottom, !scrollerTracking, !selectionTracking, ContinuousClock.now < pending.expires,
+                   abs(actual.y - pending.origin) <= 1
+                    || measuredBottom.map({ abs(actual.y - $0) <= 1 }) == true {
+                    passiveLayoutMotion = true
+                } else {
+                    pendingDocumentBottomShift = nil
+                }
+                TraceTestHooks.appendLine("document-origin=\(actual.y),expected=\(pending.origin),measured=\(measuredBottom ?? -1),native=\(passiveLayoutMotion)",
+                    pathKey: "TRACE_TEST_TRANSCRIPT_BOUNDS_AUDIT_PATH")
             }
             TraceTestHooks.appendLine(
                 "previous=\(previous?.y ?? -1),actual=\(actual.y),ignored=\(ignored),layout=\(layoutChanged),passiveLayout=\(passiveLayoutMotion),viewHeight=\(viewportSize.height),oldViewHeight=\(previousViewportSize?.height ?? -1),docHeight=\(documentHeight ?? -1),oldDocHeight=\(previousDocumentHeight ?? -1),user=\(userScrolling),restore=\(pendingRestore != nil),interacting=\(isUserInteracting),bottom=\(followsBottom)",
@@ -2509,16 +2505,17 @@ private struct TranscriptRenderer: NSViewRepresentable {
                 beginUserScrolling()
                 recordUserViewportMotion(from: NSPoint(x: origin.x, y: origin.y - 1), to: origin)
                 scrollView.contentView.postsBoundsChangedNotifications = false
-                table.setFrameSize(NSSize(width: table.frame.width, height: max(0, oldHeight - 264)))
+                table.setFrameSize(NSSize(width: table.frame.width, height: oldHeight + 264))
                 lastObservedOrigin = origin
                 lastObservedViewportSize = oldSize
                 lastObservedDocumentHeight = oldHeight
                 expectedProgrammaticOrigin = nil
-                scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y - 264))
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: origin.y + 264))
                 boundsDidChange()
                 if simulation == "interrupted-document" { beginUserScrolling() }
-                let intermediate = scrollView.contentView.bounds.origin
-                scrollView.contentView.setBoundsOrigin(NSPoint(x: intermediate.x, y: intermediate.y - 289))
+                let measuredBottom = max(0, table.rect(ofRow: items.count - 1).maxY
+                    - scrollView.contentView.bounds.height)
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: measuredBottom))
                 boundsDidChange()
                 scrollView.contentView.postsBoundsChangedNotifications = true
                 TraceTestHooks.appendLine("simulation-classified-bottom=\(followsBottom)",
