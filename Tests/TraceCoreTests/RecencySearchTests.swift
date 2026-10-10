@@ -68,6 +68,13 @@ final class RecencySearchTests: XCTestCase {
             XCTAssertTrue(Set(page.results.map(\.id)).isDisjoint(with: next.results.map(\.id)))
             XCTAssertEqual(next.results.count, 200)
         }
+        let reopened = try IndexDatabase(url: url)
+        let obsolete = try await queue.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='message_id_overflow'")
+        }
+        XCTAssertNil(obsolete, "Opening an older index removes its obsolete overflow marker")
+        let reopenedPage = try await reopened.search(query: "needle", limit: 200)
+        XCTAssertEqual(reopenedPage.results.count, 200)
         // An already issued negative cursor remains meaningful after its row is deleted.
         let next = try await database.search(query: "needle", cursor: .init(rowID: -10, rank: nil, timestampMilliseconds: 1700000003000), limit: 1)
         XCTAssertEqual(next.results.first?.timestampMilliseconds, 1700000000000 + Int64(count))
@@ -86,6 +93,31 @@ final class RecencySearchTests: XCTestCase {
         XCTAssertEqual(after.results.first?.timestampMilliseconds, 1700000000000 + Int64(count))
         expectNoDifference([Int64.max, 1700000000000 + Int64(count)],
                            [clamped.results.first?.timestampMilliseconds, after.results.first?.timestampMilliseconds].compactMap { $0 })
+        // A deleted normal legacy cursor still carries recoverable timestamp bits,
+        // even when an unrelated exceptional date switches the pagination path.
+        let deletedNormal = (Int64(1700000000000) + 1_000) << 20
+        try await queue.write { db in
+            try db.execute(sql: "DELETE FROM message_fts WHERE rowid=?; DELETE FROM message WHERE id=?",
+                           arguments: [deletedNormal, deletedNormal])
+            try db.execute(sql: "DELETE FROM message_fts WHERE rowid=?; INSERT INTO message_fts(rowid,body) VALUES(?,'other')",
+                           arguments: [Int64.max - 1, Int64.max - 1])
+        }
+        let expected = try await database.search(query: "needle",
+            cursor: .init(rowID: deletedNormal, rank: nil, timestampMilliseconds: 1700000001000), limit: 200)
+        let legacy = try await database.search(query: "needle", cursor: .init(rowID: deletedNormal, rank: nil), limit: 200)
+        expectNoDifference(expected.results.map(\.id), legacy.results.map(\.id))
+        XCTAssertEqual(legacy.results.count, 200)
+        let nextLegacy = try await database.search(query: "needle",
+            cursor: .init(rowID: try XCTUnwrap(legacy.results.last).id, rank: nil), limit: 200)
+        XCTAssertTrue(Set(legacy.results.map(\.id)).isDisjoint(with: nextLegacy.results.map(\.id)))
+        for ambiguous in [Int64(-11), 1, Int64.max - 2] {
+            do {
+                _ = try await database.search(query: "needle", cursor: .init(rowID: ambiguous, rank: nil), limit: 1)
+                XCTFail("A deleted ambiguous timestamp-less cursor must retain its explicit error")
+            } catch SessionSourceError.missingRecord(let identity) {
+                XCTAssertEqual(identity, String(ambiguous))
+            }
+        }
         try await queue.write { db in
             try db.execute(sql: """
                 INSERT INTO message(id,source_file_id,session_id,source_key,seq,role,ts,loc_kind,char_count,prefix)

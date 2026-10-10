@@ -161,7 +161,7 @@ final class ReviewFollowupTests: XCTestCase {
         let overflowAfterClear = try await queue.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='message_id_overflow'")
         }
-        XCTAssertNil(overflowAfterClear, "a full index clear must restore streaming rowid recency searches")
+        XCTAssertNil(overflowAfterClear, "overflow allocation must not recreate obsolete metadata")
         let health = try await restarted.sourceHealth()
         XCTAssertTrue(health.allSatisfy { $0.error == nil })
     }

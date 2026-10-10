@@ -1,6 +1,7 @@
 import AppKit
 import Clocks
 import CustomDump
+import GRDB
 import XCTest
 @testable import TraceCore
 
@@ -328,7 +329,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(reads, before + 2, "Discarded actions cannot issue another read in the new project")
     }
 
-    func testQueuedRetryTakesPriorityOverRepeatedLoadMoreDuringBackgroundRead() async throws {
+    func testSuccessfulBackgroundReloadSatisfiesQueuedRetryWithoutAnotherRead() async throws {
         let f = try await fixture(count: 605)
         f.model.selectProject(f.project.id)
         try await wait { !f.model.isLoadingSessions }
@@ -353,7 +354,107 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.sessions.count, 201, "Retry reload wins over queued pagination")
         XCTAssertTrue(f.model.sessions.contains { $0.id == target.sessionID })
         let reads = await f.database.sessionListReadCountForTesting()
-        XCTAssertEqual(reads, before + 2, "Background read and one coalesced Retry")
+        XCTAssertEqual(reads, before + 1, "The successful background reload already satisfies Retry")
+    }
+
+    func testFailedBackgroundReloadStillRunsQueuedRetry() async throws {
+        let f = try await fixture(count: 605)
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        let results = try await f.database.search(query: "NavigationNeedle",
+            filters: .init(projectCanonicalKey: f.project.canonicalKey), limit: 1000)
+        let target = try XCTUnwrap(results.results.last)
+        await f.database.failSessionListReadOnceForTesting()
+        f.model.openSearchResult(target)
+        try await wait { !f.model.isLoadingSessions && f.model.sessionListError != nil }
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        await f.database.gateSessionListReadsForTesting(task)
+        let before = await f.database.sessionListReadCountForTesting()
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { await f.database.sessionListReadCountForTesting() > before }
+        await f.database.failSessionListReadOnceForTesting()
+        f.model.loadMoreSessions()
+        f.model.retrySessionLoad()
+        f.model.retrySessionLoad()
+        await gate.open(); await refresh.value
+        try await wait { !f.model.isLoadingSessions && f.model.sessionListError == nil }
+        XCTAssertTrue(f.model.sessions.contains { $0.id == target.sessionID })
+        XCTAssertEqual(f.model.sessions.count, 201)
+        let reads = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(reads, before + 2)
+    }
+
+    func testQueuedNextPageRetrySurvivesSuccessfulBackgroundReload() async throws {
+        let f = try await fixture(count: 605)
+        let queue = try DatabaseQueue(path: f.root.appendingPathComponent("index.sqlite").path)
+        try await queue.write { try $0.execute(sql: "ALTER TABLE session RENAME TO unavailable_session") }
+        f.model.loadMoreSessions()
+        try await wait { !f.model.isLoadingSessions && f.model.sessionListError != nil }
+        try await queue.write { try $0.execute(sql: "ALTER TABLE unavailable_session RENAME TO session") }
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        await f.database.gateSessionListReadsForTesting(task)
+        let before = await f.database.sessionListReadCountForTesting()
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { await f.database.sessionListReadCountForTesting() > before }
+        f.model.retrySessionLoad()
+        f.model.loadMoreSessions()
+        await gate.open(); await refresh.value
+        try await wait { !f.model.isLoadingSessions && f.model.sessions.count == 400 }
+        XCTAssertNil(f.model.sessionListError)
+        XCTAssertEqual(Set(f.model.sessions.map(\.id)).count, 400)
+        let reads = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(reads, before + 1, "One background snapshot; the successful page is verified by its rows")
+    }
+
+    func testQueuedLoadMoreWaitsForExplicitReloadAfterBackgroundSnapshot() async throws {
+        let f = try await fixture(count: 605)
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        let background = ReviewReadGate(), backgroundTask = Task { await background.wait() }
+        let explicit = ReviewReadGate(), explicitTask = Task { await explicit.wait() }
+        defer {
+            backgroundTask.cancel(); explicitTask.cancel()
+            Task { await background.open(); await explicit.open() }
+        }
+        await f.database.gateSidebarSnapshotPublicationForTesting(backgroundTask)
+        let before = await f.database.sessionListReadCountForTesting()
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { await f.database.sidebarSnapshotWaitingForTesting }
+        f.model.loadMoreSessions()
+        f.model.loadMoreSessions()
+        await f.database.gateSessionListReadsForTesting(explicitTask)
+        f.model.openSession(try XCTUnwrap(f.model.sessions.first))
+        try await wait { await f.database.sessionListReadCountForTesting() == before + 2 }
+        await background.open(); await refresh.value
+        XCTAssertTrue(f.model.isLoadingSessions)
+        XCTAssertEqual(f.model.sessions.count, 200)
+        await f.database.gateSidebarSnapshotPublicationForTesting(nil)
+        await f.database.gateSessionListReadsForTesting(nil)
+        await explicit.open()
+        try await wait { !f.model.isLoadingSessions && f.model.sessions.count == 400 }
+        XCTAssertEqual(Set(f.model.sessions.map(\.id)).count, 400)
+        let reads = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(reads, before + 2, "Background and explicit snapshots; repeated paging intent coalesces to one page")
+    }
+
+    func testTerminationDiscardsFooterActionsQueuedDuringBackgroundRead() async throws {
+        let f = try await fixture(count: 605)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        await f.database.gateSidebarSnapshotPublicationForTesting(task)
+        let before = await f.database.sessionListReadCountForTesting()
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { await f.database.sidebarSnapshotWaitingForTesting }
+        f.model.loadMoreSessions()
+        f.model.loadMoreSessions()
+        await f.model.prepareToTerminate()
+        await gate.open(); await refresh.value
+        XCTAssertEqual(f.model.sessions.count, 200)
+        XCTAssertFalse(f.model.isLoadingSessions)
+        let reads = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(reads, before + 1)
     }
 
     func testSidebarRetryRepeatsEnsuredReloadInsteadOfLoadingNextPage() async throws {
@@ -400,6 +501,7 @@ final class AppReviewFollowupTests: XCTestCase {
         }
         let ids = f.model.mainSearch.results.map(\.id)
         let set = f.model.mainSearch.resultSetID
+        let reads = await f.database.sessionListReadCountForTesting()
         f.model.selectSession(try XCTUnwrap(f.model.sessions.first).id)
         try await wait { f.model.selectedSession != nil }
         f.model.returnFromSession()
@@ -407,6 +509,104 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.mainSearch.resultSetID, set)
         XCTAssertTrue(f.model.mainSearch.hasLoadedAdditionalPages)
         XCTAssertFalse(f.model.mainSearch.isSearching)
+        let after = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(after, reads, "Returning to unchanged protected results needs no sidebar reload")
+    }
+
+    func testSinglePageSidebarReturnRefreshesSearchWithoutReloadingSidebar() async throws {
+        let f = try await fixture()
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        try await search(f)
+        let set = f.model.mainSearch.resultSetID
+        let reads = await f.database.sessionListReadCountForTesting()
+        f.model.selectSession(try XCTUnwrap(f.model.sessions.first).id)
+        try await wait { !f.model.messages.isEmpty }
+        f.model.returnFromSession()
+        await f.clock.advance(by: .milliseconds(100))
+        try await wait { !f.model.mainSearch.isSearching }
+        XCTAssertFalse(f.model.mainSearch.resultsMayBeStale)
+        XCTAssertNotEqual(f.model.mainSearch.resultSetID, set)
+        XCTAssertFalse(f.model.mainSearch.hasLoadedAdditionalPages)
+        let after = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(after, reads)
+    }
+
+    private func invalidateCommittedSearch(_ f: Fixture) async throws {
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        try await search(f)
+        f.model.mainSearch.search(reset: false)
+        try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.results.count == 400 }
+        _ = f.model.mainSearch.resolveProjectFilter(in: [], missingProject: .keepResolving)
+        _ = f.model.mainSearch.resolveProjectFilter(in: [f.project], missingProject: .retain)
+        XCTAssertFalse(f.model.mainSearch.matchesCurrentCriteria(sort: .recency))
+        XCTAssertEqual(f.model.mainSearch.results.count, 400)
+    }
+
+    func testManualRefreshAfterInvalidationRotatesIdentityOnlyOnPublication() async throws {
+        let f = try await fixture(count: 605)
+        try await invalidateCommittedSearch(f)
+        let set = f.model.mainSearch.resultSetID
+        let result = try XCTUnwrap(f.model.mainSearch.results.first)
+        let hydrationGate = ReviewReadGate(), hydrationGateTask = Task { await hydrationGate.wait() }
+        defer { hydrationGateTask.cancel(); Task { await hydrationGate.open() } }
+        f.model.mainSearch.snippetHydrationGateForTesting = hydrationGateTask
+        let hydration = Task { await f.model.mainSearch.hydrate(result) }
+        try await wait { f.model.mainSearch.snippetHydrationWaitingForTesting }
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.mainSearch.resetResultGateForTesting = task
+        f.model.searchMain()
+        await f.clock.advance(by: .milliseconds(100))
+        try await wait { f.model.mainSearch.resetResultWaitingForTesting }
+        XCTAssertEqual(f.model.mainSearch.resultSetID, set)
+        await gate.open()
+        try await wait { !f.model.mainSearch.isSearching }
+        XCTAssertNotEqual(f.model.mainSearch.resultSetID, set)
+        XCTAssertEqual(f.model.mainSearch.results.count, 200)
+        XCTAssertFalse(f.model.mainSearch.resultsMayBeStale)
+        XCTAssertFalse(f.model.mainSearch.hasLoadedAdditionalPages)
+        await hydrationGate.open(); await hydration.value
+        XCTAssertNil(f.model.mainSearch.snippets[result.id], "Old-set hydration cannot publish into the replacement set")
+        f.model.mainSearch.snippetHydrationGateForTesting = nil
+        await f.model.mainSearch.hydrate(result)
+        XCTAssertNotNil(f.model.mainSearch.snippets[result.id])
+        f.model.mainSearch.search(reset: false)
+        try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.results.count == 400 }
+        XCTAssertEqual(Set(f.model.mainSearch.results.map(\.id)).count, 400)
+    }
+
+    func testCancelledManualRefreshAfterInvalidationRetainsRowsAndIdentity() async throws {
+        let f = try await fixture(count: 605)
+        try await invalidateCommittedSearch(f)
+        let ids = f.model.mainSearch.results.map(\.id), set = f.model.mainSearch.resultSetID
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.mainSearch.resetResultGateForTesting = task
+        f.model.searchMain()
+        await f.clock.advance(by: .milliseconds(100))
+        try await wait { f.model.mainSearch.resetResultWaitingForTesting }
+        f.model.mainSearch.suspendForNavigation()
+        await gate.open()
+        try await wait { !f.model.mainSearch.resetResultWaitingForTesting }
+        expectNoDifference(ids, f.model.mainSearch.results.map(\.id))
+        XCTAssertEqual(f.model.mainSearch.resultSetID, set)
+        XCTAssertTrue(f.model.mainSearch.resultsMayBeStale)
+    }
+
+    func testFailedManualRefreshAfterInvalidationRetainsRowsAndIdentity() async throws {
+        let f = try await fixture(count: 605)
+        try await invalidateCommittedSearch(f)
+        let ids = f.model.mainSearch.results.map(\.id), set = f.model.mainSearch.resultSetID
+        let queue = try DatabaseQueue(path: f.root.appendingPathComponent("index.sqlite").path)
+        try await queue.write { try $0.execute(sql: "DROP TABLE message_fts") }
+        f.model.searchMain()
+        await f.clock.advance(by: .milliseconds(100))
+        try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.error != nil }
+        expectNoDifference(ids, f.model.mainSearch.results.map(\.id))
+        XCTAssertEqual(f.model.mainSearch.resultSetID, set)
+        XCTAssertTrue(f.model.mainSearch.resultsMayBeStale)
     }
 
     func testInterruptedManualRefreshRetainsPagesIdentityAnchorAndCursor() async throws {
@@ -452,13 +652,23 @@ final class AppReviewFollowupTests: XCTestCase {
         let ids = f.model.mainSearch.results.map(\.id)
         f.model.openSearchResult(try XCTUnwrap(f.model.mainSearch.results.first), fromMainSearch: true)
         try await wait { f.model.selectedSession != nil }
-        f.model.summaryProjectsForTesting = []
-        await f.model.refreshSummariesForTesting(terminal: false)
-        XCTAssertFalse(f.model.mainSearch.isResolvingProjectFilter)
-        await f.model.refreshSummariesForTesting(terminal: true)
-        XCTAssertFalse(f.model.mainSearch.isResolvingProjectFilter, "Terminal reconciliation must leave Refresh usable")
-        XCTAssertEqual(f.model.mainSearch.projectFilterCanonicalKey, f.project.canonicalKey)
-        f.model.summaryProjectsForTesting = nil
+        for terminal in [false, true] {
+            let gate = ReviewReadGate(), task = Task { await gate.wait() }
+            defer { task.cancel(); Task { await gate.open() } }
+            try await f.database.deleteSource(agent: .claudeCode, path: f.root.appendingPathComponent("sessions.jsonl").path)
+            let empty = try await f.database.sidebarSnapshot(projectCanonicalKey: f.project.canonicalKey)
+            XCTAssertTrue(empty.projects.isEmpty)
+            XCTAssertTrue(empty.sessionList.sessions.isEmpty)
+            await f.database.gateSidebarSnapshotPublicationForTesting(task)
+            let refresh = Task { await f.model.refreshSummariesForTesting(terminal: terminal) }
+            try await wait { await f.database.sidebarSnapshotWaitingForTesting }
+            await f.coordinator.indexAll(scope: .proseOnly)
+            await gate.open(); await refresh.value
+            await f.database.gateSidebarSnapshotPublicationForTesting(nil)
+            XCTAssertFalse(f.model.mainSearch.isResolvingProjectFilter, "Reconciliation must leave Refresh usable")
+            XCTAssertEqual(f.model.mainSearch.projectFilterCanonicalKey, f.project.canonicalKey)
+            expectNoDifference(ids, f.model.mainSearch.results.map(\.id))
+        }
         await f.model.refreshSummariesForTesting()
         f.model.returnFromSession()
         expectNoDifference(ids, f.model.mainSearch.results.map(\.id))

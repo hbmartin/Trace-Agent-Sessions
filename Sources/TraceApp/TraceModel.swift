@@ -151,7 +151,7 @@ final class TraceModel: ObservableObject {
     private typealias LoadedSessionPages = SessionListSnapshot
     private var sessionListTask: Task<Void, Never>?
     private enum SessionListRetry {
-        case reload(ensuringSessionID: Int64?)
+        case reload
         case nextPage
     }
     private var sessionListRetry: SessionListRetry?
@@ -318,7 +318,6 @@ final class TraceModel: ObservableObject {
     var selectionTranscriptReadGateForTesting: Task<Void, Never>?
     var selectionTranscriptGateForTesting: Task<Void, Never>?
     var summaryTranscriptGateForTesting: Task<Void, Never>?
-    var summaryProjectsForTesting: [ProjectSummary]?
     var summaryTailGateForTesting: Task<Void, Never>?
     private(set) var selectionTranscriptReadWaitingForTesting = false
     private(set) var selectionTranscriptWaitingForTesting = false
@@ -938,10 +937,10 @@ final class TraceModel: ObservableObject {
             mainSearchNeedsRefresh = false
             loadProjectSessions()
         } else if mainSearchNeedsRefresh {
-            if mainSearch.matchesCurrentCriteria(sort: settings.searchSort) {
+            if mainSearch.protectsPagination,
+               mainSearch.matchesCurrentCriteria(sort: settings.searchSort) {
                 mainSearch.markResultsStale()
                 mainSearchNeedsRefresh = false
-                loadProjectSessions()
             } else { searchMain() }
         }
     }
@@ -1080,7 +1079,7 @@ final class TraceModel: ObservableObject {
             catch {
                 guard projectRequestID == request else { return }
                 sessionListError = error.localizedDescription
-                sessionListRetry = .reload(ensuringSessionID: ensuringSessionID)
+                sessionListRetry = .reload
             }
         }
     }
@@ -1089,17 +1088,27 @@ final class TraceModel: ObservableObject {
         guard projectRequestID == request else { return }
         isLoadingSessions = false
         sessionListTask = nil
+        drainPendingSidebarAction()
     }
 
     private func finishBackgroundSidebarRequest(_ request: UUID) {
         guard backgroundSidebarRequest == request else { return }
         backgroundSidebarRequest = nil
+        drainPendingSidebarAction()
+    }
+
+    private func drainPendingSidebarAction() {
+        guard backgroundSidebarRequest == nil, !isLoadingSessions else { return }
         guard let pending = pendingSidebarAction else { return }
         pendingSidebarAction = nil
         guard pending.project == selectedProjectCanonicalKey else { return }
         switch pending.action {
         case .loadMore: loadMoreSessions()
-        case .retry(let retry): performSidebarRetry(retry)
+        case .retry(.reload):
+            // A successful background or explicit reload already satisfies this
+            // intent. A failed read retains the current retry operation.
+            if let retry = sessionListRetry { performSidebarRetry(retry) }
+        case .retry(.nextPage): loadMoreSessions()
         }
     }
 
@@ -1172,7 +1181,6 @@ final class TraceModel: ObservableObject {
                     marker: .touch(pathKey: "TRACE_TEST_SESSION_PAGE_STARTED_PATH")
                 ) {
                     try await Task.sleep(for: .milliseconds(delay))
-                    TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_PAGE_FINISHED_PATH")
                 }
                 guard projectRequestID == request, selectedProjectCanonicalKey == key else { return }
                 let existing = Set(sessions.map(\.id))
@@ -2071,11 +2079,7 @@ final class TraceModel: ObservableObject {
         let sidebar = try? await database.sidebarSnapshot(
             projectCanonicalKey: projectCanonicalKey, pageCount: pageCount, ensuringSessionID: ensuredSessionID
         )
-        #if DEBUG
-        let loadedProjects = summaryProjectsForTesting ?? sidebar?.projects
-        #else
         let loadedProjects = sidebar?.projects
-        #endif
         let loadedRecent = sidebar?.recentSessions ?? recentSessions
         let loadedSessions = sidebar?.sessionList
         guard summaryRequestID == refresh else { return }
