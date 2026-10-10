@@ -268,7 +268,7 @@ final class TraceModel: ObservableObject {
     private var lastSearchedMutationRevision = 0
     private var timeZoneObserver: NSObjectProtocol?
     private var sessionRequestID = UUID()
-    private var transcriptPublicationEpoch = UUID()
+    private var transcriptReadRevision: UInt64 = 0
     private var projectRequestID = UUID()
     private var summaryRequestID = UUID()
     var scrollPositions: [Int64: TranscriptBookmark] = [:]
@@ -516,6 +516,7 @@ final class TraceModel: ObservableObject {
 
     /// Installs an already-open index without starting source discovery or filesystem watchers.
     func attach(database: IndexDatabase, coordinator: IndexCoordinator) {
+        if self.database !== database { transcriptReadRevision = 0 }
         self.database = database
         self.coordinator = coordinator
         globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
@@ -1232,7 +1233,6 @@ final class TraceModel: ObservableObject {
         guard let database else { return }
         Task {
             guard sessionRequestID == request, selectedSessionID == sessionID else { return }
-            let publicationEpoch = transcriptPublicationEpoch
             #if DEBUG
             if let gate = selectionTranscriptReadGateForTesting {
                 selectionTranscriptReadWaitingForTesting = true
@@ -1248,8 +1248,9 @@ final class TraceModel: ObservableObject {
                 selectionTranscriptWaitingForTesting = false
             }
             #endif
-            guard sessionRequestID == request, selectedSessionID == sessionID else { return }
-            publishTranscript(snapshot, expectedEpoch: publicationEpoch)
+            guard self.database === database,
+                  sessionRequestID == request, selectedSessionID == sessionID else { return }
+            publishTranscript(snapshot)
             let session = selectedSession
             if let session,
                adoptProjectIdentity(from: session) {
@@ -1495,11 +1496,19 @@ final class TraceModel: ObservableObject {
 
     /// Called on the main actor without suspension: no hydration request can
     /// observe new source metadata paired with the old locator rows.
-    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot, expectedEpoch: UUID) {
-        // Every read describes the transcript when it started, including reads
-        // with rows. A newer publication makes that snapshot obsolete.
-        guard expectedEpoch == transcriptPublicationEpoch else { return }
-        transcriptPublicationEpoch = UUID()
+    @discardableResult
+    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot) -> Bool {
+        guard snapshot.readRevision > transcriptReadRevision else { return false }
+        // Omitted rows may only reuse a transcript matching the state the
+        // database read actually described, even if another read published first.
+        if snapshot.messages == nil {
+            guard let session = snapshot.session,
+                  selectedSession?.id == session.id,
+                  selectedSession?.sourceGeneration == session.sourceGeneration,
+                  selectedSession?.sourcePath == session.sourcePath,
+                  messages.count == session.messageCount else { return false }
+        }
+        transcriptReadRevision = snapshot.readRevision
         let changed = selectedSession?.id != snapshot.session?.id
             || selectedSession?.sourceGeneration != snapshot.session?.sourceGeneration
             || selectedSession?.sourcePath != snapshot.session?.sourcePath
@@ -1522,6 +1531,7 @@ final class TraceModel: ObservableObject {
         }
         selectedSession = snapshot.session
         if let rows = snapshot.messages { messages = rows }
+        return true
     }
 
     func retryHydration(_ message: MessageSummary) {
@@ -2133,7 +2143,6 @@ final class TraceModel: ObservableObject {
         }
         finishBackgroundSidebarRequest(projectRequest)
         let loadedTranscript: SessionTranscriptSnapshot?
-        let transcriptEpoch = transcriptPublicationEpoch
         if let ensuredSessionID {
             loadedTranscript = try? await database.transcriptSnapshot(
                 sessionID: ensuredSessionID, knownSession: selectedSession, knownMessageCount: messages.count
@@ -2176,13 +2185,12 @@ final class TraceModel: ObservableObject {
             }
         }
         if let sessionID = ensuredSessionID,
+           self.database === database,
            selectedSessionID == sessionID,
            sessionRequestID == selectedSessionRequest,
            summaryRequestID == refresh,
            loadedSelectedSession.succeeded {
-            if let loadedTranscript, loadedTranscript.session != nil {
-                publishTranscript(loadedTranscript, expectedEpoch: transcriptEpoch)
-            } else {
+            if let loadedTranscript, publishTranscript(loadedTranscript), loadedTranscript.session == nil {
                 returnFromSession()
             }
         }
