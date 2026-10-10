@@ -151,7 +151,7 @@ final class TraceModel: ObservableObject {
     private typealias LoadedSessionPages = SessionListSnapshot
     private var sessionListTask: Task<Void, Never>?
     private enum SessionListRetry {
-        case reload(ensuringSessionID: Int64?)
+        case reload
         case nextPage
     }
     private var sessionListRetry: SessionListRetry?
@@ -315,10 +315,11 @@ final class TraceModel: ObservableObject {
     }
 
     func queueMainSearchRefreshForTesting() { mainSearchNeedsRefresh = true }
+    var selectionTranscriptReadGateForTesting: Task<Void, Never>?
     var selectionTranscriptGateForTesting: Task<Void, Never>?
     var summaryTranscriptGateForTesting: Task<Void, Never>?
-    var summaryProjectsForTesting: [ProjectSummary]?
     var summaryTailGateForTesting: Task<Void, Never>?
+    private(set) var selectionTranscriptReadWaitingForTesting = false
     private(set) var selectionTranscriptWaitingForTesting = false
     private(set) var summaryTranscriptWaitingForTesting = false
     private(set) var summaryTailWaitingForTesting = false
@@ -936,10 +937,10 @@ final class TraceModel: ObservableObject {
             mainSearchNeedsRefresh = false
             loadProjectSessions()
         } else if mainSearchNeedsRefresh {
-            if mainSearch.matchesCurrentCriteria(sort: settings.searchSort) {
+            if mainSearch.protectsPagination,
+               mainSearch.matchesCurrentCriteria(sort: settings.searchSort) {
                 mainSearch.markResultsStale()
                 mainSearchNeedsRefresh = false
-                loadProjectSessions()
             } else { searchMain() }
         }
     }
@@ -1078,7 +1079,7 @@ final class TraceModel: ObservableObject {
             catch {
                 guard projectRequestID == request else { return }
                 sessionListError = error.localizedDescription
-                sessionListRetry = .reload(ensuringSessionID: ensuringSessionID)
+                sessionListRetry = .reload
             }
         }
     }
@@ -1087,17 +1088,27 @@ final class TraceModel: ObservableObject {
         guard projectRequestID == request else { return }
         isLoadingSessions = false
         sessionListTask = nil
+        drainPendingSidebarAction()
     }
 
     private func finishBackgroundSidebarRequest(_ request: UUID) {
         guard backgroundSidebarRequest == request else { return }
         backgroundSidebarRequest = nil
+        drainPendingSidebarAction()
+    }
+
+    private func drainPendingSidebarAction() {
+        guard backgroundSidebarRequest == nil, !isLoadingSessions else { return }
         guard let pending = pendingSidebarAction else { return }
         pendingSidebarAction = nil
         guard pending.project == selectedProjectCanonicalKey else { return }
         switch pending.action {
         case .loadMore: loadMoreSessions()
-        case .retry(let retry): performSidebarRetry(retry)
+        case .retry(.reload):
+            // A successful background or explicit reload already satisfies this
+            // intent. A failed read retains the current retry operation.
+            if let retry = sessionListRetry { performSidebarRetry(retry) }
+        case .retry(.nextPage): loadMoreSessions()
         }
     }
 
@@ -1170,7 +1181,6 @@ final class TraceModel: ObservableObject {
                     marker: .touch(pathKey: "TRACE_TEST_SESSION_PAGE_STARTED_PATH")
                 ) {
                     try await Task.sleep(for: .milliseconds(delay))
-                    TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_PAGE_FINISHED_PATH")
                 }
                 guard projectRequestID == request, selectedProjectCanonicalKey == key else { return }
                 let existing = Set(sessions.map(\.id))
@@ -1223,6 +1233,13 @@ final class TraceModel: ObservableObject {
         Task {
             guard sessionRequestID == request, selectedSessionID == sessionID else { return }
             let publicationEpoch = transcriptPublicationEpoch
+            #if DEBUG
+            if let gate = selectionTranscriptReadGateForTesting {
+                selectionTranscriptReadWaitingForTesting = true
+                await gate.value
+                selectionTranscriptReadWaitingForTesting = false
+            }
+            #endif
             guard let snapshot = try? await database.transcriptSnapshot(sessionID: sessionID) else { return }
             #if DEBUG
             if let gate = selectionTranscriptGateForTesting {
@@ -1232,9 +1249,7 @@ final class TraceModel: ObservableObject {
             }
             #endif
             guard sessionRequestID == request, selectedSessionID == sessionID else { return }
-            if transcriptPublicationEpoch == publicationEpoch {
-                publishTranscript(snapshot)
-            }
+            publishTranscript(snapshot, expectedEpoch: publicationEpoch)
             let session = selectedSession
             if let session,
                adoptProjectIdentity(from: session) {
@@ -1480,10 +1495,10 @@ final class TraceModel: ObservableObject {
 
     /// Called on the main actor without suspension: no hydration request can
     /// observe new source metadata paired with the old locator rows.
-    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot, expectedEpoch: UUID? = nil) {
-        // An unchanged read describes the rows present when it started. It may
-        // retain them only if no other snapshot has been published since then.
-        guard snapshot.messages != nil || expectedEpoch == transcriptPublicationEpoch else { return }
+    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot, expectedEpoch: UUID) {
+        // Every read describes the transcript when it started, including reads
+        // with rows. A newer publication makes that snapshot obsolete.
+        guard expectedEpoch == transcriptPublicationEpoch else { return }
         transcriptPublicationEpoch = UUID()
         let changed = selectedSession?.id != snapshot.session?.id
             || selectedSession?.sourceGeneration != snapshot.session?.sourceGeneration
@@ -2064,11 +2079,7 @@ final class TraceModel: ObservableObject {
         let sidebar = try? await database.sidebarSnapshot(
             projectCanonicalKey: projectCanonicalKey, pageCount: pageCount, ensuringSessionID: ensuredSessionID
         )
-        #if DEBUG
-        let loadedProjects = summaryProjectsForTesting ?? sidebar?.projects
-        #else
         let loadedProjects = sidebar?.projects
-        #endif
         let loadedRecent = sidebar?.recentSessions ?? recentSessions
         let loadedSessions = sidebar?.sessionList
         guard summaryRequestID == refresh else { return }

@@ -14,7 +14,6 @@ public enum TranscriptMarkdown {
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
         var codeLines = Set<Int>()
         var fence: (marker: Character, length: Int)?
-        var needsBlockParser = false
         for (index, line) in lines.enumerated() {
             let candidate = fenceMarker(in: line)
             if let current = fence {
@@ -29,13 +28,12 @@ public enum TranscriptMarkdown {
             if let candidate, candidate.marker != "`" || !candidate.tail.contains("`") {
                 fence = (candidate.marker, candidate.length)
                 codeLines.insert(index + 1)
-            } else if mayContainContainerCode(line) {
-                needsBlockParser = true
             }
         }
-        if needsBlockParser, let blocks = try? AttributedString(markdown: source,
+        if let blocks = try? AttributedString(markdown: source,
             options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true)) {
-            // Block syntax is authoritative in ambiguous list/quote/indent contexts.
+            // Block syntax is authoritative for every transcript, including code
+            // inside lists and blockquotes; retain the scanner if parsing fails.
             codeLines.removeAll()
             for run in blocks.runs {
                 guard let position = run.markdownSourcePosition,
@@ -63,38 +61,4 @@ public enum TranscriptMarkdown {
         return (marker, length, text.dropFirst(length))
     }
 
-    private static func mayContainContainerCode(_ line: Substring) -> Bool {
-        var text = line
-        var hasContainer = false
-        while true {
-            let spaces = text.prefix(while: { $0 == " " }).count
-            let probe = text.dropFirst(min(spaces, 3))
-            guard probe.first == ">" else { break }
-            hasContainer = true
-            text = probe.dropFirst()
-            if text.first == " " { text = text.dropFirst() }
-        }
-        let probe = text.dropFirst(min(text.prefix(while: { $0 == " " }).count, 3))
-        let markerLength: Int
-        if let first = probe.first, "-*+".contains(first) { markerLength = 1 }
-        else {
-            let digits = probe.prefix(while: { $0.isNumber }).count
-            let tail = probe.dropFirst(digits)
-            markerLength = (1...9).contains(digits) && (tail.first == "." || tail.first == ")") ? digits + 1 : 0
-        }
-        if markerLength > 0 {
-            let remainder = probe.dropFirst(markerLength)
-            if remainder.first == " " || remainder.first == "\t" {
-                hasContainer = true
-                text = remainder.dropFirst()
-            }
-        }
-        var columns = 0
-        for character in text {
-            if character == " " { columns += 1 }
-            else if character == "\t" { columns += 4 - columns % 4 }
-            else { break }
-        }
-        return columns >= 4 || (hasContainer && fenceMarker(in: text) != nil)
-    }
 }

@@ -495,7 +495,6 @@ public actor IndexDatabase {
             guard stored != String(indexFormatVersion) else { return false }
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM message_fts")
-                try db.execute(sql: "DELETE FROM trace_meta WHERE key='message_id_overflow'")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM source_root")
@@ -577,7 +576,6 @@ public actor IndexDatabase {
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM message_fts")
-                try db.execute(sql: "DELETE FROM trace_meta WHERE key='message_id_overflow'")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
                 try db.execute(sql: "DELETE FROM source_scan_error")
@@ -1552,6 +1550,14 @@ public actor IndexDatabase {
         return rebuilt
     }
 
+    private nonisolated static func recoverEncodedCursorTimestamp(_ rowID: Int64) -> Int64? {
+        guard rowID >= 0 else { return nil }
+        let timestamp = rowID >> 20
+        // Boundary buckets can contain clamped dates. Overflow IDs have no
+        // timestamp bits, so only interior positive buckets are recoverable.
+        return timestamp > 0 && timestamp < (Int64.max >> 20) ? timestamp : nil
+    }
+
     public func search(
         query: String,
         filters: SearchFilters = .init(),
@@ -1617,6 +1623,7 @@ public actor IndexDatabase {
                     if needsTimestampCursor {
                         let timestamp = try cursor.timestampMilliseconds
                             ?? Int64.fetchOne(db, sql: "SELECT ts FROM message WHERE id=?", arguments: [cursor.rowID])
+                            ?? Self.recoverEncodedCursorTimestamp(cursor.rowID)
                         guard let timestamp else { throw SessionSourceError.missingRecord(String(cursor.rowID)) }
                         let identifiers = cursor.rowID < 0 ? "(m.id >= 0 OR m.id < ?)" : "(m.id >= 0 AND m.id < ?)"
                         timestampCursor = " AND (m.ts < ? OR (m.ts = ? AND \(identifiers)))"
@@ -2032,7 +2039,7 @@ public actor IndexDatabase {
     public func sidebarSnapshot(projectCanonicalKey: String?, pageCount: Int = 1,
                                 ensuringSessionID: Int64? = nil) async throws -> SidebarSnapshot {
         try await waitForSessionListReadForTesting()
-        return try await pool.read { db in
+        let snapshot: SidebarSnapshot = try await pool.read { db in
             let projects = try projects(in: db)
             let total = projectCanonicalKey.map { key in
                 projects.first { $0.canonicalKey == key }?.sessionCount ?? 0
@@ -2042,6 +2049,15 @@ public actor IndexDatabase {
                          sessionList: try sessionListSnapshot(projectCanonicalKey: projectCanonicalKey,
                             pageCount: pageCount, ensuringSessionID: ensuringSessionID, total: total, in: db))
         }
+        #if DEBUG
+        if let gate = sidebarSnapshotPublicationGate {
+            sidebarSnapshotWaitingForTesting = true
+            await gate.value
+            sidebarSnapshotWaitingForTesting = false
+        }
+        #endif
+        try Task.checkCancellation()
+        return snapshot
     }
 
     private nonisolated func sessionCount(projectCanonicalKey: String?, in db: Database) throws -> Int {
@@ -2107,6 +2123,11 @@ public actor IndexDatabase {
     private var sessionListReadGate: Task<Void, Never>?
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
+    private var sidebarSnapshotPublicationGate: Task<Void, Never>?
+    private(set) var sidebarSnapshotWaitingForTesting = false
+    func gateSidebarSnapshotPublicationForTesting(_ gate: Task<Void, Never>?) {
+        sidebarSnapshotPublicationGate = gate
+    }
     func gateSessionListReadsForTesting(_ gate: Task<Void, Never>?) { sessionListReadGate = gate }
     func sessionListReadCountForTesting() -> Int { sessionListReadCount }
     func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }

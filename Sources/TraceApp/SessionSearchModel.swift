@@ -72,6 +72,8 @@ final class SessionSearchModel: ObservableObject {
     #if DEBUG
     var resetResultGateForTesting: Task<Void, Never>?
     private(set) var resetResultWaitingForTesting = false
+    var snippetHydrationGateForTesting: Task<Void, Never>?
+    private(set) var snippetHydrationWaitingForTesting = false
     private var automaticResultGateForTesting: Task<Void, Never>?
     private(set) var automaticResultWaitingForTesting = false
     func gateAutomaticResultsForTesting(_ gate: Task<Void, Never>?) { automaticResultGateForTesting = gate }
@@ -215,6 +217,7 @@ final class SessionSearchModel: ObservableObject {
         #endif
         if let sort { self.sort = sort }
         let criteria: SearchRequestCriteria
+        let rotatesResultSetOnCommit: Bool
         if reset {
             let bounds = datePreset.bounds(now: Date())
             var requestFilters = filters
@@ -224,6 +227,7 @@ final class SessionSearchModel: ObservableObject {
             resultsMayBeStale = false
             let criteriaChanged = query != lastQuery || filters != lastFilters
                 || datePreset != lastDatePreset || self.sort != lastSort
+            rotatesResultSetOnCommit = trigger == .user && !criteriaChanged
             if !criteriaChanged, hasCommittedSearch, activeRequestCriteria != nil {
                 if refreshBackup == nil {
                     refreshBackup = .init(cursor: nextCursor, criteria: activeRequestCriteria,
@@ -263,12 +267,15 @@ final class SessionSearchModel: ObservableObject {
             }
             guard nextCursor != nil, let activeRequestCriteria else { return }
             criteria = activeRequestCriteria
+            rotatesResultSetOnCommit = false
         }
-        performSearch(reset: reset, trigger: trigger, criteria: criteria)
+        performSearch(reset: reset, trigger: trigger, criteria: criteria,
+                      rotatesResultSetOnCommit: rotatesResultSetOnCommit)
     }
 
     private func performSearch(
-        reset: Bool, trigger: SearchTrigger, criteria: SearchRequestCriteria
+        reset: Bool, trigger: SearchTrigger, criteria: SearchRequestCriteria,
+        rotatesResultSetOnCommit: Bool
     ) {
         guard let database,
               !criteria.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -368,7 +375,7 @@ final class SessionSearchModel: ObservableObject {
                         : page.uniqueResults(excluding: seenResultIDs)
                     seenResultIDs.formUnion(unique.map(\.id))
                     if reset {
-                        if trigger == .user, self.refreshBackup != nil { self.resultSetID = UUID() }
+                        if rotatesResultSetOnCommit { self.resultSetID = UUID() }
                         self.activeRequestCriteria = criteria
                         self.hasCommittedSearch = true
                         self.hasLoadedAdditionalPages = false
@@ -482,7 +489,7 @@ final class SessionSearchModel: ObservableObject {
             hasLoadedAdditionalPages = backup.hasLoadedAdditionalPages
             resultSetID = backup.resultSetID
             markResultsStale()
-        } else if activeTaskIsAutomatic { markResultsStale() }
+        } else if activeTaskIsAutomatic || !results.isEmpty { markResultsStale() }
         refreshBackup = nil
     }
 
@@ -530,6 +537,13 @@ final class SessionSearchModel: ObservableObject {
     func hydrate(_ result: SearchResult) async {
         guard snippets[result.id] == nil, let coordinator else { return }
         let setID = resultSetID
+        #if DEBUG
+        if let gate = snippetHydrationGateForTesting {
+            snippetHydrationWaitingForTesting = true
+            await gate.value
+            snippetHydrationWaitingForTesting = false
+        }
+        #endif
         if let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_SNIPPET_HYDRATION_DELAY_MS",
             cappedAt: 5_000,
