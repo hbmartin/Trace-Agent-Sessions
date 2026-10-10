@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import termios
 import unittest
+from unittest import mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -404,12 +405,28 @@ class ReviewFixRegressionTests(unittest.TestCase):
                     validator.validate(candidate, candidate, revision, role='candidate')
                     final = {name: (checkout / name).read_bytes() for name in names}
                     times = {name: (checkout / name).stat().st_mtime_ns for name in names}
-                    validator.normalize_sqlite(candidate)
+                    read_git = validator.git
+                    def without_history(root, *args):
+                        self.assertNotIn('log', args, 'Canonical files must not require historical overlays')
+                        return read_git(root, *args)
+                    with mock.patch.object(validator, 'git', side_effect=without_history):
+                        validator.normalize_sqlite(candidate)
+                        validator.validate(candidate, candidate, revision, role='candidate')
                     self.assertEqual(final, {name: (checkout / name).read_bytes() for name in names})
                     self.assertEqual(times, {name: (checkout / name).stat().st_mtime_ns for name in names})
+            # Reject drift in the final file before replacing earlier pristine files.
+            for name, data in original.items(): (checkout / name).write_bytes(data)
+            config = checkout / 'SQLiteLib.xcconfig'
+            config.write_bytes(config.read_bytes() + b'\nUNRELATED = YES\n')
+            before = {name: (checkout / name).read_bytes() for name in names}
+            with self.assertRaisesRegex(ValueError, 'refusing to overwrite'):
+                validator.normalize_sqlite(candidate)
+            self.assertEqual(before, {name: (checkout / name).read_bytes() for name in names})
+            for name, data in final.items(): (checkout / name).write_bytes(data)
             patch = candidate / 'GRDBCustomSQLite/SQLiteRegularFiles.patch'
             patch.write_text(patch.read_text().replace('Nonblocking opens also cover', 'Nonblocking descriptor opens also cover'))
-            self.fixture.git(candidate, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-am', 'extend safety patch')
+            # An invocation must see changed patch bytes even with an unchanged HEAD.
+            self.assertEqual(revision, self.fixture.git(candidate, 'rev-parse', 'HEAD'))
             validator.normalize_sqlite(candidate)
             source = checkout / 'sqlite/src/os_unix.c'
             self.assertIn('Nonblocking descriptor opens also cover', source.read_text())
@@ -418,6 +435,21 @@ class ReviewFixRegressionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'refusing to overwrite'):
                 validator.normalize_sqlite(candidate)
             self.assertEqual(source.read_bytes(), before)
+
+    def test_sqlite_reconstruction_cache_distinguishes_source_and_patch_bytes(self):
+        validator = self.fixture.module('validate-benchmark-baseline')
+        patch = b'--- a/example.c\n+++ b/example.c\n@@ -1 +1 @@\n-original\n+protected\n'
+        with tempfile.TemporaryDirectory() as directory:
+            resolver = validator.SQLitePatchResolver(Path(directory))
+            temporary = validator.tempfile.TemporaryDirectory
+            with mock.patch.object(validator.tempfile, 'TemporaryDirectory', wraps=temporary) as directories:
+                self.assertEqual(resolver.applied('example.c', b'original\n', [patch]), b'protected\n')
+                self.assertEqual(resolver.applied('example.c', b'original\n', [bytes(bytearray(patch))]), b'protected\n')
+                self.assertEqual(directories.call_count, 1, 'Identical patch content shares one reconstruction')
+                self.assertEqual(resolver.applied('example.c', b'original\nextra\n', [patch]), b'protected\nextra\n')
+                changed = patch.replace(b'+protected', b'+safer')
+                self.assertEqual(resolver.applied('example.c', b'original\n', [changed]), b'safer\n')
+                self.assertEqual(directories.call_count, 3)
 
     def test_signal_at_former_handler_handoff_invalidates_evidence(self):
         runner_source = fixtures.SCRIPTS / 'run-local-benchmark-comparisons.py'

@@ -25,45 +25,110 @@ def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args])
 
 
-def sqlite_patch_state(trusted, checkout, name, original=None):
-    """Reconstruct exact approved states from pinned source, never reverse live hunks."""
-    original = original if original is not None else git(checkout, 'show', 'HEAD:./' + name)
-    regular = trusted / 'GRDBCustomSQLite/SQLiteRegularFiles.patch'
-    terminal = trusted / 'GRDBCustomSQLite/SQLiteNoControllingTerminal.patch'
-    combined = regular.read_bytes().startswith(b'# Trace combined file safety overlay v2')
-    final_chain = [regular] if combined else [regular, terminal]
+class SQLitePatchResolver:
+    """Memoize reconstruction for one operation; always inspect live bytes anew."""
+    def __init__(self, trusted):
+        self.trusted = Path(trusted)
+        self.originals = {}
+        self.patches = {}
+        self.applications = {}
+        self.history = None
 
-    def applied(chain):
-        with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(original)
-            for patch in chain:
-                if not patch.exists(): return None
-                result = subprocess.run(['git', 'apply', '--unidiff-zero', '--include=' + name, str(patch)],
-                                        cwd=tmp, capture_output=True)
-                if result.returncode: return None
-            return target.read_bytes()
+    def original(self, checkout, name):
+        key = (Path(checkout).resolve(), name)
+        if key not in self.originals:
+            self.originals[key] = git(checkout, 'show', 'HEAD:./' + name)
+        return self.originals[key]
 
-    expected = applied(final_chain)
-    if expected is None:
-        raise ValueError('Current SQLite overlay does not apply to pinned source: ' + name)
-    recognized = {original, expected}
-    # Historical patch bytes are trusted only when present in candidate history.
-    # The archived v1 also supports shallow clones and independently staged upgrades.
-    patches = [regular, trusted / 'GRDBCustomSQLite/SQLiteRegularFiles-v1.patch']
-    with tempfile.TemporaryDirectory() as tmp:
-        history = subprocess.run(['git', '-C', str(trusted), 'log', '--format=%H', '--',
-                                  'GRDBCustomSQLite/SQLiteRegularFiles.patch'], capture_output=True, text=True)
-        for index, revision in enumerate(history.stdout.splitlines()):
-            data = git(trusted, 'show', revision + ':GRDBCustomSQLite/SQLiteRegularFiles.patch')
-            path = Path(tmp) / str(index); path.write_bytes(data); patches.append(path)
+    def patch(self, name):
+        if name not in self.patches:
+            path = self.trusted / 'GRDBCustomSQLite' / name
+            self.patches[name] = path.read_bytes() if path.exists() else None
+        return self.patches[name]
+
+    def applied(self, name, original, chain):
+        if any(data is None for data in chain):
+            return None
+        key = (name, original, tuple(hashlib.sha256(data).digest() for data in chain))
+        if key not in self.applications:
+            with tempfile.TemporaryDirectory() as tmp:
+                target = Path(tmp) / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(original)
+                for index, data in enumerate(chain):
+                    patch = Path(tmp) / ('overlay-' + str(index) + '.patch')
+                    patch.write_bytes(data)
+                    result = subprocess.run(['git', 'apply', '--unidiff-zero', '--include=' + name, str(patch)],
+                                            cwd=tmp, capture_output=True)
+                    if result.returncode:
+                        self.applications[key] = None
+                        break
+                else:
+                    self.applications[key] = target.read_bytes()
+        return self.applications[key]
+
+    def expected(self, name, original):
+        if name == 'SQLiteLib.xcconfig':
+            chain = [self.patch('SQLiteLib-macOS15.patch')]
+        else:
+            regular = self.patch('SQLiteRegularFiles.patch')
+            combined = regular is not None and regular.startswith(b'# Trace combined file safety overlay v2')
+            chain = [regular] if combined else [regular, self.patch('SQLiteNoControllingTerminal.patch')]
+        expected = self.applied(name, original, chain)
+        if expected is None:
+            raise ValueError('Current SQLite overlay does not apply to pinned source: ' + name)
+        return expected
+
+    def historical_patches(self):
+        if self.history is None:
+            revisions = git(self.trusted, 'log', '--format=%H', '--',
+                            'GRDBCustomSQLite/SQLiteRegularFiles.patch').decode().splitlines()
+            self.history = list(dict.fromkeys(git(self.trusted, 'show', revision +
+                                ':GRDBCustomSQLite/SQLiteRegularFiles.patch') for revision in revisions))
+        return self.history
+
+    def recognizes(self, name, original, actual):
+        # Canonical and pristine files need no historical Git reads or overlays.
+        if actual in {original, self.expected(name, original)}:
+            return True
+        if name == 'SQLiteLib.xcconfig':
+            return False
+        regular = self.patch('SQLiteRegularFiles.patch')
+        terminal = self.patch('SQLiteNoControllingTerminal.patch')
+        patches = list(dict.fromkeys([regular, self.patch('SQLiteRegularFiles-v1.patch')]))
         for patch in patches:
             for chain in ([patch], [patch, terminal]):
-                value = applied(chain)
-                if value is not None: recognized.add(value)
-        value = applied([terminal])
-        if value is not None: recognized.add(value)
+                if self.applied(name, original, chain) == actual:
+                    return True
+        if self.applied(name, original, [terminal]) == actual:
+            return True
+        for patch in self.historical_patches():
+            if patch in patches:
+                continue
+            for chain in ([patch], [patch, terminal]):
+                if self.applied(name, original, chain) == actual:
+                    return True
+        return False
+
+
+def sqlite_patch_state(trusted, checkout, name, original=None):
+    """Return exact approved states for callers that need the complete state set."""
+    resolver = SQLitePatchResolver(trusted)
+    original = original if original is not None else resolver.original(checkout, name)
+    expected = resolver.expected(name, original)
+    recognized = {original, expected}
+    patches = list(dict.fromkeys([resolver.patch('SQLiteRegularFiles.patch'),
+                                 resolver.patch('SQLiteRegularFiles-v1.patch'),
+                                 *resolver.historical_patches()]))
+    terminal = resolver.patch('SQLiteNoControllingTerminal.patch')
+    for patch in patches:
+        for chain in ([patch], [patch, terminal]):
+            value = resolver.applied(name, original, chain)
+            if value is not None:
+                recognized.add(value)
+    value = resolver.applied(name, original, [terminal])
+    if value is not None:
+        recognized.add(value)
     return expected, recognized
 
 
@@ -71,22 +136,16 @@ def normalize_sqlite(root, trusted=None):
     root = Path(root).resolve(); trusted = Path(trusted or root).resolve()
     checkout = root / 'Vendor/GRDB.swift/SQLiteCustom/src'
     replacements = []
+    resolver = SQLitePatchResolver(trusted)
     for full, (name, _, _) in SQLITE_PATCHES.items():
         target = root / full
         if not target.exists(): continue
-        # The deployment target is independent of source safety.
-        if name == 'SQLiteLib.xcconfig':
-            original = git(checkout, 'show', 'HEAD:./' + name)
-            with tempfile.TemporaryDirectory() as tmp:
-                output = Path(tmp) / name; output.write_bytes(original)
-                subprocess.run(['git', 'apply', '--unidiff-zero', str(trusted / 'GRDBCustomSQLite/SQLiteLib-macOS15.patch')],
-                               cwd=tmp, check=True, capture_output=True)
-                expected = output.read_bytes(); recognized = {original, expected}
-        else:
-            expected, recognized = sqlite_patch_state(trusted, checkout, name)
-        if target.read_bytes() not in recognized:
+        original = resolver.original(checkout, name)
+        expected = resolver.expected(name, original)
+        actual = target.read_bytes()
+        if not resolver.recognizes(name, original, actual):
             raise ValueError('Unexpected SQLite patch; refusing to overwrite: ' + str(target))
-        if target.read_bytes() != expected: replacements.append((target, expected))
+        if actual != expected: replacements.append((target, expected))
     # Validate every file before publishing any replacement; interrupted publication
     # remains an exact recognized mix of old and new per-file states.
     for target, data in replacements:
@@ -131,6 +190,7 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
     overlays = harness_files(candidate)
     records = {}
     missing = []
+    sqlite = SQLitePatchResolver(candidate)
 
     def signing_configuration(path):
         for line in path.read_text().splitlines():
@@ -193,23 +253,12 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
                 signing_configuration(checkout / name)
                 continue
             if full in SQLITE_PATCHES:
-                patched_name, patch_name, patch_label = SQLITE_PATCHES[full]
-                if patched_name != 'SQLiteLib.xcconfig':
-                    expected_bytes, recognized = sqlite_patch_state(candidate, checkout, patched_name,
-                        original=git(checkout, 'show', 'HEAD:' + name))
-                    # Recognized preparation includes older synchronized overlay versions.
-                    accepted = recognized if preparation else {expected_bytes}
-                    if (checkout / name).read_bytes() not in accepted:
-                        raise ValueError(label + ': Unexpected SQLite ' + patch_label + ' patch')
-                else:
-                    original = git(checkout, 'show', 'HEAD:' + name)
-                    with tempfile.TemporaryDirectory() as tmp:
-                        patched = Path(tmp) / patched_name; patched.write_bytes(original)
-                        subprocess.run(['git', 'apply', '--unidiff-zero', str(candidate / patch_name)],
-                                       cwd=tmp, check=True, capture_output=True)
-                        accepted = {original, patched.read_bytes()} if preparation else {patched.read_bytes()}
-                        if (checkout / name).read_bytes() not in accepted:
-                            raise ValueError(label + ': Unexpected SQLite configuration patch')
+                patched_name, _, patch_label = SQLITE_PATCHES[full]
+                original = git(checkout, 'show', 'HEAD:' + name)
+                expected_bytes = sqlite.expected(patched_name, original)
+                actual = (checkout / name).read_bytes()
+                if actual != expected_bytes and not (preparation and sqlite.recognizes(patched_name, original, actual)):
+                    raise ValueError(label + ': Unexpected SQLite ' + patch_label + ' patch')
                 continue
             # Ignored generated dependency files are checked separately below.
             if name in changed or Path(name).suffix in {'.swift', '.yml', '.yaml', '.xcconfig', '.pbxproj', '.sh', '.py', '.h', '.c'}:
