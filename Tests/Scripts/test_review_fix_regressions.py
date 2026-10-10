@@ -616,6 +616,62 @@ class ReviewFixRegressionTests(unittest.TestCase):
                         unrelated.terminate();unrelated.wait(timeout=5)
                         os.close(master)
 
+    def test_failed_interruption_publication_restores_imported_mask_and_preserves_first_signal(self):
+        runner_source = fixtures.SCRIPTS / 'run-local-benchmark-comparisons.py'
+        for first in [signal.SIGINT, signal.SIGTERM]:
+            for failed_file in ['host-session-check.json', 'local-acceptance.json']:
+                for lifetime in [False, True]:
+                    with self.subTest(signal=first, file=failed_file, lifetime=lifetime), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        child = root / 'child.py'
+                        child.write_text("import importlib.util,json,os,pathlib,signal,sys\n"
+                            f"s=importlib.util.spec_from_file_location('runner',{str(runner_source)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
+                            f"r=pathlib.Path({str(root)!r});first={int(first)};lifetime={lifetime!r}\n"
+                            "before=signal.pthread_sigmask(signal.SIG_BLOCK,[])\n"
+                            "host=r/'host-session-check.json';report=r/'local-acceptance.json'\n"
+                            "host.write_text('{\"valid\":true}');report.write_text('{\"status\":\"passed\",\"valid\":true}')\n"
+                            "write=m.write_json;attempted=[]\n"
+                            "def fail(path,value):\n"
+                            " attempted.append(path.name)\n"
+                            f" if path.name=={failed_file!r}:raise OSError('evidence unavailable')\n"
+                            " write(path,value)\n"
+                            "m.write_json=fail\n"
+                            "try:\n"
+                            " with m.CancellationController(process_lifetime=lifetime) as c:\n"
+                            "  c.evidence=(host,{'valid':True});c.acceptance=report\n"
+                            "  os.kill(os.getpid(),first)\n"
+                            "  os.kill(os.getpid(),signal.SIGTERM if first==signal.SIGINT else signal.SIGINT)\n"
+                            "except m.RunInterrupted as e:\n"
+                            " after=signal.pthread_sigmask(signal.SIG_BLOCK,[])\n"
+                            " assert e.signum==first and isinstance(e.__cause__,OSError)\n"
+                            " assert set(attempted)=={host.name,report.name}\n"
+                            " assert all(signal.getsignal(sig)==c.record for sig in c.signals)\n"
+                            " assert (set(c.signals)<=after) if lifetime else (after==before)\n"
+                            " other=report if host.name==" + repr(failed_file) + " else host\n"
+                            " assert json.loads(other.read_text())['valid'] is False\n"
+                            " print(json.dumps({'signal':e.signum,'mask':sorted(int(s) for s in after)}))\n"
+                            " sys.exit(128+e.signum if lifetime else 0)\n"
+                            "raise AssertionError('interruption must be raised')\n")
+                        result = subprocess.run([sys.executable, str(child)], capture_output=True, text=True, timeout=8)
+                        self.assertEqual(result.returncode, 128 + first if lifetime else 0, result.stderr)
+                        self.assertEqual(json.loads(result.stdout)['signal'], first)
+
+    def test_finalization_failure_without_interrupt_restores_mask_and_propagates_error(self):
+        runner_source = fixtures.SCRIPTS / 'run-local-benchmark-comparisons.py'
+        code = ("import importlib.util,signal\n"
+                f"s=importlib.util.spec_from_file_location('runner',{str(runner_source)!r});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
+                "before=signal.pthread_sigmask(signal.SIG_BLOCK,[])\n"
+                "failure=OSError('pending drain unavailable')\n"
+                "def fail():raise failure\n"
+                "try:\n"
+                " with m.CancellationController() as c:c._drain_pending=fail\n"
+                "except OSError as e:\n"
+                " assert e is failure\n"
+                " assert signal.pthread_sigmask(signal.SIG_BLOCK,[])==before\n"
+                "else:raise AssertionError('finalization error must propagate')\n")
+        result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_initial_interrupt_during_cleanup_is_deferred_until_evidence_is_written(self):
         runner = self.fixture.module('run-local-benchmark-comparisons')
         test = reliability.BenchmarkReliabilityTests()

@@ -57,10 +57,14 @@ class CancellationController:
     def _invalidate_interrupted_evidence(self):
         if self.signum is None:
             return
+        failures = []
         if self.evidence is not None:
             path, host = self.evidence
             host.update(valid=False, interruptionSignal=self.signum)
-            write_json(path, host)
+            try:
+                write_json(path, host)
+            except BaseException as error:
+                failures.append(error)
         if self.acceptance is not None:
             try:
                 report = json.loads(self.acceptance.read_text())
@@ -69,29 +73,48 @@ class CancellationController:
             if not isinstance(report, dict):
                 report = {}
             report.update(status='interrupted', valid=False, interruptionSignal=self.signum)
-            write_json(self.acceptance, report)
+            try:
+                write_json(self.acceptance, report)
+            except BaseException as error:
+                failures.append(error)
+        if failures:
+            raise failures[0]
 
     def __exit__(self, kind, error, traceback):
         # The CLI owns these handlers until process exit. Handing a signal to a
         # restored default handler could terminate before invalidating evidence.
         mask = signal.pthread_sigmask(signal.SIG_BLOCK, self.signals)
-        self._drain_pending()
-        self._invalidate_interrupted_evidence()
-        # Include signals queued during final evidence publication in the final
-        # blocked drain. Signals remain blocked after this completion boundary.
-        first = self.signum
-        self._drain_pending()
-        if self.signum != first:
-            self._invalidate_interrupted_evidence()
-        if not self.process_lifetime:
-            # Imported test callers keep recording handlers through the unblock;
-            # their fixture restores its own handlers after inspecting evidence.
-            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
-            self._invalidate_interrupted_evidence()
+        failures = []
+        def invalidate():
+            try:
+                self._invalidate_interrupted_evidence()
+            except BaseException as error:
+                failures.append(error)
+        try:
+            self._drain_pending()
+            invalidate()
+            # Include signals queued during final evidence publication in the
+            # blocked drain, even if an evidence write failed.
+            first = self.signum
+            self._drain_pending()
+            if self.signum != first:
+                invalidate()
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            if not self.process_lifetime:
+                # Keep recording handlers through the unblock, including when
+                # publication fails. Imported callers own handler restoration.
+                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+                invalidate()
         if self.signum is not None:
+            if failures:
+                raise RunInterrupted(self.signum) from failures[0]
             preserves_first = isinstance(error, RunInterrupted) and error.signum == self.signum
             preserves_keyboard = isinstance(error, KeyboardInterrupt) and self.signum == signal.SIGINT
             if not preserves_first and not preserves_keyboard: raise RunInterrupted(self.signum)
+        if failures:
+            raise failures[0]
 
 
 def process_records():
