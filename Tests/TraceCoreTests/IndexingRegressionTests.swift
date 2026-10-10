@@ -418,12 +418,14 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(initial.messages?.count, initial.session?.messageCount)
         let unchanged = try await database.transcriptSnapshot(sessionID: id,
             knownSession: initial.session, knownMessageCount: initial.messages?.count)
+        XCTAssertGreaterThan(unchanged.readRevision, initial.readRevision)
         XCTAssertNil(unchanged.messages, "unchanged refresh must not refetch the transcript")
         let writer = try FileHandle(forWritingTo: file)
         try writer.seekToEnd(); try writer.write(contentsOf: Data(line(2).utf8)); try writer.close()
         await coordinator.refresh(paths: [file.path], scope: .proseOnly)
         let appended = try await database.transcriptSnapshot(sessionID: id,
             knownSession: initial.session, knownMessageCount: 1)
+        XCTAssertGreaterThan(appended.readRevision, unchanged.readRevision)
         XCTAssertEqual(appended.messages?.count, 2)
         XCTAssertEqual(appended.session?.sourceGeneration, initial.session?.sourceGeneration)
         // Keep a larger row ID alive so replacement cannot accidentally reuse id.
@@ -448,6 +450,10 @@ final class IndexingRegressionTests: XCTestCase {
             knownSession: replaced.session, knownMessageCount: 2)
         XCTAssertEqual(moved.session?.sourcePath, renamed.path)
         XCTAssertTrue(try XCTUnwrap(moved.messages).allSatisfy { $0.sourcePath == renamed.path })
+        let missing = try await database.transcriptSnapshot(sessionID: Int64.max)
+        XCTAssertGreaterThan(missing.readRevision, moved.readRevision)
+        XCTAssertNil(missing.session)
+        XCTAssertEqual(missing.messages?.count, 0)
     }
 
     func testSameIDAndSameCountReplacementReloadsGenerationAndLocators() async throws {

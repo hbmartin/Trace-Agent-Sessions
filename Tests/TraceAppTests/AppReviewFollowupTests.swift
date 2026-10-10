@@ -113,27 +113,54 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RewrittenNavigationNeedle"))
     }
 
+    func testOlderSelectionPublishingFirstCannotDiscardNewerSummary() async throws {
+        try await overlappingTranscriptReads(staleSelection: true, staleFirst: true)
+    }
+
+    func testNewerSummaryPublishingFirstRejectsOlderSelection() async throws {
+        try await overlappingTranscriptReads(staleSelection: true, staleFirst: false)
+    }
+
+    func testOlderSummaryPublishingFirstCannotDiscardNewerSelection() async throws {
+        try await overlappingTranscriptReads(staleSelection: false, staleFirst: true)
+    }
+
     func testRowBearingSummaryCannotOverwriteNewerSelectionAfterSourceReplacement() async throws {
+        try await overlappingTranscriptReads(staleSelection: false, staleFirst: false)
+    }
+
+    private func overlappingTranscriptReads(staleSelection: Bool, staleFirst: Bool) async throws {
         let f = try await fixture(count: 2)
         let session = try XCTUnwrap(f.model.sessions.first)
+        let selectionReadGate = ReviewReadGate()
+        let selectionReadTask = Task { await selectionReadGate.wait() }
         let selectionGate = ReviewReadGate()
         let selectionTask = Task { await selectionGate.wait() }
         let summaryGate = ReviewReadGate()
         let summaryTask = Task { await summaryGate.wait() }
         defer {
-            selectionTask.cancel(); summaryTask.cancel()
-            Task { await selectionGate.open(); await summaryGate.open() }
+            selectionReadTask.cancel(); selectionTask.cancel(); summaryTask.cancel()
+            Task { await selectionReadGate.open(); await selectionGate.open(); await summaryGate.open() }
         }
-        f.model.selectionTranscriptReadGateForTesting = selectionTask
+        if !staleSelection { f.model.selectionTranscriptReadGateForTesting = selectionReadTask }
+        f.model.selectionTranscriptGateForTesting = selectionTask
         f.model.summaryTranscriptGateForTesting = summaryTask
         f.model.selectSession(session.id)
-        try await wait { f.model.selectionTranscriptReadWaitingForTesting }
+        if staleSelection {
+            try await wait { f.model.selectionTranscriptWaitingForTesting }
+        } else {
+            try await wait { f.model.selectionTranscriptReadWaitingForTesting }
+        }
         XCTAssertTrue(f.model.messages.isEmpty)
         let old = try await f.database.transcriptSnapshot(sessionID: session.id,
             knownSession: f.model.selectedSession, knownMessageCount: f.model.messages.count)
-        XCTAssertFalse(try XCTUnwrap(old.messages).isEmpty, "the delayed summary must contain old rows")
-        let refresh = Task { await f.model.refreshSummariesForTesting() }
-        try await wait { f.model.summaryTranscriptWaitingForTesting }
+        let oldRows = try XCTUnwrap(old.messages)
+        XCTAssertFalse(oldRows.isEmpty, "the older snapshot must contain rows")
+        var summaryRefresh: Task<Void, Never>?
+        if !staleSelection {
+            summaryRefresh = Task { await f.model.refreshSummariesForTesting() }
+            try await wait { f.model.summaryTranscriptWaitingForTesting }
+        }
 
         let file = f.root.appendingPathComponent("sessions.jsonl")
         let rewritten = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(
@@ -143,22 +170,85 @@ final class AppReviewFollowupTests: XCTestCase {
         let current = try await f.database.transcriptSnapshot(sessionID: session.id)
         let currentSession = try XCTUnwrap(current.session)
         let currentRows = try XCTUnwrap(current.messages)
+        XCTAssertEqual(currentSession.id, old.session?.id, "exercise replacement with a reused session ID")
+        XCTAssertEqual(currentRows.count, oldRows.count, "row count cannot detect this replacement")
         XCTAssertNotEqual(currentSession.sourceGeneration, old.session?.sourceGeneration)
-        XCTAssertNotEqual(currentRows.map(\.locator), old.messages?.map(\.locator))
-        await selectionGate.open()
-        try await wait { !f.model.selectionTranscriptReadWaitingForTesting && !f.model.messages.isEmpty }
-        XCTAssertEqual(f.model.selectedSession?.sourceGeneration, currentSession.sourceGeneration)
-        XCTAssertEqual(f.model.messages.map(\.locator), currentRows.map(\.locator))
+        XCTAssertNotEqual(currentRows.map(\.locator), oldRows.map(\.locator))
+        if staleSelection {
+            summaryRefresh = Task { await f.model.refreshSummariesForTesting() }
+            try await wait { f.model.summaryTranscriptWaitingForTesting }
+        } else {
+            await selectionReadGate.open()
+            try await wait { f.model.selectionTranscriptWaitingForTesting }
+        }
+        let refresh = try XCTUnwrap(summaryRefresh)
 
-        await summaryGate.open()
-        await refresh.value
+        let selectionPublishesFirst = staleSelection == staleFirst
+        if selectionPublishesFirst {
+            await selectionGate.open()
+            try await wait { !f.model.selectionTranscriptWaitingForTesting }
+        } else {
+            await summaryGate.open()
+            await refresh.value
+        }
+        XCTAssertEqual(f.model.selectedSession?.sourceGeneration,
+                       staleFirst ? old.session?.sourceGeneration : currentSession.sourceGeneration)
+        XCTAssertEqual(f.model.messages.map(\.locator), (staleFirst ? oldRows : currentRows).map(\.locator))
+
+        if selectionPublishesFirst {
+            await summaryGate.open()
+            await refresh.value
+        } else {
+            await selectionGate.open()
+            try await wait { !f.model.selectionTranscriptWaitingForTesting }
+        }
         XCTAssertEqual(f.model.selectedSession?.sourceGeneration, currentSession.sourceGeneration)
         XCTAssertEqual(f.model.messages.map(\.locator), currentRows.map(\.locator),
-                       "a stale row-bearing summary must not replace the newer selection")
+                       "the newest database snapshot must win in both completion orders")
         let message = try XCTUnwrap(f.model.messages.first)
         f.model.hydrate(message)
         try await wait { f.model.hydratedMessages[message.id] != nil }
         XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RewrittenNavigationNeedle"))
+    }
+
+    func testMissingSummaryCannotClearNewerSelectionAfterSourceRecreation() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        let selectionGate = ReviewReadGate(), selectionTask = Task { await selectionGate.wait() }
+        let summaryGate = ReviewReadGate(), summaryTask = Task { await summaryGate.wait() }
+        defer {
+            selectionTask.cancel(); summaryTask.cancel()
+            Task { await selectionGate.open(); await summaryGate.open() }
+        }
+        f.model.selectionTranscriptReadGateForTesting = selectionTask
+        f.model.summaryTranscriptGateForTesting = summaryTask
+        f.model.selectSession(session.id)
+        try await wait { f.model.selectionTranscriptReadWaitingForTesting }
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let original = try String(contentsOf: file, encoding: .utf8)
+        try FileManager.default.removeItem(at: file)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let missing = try await f.database.transcriptSnapshot(sessionID: session.id)
+        XCTAssertNil(missing.session)
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { f.model.summaryTranscriptWaitingForTesting }
+        try Data(original.replacingOccurrences(of: "NavigationNeedle", with: "RecreatedNavigationNeedle").utf8)
+            .write(to: file, options: .atomic)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let current = try await f.database.transcriptSnapshot(sessionID: session.id)
+        XCTAssertEqual(current.session?.id, session.id, "exercise a recreated session with the same ID")
+        let rows = try XCTUnwrap(current.messages)
+        await selectionGate.open()
+        try await wait { !f.model.selectionTranscriptReadWaitingForTesting && !f.model.messages.isEmpty }
+        await summaryGate.open()
+        await refresh.value
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
+        XCTAssertEqual(f.model.selectedSession?.sourceGeneration, current.session?.sourceGeneration)
+        XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.hydrate(message)
+        try await wait { f.model.hydratedMessages[message.id] != nil }
+        XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RecreatedNavigationNeedle"))
     }
 
     func testSidebarPaginationIsAvailableDuringTheSlowSummaryTail() async throws {

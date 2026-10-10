@@ -70,6 +70,7 @@ private struct StoredRecoveryRow: Sendable {
 }
 
 public actor IndexDatabase {
+    private var transcriptReadRevision: UInt64 = 0
     private var codexNameWriteTransactionCount = 0
     private var failNextCodexTitleLookupForTesting = false
 
@@ -2156,14 +2157,18 @@ public actor IndexDatabase {
     public func transcriptSnapshot(
         sessionID: Int64, knownSession: SessionSummary? = nil, knownMessageCount: Int? = nil
     ) throws -> SessionTranscriptSnapshot {
-        try pool.read { db in
+        // This actor does not suspend between assigning the revision and reading
+        // the transaction, so revisions order snapshots rather than UI requests.
+        transcriptReadRevision += 1
+        let readRevision = transcriptReadRevision
+        return try pool.read { db in
             let session = try transcriptSession(id: sessionID, in: db)
-            guard let session else { return .init(session: nil, messages: []) }
+            guard let session else { return .init(readRevision: readRevision, session: nil, messages: []) }
             let unchanged = knownSession?.id == sessionID
                 && knownSession?.sourceGeneration == session.sourceGeneration
                 && knownSession?.sourcePath == session.sourcePath
                 && knownMessageCount == session.messageCount
-            return .init(session: session, messages: unchanged ? nil
+            return .init(readRevision: readRevision, session: session, messages: unchanged ? nil
                 : try transcriptMessages(sessionID: sessionID, in: db))
         }
     }

@@ -863,6 +863,8 @@ public struct SessionSummary: Identifiable, Sendable {
 /// Metadata and rows read from one database snapshot. Nil rows mean that the
 /// caller's known generation, source path, and row count are still current.
 public struct SessionTranscriptSnapshot: Sendable {
+    /// Increasing read order within the IndexDatabase instance that produced this snapshot.
+    public let readRevision: UInt64
     public let session: SessionSummary?
     public let messages: [MessageSummary]?
 }
