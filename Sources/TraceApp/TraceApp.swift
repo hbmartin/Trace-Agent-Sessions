@@ -30,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if TraceTestHooks.isUITesting,
+           let appearance = TraceTestHooks.environment["TRACE_TEST_SNAPSHOT_APPEARANCE"],
+           ["light", "dark"].contains(appearance) {
+            NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+        }
         NSApp.setActivationPolicy(TraceTestHooks.isUITesting ? .regular : .accessory)
         environment.model.start()
 

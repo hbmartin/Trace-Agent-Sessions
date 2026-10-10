@@ -101,12 +101,16 @@ public actor IndexDatabase {
     }
 
     public init(url: URL) throws {
+        try self.init(url: url, configuration: Configuration())
+    }
+
+    init(url: URL, configuration: Configuration) throws {
         self.url = url
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        var configuration = Configuration()
+        var configuration = configuration
         configuration.busyMode = .timeout(5)
         let supportedAgents = AgentKind.allCases.map {
             "SELECT '\($0.rawValue.replacingOccurrences(of: "'", with: "''"))' AS agent"
@@ -123,6 +127,7 @@ public actor IndexDatabase {
         try Self.migrate(pool)
         try pool.write { db in
             try db.execute(sql: "INSERT OR IGNORE INTO trace_meta(key, value) VALUES ('usage_rollups_dirty', '1')")
+            try db.execute(sql: "DELETE FROM trace_meta WHERE key='message_id_overflow'")
         }
         contentWasResetOnOpen = try Self.rebuildContentIfNeeded(pool)
     }
@@ -1213,7 +1218,6 @@ public actor IndexDatabase {
         let overflow = try Int64.fetchOne(db, sql: "SELECT max(id) FROM message WHERE id < 0")
         let next = overflow.map { $0 + 1 } ?? Int64.min
         guard next < 0 else { throw IndexDatabaseError.timestampCollisionLimit }
-        try db.execute(sql: "INSERT INTO trace_meta(key,value) VALUES ('message_id_overflow','1') ON CONFLICT(key) DO UPDATE SET value='1'")
         return next
     }
 
@@ -1585,30 +1589,13 @@ public actor IndexDatabase {
             let sql: String
             var arguments: StatementArguments = [pattern]
             if sort == .recency {
-                let usesOverflowIDs = try String.fetchOne(
-                    db, sql: "SELECT value FROM trace_meta WHERE key='message_id_overflow'"
-                ) == "1"
-                var cursorSQL = ""
-                if let cursor {
-                    if usesOverflowIDs {
-                        let timestamp = try cursor.timestampMilliseconds
-                            ?? Int64.fetchOne(db, sql: "SELECT ts FROM message WHERE id=?", arguments: [cursor.rowID])
-                        guard let timestamp else { throw SessionSourceError.missingRecord(String(cursor.rowID)) }
-                        // Overflow entries follow the original bucket in allocation
-                        // order, and must precede it in descending recency order.
-                        let identifiers = cursor.rowID < 0
-                            ? "(m.id >= 0 OR m.id < ?)"
-                            : "(m.id >= 0 AND m.id < ?)"
-                        cursorSQL = " AND (m.ts < ? OR (m.ts = ? AND \(identifiers)))"
-                        arguments += [timestamp, timestamp, cursor.rowID]
-                    } else {
-                        cursorSQL = " AND message_fts.rowid < ?"
-                        arguments += [cursor.rowID]
-                    }
-                }
-                arguments += filterArguments
-                arguments += [limit + 1]
-                sql = """
+                let maximumTimestamp = Int64.max >> 20
+                let hasOverflow = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM message WHERE id<0)") == true
+                let hasClampedDates = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM message WHERE ts<0 OR ts>?)",
+                                                       arguments: [maximumTimestamp]) == true
+                let cursorHasClampedDate = cursor?.timestampMilliseconds.map { $0 < 0 || $0 > maximumTimestamp } ?? false
+                let needsTimestampCursor = hasOverflow || hasClampedDates || cursorHasClampedDate || (cursor?.rowID ?? 0) < 0
+                let selection = """
                     SELECT m.id, m.session_id, s.project_id,
                            p.canonical_key AS project_canonical_key,
                            p.display_name AS project_name,
@@ -1620,10 +1607,77 @@ public actor IndexDatabase {
                     JOIN session s ON s.id = m.session_id
                     JOIN project p ON p.id = s.project_id
                     JOIN source_file sf ON sf.id = m.source_file_id
-                    WHERE message_fts MATCH ?\(cursorSQL)\(filterSQL)
-                    ORDER BY \(usesOverflowIDs ? "m.ts DESC, (m.id < 0) DESC, m.id DESC" : "message_fts.rowid DESC")
-                    LIMIT ?
+                    WHERE message_fts MATCH ?
                     """
+                var timestampCursor = ""
+                var timestampArguments = StatementArguments()
+                var normalCursor = ""
+                var normalArguments = StatementArguments()
+                if let cursor {
+                    if needsTimestampCursor {
+                        let timestamp = try cursor.timestampMilliseconds
+                            ?? Int64.fetchOne(db, sql: "SELECT ts FROM message WHERE id=?", arguments: [cursor.rowID])
+                        guard let timestamp else { throw SessionSourceError.missingRecord(String(cursor.rowID)) }
+                        let identifiers = cursor.rowID < 0 ? "(m.id >= 0 OR m.id < ?)" : "(m.id >= 0 AND m.id < ?)"
+                        timestampCursor = " AND (m.ts < ? OR (m.ts = ? AND \(identifiers)))"
+                        timestampArguments += [timestamp, timestamp, cursor.rowID]
+                        if cursor.rowID >= 0, !hasClampedDates, !cursorHasClampedDate {
+                            normalCursor = " AND message_fts.rowid < ?"
+                            normalArguments += [cursor.rowID]
+                        } else {
+                            // Timestamp-encoded normal IDs admit a bounded FTS scan.
+                            let upper = timestamp < 0 ? -1 : timestamp >= maximumTimestamp
+                                ? Int64.max : (timestamp << 20) | ((1 << 20) - 1)
+                            normalCursor = " AND message_fts.rowid <= ?" + timestampCursor
+                            normalArguments += [upper]
+                            normalArguments += timestampArguments
+                        }
+                    } else {
+                        normalCursor = " AND message_fts.rowid < ?"
+                        normalArguments += [cursor.rowID]
+                    }
+                }
+                let lowestNormalID: Int64 = hasClampedDates ? 1 << 20 : 0
+                let highestNormalID: Int64 = maximumTimestamp << 20
+                var normalRange = " AND message_fts.rowid >= ?"
+                var normalRangeArguments: StatementArguments = [lowestNormalID]
+                if hasClampedDates {
+                    normalRange += " AND message_fts.rowid < ?"
+                    normalRangeArguments += [highestNormalID]
+                }
+                var normal: StatementArguments = [pattern]
+                normal += normalRangeArguments; normal += normalArguments
+                normal += filterArguments; normal += [limit + 1]
+                var candidates = try Row.fetchAll(db, sql: selection + normalRange + normalCursor + filterSQL
+                    + " ORDER BY message_fts.rowid DESC LIMIT ?", arguments: normal)
+                var exceptionalRanges: [(String, StatementArguments)] = []
+                if hasOverflow { exceptionalRanges.append((" AND message_fts.rowid < 0", .init())) }
+                if hasClampedDates {
+                    exceptionalRanges.append((" AND message_fts.rowid >= 0 AND message_fts.rowid < ?", [lowestNormalID]))
+                    exceptionalRanges.append((" AND message_fts.rowid >= ?", [highestNormalID]))
+                }
+                for (range, rangeArguments) in exceptionalRanges {
+                    var values: StatementArguments = [pattern]
+                    values += rangeArguments; values += timestampArguments
+                    values += filterArguments; values += [limit + 1]
+                    candidates += try Row.fetchAll(db, sql: selection + range + timestampCursor + filterSQL
+                        + " ORDER BY m.ts DESC, (m.id < 0) DESC, m.id DESC LIMIT ?", arguments: values)
+                }
+                if !exceptionalRanges.isEmpty {
+                    candidates.sort { left, right in
+                        let lt: Int64 = left["ts"], rt: Int64 = right["ts"]
+                        if lt != rt { return lt > rt }
+                        let li: Int64 = left["id"], ri: Int64 = right["id"]
+                        if (li < 0) != (ri < 0) { return li < 0 }
+                        return li > ri
+                    }
+                }
+                let hasMore = candidates.count > limit
+                let results = candidates.prefix(limit).compactMap(searchResult(from:))
+                let next = hasMore ? results.last.map {
+                    SearchCursor(rowID: $0.id, rank: nil, timestampMilliseconds: $0.timestampMilliseconds)
+                } : nil
+                return SearchPage(results: results, nextCursor: next)
             } else {
                 var cursorSQL = ""
                 if let cursor, let rank = cursor.rank {

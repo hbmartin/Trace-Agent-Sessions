@@ -376,7 +376,7 @@ final class GeminiSnapshotStream: @unchecked Sendable {
 
     private func openIfNeeded() throws {
         guard handle == nil else { return }
-        let opened = try FileHandle(forReadingFrom: file.url)
+        let opened = try TraceFileIO.openRegularSessionFile(file.url)
         fileSize = Int64(try opened.seekToEnd())
         try opened.seek(toOffset: 0)
         handle = opened

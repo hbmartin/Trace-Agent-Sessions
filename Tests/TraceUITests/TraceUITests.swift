@@ -5324,10 +5324,10 @@ extension TraceUITests {
         }
         try data.write(to: directory.appendingPathComponent("Sources/Claude/race.jsonl"))
         let started = directory.appendingPathComponent("page-started")
-        let finished = directory.appendingPathComponent("page-finished")
+        let finished = directory.appendingPathComponent("page-cancelled")
         app.launchEnvironment["TRACE_TEST_SESSION_PAGE_DELAY_MS"] = "5000"
         app.launchEnvironment["TRACE_TEST_SESSION_PAGE_STARTED_PATH"] = started.path
-        app.launchEnvironment["TRACE_TEST_SESSION_PAGE_FINISHED_PATH"] = finished.path
+        app.launchEnvironment["TRACE_TEST_SESSION_PAGE_CANCELLED_PATH"] = finished.path
         app.launch()
         XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
         let project = app.staticTexts["RaceProject"].firstMatch
@@ -5565,79 +5565,17 @@ extension TraceUITests {
     }
 
     func testCaptureReadmeShowcaseWithoutTestControls() throws {
-        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        app.launchEnvironment["TRACE_TEST_SHOWCASE"] = "1"
-        try FileManager.default.removeItem(at: directory.appendingPathComponent("Sources/Claude/session.jsonl"))
-        func writeSession(_ title: String, project: String, agent: String, number: Int) throws {
-            let lines = [title,
-                "Keep the app focused on the work in front of you.\n\nUse clear labels and make every state easy to understand.",
-                "Add a compact dashboard with activation, retention, and weekly active teams.",
-                "Add a seven-day funnel with accessible colors and direct labels.\n\nLoad each section independently so the dashboard stays responsive.\n\nShow clear empty, loading, error, and complete states.",
-                "Make keyboard navigation and reduced motion part of the definition of done.",
-                "Include focus order, VoiceOver labels, contrast checks, and a no-animation path in the acceptance criteria.",
-                "Use a disposable cache so source transcripts stay untouched.",
-                "Cache only the local search index. Rebuild it safely when the source format changes."]
-            let root = directory.appendingPathComponent("Sources/\(agent)")
-            let parent = agent == "Gemini" ? root.appendingPathComponent("\(project)/chats") : root
-            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-            var records: [[String: Any]] = []
-            if agent == "Codex" { records.append(["type": "session_meta", "payload": ["id": title, "cwd": "/tmp/\(project)"]]) }
-            for (index, text) in lines.enumerated() {
-                let timestamp = 1_789_746_000_000 + number * 60_000 + index * 60_000
-                if agent == "Codex" {
-                    records.append(["type": "response_item", "timestamp": timestamp,
-                        "payload": ["type": "message", "id": "showcase-\(number)-\(index)", "role": index % 2 == 0 ? "user" : "assistant", "content": text]])
-                } else if agent == "Gemini" {
-                    records.append(["id": "showcase-\(number)-\(index)", "type": index % 2 == 0 ? "user" : "gemini", "timestamp": timestamp, "content": text])
-                } else {
-                    records.append(["type": index % 2 == 0 ? "user" : "assistant", "uuid": "showcase-\(number)-\(index)", "sessionId": title,
-                        "cwd": "/tmp/\(project)", "timestamp": timestamp, "message": ["content": text]])
-                }
-            }
-            let file = parent.appendingPathComponent(agent == "Codex" ? "rollout-\(number).jsonl" : "session-\(number).\(agent == "Gemini" ? "json" : "jsonl")")
-            if agent == "Gemini" {
-                try JSONSerialization.data(withJSONObject: ["sessionId": title, "messages": records]).write(to: file)
-                try Data("/tmp/\(project)".utf8).write(to: parent.deletingLastPathComponent().appendingPathComponent(".project_root"))
-            } else {
-                var data = Data()
-                for record in records { data.append(try JSONSerialization.data(withJSONObject: record)); data.append(10) }
-                try data.write(to: file)
-            }
-        }
-        try writeSession("Plan the analytics dashboard", project: "AtlasApp", agent: "Claude", number: 0)
-        try writeSession("Investigate search latency", project: "AtlasApp", agent: "Codex", number: 1)
-        try writeSession("Migrate authentication flow", project: "NimbusAPI", agent: "Gemini", number: 2)
-        try writeSession("Ship the macOS release", project: "OrbitMobile", agent: "Claude", number: 3)
-        try writeSession("Polish first-run onboarding", project: "OrbitMobile", agent: "Claude", number: 4)
-        let output = URL(fileURLWithPath: "/tmp/trace-readme-showcase")
+        let app = try TraceShowcaseFixture.makeApp(test: self)
+        // Xcode's UI runner can only write inside its own temporary directory.
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("trace-readme-showcase")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        func capture(_ name: String) throws {
+        try TraceShowcaseFixture.captureScreens(app: app) { name in
             let screenshot = app.windows.firstMatch.screenshot()
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: screenshot.pngRepresentation))
             let jpeg = try XCTUnwrap(bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92]))
             try jpeg.write(to: output.appendingPathComponent("\(name).jpg"))
             attach(app, name: "showcase-\(name)")
         }
-        app.launch()
-        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10)); app.buttons["Build Index"].click()
-        XCTAssertTrue(app.staticTexts["AtlasApp"].firstMatch.waitForExistence(timeout: 20))
-        XCTAssertTrue(app.staticTexts["NimbusAPI"].firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["1 session"].firstMatch.exists)
-        try capture("project-browser")
-        let query = app.textFields["mainSearch"]
-        query.click(); query.typeText("cache")
-        XCTAssertTrue(app.scrollViews["searchResultsScroll"].waitForExistence(timeout: 10))
-        try capture("search-results")
-        query.click(); query.typeKey("a", modifierFlags: .command); query.typeKey(.delete, modifierFlags: [])
-        app.staticTexts["AtlasApp"].firstMatch.click()
-        let session = app.staticTexts["Plan the analytics dashboard"].firstMatch
-        XCTAssertTrue(session.waitForExistence(timeout: 10)); session.click()
-        let scroll = app.scrollViews["transcriptScroll"]
-        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
-        XCTAssertFalse(app.buttons["testOpenLauncher"].exists)
-        XCTAssertTrue(scroll.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "Keep the app focused")).firstMatch.waitForExistence(timeout: 10))
-        try capture("transcript-view")
-        app.radioButtons["Compact"].click()
-        try capture("compact-transcript")
+        print("TRACE_README_SHOWCASE_DIRECTORY=\(output.path)")
     }
 }

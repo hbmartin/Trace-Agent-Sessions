@@ -19,7 +19,7 @@ mkdir -p "$comparison_dir"
 mkdir -p "$comparison_dir/runs"
 comparison_dir="$(mktemp -d "$comparison_dir/runs/run-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
 printf 'TRACE_BENCHMARK_RUN_DIRECTORY=%s\n' "$comparison_dir"
-python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_dir" "$candidate_commit" --role candidate >/dev/null
+python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_dir" "$candidate_commit" --role candidate --preparation >/dev/null
 "$repo_dir/Scripts/configure-grdb.sh"
 python3 "$repo_dir/Scripts/validate-benchmark-baseline.py" "$repo_dir" "$repo_dir" "$candidate_commit" --role candidate \
   > "$comparison_dir/candidate-initial-build-inputs.json"

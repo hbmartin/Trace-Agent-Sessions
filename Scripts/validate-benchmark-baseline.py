@@ -25,6 +25,81 @@ def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args])
 
 
+def sqlite_patch_state(trusted, checkout, name, original=None):
+    """Reconstruct exact approved states from pinned source, never reverse live hunks."""
+    original = original if original is not None else git(checkout, 'show', 'HEAD:./' + name)
+    regular = trusted / 'GRDBCustomSQLite/SQLiteRegularFiles.patch'
+    terminal = trusted / 'GRDBCustomSQLite/SQLiteNoControllingTerminal.patch'
+    combined = regular.read_bytes().startswith(b'# Trace combined file safety overlay v2')
+    final_chain = [regular] if combined else [regular, terminal]
+
+    def applied(chain):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(original)
+            for patch in chain:
+                if not patch.exists(): return None
+                result = subprocess.run(['git', 'apply', '--unidiff-zero', '--include=' + name, str(patch)],
+                                        cwd=tmp, capture_output=True)
+                if result.returncode: return None
+            return target.read_bytes()
+
+    expected = applied(final_chain)
+    if expected is None:
+        raise ValueError('Current SQLite overlay does not apply to pinned source: ' + name)
+    recognized = {original, expected}
+    # Historical patch bytes are trusted only when present in candidate history.
+    # The archived v1 also supports shallow clones and independently staged upgrades.
+    patches = [regular, trusted / 'GRDBCustomSQLite/SQLiteRegularFiles-v1.patch']
+    with tempfile.TemporaryDirectory() as tmp:
+        history = subprocess.run(['git', '-C', str(trusted), 'log', '--format=%H', '--',
+                                  'GRDBCustomSQLite/SQLiteRegularFiles.patch'], capture_output=True, text=True)
+        for index, revision in enumerate(history.stdout.splitlines()):
+            data = git(trusted, 'show', revision + ':GRDBCustomSQLite/SQLiteRegularFiles.patch')
+            path = Path(tmp) / str(index); path.write_bytes(data); patches.append(path)
+        for patch in patches:
+            for chain in ([patch], [patch, terminal]):
+                value = applied(chain)
+                if value is not None: recognized.add(value)
+        value = applied([terminal])
+        if value is not None: recognized.add(value)
+    return expected, recognized
+
+
+def normalize_sqlite(root, trusted=None):
+    root = Path(root).resolve(); trusted = Path(trusted or root).resolve()
+    checkout = root / 'Vendor/GRDB.swift/SQLiteCustom/src'
+    replacements = []
+    for full, (name, _, _) in SQLITE_PATCHES.items():
+        target = root / full
+        if not target.exists(): continue
+        # The deployment target is independent of source safety.
+        if name == 'SQLiteLib.xcconfig':
+            original = git(checkout, 'show', 'HEAD:./' + name)
+            with tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / name; output.write_bytes(original)
+                subprocess.run(['git', 'apply', '--unidiff-zero', str(trusted / 'GRDBCustomSQLite/SQLiteLib-macOS15.patch')],
+                               cwd=tmp, check=True, capture_output=True)
+                expected = output.read_bytes(); recognized = {original, expected}
+        else:
+            expected, recognized = sqlite_patch_state(trusted, checkout, name)
+        if target.read_bytes() not in recognized:
+            raise ValueError('Unexpected SQLite patch; refusing to overwrite: ' + str(target))
+        if target.read_bytes() != expected: replacements.append((target, expected))
+    # Validate every file before publishing any replacement; interrupted publication
+    # remains an exact recognized mix of old and new per-file states.
+    for target, data in replacements:
+        import os
+        fd, tmp = tempfile.mkstemp(prefix=target.name + '.', dir=target.parent)
+        try:
+            with os.fdopen(fd, 'wb') as output: output.write(data)
+            os.chmod(tmp, target.stat().st_mode & 0o777)
+            os.replace(tmp, target)
+        finally:
+            if os.path.exists(tmp): os.unlink(tmp)
+
+
 def owns_checkout(checkout):
     if not checkout.exists():
         return False
@@ -41,7 +116,7 @@ def harness_files(root):
     return set(module.FILES)
 
 
-def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=False):
+def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=False, preparation=False):
     candidate, baseline = candidate.resolve(), baseline.resolve()
     role = role or ('candidate' if candidate.samefile(baseline) else 'baseline')
     label = 'Candidate checkout' if role == 'candidate' else 'Cached baseline'
@@ -105,7 +180,10 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
         # partial repositories instead of having the parent diff fail first.
         changed = set(filter(None, git(checkout, 'diff', '--ignore-submodules=all', '--name-only', 'HEAD', '-z').decode().split('\0')))
         extra = set(filter(None, git(checkout, 'ls-files', '--others', '--exclude-standard', '-z').decode().split('\0')))
-        for name in changed | extra:
+        recognized_sqlite = {full[len(prefix):] for full in SQLITE_PATCHES
+                             if full.startswith(prefix) and (checkout / full[len(prefix):]).is_file()
+                             and not any(full[len(prefix):].startswith(module + '/') for module in modules)}
+        for name in changed | extra | recognized_sqlite:
             full = prefix + name
             if name in modules:
                 continue
@@ -116,23 +194,22 @@ def validate(candidate, baseline, revision, *, role=None, allow_uninitialized=Fa
                 continue
             if full in SQLITE_PATCHES:
                 patched_name, patch_name, patch_label = SQLITE_PATCHES[full]
-                original = git(checkout, 'show', 'HEAD:' + name)
-                with tempfile.TemporaryDirectory() as tmp:
-                    directory = Path(tmp)
-                    patched = directory / patched_name
-                    patched.parent.mkdir(parents=True, exist_ok=True)
-                    patched.write_bytes(original)
-                    patch_names = patch_name if isinstance(patch_name, tuple) else (patch_name,)
-                    for recognized_patch in patch_names:
-                        patch_path = baseline / recognized_patch
-                        # Older prepared caches have the previous recognized VFS
-                        # overlay; preparation adds the independent terminal patch.
-                        if not patch_path.exists() and recognized_patch.endswith('SQLiteNoControllingTerminal.patch') and role == 'baseline':
-                            continue
-                        subprocess.run(['git', 'apply', '--unidiff-zero', '--include=' + patched_name, str(patch_path)],
-                                       cwd=directory, check=True, capture_output=True)
-                    if (checkout / name).read_bytes() != patched.read_bytes():
+                if patched_name != 'SQLiteLib.xcconfig':
+                    expected_bytes, recognized = sqlite_patch_state(candidate, checkout, patched_name,
+                        original=git(checkout, 'show', 'HEAD:' + name))
+                    # Recognized preparation includes older synchronized overlay versions.
+                    accepted = recognized if preparation else {expected_bytes}
+                    if (checkout / name).read_bytes() not in accepted:
                         raise ValueError(label + ': Unexpected SQLite ' + patch_label + ' patch')
+                else:
+                    original = git(checkout, 'show', 'HEAD:' + name)
+                    with tempfile.TemporaryDirectory() as tmp:
+                        patched = Path(tmp) / patched_name; patched.write_bytes(original)
+                        subprocess.run(['git', 'apply', '--unidiff-zero', str(candidate / patch_name)],
+                                       cwd=tmp, check=True, capture_output=True)
+                        accepted = {original, patched.read_bytes()} if preparation else {patched.read_bytes()}
+                        if (checkout / name).read_bytes() not in accepted:
+                            raise ValueError(label + ': Unexpected SQLite configuration patch')
                 continue
             # Ignored generated dependency files are checked separately below.
             if name in changed or Path(name).suffix in {'.swift', '.yml', '.yaml', '.xcconfig', '.pbxproj', '.sh', '.py', '.h', '.c'}:
@@ -193,7 +270,7 @@ def initialize_missing(candidate, baseline, revision):
     candidate, baseline = candidate.resolve(), baseline.resolve()
     previous_missing = None
     while True:
-        records = validate(candidate, baseline, revision, role='baseline', allow_uninitialized=True)
+        records = validate(candidate, baseline, revision, role='baseline', allow_uninitialized=True, preparation=True)
         missing = records.get('uninitialized_submodules', [])
         if not missing:
             return
@@ -231,16 +308,21 @@ def initialize_missing(candidate, baseline, revision):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == '--configure-sqlite':
+        try: normalize_sqlite(Path(sys.argv[2]))
+        except (ValueError, subprocess.CalledProcessError) as error: raise SystemExit(str(error))
+        raise SystemExit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('candidate', type=Path)
     parser.add_argument('checkout', type=Path)
     parser.add_argument('revision')
     parser.add_argument('--role', choices=['baseline', 'candidate'])
     parser.add_argument('--initialize-missing', action='store_true')
+    parser.add_argument('--preparation', action='store_true')
     args = parser.parse_args()
     try:
         if args.initialize_missing:
             initialize_missing(args.candidate.resolve(), args.checkout.resolve(), args.revision)
-        print(json.dumps(validate(args.candidate, args.checkout, args.revision, role=args.role), indent=2))
+        print(json.dumps(validate(args.candidate, args.checkout, args.revision, role=args.role, preparation=args.preparation), indent=2))
     except (ValueError, subprocess.CalledProcessError) as error:
         raise SystemExit(str(error))

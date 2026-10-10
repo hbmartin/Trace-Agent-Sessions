@@ -1,3 +1,4 @@
+import Clocks
 import Foundation
 
 /// All app indexing requests enter here. Events arriving during a pass are merged for its successor.
@@ -23,6 +24,7 @@ public actor IndexScheduler {
     private let didComplete: @Sendable (IndexActivity, [String: UInt64]) async -> Void
     private let didSatisfySafetyReconciliation: @Sendable () async -> Void
     private let retryDelay: Duration
+    private let clock: any Clock<Duration>
     private var scope: IndexScope
     private var pendingPaths: Set<String> = []
     private var pendingReconciliationPaths: Set<String> = []
@@ -44,11 +46,13 @@ public actor IndexScheduler {
     public init(coordinator: IndexCoordinator, scope: IndexScope,
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
                 retryDelay: Duration = .seconds(5),
+                clock: any Clock<Duration> = ContinuousClock(),
                 didComplete: @escaping @Sendable (IndexActivity, [String: UInt64]) async -> Void = { _, _ in },
                 didSatisfySafetyReconciliation: @escaping @Sendable () async -> Void = {}) {
         self.coordinator = coordinator
         self.scope = scope
         self.retryDelay = retryDelay
+        self.clock = clock
         self.progress = progress
         self.didComplete = didComplete
         self.didSatisfySafetyReconciliation = didSatisfySafetyReconciliation
@@ -414,8 +418,9 @@ public actor IndexScheduler {
     private func scheduleRetry() {
         guard retryTask == nil, !stopping else { return }
         let delay = retryDelay
+        let clock = clock
         retryTask = Task { [weak self] in
-            do { try await Task.sleep(for: delay) }
+            do { try await clock.sleep(for: delay) }
             catch { return }
             await self?.startScheduledRetry()
         }

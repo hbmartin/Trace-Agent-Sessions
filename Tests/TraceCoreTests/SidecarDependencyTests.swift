@@ -147,8 +147,11 @@ final class SidecarDependencyTests: XCTestCase {
         XCTAssertFalse(mapping.topologyHasChanged)
         var status = stat()
         XCTAssertEqual(lstat("/dev/null", &status), 0)
-        let fingerprint = try TraceFileIO.fingerprint(url: URL(fileURLWithPath: "/dev/null"))
-        XCTAssertEqual(fingerprint.device, UInt64(UInt32(bitPattern: status.st_dev)))
+        XCTAssertThrowsError(try TraceFileIO.fingerprint(url: URL(fileURLWithPath: "/dev/null")))
+        let handle = try TraceFileIO.openRegularMetadataFile(sidecar, allowingNullSessionIndex: true)
+        defer { try? handle.close() }
+        XCTAssertEqual(fstat(handle.fileDescriptor, &status), 0)
+        XCTAssertEqual(status.st_mode & S_IFMT, S_IFCHR)
     }
 
     func testFifoSidecarsDoNotBlockActivationOrMetadataReads() async throws {
@@ -312,14 +315,16 @@ final class SidecarDependencyTests: XCTestCase {
         try compiler.run(); compiler.waitUntilExit()
         XCTAssertEqual(compiler.terminationStatus, 0)
         let script = #"""
-        import ctypes, json, os, pty, subprocess, sys
+        import ctypes, json, os, pty, signal, subprocess, sys
         filename = sys.argv[2]
-        tty_probe = filename == 'tty'
+        tty_probe = filename in ('tty', 'tty-control')
+        negative_control = filename == 'tty-control'
         if tty_probe and os.getsid(0) != os.getpid():
-            child = subprocess.run([sys.executable, '-c', sys.argv[3], sys.argv[1], 'tty', sys.argv[3]],
+            child = subprocess.run([sys.executable, '-c', sys.argv[3], sys.argv[1], filename, sys.argv[3]],
                                    start_new_session=True, timeout=3)
             sys.exit(child.returncode)
         if tty_probe:
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)
             master, slave = pty.openpty()
             filename = os.ttyname(slave)
             os.close(slave)
@@ -327,23 +332,43 @@ final class SidecarDependencyTests: XCTestCase {
         sqlite.sqlite3_open_v2.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.c_char_p]
         sqlite.sqlite3_exec.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         sqlite.sqlite3_close.argtypes = [ctypes.c_void_p]
+        acquired = []
+        if tty_probe:
+            class VFS(ctypes.Structure):
+                _fields_ = [('version',ctypes.c_int),('size',ctypes.c_int),('maxpath',ctypes.c_int)] + [
+                    (name,ctypes.c_void_p) for name in ['next','name','data','open','delete','access','fullpath',
+                    'dlopen','dlerror','dlsym','dlclose','random','sleep','time','error','time64','setcall','getcall','nextcall']]
+            sqlite.sqlite3_vfs_find.restype = ctypes.POINTER(VFS)
+            vfs = sqlite.sqlite3_vfs_find(None)
+            GetCall = ctypes.CFUNCTYPE(ctypes.c_void_p,ctypes.c_void_p,ctypes.c_char_p)
+            SetCall = ctypes.CFUNCTYPE(ctypes.c_int,ctypes.c_void_p,ctypes.c_char_p,ctypes.c_void_p)
+            Open = ctypes.CFUNCTYPE(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_int)
+            original = Open(GetCall(vfs.contents.getcall)(vfs,b'open'))
+            @Open
+            def observe(path,flags,mode):
+                if negative_control: flags &= ~os.O_NOCTTY
+                fd = original(path,flags,mode)
+                if fd >= 0 and path == filename.encode():
+                    # Inspect the actual descriptor before SQLite rejects/closes it.
+                    # Opening /dev/tty here would itself change terminal lifetime.
+                    try: acquired.append(os.tcgetpgrp(fd))
+                    except OSError: acquired.append(None)
+                return fd
+            assert SetCall(vfs.contents.setcall)(vfs,b'open',ctypes.cast(observe,ctypes.c_void_p)) == 0
         before = len(os.listdir('/dev/fd'))
         db = ctypes.c_void_p()
         rc = sqlite.sqlite3_open_v2(filename.encode(), ctypes.byref(db), 1 | 64, None)
         if rc == 0: rc = sqlite.sqlite3_exec(db, b'SELECT * FROM threads', None, None, None)
         sqlite.sqlite3_close(db)
         if tty_probe:
-            try:
-                fd = os.open('/dev/tty', os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
-                os.close(fd)
-                sys.exit(3)  # Rejection must not leave a controlling terminal.
-            except OSError:
-                pass
+            assert acquired, 'Probe must observe an actual terminal descriptor'
+            if negative_control: assert os.getpgrp() in acquired, acquired
+            else: assert all(group is None for group in acquired), acquired
         print(json.dumps({'result': rc, 'before': before, 'after': len(os.listdir('/dev/fd'))}))
         sys.exit(0 if rc != 0 else 2)
         """#
-        for suffix in ["", "-journal", "-wal", "-shm", "-shm-readonly", "tty"] {
-            for symlinked in suffix == "tty" ? [false] : [false, true] {
+        for suffix in ["", "-journal", "-wal", "-shm", "-shm-readonly", "tty", "tty-control"] {
+            for symlinked in suffix.hasPrefix("tty") ? [false] : [false, true] {
                 let root = try fixture()
                 let database = root.appendingPathComponent("state_7.sqlite")
                 let queue = try DatabaseQueue(path: database.path)
@@ -367,7 +392,7 @@ final class SidecarDependencyTests: XCTestCase {
                 }
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                let uri = suffix == "tty" ? "tty" : "file:" + database.path + (suffix == "-shm-readonly" ? "?readonly_shm=1" : "")
+                let uri = suffix.hasPrefix("tty") ? suffix : "file:" + database.path + (suffix == "-shm-readonly" ? "?readonly_shm=1" : "")
                 process.arguments = ["-c", script, library, uri, script]
                 let output = Pipe(); process.standardOutput = output; process.standardError = output
                 try process.run()

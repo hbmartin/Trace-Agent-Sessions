@@ -1,4 +1,5 @@
 import AppKit
+import Clocks
 import CryptoKit
 import Darwin
 import Foundation
@@ -124,8 +125,9 @@ final class TraceModel: ObservableObject {
         }
     }
     let settings: AppSettings
-    let globalSearch = SessionSearchModel()
-    var mainSearch = SessionSearchModel()
+    let globalSearch: SessionSearchModel
+    let mainSearch: SessionSearchModel
+    private let clock: AnyClock<Duration>
     let diagnostics: DiagnosticsStore
 
     @Published private(set) var progress = IndexProgress(phase: .waiting)
@@ -153,6 +155,9 @@ final class TraceModel: ObservableObject {
         case nextPage
     }
     private var sessionListRetry: SessionListRetry?
+    private var backgroundSidebarRequest: UUID?
+    private enum PendingSidebarAction { case loadMore, retry(SessionListRetry) }
+    private var pendingSidebarAction: (project: String?, action: PendingSidebarAction)?
     @Published private(set) var recentSessions: [SessionSummary] = []
     @Published private(set) var messages: [MessageSummary] = [] {
         didSet {
@@ -236,11 +241,12 @@ final class TraceModel: ObservableObject {
     private var sourceChangeTask: Task<Void, Never>?
     private var sourceConfigurationRevision: UInt64 = 0
     private var startupSetupComplete = false
-    private var lastSummaryRefresh = ContinuousClock.now
+    private var lastSummaryRefresh: AnyClock<Duration>.Instant
     private var incrementalProgressTask: Task<Void, Never>?
     private var pendingIncrementalProgress: IndexProgress?
     private var incrementalProgressVisible = false
     private var automaticSearchTask: Task<Void, Never>?
+    private var searchVisibilityTask: Task<Void, Never>?
     private var automaticSearchTaskID: UUID?
     private var globalSearchNeedsRefresh = false
     private var mainSearchNeedsRefresh = false
@@ -255,7 +261,7 @@ final class TraceModel: ObservableObject {
     private var deferredUsageRepairTask: Task<Void, Never>?
     private var indexWorkflow = IndexWorkflowState()
     private var indexingPassActive: Bool { indexWorkflow.isActive }
-    private var lastAutomaticSearchRefresh: ContinuousClock.Instant?
+    private var lastAutomaticSearchRefresh: AnyClock<Duration>.Instant?
     private var lastObservedPassID: UUID?
     private var lastObservedMutationRevision = 0
     private var lastSearchedPassID: UUID?
@@ -280,23 +286,27 @@ final class TraceModel: ObservableObject {
 
     init(
         settings: AppSettings = AppSettings(),
+        clock: any Clock<Duration> = ContinuousClock(),
+        diagnostics: DiagnosticsStore? = nil,
         watcherGroupingPolicy: WatcherGroupingPolicy = .byVolume,
         startupActivityObserver: @escaping (IndexActivity) -> Void = { _ in },
         diagnosticsURL: URL? = nil
     ) {
         self.settings = settings
+        let clock = AnyClock(clock)
+        self.clock = clock
+        lastSummaryRefresh = clock.now
+        globalSearch = SessionSearchModel(clock: clock)
+        mainSearch = SessionSearchModel(clock: clock)
         self.watcherGroupingPolicy = watcherGroupingPolicy
         self.startupActivityObserver = startupActivityObserver
-        diagnostics = DiagnosticsStore(url: diagnosticsURL ?? TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
+        self.diagnostics = diagnostics ?? DiagnosticsStore(url: diagnosticsURL ?? TraceRuntime.testDirectory?.appendingPathComponent("diagnostics.json") ?? DiagnosticsStore.defaultURL())
     }
 
     #if DEBUG
     func attachForTesting(database: IndexDatabase, sources: [any SessionSource]) {
-        self.database = database
-        let coordinator = IndexCoordinator(database: database, sources: sources)
-        self.coordinator = coordinator
-        mainSearch.attach(database: database, coordinator: coordinator)
-        globalSearch.attach(database: database, coordinator: coordinator)
+        let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
+        attach(database: database, coordinator: coordinator)
     }
 
     func refreshSummariesForTesting(terminal: Bool = true, lightweight: Bool = true) async {
@@ -307,6 +317,7 @@ final class TraceModel: ObservableObject {
     func queueMainSearchRefreshForTesting() { mainSearchNeedsRefresh = true }
     var selectionTranscriptGateForTesting: Task<Void, Never>?
     var summaryTranscriptGateForTesting: Task<Void, Never>?
+    var summaryProjectsForTesting: [ProjectSummary]?
     var summaryTailGateForTesting: Task<Void, Never>?
     private(set) var selectionTranscriptWaitingForTesting = false
     private(set) var summaryTranscriptWaitingForTesting = false
@@ -399,11 +410,8 @@ final class TraceModel: ObservableObject {
                     }
                     break
                 }
-                let coordinator = IndexCoordinator(database: database, sources: sources)
-                self.coordinator = coordinator
-                globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-                mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-                scheduler = makeScheduler(coordinator)
+                let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
+                attach(database: database, coordinator: coordinator)
                 timeZoneObserver = NotificationCenter.default.addObserver(
                     forName: Notification.Name.NSSystemTimeZoneDidChange,
                     object: nil, queue: .main
@@ -495,6 +503,7 @@ final class TraceModel: ObservableObject {
             progress: { [weak self] update in
                 await self?.receiveProgress(update)
             },
+            clock: clock,
             didComplete: { [weak self] _, watermarks in
                 try? await self?.database?.saveEventCheckpoints(watermarks)
             },
@@ -504,7 +513,16 @@ final class TraceModel: ObservableObject {
         )
     }
 
-    private func receiveProgress(_ update: IndexProgress) async {
+    /// Installs an already-open index without starting source discovery or filesystem watchers.
+    func attach(database: IndexDatabase, coordinator: IndexCoordinator) {
+        self.database = database
+        self.coordinator = coordinator
+        globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+        mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+        scheduler = makeScheduler(coordinator)
+    }
+
+    func receiveProgress(_ update: IndexProgress) async {
         let disposition = indexWorkflow.receive(update)
         if !disposition.passTerminal { usageSnapshotRequestID = UUID() }
         if disposition.passTerminal {
@@ -529,8 +547,9 @@ final class TraceModel: ObservableObject {
             } else {
                 pendingIncrementalProgress = update
                 if incrementalProgressTask == nil {
+                    let clock = clock
                     incrementalProgressTask = Task { [weak self] in
-                        do { try await Task.sleep(for: .milliseconds(300)) }
+                        do { try await clock.sleep(for: .milliseconds(300)) }
                         catch { return }
                         guard let self, let pending = self.pendingIncrementalProgress else { return }
                         self.progress = pending
@@ -557,9 +576,9 @@ final class TraceModel: ObservableObject {
 
         let shouldRefresh = disposition.passTerminal
             || ((!update.incremental || incrementalProgressVisible)
-                && lastSummaryRefresh.duration(to: .now) >= .milliseconds(250))
+                && lastSummaryRefresh.duration(to: clock.now) >= .milliseconds(250))
         if shouldRefresh {
-            lastSummaryRefresh = .now
+            lastSummaryRefresh = clock.now
             await reloadSummaries(
                 lightweight: !disposition.workflowTerminal,
                 projectReconciliation: disposition.projectReconciliation,
@@ -672,13 +691,19 @@ final class TraceModel: ObservableObject {
     }
 
     private func searchVisibilityChanged() {
+        searchVisibilityTask?.cancel()
+        searchVisibilityTask = nil
         if !hasVisibleAutomaticSearch {
             cancelAutomaticSearch()
             return
         }
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(20))
-            self?.scheduleAutomaticSearch()
+        let clock = clock
+        searchVisibilityTask = Task { @MainActor [weak self] in
+            do { try await clock.sleep(for: .milliseconds(20)) }
+            catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.searchVisibilityTask = nil
+            self.scheduleAutomaticSearch()
         }
     }
 
@@ -691,12 +716,13 @@ final class TraceModel: ObservableObject {
     private func scheduleAutomaticSearch() {
         guard hasVisibleAutomaticSearch else { return }
         guard automaticSearchTask == nil else { return }
-        let elapsed = lastAutomaticSearchRefresh?.duration(to: .now) ?? .seconds(1)
+        let elapsed = lastAutomaticSearchRefresh?.duration(to: clock.now) ?? .seconds(1)
         if elapsed >= .seconds(1) { performAutomaticSearch(); return }
         let id = UUID()
         automaticSearchTaskID = id
+        let clock = clock
         automaticSearchTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(1) - elapsed) }
+            do { try await clock.sleep(for: .seconds(1) - elapsed) }
             catch { return }
             guard let self, !Task.isCancelled, self.automaticSearchTaskID == id else { return }
             self.automaticSearchTaskID = nil
@@ -707,7 +733,7 @@ final class TraceModel: ObservableObject {
 
     private func performAutomaticSearch() {
         guard hasVisibleAutomaticSearch else { return }
-        lastAutomaticSearchRefresh = .now
+        lastAutomaticSearchRefresh = clock.now
         lastSearchedPassID = lastObservedPassID
         lastSearchedMutationRevision = lastObservedMutationRevision
         if globalSearchNeedsRefresh, !globalSearchSurfaces.isEmpty,
@@ -809,11 +835,8 @@ final class TraceModel: ObservableObject {
                 return
             }
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
-            let coordinator = IndexCoordinator(database: database, sources: sources)
-            self.coordinator = coordinator
-            globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-            mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-            scheduler = makeScheduler(coordinator)
+            let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
+            attach(database: database, coordinator: coordinator)
             initialIndexRequested = false
             startupSetupComplete = true
             guard await startWatching(sources, forceRootReconciliation: true) else { return }
@@ -913,7 +936,11 @@ final class TraceModel: ObservableObject {
             mainSearchNeedsRefresh = false
             loadProjectSessions()
         } else if mainSearchNeedsRefresh {
-            searchMain()
+            if mainSearch.matchesCurrentCriteria(sort: settings.searchSort) {
+                mainSearch.markResultsStale()
+                mainSearchNeedsRefresh = false
+                loadProjectSessions()
+            } else { searchMain() }
         }
     }
 
@@ -1062,7 +1089,21 @@ final class TraceModel: ObservableObject {
         sessionListTask = nil
     }
 
+    private func finishBackgroundSidebarRequest(_ request: UUID) {
+        guard backgroundSidebarRequest == request else { return }
+        backgroundSidebarRequest = nil
+        guard let pending = pendingSidebarAction else { return }
+        pendingSidebarAction = nil
+        guard pending.project == selectedProjectCanonicalKey else { return }
+        switch pending.action {
+        case .loadMore: loadMoreSessions()
+        case .retry(let retry): performSidebarRetry(retry)
+        }
+    }
+
     private func resetSessionPagination() {
+        backgroundSidebarRequest = nil
+        pendingSidebarAction = nil
         sessionListTask?.cancel()
         sessionListTask = nil
         sessions = []
@@ -1086,14 +1127,29 @@ final class TraceModel: ObservableObject {
     }
 
     func retrySessionLoad() {
-        guard !isLoadingSessions, let retry = sessionListRetry else { return }
+        guard let retry = sessionListRetry else { return }
+        if backgroundSidebarRequest != nil {
+            pendingSidebarAction = (selectedProjectCanonicalKey, .retry(retry))
+            return
+        }
+        guard !isLoadingSessions else { return }
+        performSidebarRetry(retry)
+    }
+
+    private func performSidebarRetry(_ retry: SessionListRetry) {
         switch retry {
-        case .reload(let sessionID): loadProjectSessions(ensuring: sessionID)
+        case .reload: loadProjectSessions(ensuring: selectedSessionID)
         case .nextPage: loadMoreSessions()
         }
     }
 
     func loadMoreSessions() {
+        if backgroundSidebarRequest != nil {
+            if pendingSidebarAction == nil {
+                pendingSidebarAction = (selectedProjectCanonicalKey, .loadMore)
+            }
+            return
+        }
         guard !isLoadingSessions, let cursor = nextSessionCursor, let database else { return }
         let key = selectedProjectCanonicalKey
         let request = UUID()
@@ -1124,7 +1180,9 @@ final class TraceModel: ObservableObject {
                 nextSessionCursor = page.nextCursor
                 hasMoreSessions = page.nextCursor != nil
                 loadedSessionPageCount += 1
-            } catch is CancellationError { }
+            } catch is CancellationError {
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_PAGE_CANCELLED_PATH")
+            }
             catch {
                 guard projectRequestID == request else { return }
                 sessionListError = error.localizedDescription
@@ -1267,6 +1325,7 @@ final class TraceModel: ObservableObject {
         let delay = TraceTestHooks.delayMilliseconds(
             for: "TRACE_TEST_SIDEBAR_REVEAL_FALLBACK_DELAY_MS", cappedAt: 5_000
         ) ?? 5_000
+        let clock = clock
         if TraceTestHooks.isUITesting, TraceTestHooks.environment["TRACE_TEST_PROJECT_AVAILABILITY_RELEASE_PATH"] != nil {
             TraceTestHooks.touch(pathKey: "TRACE_TEST_PROJECT_AVAILABILITY_ENTERED_PATH")
             Task { @MainActor [weak self] in
@@ -1283,7 +1342,7 @@ final class TraceModel: ObservableObject {
                         try await TraceTestHooks.waitForRelease(pathKey: key, timeoutMilliseconds: 15_000)
                     }
                 }
-                try await Task.sleep(for: .milliseconds(delay))
+                try await clock.sleep(for: .milliseconds(delay))
             }
             catch { return }
             guard let self, self.sidebarRevealRequest?.token == request.token else { return }
@@ -1530,7 +1589,7 @@ final class TraceModel: ObservableObject {
             let delay = TraceTestHooks.delayMilliseconds(
                 for: "TRACE_TEST_USAGE_REPAIR_QUIET_DELAY_MS", cappedAt: 5_000
             ) ?? 1_000
-            do { try await Task.sleep(for: .milliseconds(delay)) }
+            do { try await self.clock.sleep(for: .milliseconds(delay)) }
             catch { return }
             guard !Task.isCancelled else { return }
             await self.scheduler?.waitUntilIdle()
@@ -1622,9 +1681,24 @@ final class TraceModel: ObservableObject {
     }
 
     func prepareToTerminate() async {
-        sessionListTask?.cancel()
         invalidateWatchers()
         sourceChangeTask?.cancel()
+        sessionListTask?.cancel()
+        sessionListTask = nil
+        backgroundSidebarRequest = nil
+        pendingSidebarAction = nil
+        searchVisibilityTask?.cancel()
+        searchVisibilityTask = nil
+        incrementalProgressTask?.cancel()
+        incrementalProgressTask = nil
+        pendingIncrementalProgress = nil
+        deferredUsageRepairTask?.cancel()
+        deferredUsageRepairTask = nil
+        globalSearchSurfaces.removeAll()
+        mainWindowVisible = false
+        mainSearchPanelVisible = false
+        globalSearch.suspendForNavigation()
+        mainSearch.suspendForNavigation()
         cancelAutomaticSearch()
         invalidateSidebarRevealRequest()
         if let timeZoneObserver {
@@ -1982,17 +2056,71 @@ final class TraceModel: ObservableObject {
         let projectCanonicalKey = selectedProjectCanonicalKey
         let projectRequest = UUID()
         projectRequestID = projectRequest
-        isLoadingSessions = true
-        defer { finishSessionListRequest(projectRequest) }
+        backgroundSidebarRequest = projectRequest
+        defer { finishBackgroundSidebarRequest(projectRequest) }
         let ensuredSessionID = selectedSessionID
         let selectedSessionRequest = sessionRequestID
         let pageCount = sessionListProjectKey == projectCanonicalKey ? loadedSessionPageCount : 1
         let sidebar = try? await database.sidebarSnapshot(
             projectCanonicalKey: projectCanonicalKey, pageCount: pageCount, ensuringSessionID: ensuredSessionID
         )
+        #if DEBUG
+        let loadedProjects = summaryProjectsForTesting ?? sidebar?.projects
+        #else
         let loadedProjects = sidebar?.projects
+        #endif
         let loadedRecent = sidebar?.recentSessions ?? recentSessions
         let loadedSessions = sidebar?.sessionList
+        guard summaryRequestID == refresh else { return }
+        let globalProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
+        let mainProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
+        if let loadedProjects {
+            globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
+                in: loadedProjects,
+                missingProject: projectReconciliation.globalMissingProjectPolicy
+            )
+            mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+                in: loadedProjects,
+                missingProject: projectReconciliation.mainMissingProjectPolicy,
+                preservingResults: hasSearchReturnContext && !mainSearch.results.isEmpty
+            )
+            projects = loadedProjects
+            reconcileSelectedProject(in: loadedProjects)
+        } else {
+            switch projectReconciliation {
+            case .ongoing:
+                globalProjectFilterReconciliation = .unchanged
+                mainProjectFilterReconciliation = .unchanged
+            case .completed, .terminalRetaining:
+                // A failed summary read cannot establish that a canonical project was
+                // deleted. Retain both filters, but do not leave either search blocked.
+                globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
+                    in: projects, missingProject: .retain
+                )
+                mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
+                    in: projects, missingProject: .retain,
+                    preservingResults: hasSearchReturnContext && !mainSearch.results.isEmpty
+                )
+            }
+        }
+        recentSessions = loadedRecent
+        if globalProjectFilterReconciliation.requiresSearchRefresh,
+           !globalSearch.query.isEmpty {
+            globalSearchNeedsRefresh = true
+            scheduleAutomaticSearch()
+        }
+        if mainProjectFilterReconciliation.requiresSearchRefresh,
+           !mainSearch.query.isEmpty {
+            if hasSearchReturnContext { mainSearch.markResultsStale() }
+            else { mainSearchNeedsRefresh = true; scheduleAutomaticSearch() }
+        }
+        if selectedProjectCanonicalKey == projectCanonicalKey,
+           projectRequestID == projectRequest,
+           let loadedSessions {
+            sessionListProjectKey = projectCanonicalKey
+            applySessionPages(loadedSessions)
+        }
+        finishBackgroundSidebarRequest(projectRequest)
         let loadedTranscript: SessionTranscriptSnapshot?
         let transcriptEpoch = transcriptPublicationEpoch
         if let ensuredSessionID {
@@ -2022,52 +2150,6 @@ final class TraceModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(delay))
         }
         guard summaryRequestID == refresh else { return }
-        let globalProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
-        let mainProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
-        if let loadedProjects {
-            globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
-                in: loadedProjects,
-                missingProject: projectReconciliation.globalMissingProjectPolicy
-            )
-            mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
-                in: loadedProjects,
-                missingProject: projectReconciliation.mainMissingProjectPolicy
-            )
-            projects = loadedProjects
-            reconcileSelectedProject(in: loadedProjects)
-        } else {
-            switch projectReconciliation {
-            case .ongoing:
-                globalProjectFilterReconciliation = .unchanged
-                mainProjectFilterReconciliation = .unchanged
-            case .completed, .terminalRetaining:
-                // A failed summary read cannot establish that a canonical project was
-                // deleted. Retain both filters, but do not leave either search blocked.
-                globalProjectFilterReconciliation = globalSearch.resolveProjectFilter(
-                    in: projects, missingProject: .retain
-                )
-                mainProjectFilterReconciliation = mainSearch.resolveProjectFilter(
-                    in: projects, missingProject: .retain
-                )
-            }
-        }
-        recentSessions = loadedRecent
-        if globalProjectFilterReconciliation.requiresSearchRefresh,
-           !globalSearch.query.isEmpty {
-            globalSearchNeedsRefresh = true
-            scheduleAutomaticSearch()
-        }
-        if mainProjectFilterReconciliation.requiresSearchRefresh,
-           !mainSearch.query.isEmpty {
-            if hasSearchReturnContext { mainSearch.markResultsStale() }
-            else { mainSearchNeedsRefresh = true; scheduleAutomaticSearch() }
-        }
-        if selectedProjectCanonicalKey == projectCanonicalKey,
-           projectRequestID == projectRequest,
-           let loadedSessions {
-            sessionListProjectKey = projectCanonicalKey
-            applySessionPages(loadedSessions)
-        }
         if projectReconciliation != .ongoing,
            let reveal = sidebarRevealRequest {
             let projectUnavailable = loadedProjects.map { projects in
@@ -2093,7 +2175,6 @@ final class TraceModel: ObservableObject {
                 returnFromSession()
             }
         }
-        finishSessionListRequest(projectRequest)
         if lightweight || summaryRequestID != refresh { return }
         #if DEBUG
         if let gate = summaryTailGateForTesting {

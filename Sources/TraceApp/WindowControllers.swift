@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import TraceCore
 
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate {
@@ -81,6 +82,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var titleObservation: AnyCancellable?
+    private var snapshotBackdrop: NSWindow?
     private let model: TraceModel
     init(model: TraceModel) {
         self.model = model
@@ -94,8 +96,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 880, height: 560)
         window.center()
-        window.contentView = NSHostingView(rootView: MainView(model: model))
+        let snapshotAppearance = TraceTestHooks.isUITesting
+            ? TraceTestHooks.environment["TRACE_TEST_SNAPSHOT_APPEARANCE"] : nil
+        let snapshot = snapshotAppearance != nil
+        if snapshot {
+            window.appearance = NSAppearance(named: snapshotAppearance == "dark" ? .darkAqua : .aqua)
+            window.animationBehavior = .none
+            window.minSize = window.frame.size
+            window.maxSize = window.frame.size
+        }
+        if snapshot {
+            window.contentView = NSHostingView(rootView: MainView(model: model)
+                .preferredColorScheme(snapshotAppearance == "dark" ? .dark : .light)
+                .transaction { transaction in
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                })
+        } else {
+            window.contentView = NSHostingView(rootView: MainView(model: model))
+        }
         super.init(window: window)
+        if snapshot {
+            // Window screenshots include desktop pixels outside macOS's rounded corners.
+            // A fixed backdrop keeps those pixels deterministic without masking the image.
+            let backdrop = NSWindow(contentRect: window.frame, styleMask: .borderless,
+                                    backing: .buffered, defer: false)
+            backdrop.backgroundColor = snapshotAppearance == "dark" ? .black : .white
+            backdrop.isOpaque = true
+            backdrop.hasShadow = false
+            backdrop.ignoresMouseEvents = true
+            backdrop.setAccessibilityElement(false)
+            snapshotBackdrop = backdrop
+        }
         window.delegate = self
         titleObservation = model.objectWillChange.sink { [weak self, weak model] in
             Task { @MainActor in
@@ -111,11 +143,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        if let window, let snapshotBackdrop {
+            window.addChildWindow(snapshotBackdrop, ordered: .below)
+        }
         model.setMainWindowVisible(true)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func windowWillClose(_ notification: Notification) {
+        snapshotBackdrop?.orderOut(nil)
         model.setMainWindowVisible(false)
         NSApp.setActivationPolicy(.accessory)
     }

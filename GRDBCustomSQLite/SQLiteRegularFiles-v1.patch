@@ -1,49 +1,20 @@
-# Trace combined file safety overlay v2
 diff --git a/SQLiteLib.xcodeproj/project.pbxproj b/SQLiteLib.xcodeproj/project.pbxproj
-index a56266e..74af20c 100644
+index a56266e..74af20c 100755
 --- a/SQLiteLib.xcodeproj/project.pbxproj
 +++ b/SQLiteLib.xcodeproj/project.pbxproj
-@@ -184,6 +184,7 @@
- 			);
- 			inputPaths = (
- 				"$(SRCROOT)/sqlite",
+@@ -186,0 +187 @@
 +				"$(SRCROOT)/sqlite/src/os_unix.c",
- 				"$(SRCROOT)/SQLiteLib.xcconfig",
- 				"$(SRCROOT)/SQLiteLib-Custom.xcconfig",
- 			);
 diff --git a/sqlite/src/os_unix.c b/sqlite/src/os_unix.c
-index c13c5ce..08894dd 100644
+index c13c5ce..f80d28b 100644
 --- a/sqlite/src/os_unix.c
 +++ b/sqlite/src/os_unix.c
-@@ -719,6 +719,10 @@ static const char *unixNextSystemCall(sqlite3_vfs *p, const char *zName){
- static int robust_open(const char *z, int f, mode_t m){
-   int fd;
-   mode_t m2 = m ? m : SQLITE_DEFAULT_FILE_PERMISSIONS;
-+#if defined(O_NOCTTY)
-+  /* A rejected device substitution must never become our controlling tty. */
-+  f |= O_NOCTTY;
-+#endif
-   while(1){
- #if defined(O_CLOEXEC)
-     fd = osOpen(z,f|O_CLOEXEC,m2);
-@@ -4731,11 +4735,11 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
- 
-     if( pInode->bProcessLock==0 ){
-       if( 0==sqlite3_uri_boolean(pDbFd->zPath, "readonly_shm", 0) ){
+@@ -4734 +4734 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
 -        pShmNode->hShm = robust_open(zShm, O_RDWR|O_CREAT|O_NOFOLLOW,
 +        pShmNode->hShm = robust_open(zShm, O_RDWR|O_CREAT|O_NOFOLLOW|O_NONBLOCK,
-                                      (sStat.st_mode&0777));
-       }
-       if( pShmNode->hShm<0 ){
+@@ -4738 +4738 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
 -        pShmNode->hShm = robust_open(zShm, O_RDONLY|O_NOFOLLOW,
 +        pShmNode->hShm = robust_open(zShm, O_RDONLY|O_NOFOLLOW|O_NONBLOCK,
-                                      (sStat.st_mode&0777));
-         if( pShmNode->hShm<0 ){
-           rc = unixLogError(SQLITE_CANTOPEN_BKPT, "open", zShm);
-@@ -4744,6 +4748,23 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
-         pShmNode->isReadonly = 1;
-       }
- 
+@@ -4746,0 +4747,17 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
 +      /* Validate either writable or read-only SHM descriptors before locks,
 +      ** reads, or mappings. Nonblocking opens also cover FIFO substitution.
 +      ** unixShmPurge() closes the rejected descriptor on shm_open_err.
@@ -61,22 +32,10 @@ index c13c5ce..08894dd 100644
 +        }
 +      }
 +
-       /* If this process is running as root, make sure that the SHM file
-       ** is owned by the same user that owns the original database.  Otherwise,
-       ** the original owner will not be able to connect.
-@@ -6352,7 +6373,7 @@ static int unixOpen(
-   if( isReadWrite ) openFlags |= O_RDWR;
-   if( isCreate )    openFlags |= O_CREAT;
-   if( isExclusive ) openFlags |= (O_EXCL|O_NOFOLLOW);
+@@ -6355 +6372 @@ static int unixOpen(
 -  openFlags |= (O_LARGEFILE|O_BINARY|O_NOFOLLOW);
 +  openFlags |= (O_LARGEFILE|O_BINARY|O_NOFOLLOW|O_NONBLOCK);
- 
-   if( fd<0 ){
-     mode_t openMode;              /* Permissions to create file with */
-@@ -6411,6 +6432,24 @@ static int unixOpen(
-       robustFchown(fd, uid, gid);
-     }
-   }
+@@ -6413,0 +6431,18 @@ static int unixOpen(
 +  /* Trace only accepts regular SQLite files. Validate the descriptor actually
 +  ** opened (including a reusable descriptor), before SQLite reads from it.
 +  ** O_NONBLOCK above prevents a concurrently substituted FIFO from blocking.
@@ -95,6 +54,3 @@ index c13c5ce..08894dd 100644
 +      goto open_finished;
 +    }
 +  }
-   assert( fd>=0 );
-   if( pOutFlags ){
-     *pOutFlags = flags;

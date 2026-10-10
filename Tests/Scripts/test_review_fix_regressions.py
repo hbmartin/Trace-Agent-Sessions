@@ -19,6 +19,8 @@ import test_benchmark_reliability as reliability
 
 class ReviewFixRegressionTests(unittest.TestCase):
     def setUp(self):
+        previous_signals = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        self.addCleanup(lambda: [signal.signal(sig, handler) for sig, handler in previous_signals.items()])
         self.fixture = fixtures.TranscriptBenchmarkScriptTests()
 
     def prepared_fixture(self, root):
@@ -358,6 +360,123 @@ class ReviewFixRegressionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Unexpected SQLite'):
                 preparer.prepare(candidate, cache, revision)
 
+    def test_real_sqlite_overlay_preparation_and_upgrade_are_exact_and_idempotent(self):
+        validator = self.fixture.module('validate-benchmark-baseline')
+        trusted = fixtures.SCRIPTS.parent
+        pinned = trusted / 'Vendor/GRDB.swift/SQLiteCustom/src'
+        if not pinned.exists(): self.skipTest('Pinned SQLite submodule is required')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate, _, _ = self.prepared_fixture(root)
+            dependency = root / 'dependency'; dependency.mkdir()
+            self.fixture.git(dependency, 'init', '--quiet')
+            names = ['sqlite/src/os_unix.c', 'SQLiteLib.xcodeproj/project.pbxproj', 'SQLiteLib.xcconfig']
+            for name in names:
+                output = dependency / 'SQLiteCustom/src' / name
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(subprocess.check_output(['git', '-C', str(pinned), 'show', 'HEAD:' + name]))
+            (dependency / 'GRDBCustom.xcodeproj').mkdir()
+            (dependency / 'GRDBCustom.xcodeproj/fixture').write_text('fixture')
+            (dependency / '.gitignore').write_text('*-USER.h\n*-USER.xcconfig\n')
+            self.fixture.git(dependency, 'add', '.')
+            self.fixture.git(dependency, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'pinned SQLite')
+            self.fixture.git(candidate, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', str(dependency), 'Vendor/GRDB.swift')
+            for path in (trusted / 'GRDBCustomSQLite').iterdir():
+                if path.is_file(): shutil.copy2(path, candidate / 'GRDBCustomSQLite' / path.name)
+            shutil.copy2(fixtures.SCRIPTS / 'configure-grdb.sh', candidate / 'Scripts/configure-grdb.sh')
+            self.fixture.git(candidate, 'add', '.')
+            self.fixture.git(candidate, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'current safety overlay')
+            revision = self.fixture.git(candidate, 'rev-parse', 'HEAD')
+            checkout = candidate / 'Vendor/GRDB.swift/SQLiteCustom/src'
+            original = {name: (checkout / name).read_bytes() for name in names}
+            for stage in ['pristine', 'regular-only', 'regular-and-terminal', 'terminal-only']:
+                with self.subTest(stage=stage):
+                    for name,data in original.items(): (checkout / name).write_bytes(data)
+                    patches = []
+                    if stage.startswith('regular'): patches.append('SQLiteRegularFiles-v1.patch')
+                    if stage in ['regular-and-terminal', 'terminal-only']: patches.append('SQLiteNoControllingTerminal.patch')
+                    for patch in patches:
+                        subprocess.run(['git', 'apply', '--unidiff-zero', str(candidate / 'GRDBCustomSQLite' / patch)], cwd=checkout, check=True, capture_output=True)
+                    validator.validate(candidate, candidate, revision, role='candidate', preparation=True)
+                    with self.assertRaisesRegex(ValueError, 'Unexpected SQLite'):
+                        validator.validate(candidate, candidate, revision, role='candidate')
+                    validator.normalize_sqlite(candidate)
+                    validator.validate(candidate, candidate, revision, role='candidate')
+                    final = {name: (checkout / name).read_bytes() for name in names}
+                    times = {name: (checkout / name).stat().st_mtime_ns for name in names}
+                    validator.normalize_sqlite(candidate)
+                    self.assertEqual(final, {name: (checkout / name).read_bytes() for name in names})
+                    self.assertEqual(times, {name: (checkout / name).stat().st_mtime_ns for name in names})
+            patch = candidate / 'GRDBCustomSQLite/SQLiteRegularFiles.patch'
+            patch.write_text(patch.read_text().replace('Nonblocking opens also cover', 'Nonblocking descriptor opens also cover'))
+            self.fixture.git(candidate, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-am', 'extend safety patch')
+            validator.normalize_sqlite(candidate)
+            source = checkout / 'sqlite/src/os_unix.c'
+            self.assertIn('Nonblocking descriptor opens also cover', source.read_text())
+            source.write_text(source.read_text() + '\n/* unrelated change */\n')
+            before = source.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'refusing to overwrite'):
+                validator.normalize_sqlite(candidate)
+            self.assertEqual(source.read_bytes(), before)
+
+    def test_signal_at_former_handler_handoff_invalidates_evidence(self):
+        runner_source = fixtures.SCRIPTS / 'run-local-benchmark-comparisons.py'
+        for first in [signal.SIGINT, signal.SIGTERM]:
+            with self.subTest(signal=first), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                script = root / 'child.py'
+                script.write_text("import importlib.util,os,pathlib,signal,sys\n"
+                    f"spec=importlib.util.spec_from_file_location('runner',{str(runner_source)!r});m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\n"
+                    f"r=pathlib.Path({str(root)!r});first={int(first)}\n"
+                    "previous={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM)};install=m.signal.signal\n"
+                    "def handoff(sig,handler):\n"
+                    " result=install(sig,handler)\n"
+                    " if handler==previous[sig]:os.kill(os.getpid(),first)\n"
+                    " return result\n"
+                    "m.signal.signal=handoff\n"
+                    "original=m.CancellationController._drain_pending\n"
+                    "def late(self):\n"
+                    " os.kill(os.getpid(),first);original(self)\n"
+                    "m.CancellationController._drain_pending=late\n"
+                    "try:\n"
+                    " with m.CancellationController(process_lifetime=True) as c:\n"
+                    "  c.acceptance=r/'acceptance.json';c.acceptance.write_text('{\"status\":\"passed\"}')\n"
+                    "  c.publish(r/'host.json',{'valid':True})\n"
+                    "except m.RunInterrupted as e:sys.exit(128+e.signum)\n")
+                child = subprocess.run([sys.executable, str(script)], start_new_session=True,
+                                       capture_output=True, text=True, timeout=5)
+                self.assertEqual(child.returncode, 128 + first, child.stderr)
+                for name in ['acceptance.json','host.json']:
+                    result = json.loads((root / name).read_text())
+                    self.assertFalse(result['valid'])
+                    self.assertEqual(result['interruptionSignal'], first)
+
+    def test_signal_between_final_drain_and_evidence_publication_is_retained(self):
+        runner_source = fixtures.SCRIPTS / 'run-local-benchmark-comparisons.py'
+        for first in [signal.SIGINT, signal.SIGTERM]:
+            with self.subTest(signal=first), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                script = root / 'child.py'
+                script.write_text("import importlib.util,os,pathlib,signal,sys\n"
+                    f"spec=importlib.util.spec_from_file_location('runner',{str(runner_source)!r});m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\n"
+                    f"r=pathlib.Path({str(root)!r});first={int(first)}\n"
+                    "original=m.CancellationController._invalidate_interrupted_evidence\n"
+                    "def late(self):\n"
+                    " original(self);os.kill(os.getpid(),first)\n"
+                    "m.CancellationController._invalidate_interrupted_evidence=late\n"
+                    "try:\n"
+                    " with m.CancellationController(process_lifetime=True) as c:\n"
+                    "  c.acceptance=r/'acceptance.json';c.acceptance.write_text('{\"status\":\"passed\"}')\n"
+                    "  c.publish(r/'host.json',{'valid':True})\n"
+                    "except m.RunInterrupted as e:sys.exit(128+e.signum)\n")
+                child = subprocess.run([sys.executable, str(script)], start_new_session=True,
+                                       capture_output=True, text=True, timeout=5)
+                self.assertEqual(child.returncode, 128 + first, child.stderr)
+                for name in ['acceptance.json', 'host.json']:
+                    record = json.loads((root / name).read_text())
+                    self.assertFalse(record['valid'])
+                    self.assertEqual(record['interruptionSignal'], first)
+
     def test_outer_runner_configures_before_freezing_candidate(self):
         runner = self.fixture.module('run-local-benchmark-comparisons')
         test = reliability.BenchmarkReliabilityTests()
@@ -461,7 +580,7 @@ class ReviewFixRegressionTests(unittest.TestCase):
                     "  c.acceptance=r/'local-acceptance.json';c.acceptance.write_text('{\"status\":\"passed\"}')\n"
                     "  c.publish(r/'host-session-check.json',{'valid':True})\n"
                     "except m.RunInterrupted as e:\n"
-                    " assert all(signal.getsignal(sig)==old for sig,old in previous.items())\n"
+                    " assert all(signal.getsignal(sig)==c.record for sig in previous)\n"
                     " sys.exit(128+e.signum)\n")
                 unrelated = subprocess.Popen(['sleep', '60'], start_new_session=True)
                 master, slave = pty.openpty()
@@ -518,7 +637,7 @@ class ReviewFixRegressionTests(unittest.TestCase):
                     runner.run(candidate, root / 'results')
             self.assertEqual(result.exception.signum, signal.SIGINT)
             self.assertIsNotNone(children[0].returncode)
-            self.assertEqual(signal.getsignal(signal.SIGINT), previous)
+            self.assertNotEqual(signal.getsignal(signal.SIGINT), previous, "recording handlers remain owned through evidence inspection")
             host = json.loads(next((root / 'results').rglob('host-session-check.json')).read_text())
             self.assertFalse(host['valid'])
             self.assertEqual(host['interruptionSignal'], signal.SIGINT)
