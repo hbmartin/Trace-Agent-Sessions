@@ -858,6 +858,22 @@ public struct SessionSummary: Identifiable, Sendable {
     public let sourcePath: String
     public var sourceGeneration: Int64 = 0
     public var errorRevision: Int64 = 0
+
+    public var transcriptIdentity: SessionTranscriptIdentity { .init(self) }
+}
+
+/// Identifies the source contents backing a transcript, independently of its
+/// growing row count and display metadata.
+public struct SessionTranscriptIdentity: Equatable, Sendable {
+    public let sessionID: Int64
+    public let sourceGeneration: Int64
+    public let sourcePath: String
+
+    public init(_ session: SessionSummary) {
+        sessionID = session.id
+        sourceGeneration = session.sourceGeneration
+        sourcePath = session.sourcePath
+    }
 }
 
 /// Metadata and rows read from one database snapshot. Nil rows mean that the

@@ -2124,6 +2124,7 @@ public actor IndexDatabase {
     private var sessionListReadGate: Task<Void, Never>?
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
+    private var failsNextTranscriptRead = false
     private var sidebarSnapshotPublicationGate: Task<Void, Never>?
     private(set) var sidebarSnapshotWaitingForTesting = false
     func gateSidebarSnapshotPublicationForTesting(_ gate: Task<Void, Never>?) {
@@ -2132,6 +2133,7 @@ public actor IndexDatabase {
     func gateSessionListReadsForTesting(_ gate: Task<Void, Never>?) { sessionListReadGate = gate }
     func sessionListReadCountForTesting() -> Int { sessionListReadCount }
     func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }
+    func failTranscriptReadOnceForTesting() { failsNextTranscriptRead = true }
     #endif
 
     private func waitForSessionListReadForTesting() async throws {
@@ -2161,12 +2163,16 @@ public actor IndexDatabase {
         // the transaction, so revisions order snapshots rather than UI requests.
         transcriptReadRevision += 1
         let readRevision = transcriptReadRevision
+        #if DEBUG
+        if failsNextTranscriptRead {
+            failsNextTranscriptRead = false
+            throw SessionSourceError.unreadableFile("Synthetic transcript read failure")
+        }
+        #endif
         return try pool.read { db in
             let session = try transcriptSession(id: sessionID, in: db)
             guard let session else { return .init(readRevision: readRevision, session: nil, messages: []) }
-            let unchanged = knownSession?.id == sessionID
-                && knownSession?.sourceGeneration == session.sourceGeneration
-                && knownSession?.sourcePath == session.sourcePath
+            let unchanged = knownSession?.transcriptIdentity == session.transcriptIdentity
                 && knownMessageCount == session.messageCount
             return .init(readRevision: readRevision, session: session, messages: unchanged ? nil
                 : try transcriptMessages(sessionID: sessionID, in: db))
