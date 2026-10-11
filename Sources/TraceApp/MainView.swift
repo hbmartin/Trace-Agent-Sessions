@@ -429,6 +429,19 @@ struct TranscriptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if model.selectedSessionID != nil, let error = model.transcriptLoadError {
+                HStack {
+                    Text("Could not refresh this session. Try again.")
+                        .font(.callout)
+                        .help(error)
+                        .accessibilityIdentifier("transcriptLoadError")
+                    Spacer()
+                    Button("Retry") { model.retrySelectedTranscript() }
+                        .accessibilityIdentifier("retrySelectedTranscript")
+                }
+                .padding(12)
+                Divider()
+            }
             if model.selectedSessionID == nil {
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)

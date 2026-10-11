@@ -54,9 +54,9 @@ final class ClockTests: XCTestCase {
         return model
     }
 
-    private func traceModel(_ fixture: Fixture, clock: TestClock<Duration>) -> TraceModel {
+    private func traceModel(_ fixture: Fixture, clock: TestClock<Duration>) async -> TraceModel {
         let model = TraceModel(settings: fixture.settings, clock: clock, diagnostics: fixture.diagnostics)
-        model.attach(database: fixture.database, coordinator: fixture.coordinator)
+        await model.attach(database: fixture.database, coordinator: fixture.coordinator)
         addTeardownBlock {
             await model.prepareToTerminate()
             try await clock.checkSuspension()
@@ -150,7 +150,7 @@ final class ClockTests: XCTestCase {
     func testIncrementalProgressCoalescesAt300MillisecondsAndTerminalCancelsDelay() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         let pass = UUID()
         await model.receiveProgress(progress(pass: pass, incremental: true, mutation: 1))
         await clock.advance(by: .milliseconds(100))
@@ -172,7 +172,7 @@ final class ClockTests: XCTestCase {
     func testSummaryRefreshAt250MillisecondsAndTerminalBypass() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         let pass = UUID()
         await model.receiveProgress(progress(pass: pass))
         await clock.advance(by: .milliseconds(249))
@@ -192,7 +192,7 @@ final class ClockTests: XCTestCase {
     func testAutomaticRefreshCoalescesAtOneSecondAndTerminalBypassesThrottle() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         model.setMainWindowVisible(true); model.setMainSearchPanelVisible(true)
         model.mainSearch.query = "needle"; model.mainSearch.search()
         await clock.advance(by: .milliseconds(100)); await awaitSearch(model.mainSearch)
@@ -220,7 +220,7 @@ final class ClockTests: XCTestCase {
     func testHidingSearchCancelsPendingAutomaticRefresh() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         model.setMainWindowVisible(true); model.setMainSearchPanelVisible(true)
         model.mainSearch.query = "needle"; model.mainSearch.search()
         await clock.advance(by: .milliseconds(100)); await awaitSearch(model.mainSearch)
@@ -238,7 +238,7 @@ final class ClockTests: XCTestCase {
     func testSidebarRevealExpiresAtFiveSecondsAndReplacementAndAcknowledgementCancel() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         let page = try await fixture.database.search(query: "needle")
         let result = try XCTUnwrap(page.results.first)
         model.openSearchResult(result)
@@ -266,7 +266,7 @@ final class ClockTests: XCTestCase {
     func testUsageRepairWaitsForOneSecondQuietPeriod() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         var terminal = progress(.complete, pass: UUID())
         terminal.rollupError = "Synthetic rollup failure"
         await model.receiveProgress(terminal)
@@ -285,7 +285,7 @@ final class ClockTests: XCTestCase {
     func testShutdownCancelsAllPendingBehaviorDelays() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         model.mainSearch.query = "needle"; model.mainSearch.search()
         await model.receiveProgress(progress(pass: UUID(), incremental: true))
         let page = try await fixture.database.search(query: "needle")
@@ -303,7 +303,7 @@ final class ClockTests: XCTestCase {
     func testShutdownCancelsDeferredRepairAndVisibilityDelay() async throws {
         let clock = TestClock()
         let fixture = try await fixture(clock: clock)
-        let model = traceModel(fixture, clock: clock)
+        let model = await traceModel(fixture, clock: clock)
         model.mainSearch.query = "needle"
         model.setMainWindowVisible(true); model.setMainSearchPanelVisible(true)
         var terminal = progress(.complete, pass: UUID())

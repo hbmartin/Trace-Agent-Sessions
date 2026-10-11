@@ -34,7 +34,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let suite = "TraceAppReview.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let model = TraceModel(settings: AppSettings(defaults: defaults), clock: clock, diagnosticsURL: root.appendingPathComponent("diagnostics.json"))
-        model.attachForTesting(database: database, sources: [source])
+        await model.attachForTesting(database: database, sources: [source])
         await model.refreshSummariesForTesting()
         addTeardownBlock { @MainActor in
             await model.prepareToTerminate()
@@ -68,6 +68,244 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.searchMain()
         await f.clock.advance(by: .milliseconds(100))
         try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.results.count == expectedCount }
+    }
+
+    func testRecoveryBudgetCoalescesFailuresAndManualRetryPreservesRows() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id)
+        try await wait { !f.model.messages.isEmpty }
+        let rows = f.model.messages
+        await f.database.failTranscriptReadsForTesting(count: 5)
+        await f.model.refreshSummariesForTesting()
+        await f.model.refreshSummariesForTesting()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        let before = await f.database.transcriptReadCountForTesting()
+        await f.clock.advance(by: .milliseconds(249))
+        let early = await f.database.transcriptReadCountForTesting()
+        XCTAssertEqual(early, before)
+        for (index, delay) in [Duration.milliseconds(1), .seconds(1), .seconds(4)].enumerated() {
+            await f.clock.advance(by: delay)
+            try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
+            XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
+        }
+        try await wait { f.model.transcriptLoadError != nil && !f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance(by: .seconds(60))
+        let exhausted = await f.database.transcriptReadCountForTesting()
+        XCTAssertEqual(exhausted, before + 3, "exhaustion must stop automatic reads")
+        await f.database.failTranscriptReadOnceForTesting()
+        await f.model.refreshSummariesForTesting()
+        XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting, "fresh failures do not reset an exhausted episode")
+        f.model.retrySelectedTranscript()
+        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
+        await f.clock.advance()
+        try await wait { !f.model.transcriptRecoveryPendingForTesting }
+        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
+        XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
+    }
+
+    func testRecoveryCancelsAfterSelectionClearReplacementAndTermination() async throws {
+        for change in 0..<4 {
+            let f = try await fixture(count: 2)
+            let session = try XCTUnwrap(f.model.sessions.first)
+            f.model.selectSession(session.id)
+            try await wait { !f.model.messages.isEmpty }
+            await f.database.failTranscriptReadOnceForTesting()
+            await f.model.refreshSummariesForTesting()
+            try await wait { f.model.transcriptRecoveryPendingForTesting }
+            let gate = ReviewReadGate(), task = Task { await gate.wait() }
+            defer { task.cancel(); Task { await gate.open() } }
+            f.model.transcriptRecoveryPublicationGateForTesting = task
+            await f.clock.advance(by: .milliseconds(250))
+            try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
+            switch change {
+            case 0:
+                let other = try XCTUnwrap(f.model.sessions.first { $0.id != session.id })
+                f.model.selectSession(other.id)
+                try await wait { f.model.selectedSession?.id == other.id && !f.model.messages.isEmpty }
+            case 1: f.model.clearSession()
+            case 2:
+                let replacement = try await fixture(count: 3)
+                await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+            default: await f.model.prepareToTerminate()
+            }
+            let selected = f.model.selectedSessionID, rows = f.model.messages, revision = f.model.transcriptMessageRevision
+            await gate.open()
+            try await wait { !f.model.transcriptRecoveryPublicationWaitingForTesting }
+            await f.clock.advance(by: .seconds(10))
+            XCTAssertEqual(f.model.selectedSessionID, selected)
+            XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
+            XCTAssertEqual(f.model.transcriptMessageRevision, revision)
+            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
+        }
+    }
+
+    func testRecoverySelectionFailureLoadsWithoutAnotherSummary() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        await f.database.failTranscriptReadOnceForTesting()
+        f.model.selectSession(session.id)
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        XCTAssertTrue(f.model.messages.isEmpty)
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { !f.model.messages.isEmpty }
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
+        XCTAssertNil(f.model.transcriptLoadError)
+    }
+
+    func testRecoveryNewerMissingSelectionAlreadyPublishedNeedsNoConfirmation() async throws {
+        let pending = try await preparePendingMissingSummary()
+        let f = pending.fixture
+        await pending.readGate.open()
+        try await wait { f.model.selectionTranscriptWaitingForTesting }
+        await pending.publicationGate.open()
+        try await wait { !f.model.selectionTranscriptWaitingForTesting }
+        XCTAssertNil(f.model.selectedSession)
+        XCTAssertEqual(f.model.selectedSessionID, pending.session.id)
+        let before = await f.database.transcriptReadCountForTesting()
+        let revision = f.model.transcriptMessageRevision
+        await pending.summaryGate.open()
+        try await wait { pending.finished() }
+        assertMissingSummaryCleared(pending, revision: revision)
+        let after = await f.database.transcriptReadCountForTesting()
+        XCTAssertEqual(after, before)
+    }
+
+    func testRecoveryAcceptedMovedSelectionCancelsRevealBeforeStaleTerminalSummary() async throws {
+        let f = try await fixture(count: 2)
+        let staleSession = try XCTUnwrap(f.model.sessions.first)
+        let readGate = ReviewReadGate(), readTask = Task { await readGate.wait() }
+        let summaryGate = ReviewReadGate(), summaryTask = Task { await summaryGate.wait() }
+        defer { readTask.cancel(); summaryTask.cancel(); Task { await readGate.open(); await summaryGate.open() } }
+        f.model.selectionTranscriptReadGateForTesting = readTask
+        f.model.openSession(staleSession)
+        try await wait { f.model.selectionTranscriptReadWaitingForTesting }
+        XCTAssertEqual(f.model.sidebarRevealRequest?.projectCanonicalKey, staleSession.projectCanonicalKey)
+        f.model.summaryTranscriptGateForTesting = summaryTask
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        addTeardownBlock { await readGate.open(); await summaryGate.open(); await refresh.value }
+        try await wait { f.model.summaryTranscriptWaitingForTesting }
+        var moved = Data()
+        for index in 0..<6 { moved.append(try line(index, project: "MovedReview")) }
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        try moved.write(to: file, options: .atomic)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        await readGate.open()
+        try await wait { f.model.selectedSession?.projectCanonicalKey != staleSession.projectCanonicalKey && !f.model.messages.isEmpty }
+        XCTAssertNil(f.model.sidebarRevealRequest, "accepted selection must invalidate the old project reveal immediately")
+        await summaryGate.open()
+        await refresh.value
+        XCTAssertNil(f.model.sidebarRevealRequest)
+        XCTAssertEqual(f.model.selectedSessionID, staleSession.id)
+        XCTAssertEqual(f.model.selectedProjectCanonicalKey, f.model.selectedSession?.projectCanonicalKey)
+    }
+
+    func testRecoveryActiveSchedulerReplacementFencesProgressAndLatestAttachmentWins() async throws {
+        let f = try await fixture(count: 2), replacement = try await fixture(count: 3), latest = try await fixture(count: 4)
+        let previous = try XCTUnwrap(f.model.schedulerForTesting)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.schedulerProgressGateForTesting = task
+        await previous.request(reconcile: true)
+        try await wait { f.model.schedulerProgressWaitingForTesting }
+        let first = Task { await f.model.attach(database: replacement.database, coordinator: replacement.coordinator) }
+        try await wait { f.model.schedulerForTesting == nil }
+        let second = Task { await f.model.attach(database: latest.database, coordinator: latest.coordinator) }
+        // The second attachment installs its database before it waits for the retiring worker.
+        try await wait { f.model.databaseForTesting === latest.database }
+        f.model.schedulerProgressGateForTesting = nil
+        await gate.open()
+        let firstCommitted = await first.value, secondCommitted = await second.value
+        XCTAssertFalse(firstCommitted)
+        XCTAssertTrue(secondCommitted)
+        XCTAssertTrue(f.model.coordinatorForTesting === latest.coordinator)
+        XCTAssertEqual(f.model.progress.phase, .waiting)
+        XCTAssertNil(f.model.statistics)
+        await previous.waitUntilIdle()
+        await f.model.refreshSummariesForTesting()
+        XCTAssertEqual(f.model.sessions.count, 8)
+    }
+
+    func testRecoverySchedulerReplacementCannotCheckpointReplacementDatabase() async throws {
+        let f = try await fixture(count: 2), replacement = try await fixture(count: 3)
+        let previous = try XCTUnwrap(f.model.schedulerForTesting)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.schedulerCompletionGateForTesting = task
+        await previous.request(watermarks: ["retired": 42])
+        try await wait { f.model.schedulerCompletionWaitingForTesting }
+        let attachment = Task { await f.model.attach(database: replacement.database, coordinator: replacement.coordinator) }
+        try await wait { f.model.schedulerForTesting == nil }
+        f.model.schedulerCompletionGateForTesting = nil
+        await gate.open()
+        let committed = await attachment.value
+        XCTAssertTrue(committed)
+        let oldCheckpoint = try await f.database.eventCheckpoint(volumeID: "retired")
+        let replacementCheckpoint = try await replacement.database.eventCheckpoint(volumeID: "retired")
+        XCTAssertNil(oldCheckpoint)
+        XCTAssertNil(replacementCheckpoint)
+        let current = try XCTUnwrap(f.model.schedulerForTesting)
+        await current.request(watermarks: ["fresh": 99])
+        await current.waitUntilIdle()
+        let fresh = try await replacement.database.eventCheckpoint(volumeID: "fresh")
+        XCTAssertEqual(fresh, 99)
+    }
+
+    func testRecoveryReplacementDiscardsPendingSourceReconfiguration() async throws {
+        let f = try await fixture(count: 2), replacement = try await fixture(count: 3)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.sourceChangeAttachmentGateForTesting = task
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceChangeAttachmentWaitingForTesting }
+        await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+        await gate.open()
+        try await wait { !f.model.sourceChangeAttachmentWaitingForTesting }
+        XCTAssertTrue(f.model.coordinatorForTesting === replacement.coordinator)
+        await f.model.refreshSummariesForTesting()
+        XCTAssertEqual(f.model.sessions.count, 7)
+    }
+
+    func testRecoveryTerminationWaitsForRetirementAndRejectsPendingAttachment() async throws {
+        let f = try await fixture(count: 2), replacement = try await fixture(count: 3)
+        let previous = try XCTUnwrap(f.model.schedulerForTesting)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.schedulerProgressGateForTesting = task
+        await previous.request(reconcile: true)
+        try await wait { f.model.schedulerProgressWaitingForTesting }
+        let attachment = Task { await f.model.attach(database: replacement.database, coordinator: replacement.coordinator) }
+        try await wait { f.model.schedulerForTesting == nil }
+        let termination = Task { await f.model.prepareToTerminate() }
+        try await wait { f.model.isTerminatingForTesting }
+        f.model.schedulerProgressGateForTesting = nil
+        await gate.open()
+        let committed = await attachment.value
+        await termination.value
+        XCTAssertFalse(committed)
+        XCTAssertNil(f.model.schedulerForTesting)
+        let afterTermination = await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+        XCTAssertFalse(afterTermination)
+        await previous.waitUntilIdle()
+    }
+
+    func testRecoveryIdenticalAttachmentAndRebuildRetainScheduler() async throws {
+        let f = try await fixture(count: 2)
+        let previous = try XCTUnwrap(f.model.schedulerForTesting)
+        let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
+        let committed = await f.model.attach(database: f.database, coordinator: coordinator)
+        XCTAssertTrue(committed)
+        XCTAssertTrue(f.model.schedulerForTesting === previous)
+        f.model.settings.onboardingComplete = true
+        f.model.rebuildIndex()
+        await previous.waitUntilIdle()
+        try await wait { f.model.progress.phase == .complete }
+        XCTAssertTrue(f.model.schedulerForTesting === previous)
+        try await wait { f.model.statistics?.sessionCount == 6 }
+        XCTAssertEqual(f.model.statistics?.sessionCount, 6)
     }
 
     func testSelectionCannotOverwriteRefreshAndBreakAnUnchangedSnapshot() async throws {
@@ -374,9 +612,12 @@ final class AppReviewFollowupTests: XCTestCase {
         await pending.readGate.open()
         try await wait { model.selectionTranscriptWaitingForTesting }
         let revision = model.transcriptMessageRevision
+        let before = await pending.fixture.database.transcriptReadCountForTesting()
         await pending.summaryGate.open()
         try await wait { pending.finished() }
         assertMissingSummaryCleared(pending, revision: revision)
+        let after = await pending.fixture.database.transcriptReadCountForTesting()
+        XCTAssertEqual(after, before, "a newer missing selection needs no confirmation")
         await pending.publicationGate.open()
         try await wait { !model.selectionTranscriptWaitingForTesting }
         assertMissingSummaryCleared(pending, revision: revision)
@@ -411,7 +652,9 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.hydratedMessages.keys.sorted(), cache)
         XCTAssertEqual(f.model.transcriptMessageRevision, revision)
         f.model.summaryTranscriptGateForTesting = nil
-        await f.model.refreshSummariesForTesting()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { f.model.selectedSessionID == nil }
         assertMissingSummaryCleared(pending, revision: revision)
     }
 
@@ -436,7 +679,9 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.transcriptMessageRevision, revision)
         f.model.transcriptRecoveryReadGateForTesting = nil
         f.model.summaryTranscriptGateForTesting = nil
-        await f.model.refreshSummariesForTesting()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { f.model.selectedSessionID == nil }
         assertMissingSummaryCleared(pending, revision: revision)
         await pending.publicationGate.open()
         try await wait { !f.model.selectionTranscriptWaitingForTesting }
@@ -474,7 +719,7 @@ final class AppReviewFollowupTests: XCTestCase {
         case .database:
             f.model.selectionTranscriptGateForTesting = nil
             let replacement = try await fixture(count: 2)
-            f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+            await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
             await f.model.refreshSummariesForTesting()
             f.model.openSession(try XCTUnwrap(f.model.sessions.first))
             try await wait { f.model.selectedSession?.sourcePath == replacement.root.appendingPathComponent("sessions.jsonl").path
@@ -534,7 +779,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.openSession(session)
         try await wait { f.model.selectionTranscriptReadWaitingForTesting }
         let token = f.model.sidebarRevealRequest?.token
-        f.model.attach(database: f.database, coordinator: f.coordinator)
+        await f.model.attach(database: f.database, coordinator: f.coordinator)
         await gate.open()
         try await wait { !f.model.messages.isEmpty }
         XCTAssertEqual(f.model.selectedSessionID, session.id)
@@ -652,7 +897,9 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.sidebarRevealRequest?.token, token)
         XCTAssertEqual(f.model.selectedSessionID, session.id)
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
-        await f.model.refreshSummariesForTesting()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { f.model.selectedSessionID == nil }
         XCTAssertNil(f.model.sidebarRevealRequest)
         XCTAssertNil(f.model.selectedSessionID)
         XCTAssertTrue(f.model.messages.isEmpty)
@@ -833,7 +1080,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await assertRecovered(recovery)
     }
 
-    func testFailedRowRecoveryRetainsSelectionAndCanRetryOnNextSummary() async throws {
+    func testFailedRowRecoveryRetainsSelectionAndRetriesAutomatically() async throws {
         let recovery = try await prepareRowRecovery()
         let f = recovery.fixture
         let gate = ReviewReadGate(), task = Task { await gate.wait() }
@@ -848,7 +1095,9 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertNotNil(f.model.sidebarRevealRequest)
         XCTAssertTrue(f.model.messages.isEmpty)
         f.model.transcriptRecoveryReadGateForTesting = nil
-        await f.model.refreshSummariesForTesting()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { !f.model.messages.isEmpty }
         try await assertRecovered(recovery)
     }
 
@@ -881,7 +1130,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.transcriptRecoveryPublicationGateForTesting = task
         await recovery.summaryGate.open()
         try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
-        f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+        await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
         XCTAssertNil(f.model.selectedSessionID)
         f.model.selectionTranscriptReadGateForTesting = nil
         f.model.selectionTranscriptGateForTesting = nil
@@ -903,7 +1152,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let model = TraceModel(settings: f.model.settings, clock: f.clock,
                                diagnosticsURL: f.root.appendingPathComponent("restoration-diagnostics.json"))
         addTeardownBlock { @MainActor in await model.prepareToTerminate() }
-        model.attach(database: f.database, coordinator: f.coordinator)
+        await model.attach(database: f.database, coordinator: f.coordinator)
         XCTAssertEqual(model.settings.lastSessionID, session.id)
         await model.refreshSummariesForTesting(lightweight: false)
         try await wait { model.selectedSessionID == session.id && !model.messages.isEmpty }
@@ -921,7 +1170,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let token = f.model.sidebarRevealRequest?.token
         let rows = f.model.messages
         f.model.scrollPositions[session.id] = .init(messageID: message.id, offset: 42, index: 0)
-        f.model.attach(database: f.database, coordinator: f.coordinator)
+        await f.model.attach(database: f.database, coordinator: f.coordinator)
         XCTAssertEqual(f.model.selectedSessionID, session.id)
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
         XCTAssertNotNil(f.model.hydratedMessages[message.id])
@@ -945,7 +1194,7 @@ final class AppReviewFollowupTests: XCTestCase {
         for _ in 0..<3 { await f.model.refreshSummariesForTesting() }
         let current = try await replacement.database.transcriptSnapshot(sessionID: session.id)
         XCTAssertEqual(current.session?.id, session.id, "exercise overlapping IDs in independent databases")
-        f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+        await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
         XCTAssertNil(f.model.selectedSessionID)
         XCTAssertNil(f.model.selectedSession)
         XCTAssertNil(f.model.settings.lastSessionID)
@@ -976,7 +1225,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.hydrate(message)
         try await wait { f.model.hydrationPublicationWaitingForTesting }
         let reopened = try IndexDatabase(url: f.root.appendingPathComponent("index.sqlite"))
-        f.model.attachForTesting(database: reopened, sources: [ClaudeCodeSource(roots: [f.root])])
+        await f.model.attachForTesting(database: reopened, sources: [ClaudeCodeSource(roots: [f.root])])
         await gate.open()
         try await wait { !f.model.hydrationPublicationWaitingForTesting }
         XCTAssertNil(f.model.selectedSessionID)
@@ -997,7 +1246,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.selectionTranscriptGateForTesting = task
         f.model.openSession(session)
         try await wait { f.model.selectionTranscriptWaitingForTesting }
-        f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+        await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
         XCTAssertNil(f.model.selectedSessionID)
         f.model.selectionTranscriptGateForTesting = nil
         await f.model.refreshSummariesForTesting()
@@ -1019,7 +1268,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let refresh = Task { await f.model.refreshSummariesForTesting() }
         try await wait { await f.database.sidebarSnapshotWaitingForTesting }
         let reopened = try IndexDatabase(url: f.root.appendingPathComponent("index.sqlite"))
-        f.model.attachForTesting(database: reopened, sources: [ClaudeCodeSource(roots: [f.root])])
+        await f.model.attachForTesting(database: reopened, sources: [ClaudeCodeSource(roots: [f.root])])
         await gate.open()
         await refresh.value
         XCTAssertTrue(f.model.projects.isEmpty)
@@ -1035,7 +1284,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let refresh = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
         try await wait { f.model.summaryTailWaitingForTesting }
         let reopened = try IndexDatabase(url: f.root.appendingPathComponent("index.sqlite"))
-        f.model.attachForTesting(database: reopened, sources: [ClaudeCodeSource(roots: [f.root])])
+        await f.model.attachForTesting(database: reopened, sources: [ClaudeCodeSource(roots: [f.root])])
         await gate.open()
         await refresh.value
         XCTAssertTrue(f.model.sourceHealth.isEmpty)
