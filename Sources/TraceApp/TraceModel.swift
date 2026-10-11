@@ -1259,7 +1259,8 @@ final class TraceModel: ObservableObject {
             }
             #endif
             guard transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
-            publishTranscript(snapshot)
+            let acceptance = acceptTranscript(snapshot)
+            if acceptance == .accepted { applyTranscript(snapshot) }
             let session = selectedSession
             if let session,
                adoptProjectIdentity(from: session) {
@@ -1510,8 +1511,8 @@ final class TraceModel: ObservableObject {
             && hydratingMessageIDs[request.identity.id]?.token == request.token
     }
 
-    private enum TranscriptPublicationResult: Equatable {
-        case published
+    private enum TranscriptAcceptanceResult: Equatable {
+        case accepted
         case stale
         case requiresRows
     }
@@ -1523,10 +1524,8 @@ final class TraceModel: ObservableObject {
             && sessionRequestID == request && (summary == nil || summaryRequestID == summary)
     }
 
-    /// Called on the main actor without suspension: no hydration request can
-    /// observe new source metadata paired with the old locator rows.
-    @discardableResult
-    private func publishTranscript(_ snapshot: SessionTranscriptSnapshot) -> TranscriptPublicationResult {
+    /// After acceptance, apply the snapshot or navigate back without suspension.
+    private func acceptTranscript(_ snapshot: SessionTranscriptSnapshot) -> TranscriptAcceptanceResult {
         guard snapshot.readRevision > highestObservedTranscriptReadRevision else { return .stale }
         // Even an unusable omission establishes that older reads are obsolete.
         // The caller recovers with a newer snapshot containing complete rows.
@@ -1538,6 +1537,12 @@ final class TraceModel: ObservableObject {
                   selectedSession?.transcriptIdentity == session.transcriptIdentity,
                   messages.count == session.messageCount else { return .requiresRows }
         }
+        return .accepted
+    }
+
+    /// Called on the main actor without suspension: no hydration request can
+    /// observe new source metadata paired with the old locator rows.
+    private func applyTranscript(_ snapshot: SessionTranscriptSnapshot) {
         let changed = selectedSession?.transcriptIdentity != snapshot.session?.transcriptIdentity
         if changed {
             hydrationEpoch = UUID()
@@ -1558,7 +1563,6 @@ final class TraceModel: ObservableObject {
         }
         selectedSession = snapshot.session
         if let rows = snapshot.messages { messages = rows }
-        return .published
     }
 
     func retryHydration(_ message: MessageSummary) {
@@ -2198,8 +2202,8 @@ final class TraceModel: ObservableObject {
            transcriptRequestIsCurrent(database: database, sessionID: sessionID,
                                       request: selectedSessionRequest, summary: refresh) {
             var snapshot = loadedTranscript
-            var publication = publishTranscript(snapshot)
-            if publication == .requiresRows {
+            var acceptance = acceptTranscript(snapshot)
+            if acceptance == .requiresRows {
                 #if DEBUG
                 if let gate = transcriptRecoveryReadGateForTesting {
                     transcriptRecoveryReadWaitingForTesting = true
@@ -2221,17 +2225,20 @@ final class TraceModel: ObservableObject {
                                                  request: selectedSessionRequest, summary: refresh) else { return }
                 if let recovered {
                     snapshot = recovered
-                    publication = publishTranscript(recovered)
+                    acceptance = acceptTranscript(recovered)
                 }
             }
-            if publication == .published {
+            if acceptance == .accepted {
                 if snapshot.session == nil {
                     returnFromSession()
-                } else if projectReconciliation != .ongoing,
-                          let reveal = sidebarRevealRequest,
-                          reveal.sessionID == sessionID,
-                          snapshot.session?.projectCanonicalKey != reveal.projectCanonicalKey {
-                    invalidateSidebarRevealRequest(token: reveal.token)
+                } else {
+                    applyTranscript(snapshot)
+                    if projectReconciliation != .ongoing,
+                       let reveal = sidebarRevealRequest,
+                       reveal.sessionID == sessionID,
+                       snapshot.session?.projectCanonicalKey != reveal.projectCanonicalKey {
+                        invalidateSidebarRevealRequest(token: reveal.token)
+                    }
                 }
                 // A present matching transcript is newer evidence than the
                 // earlier project list; that list cannot cancel this reveal.

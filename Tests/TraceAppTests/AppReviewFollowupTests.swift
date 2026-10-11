@@ -300,6 +300,90 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(f.model.messages.isEmpty)
     }
 
+    func testMissingSummaryClearsTranscriptExactlyOnce() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.openSession(session)
+        try await wait { !f.model.messages.isEmpty && !f.model.isLoadingSessions }
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.hydrate(message)
+        try await wait { f.model.hydratedMessages[message.id] != nil }
+        f.model.expandedReasoningIDs.insert(message.id)
+        XCTAssertNotNil(f.model.sidebarRevealRequest)
+        XCTAssertEqual(f.model.settings.lastSessionID, session.id)
+        let revision = f.model.transcriptMessageRevision
+
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        try FileManager.default.removeItem(at: file)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting()
+
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertNil(f.model.selectedSession)
+        XCTAssertNil(f.model.settings.lastSessionID)
+        XCTAssertNil(f.model.sidebarRevealRequest)
+        XCTAssertTrue(f.model.messages.isEmpty)
+        XCTAssertTrue(f.model.hydratedMessages.isEmpty)
+        XCTAssertTrue(f.model.hydrationFailures.isEmpty)
+        XCTAssertTrue(f.model.expandedReasoningIDs.isEmpty)
+        XCTAssertEqual(f.model.transcriptMessageRevision, revision + 1,
+                       "missing-session navigation should invalidate renderer rows only once")
+    }
+
+    func testMissingSummaryRestoresMainSearchProjectContextAndAnchor() async throws {
+        let f = try await fixture(count: 2)
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        try await search(f, expectedCount: 2)
+        let result = try XCTUnwrap(f.model.mainSearch.results.first)
+        let anchor = SearchResultAnchor(id: result.id, offset: 37,
+                                        oldOrder: f.model.mainSearch.results.map(\.id))
+        f.model.openSearchResult(result, fromMainSearch: true, anchor: anchor)
+        try await wait { !f.model.messages.isEmpty && !f.model.isLoadingSessions }
+        XCTAssertTrue(f.model.hasSearchReturnContext)
+
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        try FileManager.default.removeItem(at: file)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting()
+
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertTrue(f.model.messages.isEmpty)
+        XCTAssertFalse(f.model.hasSearchReturnContext)
+        XCTAssertEqual(f.model.selectedProjectID, f.project.id)
+        XCTAssertEqual(f.model.selectedProjectCanonicalKey, f.project.canonicalKey)
+        XCTAssertEqual(f.model.selectedProjectDisplayName, f.project.displayName)
+        XCTAssertEqual(f.model.mainSearchReturnAnchor?.id, anchor.id)
+        XCTAssertEqual(f.model.mainSearchReturnAnchor?.offset, anchor.offset)
+        XCTAssertEqual(f.model.mainSearchReturnAnchor?.oldOrder, anchor.oldOrder)
+    }
+
+    func testMissingSummaryRejectsDelayedHydrationAfterClearing() async throws {
+        let f = try await fixture(count: 2)
+        f.model.openSession(try XCTUnwrap(f.model.sessions.first))
+        try await wait { !f.model.messages.isEmpty && !f.model.isLoadingSessions }
+        let message = try XCTUnwrap(f.model.messages.first)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.hydrationPublicationGateForTesting = task
+        f.model.hydrate(message)
+        try await wait { f.model.hydrationPublicationWaitingForTesting }
+
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        try FileManager.default.removeItem(at: file)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting()
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertTrue(f.model.messages.isEmpty)
+        let contentRevision = f.model.transcriptContentRevision
+
+        await gate.open()
+        try await wait { !f.model.hydrationPublicationWaitingForTesting }
+        XCTAssertTrue(f.model.hydratedMessages.isEmpty, "a delayed result cannot repopulate the cleared transcript")
+        XCTAssertTrue(f.model.hydrationFailures.isEmpty)
+        XCTAssertEqual(f.model.transcriptContentRevision, contentRevision)
+    }
+
     func testCurrentSessionProjectChangeCancelsRevealWithoutClearingTranscript() async throws {
         let f = try await fixture(count: 2)
         let session = try XCTUnwrap(f.model.sessions.first)
