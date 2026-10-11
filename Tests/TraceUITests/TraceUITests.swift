@@ -703,6 +703,27 @@ final class TraceUITests: XCTestCase {
         ), "forced reconciliation without cached source files must remain an initial build")
     }
 
+    func testTranscriptReadExhaustionShowsInlineRetryAndRecovers() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        let session = app.staticTexts["Find the sample answer"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 15))
+        let database = directory.appendingPathComponent("index.sqlite")
+        // Force actual row-read failures while retaining the sidebar session metadata.
+        XCTAssertEqual(try sqliteInteger(database, sql: "ALTER TABLE message RENAME TO unavailable_message; SELECT 1"), 1)
+        session.click()
+        let retry = app.buttons["retrySelectedTranscript"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 15), "exhaustion should offer a non-modal Retry")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertEqual(try sqliteInteger(database, sql: "ALTER TABLE unavailable_message RENAME TO message; SELECT 1"), 1)
+        retry.click()
+        XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(retry.exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "transcriptMetadataHeader").firstMatch.exists)
+    }
+
     func testTranscriptVisibilityDensityProjectFilterAndErrorHover() throws {
         let (app, _) = try makeApp(extra: ["--ui-show-main"])
         app.launch()

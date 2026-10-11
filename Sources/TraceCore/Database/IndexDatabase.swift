@@ -2124,7 +2124,7 @@ public actor IndexDatabase {
     private var sessionListReadGate: Task<Void, Never>?
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
-    private var failsNextTranscriptRead = false
+    private var failingTranscriptReads = 0
     private var sidebarSnapshotPublicationGate: Task<Void, Never>?
     private(set) var sidebarSnapshotWaitingForTesting = false
     func gateSidebarSnapshotPublicationForTesting(_ gate: Task<Void, Never>?) {
@@ -2133,7 +2133,9 @@ public actor IndexDatabase {
     func gateSessionListReadsForTesting(_ gate: Task<Void, Never>?) { sessionListReadGate = gate }
     func sessionListReadCountForTesting() -> Int { sessionListReadCount }
     func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }
-    func failTranscriptReadOnceForTesting() { failsNextTranscriptRead = true }
+    func failTranscriptReadOnceForTesting() { failingTranscriptReads = 1 }
+    func failTranscriptReadsForTesting(count: Int) { failingTranscriptReads = max(0, count) }
+    func transcriptReadCountForTesting() -> UInt64 { transcriptReadRevision }
     #endif
 
     private func waitForSessionListReadForTesting() async throws {
@@ -2164,8 +2166,8 @@ public actor IndexDatabase {
         transcriptReadRevision += 1
         let readRevision = transcriptReadRevision
         #if DEBUG
-        if failsNextTranscriptRead {
-            failsNextTranscriptRead = false
+        if failingTranscriptReads > 0 {
+            failingTranscriptReads -= 1
             throw SessionSourceError.unreadableFile("Synthetic transcript read failure")
         }
         #endif

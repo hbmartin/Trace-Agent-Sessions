@@ -199,6 +199,9 @@ final class TraceModel: ObservableObject {
     private var metadataWatcher: CodexMetadataWatcher?
     private var watcherTeardownTask: Task<Void, Never>?
     private var scheduler: IndexScheduler?
+    private var attachmentGeneration = UUID()
+    private var schedulerTeardownTask: Task<Void, Never>?
+    private var terminating = false
     private var bufferedSourceChanges = SourceChanges()
     private var watcherStartupPending = true
     private var startupReconciliationPaths: Set<String> = []
@@ -263,15 +266,22 @@ final class TraceModel: ObservableObject {
     private var lastSearchedMutationRevision = 0
     private var timeZoneObserver: NSObjectProtocol?
     private var sessionRequestID = UUID()
+    private enum TranscriptReadOutcome {
+        case snapshot(SessionTranscriptSnapshot)
+        case failed(String)
+        case superseded
+    }
     private struct PendingSelectionTranscriptRead {
-        let database: IndexDatabase
-        let sessionID: Int64
         let requestID: UUID
-        let task: Task<SessionTranscriptSnapshot?, Never>
+        let task: Task<TranscriptReadOutcome, Never>
     }
     private var pendingSelectionTranscriptRead: PendingSelectionTranscriptRead?
+    private var transcriptRecoveryTask: Task<Void, Never>?
+    private var transcriptRecoveryID: UUID?
+    @Published private(set) var transcriptLoadError: String?
     // Includes current reads awaiting row recovery or selection reconciliation.
     private var highestObservedTranscriptReadRevision: UInt64 = 0
+    private var lastAppliedTranscriptReadRevision: UInt64 = 0
     private var projectRequestID = UUID()
     private var summaryRequestID = UUID()
     var scrollPositions: [Int64: TranscriptBookmark] = [:]
@@ -307,9 +317,9 @@ final class TraceModel: ObservableObject {
     }
 
     #if DEBUG
-    func attachForTesting(database: IndexDatabase, sources: [any SessionSource]) {
+    func attachForTesting(database: IndexDatabase, sources: [any SessionSource]) async {
         let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
-        attach(database: database, coordinator: coordinator)
+        await attach(database: database, coordinator: coordinator)
     }
 
     func refreshSummariesForTesting(terminal: Bool = true, lightweight: Bool = true) async {
@@ -325,6 +335,17 @@ final class TraceModel: ObservableObject {
     var transcriptRecoveryPublicationGateForTesting: Task<Void, Never>?
     var hydrationPublicationGateForTesting: Task<Void, Never>?
     var summaryTailGateForTesting: Task<Void, Never>?
+    var schedulerProgressGateForTesting: Task<Void, Never>?
+    var schedulerCompletionGateForTesting: Task<Void, Never>?
+    var sourceChangeAttachmentGateForTesting: Task<Void, Never>?
+    private(set) var schedulerProgressWaitingForTesting = false
+    private(set) var schedulerCompletionWaitingForTesting = false
+    private(set) var sourceChangeAttachmentWaitingForTesting = false
+    var schedulerForTesting: IndexScheduler? { scheduler }
+    var coordinatorForTesting: IndexCoordinator? { coordinator }
+    var databaseForTesting: IndexDatabase? { database }
+    var isTerminatingForTesting: Bool { terminating }
+    var transcriptRecoveryPendingForTesting: Bool { transcriptRecoveryTask != nil }
     private(set) var selectionTranscriptReadWaitingForTesting = false
     private(set) var selectionTranscriptWaitingForTesting = false
     private(set) var summaryTranscriptWaitingForTesting = false
@@ -422,7 +443,8 @@ final class TraceModel: ObservableObject {
                     break
                 }
                 let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
-                attach(database: database, coordinator: coordinator)
+                guard await attach(database: database, coordinator: coordinator,
+                                   configurationRevision: configuredRevision) else { return }
                 timeZoneObserver = NotificationCenter.default.addObserver(
                     forName: Notification.Name.NSSystemTimeZoneDidChange,
                     object: nil, queue: .main
@@ -508,29 +530,101 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    private func makeScheduler(_ coordinator: IndexCoordinator) -> IndexScheduler {
+    private func makeScheduler(_ coordinator: IndexCoordinator, database: IndexDatabase,
+                               generation: UUID) -> IndexScheduler {
         IndexScheduler(
             coordinator: coordinator, scope: settings.indexScope,
             progress: { [weak self] update in
-                await self?.receiveProgress(update)
+                await self?.receiveSchedulerProgress(update, database: database, generation: generation)
             },
             clock: clock,
             didComplete: { [weak self] _, watermarks in
-                try? await self?.database?.saveEventCheckpoints(watermarks)
+                await self?.completeSchedulerCheckpoint(watermarks, database: database, generation: generation)
             },
             didSatisfySafetyReconciliation: { [weak self] in
-                try? await self?.database?.markSafetyReconciliationComplete()
+                guard await self?.attachmentIsCurrent(database: database, generation: generation) == true else { return }
+                try? await database.markSafetyReconciliationComplete()
             }
         )
     }
 
-    /// Installs an already-open index without starting source discovery or filesystem watchers.
-    func attach(database: IndexDatabase, coordinator: IndexCoordinator) {
+    private func attachmentIsCurrent(database: IndexDatabase, generation: UUID) -> Bool {
+        !terminating && self.database === database && attachmentGeneration == generation
+    }
+
+    private func receiveSchedulerProgress(_ update: IndexProgress, database: IndexDatabase,
+                                          generation: UUID) async {
+        #if DEBUG
+        if let gate = schedulerProgressGateForTesting {
+            schedulerProgressWaitingForTesting = true
+            await gate.value
+            schedulerProgressWaitingForTesting = false
+        }
+        #endif
+        guard attachmentIsCurrent(database: database, generation: generation) else { return }
+        await receiveProgress(update)
+    }
+
+    private func completeSchedulerCheckpoint(_ watermarks: [String: UInt64], database: IndexDatabase,
+                                             generation: UUID) async {
+        #if DEBUG
+        if let gate = schedulerCompletionGateForTesting {
+            schedulerCompletionWaitingForTesting = true
+            await gate.value
+            schedulerCompletionWaitingForTesting = false
+        }
+        #endif
+        guard attachmentIsCurrent(database: database, generation: generation) else { return }
+        try? await database.saveEventCheckpoints(watermarks)
+    }
+
+    /// Installs an already-open index after retiring displaced producers.
+    @discardableResult
+    func attach(database: IndexDatabase, coordinator: IndexCoordinator,
+                configurationRevision: UInt64? = nil) async -> Bool {
+        guard !terminating, !Task.isCancelled,
+              configurationRevision == nil || configurationRevision == sourceConfigurationRevision else { return false }
+        if self.database === database, self.coordinator === coordinator, scheduler != nil { return true }
+        let generation = UUID()
+        attachmentGeneration = generation
+        if self.coordinator != nil || schedulerTeardownTask != nil {
+            if configurationRevision == nil {
+                sourceConfigurationRevision &+= 1
+                sourceChangeTask?.cancel()
+                sourceChangeTask = nil
+            }
+            invalidateWatchers()
+        }
+        let previousScheduler = scheduler
+        let previousTeardown = schedulerTeardownTask
+        scheduler = nil
+        self.coordinator = nil
+        incrementalProgressTask?.cancel()
+        incrementalProgressTask = nil
+        pendingIncrementalProgress = nil
+        incrementalProgressVisible = false
+        summaryRequestID = UUID()
+        usageSnapshotRequestID = UUID()
+        indexWorkflow = .init()
+        progress = .init(phase: .waiting)
         installDatabase(database)
+        updateCostsTotalsUpdating()
+        if previousScheduler != nil || previousTeardown != nil {
+            let teardown = Task {
+                await previousTeardown?.value
+                await previousScheduler?.stop()
+            }
+            schedulerTeardownTask = teardown
+            await teardown.value
+        }
+        guard !Task.isCancelled, attachmentIsCurrent(database: database, generation: generation),
+              configurationRevision == nil || configurationRevision == sourceConfigurationRevision else { return false }
+        schedulerTeardownTask = nil
         self.coordinator = coordinator
         globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
         mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
-        scheduler = makeScheduler(coordinator)
+        scheduler = makeScheduler(coordinator, database: database, generation: generation)
+        return true
     }
 
     private func installDatabase(_ database: IndexDatabase) {
@@ -538,6 +632,7 @@ final class TraceModel: ObservableObject {
         // A first installation must retain the saved session for startup restoration.
         if self.database != nil { prepareForIndexReset() }
         highestObservedTranscriptReadRevision = 0
+        lastAppliedTranscriptReadRevision = 0
         self.database = database
     }
 
@@ -855,7 +950,14 @@ final class TraceModel: ObservableObject {
             }
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             let coordinator = IndexCoordinator(database: database, sources: sources, clock: clock)
-            attach(database: database, coordinator: coordinator)
+            #if DEBUG
+            if let gate = sourceChangeAttachmentGateForTesting {
+                sourceChangeAttachmentWaitingForTesting = true
+                await gate.value
+                sourceChangeAttachmentWaitingForTesting = false
+            }
+            #endif
+            guard await attach(database: database, coordinator: coordinator, configurationRevision: revision) else { return }
             initialIndexRequested = false
             startupSetupComplete = true
             guard await startWatching(sources, forceRootReconciliation: true) else { return }
@@ -969,6 +1071,7 @@ final class TraceModel: ObservableObject {
         mainSearchReturnAnchor = nil
         mayRestoreSession = false
         invalidateSidebarRevealRequest()
+        cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         sessionRequestID = UUID()
         selectedSessionID = nil
@@ -1013,6 +1116,7 @@ final class TraceModel: ObservableObject {
         lastObservedMutationRevision = 0
         lastSearchedMutationRevision = 0
         mayRestoreSession = false
+        cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         sessionRequestID = UUID()
         projectRequestID = UUID()
@@ -1227,6 +1331,7 @@ final class TraceModel: ObservableObject {
             if showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
             return
         }
+        cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         if !preservingMainSearch { mainSearchReturnContext = nil; hasSearchReturnContext = false; mainSearchReturnAnchor = nil }
         mayRestoreSession = false
@@ -1242,6 +1347,7 @@ final class TraceModel: ObservableObject {
         }
         let request = UUID()
         sessionRequestID = request
+        lastAppliedTranscriptReadRevision = 0
         requestedMessageID = messageID
         messages = []
         hydratedMessages.removeAll(keepingCapacity: true)
@@ -1253,40 +1359,47 @@ final class TraceModel: ObservableObject {
         if !preservingMainSearch { deferMainSearchForSessionNavigation() }
         guard let database else { return }
         // Summaries can await the database result independently of the UI callback.
-        let readTask = Task { () -> SessionTranscriptSnapshot? in
+        let readTask = Task { () -> TranscriptReadOutcome in
             guard !Task.isCancelled,
-                  transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return nil }
+                  transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return .superseded }
             #if DEBUG
             if let gate = selectionTranscriptReadGateForTesting {
                 selectionTranscriptReadWaitingForTesting = true
                 await gate.value
                 selectionTranscriptReadWaitingForTesting = false
             }
+            guard !Task.isCancelled,
+                  transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return .superseded }
             #endif
-            guard !Task.isCancelled,
-                  transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return nil }
-            let snapshot = try? await database.transcriptSnapshot(sessionID: sessionID)
-            guard !Task.isCancelled,
-                  transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return nil }
-            return snapshot
+            return await readTranscript(database: database, sessionID: sessionID, request: request)
         }
-        pendingSelectionTranscriptRead = .init(database: database, sessionID: sessionID, requestID: request, task: readTask)
+        pendingSelectionTranscriptRead = .init(requestID: request, task: readTask)
         Task {
             defer {
                 if pendingSelectionTranscriptRead?.requestID == request { pendingSelectionTranscriptRead = nil }
             }
-            guard let snapshot = await readTask.value else { return }
+            let outcome = await readTask.value
             #if DEBUG
-            if let gate = selectionTranscriptGateForTesting {
+            if case .snapshot = outcome, let gate = selectionTranscriptGateForTesting {
                 selectionTranscriptWaitingForTesting = true
                 await gate.value
                 selectionTranscriptWaitingForTesting = false
             }
             #endif
-            guard !readTask.isCancelled,
-                  transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
-            let acceptance = acceptTranscript(snapshot)
-            if acceptance == .accepted { applyTranscript(snapshot) }
+            guard transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
+            switch outcome {
+            case .superseded: return
+            case .failed(let error):
+                scheduleTranscriptRecovery(error: error, database: database, sessionID: sessionID, request: request)
+                return
+            case .snapshot(let snapshot):
+                let acceptance = acceptTranscript(snapshot)
+                assert(acceptance != .requiresRows, "Selection reads always contain complete rows")
+                if acceptance == .accepted {
+                    reconcileSidebarReveal(with: snapshot)
+                    applyTranscript(snapshot)
+                }
+            }
             let session = selectedSession
             if let session,
                adoptProjectIdentity(from: session) {
@@ -1556,21 +1669,32 @@ final class TraceModel: ObservableObject {
         read?.task.cancel()
     }
 
-    private func completeTranscriptRead(
-        database: IndexDatabase, sessionID: Int64, request: UUID, summary: UUID
-    ) async -> SessionTranscriptSnapshot? {
+    private func readTranscript(database: IndexDatabase, sessionID: Int64, request: UUID,
+                                summary: UUID? = nil) async -> TranscriptReadOutcome {
+        let outcome: TranscriptReadOutcome
+        do { outcome = .snapshot(try await database.transcriptSnapshot(sessionID: sessionID)) }
+        catch is CancellationError { return .superseded }
+        catch { outcome = .failed(error.localizedDescription) }
         guard !Task.isCancelled,
-              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return nil }
+              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return .superseded }
+        return outcome
+    }
+
+    private func completeTranscriptRead(
+        database: IndexDatabase, sessionID: Int64, request: UUID, summary: UUID? = nil
+    ) async -> TranscriptReadOutcome {
+        guard !Task.isCancelled,
+              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return .superseded }
         #if DEBUG
         if let gate = transcriptRecoveryReadGateForTesting {
             transcriptRecoveryReadWaitingForTesting = true
             await gate.value
             transcriptRecoveryReadWaitingForTesting = false
         }
-        #endif
         guard !Task.isCancelled,
-              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return nil }
-        let snapshot = try? await database.transcriptSnapshot(sessionID: sessionID)
+              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return .superseded }
+        #endif
+        let outcome = await readTranscript(database: database, sessionID: sessionID, request: request, summary: summary)
         #if DEBUG
         if let gate = transcriptRecoveryPublicationGateForTesting {
             transcriptRecoveryPublicationWaitingForTesting = true
@@ -1579,8 +1703,75 @@ final class TraceModel: ObservableObject {
         }
         #endif
         guard !Task.isCancelled,
-              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return nil }
-        return snapshot
+              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return .superseded }
+        return outcome
+    }
+
+    private func cancelTranscriptRecovery() {
+        transcriptRecoveryID = nil
+        transcriptRecoveryTask?.cancel()
+        transcriptRecoveryTask = nil
+        transcriptLoadError = nil
+    }
+
+    func retrySelectedTranscript() {
+        guard let database, let sessionID = selectedSessionID, !terminating else { return }
+        cancelTranscriptRecovery()
+        scheduleTranscriptRecovery(error: "Could not read the selected session.", database: database,
+                                   sessionID: sessionID, request: sessionRequestID, immediately: true)
+    }
+
+    private func scheduleTranscriptRecovery(error: String, database: IndexDatabase, sessionID: Int64,
+                                            request: UUID, immediately: Bool = false) {
+        guard !terminating, transcriptRecoveryID == nil,
+              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
+        let recoveryID = UUID()
+        transcriptRecoveryID = recoveryID
+        transcriptRecoveryTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if transcriptRecoveryID == recoveryID { transcriptRecoveryTask = nil }
+            }
+            var lastError = error
+            let delays: [Duration] = immediately ? [.zero, .milliseconds(250), .seconds(1), .seconds(4)]
+                                                 : [.milliseconds(250), .seconds(1), .seconds(4)]
+            for delay in delays {
+                do { try await clock.sleep(for: delay) } catch { return }
+                guard !Task.isCancelled, transcriptRecoveryID == recoveryID,
+                      transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
+                let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request)
+                guard !Task.isCancelled, transcriptRecoveryID == recoveryID,
+                      transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
+                switch outcome {
+                case .superseded: return
+                case .failed(let error): lastError = error
+                case .snapshot(let snapshot):
+                    guard acceptTranscript(snapshot) == .accepted else { continue }
+                    if snapshot.session == nil { returnFromSession() }
+                    else {
+                        reconcileSidebarReveal(with: snapshot)
+                        applyTranscript(snapshot)
+                        if let session = snapshot.session, adoptProjectIdentity(from: session) {
+                            if !hasSearchReturnContext { deferMainSearchForSessionNavigation() }
+                            loadProjectSessions(ensuring: sessionID)
+                        }
+                    }
+                    return
+                }
+            }
+            transcriptLoadError = lastError
+        }
+    }
+
+    private func recoverableSnapshot(_ outcome: TranscriptReadOutcome, database: IndexDatabase,
+                                     sessionID: Int64, request: UUID) -> SessionTranscriptSnapshot? {
+        switch outcome {
+        case .snapshot(let snapshot): return snapshot
+        case .failed(let error):
+            scheduleTranscriptRecovery(error: error, database: database, sessionID: sessionID, request: request)
+            return nil
+        case .superseded: return nil
+        }
     }
 
     private func reconcileMissingTranscript(
@@ -1589,35 +1780,47 @@ final class TraceModel: ObservableObject {
     ) async -> SessionTranscriptSnapshot? {
         guard snapshot.readRevision > highestObservedTranscriptReadRevision else { return nil }
         guard let pending = pendingSelectionTranscriptRead,
-              pending.database === database, pending.sessionID == sessionID,
               pending.requestID == request else { return snapshot }
-        // This missing result is observed, but cannot invalidate a selection
-        // whose newer read may still be waiting to publish on the main actor.
+        // Observe deletion without invalidating a newer selection awaiting publication.
         highestObservedTranscriptReadRevision = snapshot.readRevision
         #if DEBUG
         missingSummarySelectionReadWaitingForTesting = true
         #endif
-        let selectionSnapshot = await pending.task.value
+        let selectionOutcome = await pending.task.value
         #if DEBUG
         missingSummarySelectionReadWaitingForTesting = false
         #endif
-        guard !Task.isCancelled, !pending.task.isCancelled,
+        guard !Task.isCancelled,
               transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary),
-              let selectionSnapshot else { return nil }
-        if selectionSnapshot.readRevision > snapshot.readRevision, selectionSnapshot.session != nil {
-            return nil
+              let selectionSnapshot = recoverableSnapshot(selectionOutcome, database: database,
+                                                           sessionID: sessionID, request: request) else { return nil }
+        if selectionSnapshot.readRevision > snapshot.readRevision {
+            return selectionSnapshot.session == nil ? selectionSnapshot : nil
         }
-        // A failed read cannot establish deletion. A successful ambiguous read
-        // gets one complete confirmation, independent of its UI publication.
-        return await completeTranscriptRead(database: database, sessionID: sessionID, request: request, summary: summary)
+        let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request, summary: summary)
+        return recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request)
+    }
+
+    private func finishPreviouslyAppliedMissingTranscript(_ snapshot: SessionTranscriptSnapshot) -> Bool {
+        guard snapshot.session == nil, selectedSession == nil,
+              lastAppliedTranscriptReadRevision >= snapshot.readRevision,
+              lastAppliedTranscriptReadRevision == highestObservedTranscriptReadRevision else { return false }
+        returnFromSession()
+        return true
+    }
+
+    private func reconcileSidebarReveal(with snapshot: SessionTranscriptSnapshot) {
+        guard let session = snapshot.session, let reveal = sidebarRevealRequest,
+              reveal.sessionID == session.id, reveal.projectCanonicalKey != session.projectCanonicalKey else { return }
+        invalidateSidebarRevealRequest(token: reveal.token)
     }
 
     private func refreshSelectedTranscript(
         _ loaded: SessionTranscriptSnapshot, database: IndexDatabase,
-        sessionID: Int64, request: UUID, summary: UUID,
-        projectReconciliation: ProjectReconciliationMode
+        sessionID: Int64, request: UUID, summary: UUID
     ) async {
         guard transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return }
+        if finishPreviouslyAppliedMissingTranscript(loaded) { return }
         var snapshot = loaded
         if snapshot.session == nil {
             guard let reconciled = await reconcileMissingTranscript(snapshot, database: database,
@@ -1626,28 +1829,19 @@ final class TraceModel: ObservableObject {
         }
         guard !Task.isCancelled,
               transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return }
+        if finishPreviouslyAppliedMissingTranscript(snapshot) { return }
         var acceptance = acceptTranscript(snapshot)
         if acceptance == .requiresRows {
-            guard let recovered = await completeTranscriptRead(database: database, sessionID: sessionID,
-                                                              request: request, summary: summary) else { return }
-            guard !Task.isCancelled,
-                  transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return }
+            let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request, summary: summary)
+            guard let recovered = recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request) else { return }
             snapshot = recovered
             acceptance = acceptTranscript(recovered)
         }
         guard acceptance == .accepted else { return }
-        if snapshot.session == nil {
-            returnFromSession()
-        } else {
+        if snapshot.session == nil { returnFromSession() }
+        else {
+            reconcileSidebarReveal(with: snapshot)
             applyTranscript(snapshot)
-            if projectReconciliation != .ongoing,
-               let reveal = sidebarRevealRequest,
-               reveal.sessionID == sessionID,
-               snapshot.session?.projectCanonicalKey != reveal.projectCanonicalKey {
-                invalidateSidebarRevealRequest(token: reveal.token)
-            }
-            // A present matching transcript is newer evidence than the earlier
-            // project list; that list cannot cancel this reveal.
         }
     }
 
@@ -1670,6 +1864,8 @@ final class TraceModel: ObservableObject {
     /// Called on the main actor without suspension: no hydration request can
     /// observe new source metadata paired with the old locator rows.
     private func applyTranscript(_ snapshot: SessionTranscriptSnapshot) {
+        cancelTranscriptRecovery()
+        lastAppliedTranscriptReadRevision = snapshot.readRevision
         let changed = selectedSession?.transcriptIdentity != snapshot.session?.transcriptIdentity
         if changed {
             hydrationEpoch = UUID()
@@ -1864,6 +2060,9 @@ final class TraceModel: ObservableObject {
     }
 
     func prepareToTerminate() async {
+        terminating = true
+        attachmentGeneration = UUID()
+        cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         sessionRequestID = UUID()
         summaryRequestID = UUID()
@@ -1892,6 +2091,8 @@ final class TraceModel: ObservableObject {
             self.timeZoneObserver = nil
         }
         await watcherTeardownTask?.value
+        await schedulerTeardownTask?.value
+        schedulerTeardownTask = nil
         await scheduler?.stop()
         try? await diagnostics.markCleanShutdown()
     }
@@ -2305,9 +2506,17 @@ final class TraceModel: ObservableObject {
         finishBackgroundSidebarRequest(projectRequest)
         let loadedTranscript: SessionTranscriptSnapshot?
         if let ensuredSessionID {
-            loadedTranscript = try? await database.transcriptSnapshot(
-                sessionID: ensuredSessionID, knownSession: selectedSession, knownMessageCount: messages.count
-            )
+            do {
+                loadedTranscript = try await database.transcriptSnapshot(
+                    sessionID: ensuredSessionID, knownSession: selectedSession, knownMessageCount: messages.count
+                )
+            } catch {
+                loadedTranscript = nil
+                if !Task.isCancelled, !(error is CancellationError), summaryRequestID == refresh {
+                    scheduleTranscriptRecovery(error: error.localizedDescription, database: database,
+                                               sessionID: ensuredSessionID, request: selectedSessionRequest)
+                }
+            }
         } else {
             loadedTranscript = nil
         }
@@ -2333,7 +2542,7 @@ final class TraceModel: ObservableObject {
                                       request: selectedSessionRequest, summary: refresh) {
             await refreshSelectedTranscript(loadedTranscript, database: database,
                                             sessionID: sessionID, request: selectedSessionRequest,
-                                            summary: refresh, projectReconciliation: projectReconciliation)
+                                            summary: refresh)
         }
         if lightweight || self.database !== database || summaryRequestID != refresh { return }
         #if DEBUG
