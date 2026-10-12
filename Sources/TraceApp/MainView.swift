@@ -66,7 +66,7 @@ struct MainView: View {
                         .frame(width: 220)
                     }
                     Spacer()
-                    IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings)
+                    IndexStatusView(model: model)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
