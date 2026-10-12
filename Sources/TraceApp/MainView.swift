@@ -431,7 +431,9 @@ struct TranscriptView: View {
         VStack(spacing: 0) {
             if model.selectedSessionID != nil, let error = model.transcriptLoadError {
                 HStack {
-                    Text("Could not refresh this session. Try again.")
+                    Text(model.transcriptIsTemporarilyUnavailable
+                         ? "This session is temporarily unavailable while the index updates. Retry now or wait for indexing to finish."
+                         : "Could not refresh this session. Try again.")
                         .font(.callout)
                         .help(error)
                         .accessibilityIdentifier("transcriptLoadError")

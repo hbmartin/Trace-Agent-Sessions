@@ -3647,6 +3647,148 @@ final class TraceUITests: XCTestCase {
         return (app, directory)
     }
 
+    private func launchWithTransientSavedSelection(hiddenLauncher: Bool) throws -> (XCUIApplication, URL, URL) {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
+        app.staticTexts["TraceUIExample"].firstMatch.click()
+        openSidebarSession("Find the sample answer", in: app)
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        app.terminate()
+        // Retain the indexed rows, but request the scope-reset path on the next launch.
+        XCTAssertEqual(try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+            sql: "UPDATE trace_meta SET value='2' WHERE key='index_scope'; SELECT 1"), 1)
+        let finalizing = directory.appendingPathComponent("transient-finalizing")
+        let finalRelease = directory.appendingPathComponent("transient-final-release")
+        let readEntered = directory.appendingPathComponent("transient-read-entered")
+        let readRelease = directory.appendingPathComponent("transient-read-release")
+        let resetEntered = directory.appendingPathComponent("transient-reset-entered")
+        let resetRelease = directory.appendingPathComponent("transient-reset-release")
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = finalizing.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = finalRelease.path
+        app.launchEnvironment["TRACE_TEST_SELECTION_READ_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_SELECTION_READ_ENTERED_PATH"] = readEntered.path
+        app.launchEnvironment["TRACE_TEST_SELECTION_READ_RELEASE_PATH"] = readRelease.path
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_ENTERED_PATH"] = resetEntered.path
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_RELEASE_PATH"] = resetRelease.path
+        if hiddenLauncher { app.launchArguments.removeAll { $0 == "--ui-show-main" } }
+        app.launch()
+        XCTAssertTrue(waitForFile(finalizing, timeout: 15))
+        XCTAssertTrue(waitForFile(readEntered, timeout: 5))
+        if hiddenLauncher {
+            XCTAssertFalse(app.buttons["backToProject"].exists)
+            ensurePopoverOpen(app)
+            let popover = app.textFields["Search all sessions"]
+            popover.click(); popover.typeKey(.return, modifierFlags: [])
+            let search = app.textFields["Search Claude Code, Codex, and Gemini"]
+            XCTAssertTrue(search.waitForExistence(timeout: 10))
+            search.click(); search.typeText("sample answer")
+            let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+            XCTAssertTrue(result.waitForExistence(timeout: 10))
+            result.click()
+            XCTAssertFalse(app.buttons["backToProject"].exists, "window intent waits for the held transcript result")
+        }
+        try Data().write(to: finalRelease)
+        XCTAssertTrue(waitForFile(resetEntered, timeout: 10))
+        try Data().write(to: readRelease)
+        XCTAssertTrue(app.buttons["backToProject"].waitForExistence(timeout: 10))
+        let banner = app.staticTexts["transcriptLoadError"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 5))
+        XCTAssertEqual(banner.value as? String,
+            "This session is temporarily unavailable while the index updates. Retry now or wait for indexing to finish.")
+        XCTAssertTrue(app.buttons["retrySelectedTranscript"].exists)
+        return (app, directory, resetRelease)
+    }
+
+    func testHiddenLauncherTemporarySelectionShowsWindowAndRecoversOnce() throws {
+        let (app, _, release) = try launchWithTransientSavedSelection(hiddenLauncher: true)
+        app.buttons["retrySelectedTranscript"].click()
+        XCTAssertTrue(app.staticTexts["transcriptLoadError"].exists, "Retry retains temporary-absence feedback")
+        attach(app, name: "launcher-temporary-selection")
+        try Data().write(to: release)
+        XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].exists)
+    }
+
+    func testTransientSelectionConfirmsDeletionAtTerminalRefresh() throws {
+        let (app, directory, release) = try launchWithTransientSavedSelection(hiddenLauncher: true)
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Sources/Claude/session.jsonl"))
+        try Data().write(to: release)
+        XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+        attach(app, name: "temporary-selection-terminal-deletion")
+    }
+
+    func testSavedSessionRestoresAfterTransientStartupAbsence() throws {
+        let (app, _, release) = try launchWithTransientSavedSelection(hiddenLauncher: false)
+        try Data().write(to: release)
+        XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].exists)
+        attach(app, name: "saved-session-transient-restoration")
+    }
+
+    func testInitialStartupFailureKeepsAccurateRebuildFeedbackAfterDismissal() throws {
+        let (app, _) = try makeApp(extra: ["--ui-show-main", "--ui-show-settings"])
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_FAIL_INDEX_OPEN_ONCE"] = "1"
+        app.launch()
+        let error = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "Synthetic index startup failure")).firstMatch
+        XCTAssertTrue(error.waitForExistence(timeout: 10))
+        app.sheets.firstMatch.buttons["OK"].click()
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        let reason = "Rebuild is unavailable because index startup failed. Resolve the startup error and restart Trace."
+        XCTAssertTrue(settings.staticTexts[reason].waitForExistence(timeout: 5))
+        XCTAssertFalse(settings.buttons["rebuildIndex"].isEnabled)
+        app.typeKey("w", modifierFlags: .command)
+        app.statusItems["Trace"].rightClick()
+        let rebuild = app.menuItems.matching(NSPredicate(format: "title == %@", "Rebuild Index…")).firstMatch
+        XCTAssertTrue(rebuild.waitForExistence(timeout: 5))
+        XCTAssertFalse(rebuild.isEnabled)
+        app.typeKey(.escape, modifierFlags: [])
+        attach(app, name: "initial-startup-failed-rebuild-feedback")
+    }
+
+    func testOnboardingReversalRetiresHeldStartupAndResumesOnce() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let entered = directory.appendingPathComponent("reverse-startup-entered")
+        let release = directory.appendingPathComponent("reverse-startup-release")
+        let audit = directory.appendingPathComponent("reverse-startup-audit")
+        let completed = directory.appendingPathComponent("reverse-startup-completed")
+        let deferred = directory.appendingPathComponent("reverse-startup-deferred")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_WATCHER_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_METADATA_START_DELAY_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_METADATA_START_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_METADATA_START_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_METADATA_START_AUDIT_PATH"] = audit.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(waitForFile(entered, timeout: 15))
+        let toggle = app.buttons["testToggleOnboardingOnly"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        toggle.click()
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(deferred, timeout: 10))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path))
+        XCTAssertFalse(fileLines(in: audit).contains { $0.hasPrefix("started,") })
+        app.buttons["testResumeStartup"].click()
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        XCTAssertEqual(fileLines(in: audit).filter { $0.hasPrefix("started,") }.count, 1)
+        XCTAssertEqual(fileLines(in: audit).filter { $0.hasPrefix("enter,") }.count, 2)
+        attach(app, name: "onboarding-reversal-fresh-startup")
+    }
+
     func testManualRebuildIsDisabledUntilInitialAttachmentCommits() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main", "--ui-show-settings"])
         let entered = directory.appendingPathComponent("rebuild-startup-entered")

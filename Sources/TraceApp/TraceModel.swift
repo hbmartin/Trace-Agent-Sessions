@@ -220,9 +220,15 @@ final class TraceModel: ObservableObject {
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
     @Published private var rebuildAttachmentReady = false
+    @Published private var initialAttachmentFailure: String?
     var canRebuildIndex: Bool { rebuildAttachmentReady && settings.onboardingComplete && !terminating }
     var rebuildUnavailableReason: String? {
-        if !rebuildAttachmentReady { return "Rebuild is available after the index finishes opening." }
+        if !rebuildAttachmentReady {
+            if initialAttachmentFailure != nil {
+                return "Rebuild is unavailable because index startup failed. Resolve the startup error and restart Trace."
+            }
+            return "Rebuild is available after the index finishes opening."
+        }
         if !settings.onboardingComplete { return "Complete onboarding to rebuild the index." }
         return nil
     }
@@ -237,16 +243,26 @@ final class TraceModel: ObservableObject {
             lhs.database === rhs.database && lhs.attachment == rhs.attachment && lhs.revision == rhs.revision
         }
     }
+    private struct WatcherReceipt: Equatable, Sendable {
+        let owner: WatcherOwner
+        let attempt: UUID
+        let generation: UInt64
+    }
     private enum WatcherStartOutcome: Sendable {
-        case started(WatcherOwner)
-        case deferredByOnboarding(WatcherOwner)
+        case started(WatcherReceipt)
+        case deferredByOnboarding(WatcherReceipt)
         case superseded
     }
     private final class WatcherStartup {
+        enum Phase { case preparing, ready, deferred }
         let owner: WatcherOwner
+        let attempt = UUID()
         let generation: UInt64
         var forceRootReconciliation: Bool
-        var ready = false
+        var phase = Phase.preparing
+        var hasTranscriptRoots = false
+        var ready: Bool { phase == .ready }
+        var receipt: WatcherReceipt { .init(owner: owner, attempt: attempt, generation: generation) }
         var task: Task<WatcherStartOutcome, Never>?
         init(owner: WatcherOwner, generation: UInt64, forceRootReconciliation: Bool) {
             self.owner = owner
@@ -353,7 +369,22 @@ final class TraceModel: ObservableObject {
     private var pendingSelectionCompletion: SelectionCompletion?
     private var transcriptRecoveryTask: Task<Void, Never>?
     private var transcriptRecoveryID: UUID?
-    @Published private(set) var transcriptLoadError: String?
+    private struct TranscriptAbsence {
+        let database: IndexDatabase
+        let sessionID: Int64
+        let requestID: UUID
+    }
+    @Published private var transientTranscriptAbsence: TranscriptAbsence?
+    @Published private var transcriptReadError: String?
+    var transcriptIsTemporarilyUnavailable: Bool {
+        guard let absence = transientTranscriptAbsence else { return false }
+        return transcriptRequestIsCurrent(database: absence.database, sessionID: absence.sessionID, request: absence.requestID)
+    }
+    var transcriptLoadError: String? {
+        guard transcriptIsTemporarilyUnavailable else { return transcriptReadError }
+        let explanation = "This session is temporarily unavailable while the index updates. Retry now or wait for indexing to finish."
+        return transcriptReadError.map { explanation + "\n" + $0 } ?? explanation
+    }
     // Includes current reads awaiting row recovery or selection reconciliation.
     private var highestObservedTranscriptReadRevision: UInt64 = 0
     private var lastAppliedTranscriptReadRevision: UInt64 = 0
@@ -415,6 +446,13 @@ final class TraceModel: ObservableObject {
     var sourceChangeAttachmentGateForTesting: Task<Void, Never>?
     var watcherPreparationGateForTesting: Task<Void, Never>?
     var watcherReadinessGateForTesting: Task<Void, Never>?
+    var watcherOutcomeGateForTesting: Task<Void, Never>?
+    private(set) var watcherOutcomeWaitingForTesting = false
+    var failsWatcherStartForTesting = false
+    var initialIndexOpenErrorForTesting: String?
+    var activeWatcherCountForTesting: Int { watchers.count }
+    var metadataWatcherAttachedForTesting: Bool { metadataWatcher != nil }
+    var safetyVerificationActiveForTesting: Bool { safetyVerificationTask != nil }
     private(set) var watcherPreparationWaitingForTesting = false
     private(set) var watcherReadinessWaitingForTesting = false
     private(set) var watcherStartCountForTesting = 0
@@ -424,10 +462,11 @@ final class TraceModel: ObservableObject {
     var watcherGenerationForTesting: UInt64 { watcherGeneration }
     var startupReconciliationPathsForTesting: Set<String> { startupReconciliationPaths }
     func startWatchingForTesting(_ sources: [any SessionSource], force: Bool = false) async -> Bool {
-        if case .started(let owner) = await startWatching(sources, forceRootReconciliation: force) {
-            return watcherReadyIsCurrent(owner)
+        switch await startWatching(sources, forceRootReconciliation: force) {
+        case .started(let receipt): return watcherReadyIsCurrent(receipt)
+        case .deferredByOnboarding(let receipt): settleDeferredSourceReload(receipt: receipt); return false
+        case .superseded: return false
         }
-        return false
     }
     private(set) var schedulerProgressWaitingForTesting = false
     private(set) var schedulerCompletionWaitingForTesting = false
@@ -465,6 +504,12 @@ final class TraceModel: ObservableObject {
         Task {
             do {
                 try await diagnostics.markLaunchStarted()
+                #if DEBUG
+                if let error = initialIndexOpenErrorForTesting { throw SessionSourceError.unreadableFile(error) }
+                #endif
+                if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_INDEX_OPEN_ONCE") {
+                    throw SessionSourceError.unreadableFile("Synthetic index startup failure")
+                }
                 let isolatedURL = TraceRuntime.testDirectory?.appendingPathComponent("index.sqlite")
                 let database = try await Task.detached(priority: .userInitiated) {
                     if isolatedURL != nil,
@@ -603,6 +648,8 @@ final class TraceModel: ObservableObject {
                     }
                 }
             } catch {
+                guard !terminating, coordinator == nil else { return }
+                initialAttachmentFailure = error.localizedDescription
                 startupError = error.localizedDescription
                 progress = .init(phase: .failed, error: error.localizedDescription)
             }
@@ -748,6 +795,7 @@ final class TraceModel: ObservableObject {
                 : message
         }
         sourceReloadActivation = nil
+        if coordinator == nil, phase == .failed, let error { initialAttachmentFailure = error }
         if pending.intent == .sourceReload, let error {
             sourceReloadRecovery = .failed(error)
         } else if let previousError = sourceReloadRecovery.error {
@@ -804,6 +852,7 @@ final class TraceModel: ObservableObject {
             startupError = nil
         }
         updateCostsTotalsUpdating()
+        initialAttachmentFailure = nil
         if !rebuildAttachmentReady { rebuildAttachmentReady = true }
         if pending.intent == .installation, pendingRebuild { rebuildIndex() }
         return true
@@ -1154,8 +1203,8 @@ final class TraceModel: ObservableObject {
         return true
     }
 
-    private func settleDeferredSourceReload(owner: WatcherOwner) {
-        guard watcherOwnerIsCurrent(owner), !settings.onboardingComplete else { return }
+    private func settleDeferredSourceReload(receipt: WatcherReceipt) {
+        guard watcherDeferralIsCurrent(receipt) else { return }
         // A deliberately deferred startup cannot erase an independently running pass.
         if indexWorkflow.activePassID == nil {
             indexWorkflow = .init()
@@ -1232,7 +1281,7 @@ final class TraceModel: ObservableObject {
             startupSetupComplete = true
             switch await startWatching(sources, forceRootReconciliation: true) {
             case .deferredByOnboarding(let owner):
-                settleDeferredSourceReload(owner: owner)
+                settleDeferredSourceReload(receipt: owner)
                 return
             case .superseded:
                 return
@@ -1350,6 +1399,7 @@ final class TraceModel: ObservableObject {
         mainSearchReturnAnchor = nil
         mayRestoreSession = false
         invalidateSidebarRevealRequest()
+        transientTranscriptAbsence = nil
         cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         sessionRequestID = UUID()
@@ -1396,6 +1446,7 @@ final class TraceModel: ObservableObject {
         lastObservedMutationRevision = 0
         lastSearchedMutationRevision = 0
         mayRestoreSession = false
+        transientTranscriptAbsence = nil
         cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         sessionRequestID = UUID()
@@ -1616,6 +1667,7 @@ final class TraceModel: ObservableObject {
             }
             return
         }
+        transientTranscriptAbsence = nil
         cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         if !preservingMainSearch { mainSearchReturnContext = nil; hasSearchReturnContext = false; mainSearchReturnAnchor = nil }
@@ -1650,6 +1702,18 @@ final class TraceModel: ObservableObject {
         let readTask = Task { () -> TranscriptReadOutcome in
             guard !Task.isCancelled,
                   transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return .superseded }
+            if let delay = TraceTestHooks.delayMilliseconds(
+                for: "TRACE_TEST_SELECTION_READ_HOLD_MS", cappedAt: 30_000,
+                marker: .touch(pathKey: "TRACE_TEST_SELECTION_READ_ENTERED_PATH")
+            ) {
+                do {
+                    try await TraceTestHooks.waitForRelease(
+                        pathKey: "TRACE_TEST_SELECTION_READ_RELEASE_PATH", timeoutMilliseconds: delay
+                    )
+                } catch { return .superseded }
+                guard !Task.isCancelled,
+                      transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return .superseded }
+            }
             #if DEBUG
             if let gate = selectionTranscriptReadGateForTesting {
                 selectionTranscriptReadWaitingForTesting = true
@@ -1981,7 +2045,7 @@ final class TraceModel: ObservableObject {
         transcriptRecoveryID = nil
         transcriptRecoveryTask?.cancel()
         transcriptRecoveryTask = nil
-        transcriptLoadError = nil
+        transcriptReadError = nil
     }
 
     func retrySelectedTranscript() {
@@ -2021,7 +2085,7 @@ final class TraceModel: ObservableObject {
                     return
                 }
             }
-            transcriptLoadError = lastError
+            transcriptReadError = lastError
             showPendingSelectionWindow()
         }
     }
@@ -2101,10 +2165,6 @@ final class TraceModel: ObservableObject {
             acceptance = acceptTranscript(recovered)
         }
         guard acceptance == .accepted else { return }
-        // A scope reset can temporarily remove cached rows during a running pass.
-        // Accept its revision to fence older reads, but confirm background deletion
-        // only after the pass settles. Explicit selection retains its own handling.
-        if snapshot.session == nil, indexWorkflow.activePassID != nil { return }
         applyTranscript(snapshot)
     }
 
@@ -2128,6 +2188,16 @@ final class TraceModel: ObservableObject {
     /// observe new source metadata paired with the old locator rows.
     private func applyTranscript(_ snapshot: SessionTranscriptSnapshot, deletionIsConfirmed: Bool = true,
                                  reconcilingProject: Bool = false) {
+        if snapshot.session == nil, indexWorkflow.activePassID != nil,
+           let database, let sessionID = selectedSessionID {
+            // All publishers share this policy. Accept the revision, preserve the
+            // cached view, and end an older read-error episode without applying absence.
+            cancelTranscriptRecovery()
+            transientTranscriptAbsence = .init(database: database, sessionID: sessionID, requestID: sessionRequestID)
+            showPendingSelectionWindow()
+            return
+        }
+        transientTranscriptAbsence = nil
         if snapshot.session == nil, deletionIsConfirmed || pendingSelectionCompletion != nil {
             // Deletion is a terminal navigation outcome, even when no transcript
             // was available to complete the original selection.
@@ -2378,6 +2448,7 @@ final class TraceModel: ObservableObject {
         pendingAttachment = nil
         pendingSelectionCompletion = nil
         attachmentGeneration = UUID()
+        transientTranscriptAbsence = nil
         cancelTranscriptRecovery()
         cancelPendingSelectionTranscriptRead()
         sessionRequestID = UUID()
@@ -2450,33 +2521,87 @@ final class TraceModel: ObservableObject {
             && watcherOwnerIsCurrent(startup.owner)
     }
 
-    private func watcherReadyIsCurrent(_ owner: WatcherOwner) -> Bool {
-        guard let startup = watcherStartup, startup.owner == owner, startup.ready else { return false }
+    private func watcherReadyIsCurrent(_ receipt: WatcherReceipt) -> Bool {
+        guard let startup = watcherStartup, startup.receipt == receipt, startup.ready else { return false }
         return watcherStartupIsCurrent(startup)
     }
 
+    private func watcherDeferralIsCurrent(_ receipt: WatcherReceipt) -> Bool {
+        guard !settings.onboardingComplete, let startup = watcherStartup,
+              startup.receipt == receipt, startup.phase == .deferred else { return false }
+        return watcherStartupIsCurrent(startup)
+    }
+
+    private func deferWatcherStartup(_ startup: WatcherStartup) -> WatcherStartOutcome {
+        guard watcherStartupIsCurrent(startup), !settings.onboardingComplete else { return .superseded }
+        let generation = beginWatcherConfiguration()
+        guard watcherOwnerIsCurrent(startup.owner), generation == watcherGeneration,
+              !settings.onboardingComplete else { return .superseded }
+        let deferred = WatcherStartup(owner: startup.owner, generation: generation, forceRootReconciliation: true)
+        deferred.phase = .deferred
+        watcherStartup = deferred
+        initialIndexRequested = false
+        bufferedSourceChanges = SourceChanges()
+        watcherStartupPending = true
+        TraceTestHooks.touch(pathKey: "TRACE_TEST_WATCHER_DEFERRED_PATH")
+        return .deferredByOnboarding(deferred.receipt)
+    }
+
+    private func checkedWatcherOutcome(_ outcome: WatcherStartOutcome) async -> WatcherStartOutcome {
+        #if DEBUG
+        if let gate = watcherOutcomeGateForTesting {
+            watcherOutcomeWaitingForTesting = true
+            await gate.value
+            watcherOutcomeWaitingForTesting = false
+        }
+        #endif
+        guard !Task.isCancelled else { return .superseded }
+        switch outcome {
+        case .started(let receipt):
+            guard watcherReadyIsCurrent(receipt) else { return .superseded }
+            if !settings.onboardingComplete, let startup = watcherStartup { return deferWatcherStartup(startup) }
+        case .deferredByOnboarding(let receipt):
+            guard watcherDeferralIsCurrent(receipt) else { return .superseded }
+        case .superseded: break
+        }
+        return outcome
+    }
+
     private func startWatching(
-        _ sources: [any SessionSource], forceRootReconciliation: Bool = false,
-        reconfigureWatchers: Bool = false
+        _ sources: [any SessionSource], forceRootReconciliation: Bool = false
     ) async -> WatcherStartOutcome {
         guard !terminating, !Task.isCancelled, let database else { return .superseded }
         let owner = WatcherOwner(database: database, attachment: attachmentGeneration,
                                  revision: sourceConfigurationRevision)
         guard watcherOwnerIsCurrent(owner) else { return .superseded }
-        guard settings.onboardingComplete else { return .deferredByOnboarding(owner) }
+        let current = watcherStartup.flatMap { watcherStartupIsCurrent($0) ? $0 : nil }
+        guard settings.onboardingComplete else {
+            if let current {
+                if current.phase == .deferred { return .deferredByOnboarding(current.receipt) }
+                return deferWatcherStartup(current)
+            }
+            let deferred = WatcherStartup(owner: owner, generation: watcherGeneration, forceRootReconciliation: true)
+            deferred.phase = .deferred
+            watcherStartup = deferred
+            return .deferredByOnboarding(deferred.receipt)
+        }
+        let retryFailedMonitoring = current.map { $0.ready && $0.hasTranscriptRoots && watchers.isEmpty } ?? false
         let force = forceRootReconciliation || sourceReloadActivation == owner
-        if !reconfigureWatchers, let startup = watcherStartup, watcherStartupIsCurrent(startup) {
-            if startup.ready, !force || startup.forceRootReconciliation { return .started(owner) }
-            if let task = startup.task {
+            || retryFailedMonitoring || current?.phase == .deferred
+        if let startup = current {
+            if startup.ready, !retryFailedMonitoring, !force || startup.forceRootReconciliation {
+                return .started(startup.receipt)
+            }
+            if startup.phase == .preparing, let task = startup.task {
                 startup.forceRootReconciliation = startup.forceRootReconciliation || force
-                let outcome = await task.value
-                guard !Task.isCancelled, watcherStartupIsCurrent(startup) else { return .superseded }
-                return outcome
+                return await checkedWatcherOutcome(await task.value)
             }
         }
-        if !reconfigureWatchers { liveWatcherReplayStarts = [:] }
+        liveWatcherReplayStarts = [:]
         let startup = WatcherStartup(owner: owner, generation: beginWatcherConfiguration(),
                                      forceRootReconciliation: force)
+        guard watcherOwnerIsCurrent(owner), startup.generation == watcherGeneration else { return .superseded }
+        if retryFailedMonitoring || current?.phase == .deferred { initialIndexRequested = false }
         watcherStartup = startup
         let task = Task { [weak self] in
             defer { startup.task = nil }
@@ -2484,9 +2609,7 @@ final class TraceModel: ObservableObject {
             return await self.configureWatchers(sources, startup: startup)
         }
         startup.task = task
-        let outcome = await task.value
-        guard !Task.isCancelled, watcherStartupIsCurrent(startup) else { return .superseded }
-        return outcome
+        return await checkedWatcherOutcome(await task.value)
     }
 
     private func configureWatchers(_ sources: [any SessionSource], startup: WatcherStartup) async -> WatcherStartOutcome {
@@ -2503,6 +2626,7 @@ final class TraceModel: ObservableObject {
         await watcherTeardownTask?.value
         guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         let roots = sources.flatMap(\.roots).map(\.scanURL)
+        startup.hasTranscriptRoots = !roots.isEmpty
         let metadataRoots = sources.filter { $0.agent == .codex }
             .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
         let (sidecarMapping, canonicalRoots) = await Task.detached(priority: .utility) {
@@ -2548,12 +2672,6 @@ final class TraceModel: ObservableObject {
         watcherStartupPending = true
         bufferedSourceChanges = SourceChanges()
         startupReconciliationPaths = reconciliationPaths
-        startupActivity = Self.startupActivity(
-            hasCachedIndex: hasCachedIndex,
-            forceRootReconciliation: startup.forceRootReconciliation,
-            reconciliationPaths: startupReconciliationPaths
-        )
-
         let replacements = configurations.map { configuration in
             (configuration, FSEventsWatcher(
                 roots: configuration.roots, identifier: configuration.id,
@@ -2591,7 +2709,12 @@ final class TraceModel: ObservableObject {
         var started: [FSEventsWatcher] = []
         var failedRoots: [URL] = []
         for (configuration, watcher) in replacements {
-            if watcher.start() { started.append(watcher) }
+            #if DEBUG
+            let didStart = !failsWatcherStartForTesting && watcher.start()
+            #else
+            let didStart = watcher.start()
+            #endif
+            if didStart { started.append(watcher) }
             else { failedRoots += configuration.roots }
         }
         watchers = started
@@ -2617,7 +2740,7 @@ final class TraceModel: ObservableObject {
         }
         #endif
         guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
-        guard settings.onboardingComplete else { return .deferredByOnboarding(startup.owner) }
+        guard settings.onboardingComplete else { return deferWatcherStartup(startup) }
         // A coalesced caller may strengthen reconciliation while preparation is suspended.
         if startup.forceRootReconciliation {
             startupReconciliationPaths.formUnion(canonicalRoots.map(\.path))
@@ -2630,19 +2753,14 @@ final class TraceModel: ObservableObject {
             })
             sourceMonitoringWarnings = ["Some source folders could not be monitored; periodic reconciliation remains active."]
             updateMonitoringWarnings()
-            startupActivity = Self.startupActivity(
-                hasCachedIndex: hasCachedIndex,
-                forceRootReconciliation: startup.forceRootReconciliation,
-                reconciliationPaths: startupReconciliationPaths
-            )
         }
         guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
-        guard settings.onboardingComplete else { return .deferredByOnboarding(startup.owner) }
+        guard settings.onboardingComplete else { return deferWatcherStartup(startup) }
         startupActivity = Self.startupActivity(
             hasCachedIndex: hasCachedIndex, forceRootReconciliation: startup.forceRootReconciliation,
             reconciliationPaths: startupReconciliationPaths)
-        startup.ready = true
-        return .started(startup.owner)
+        startup.phase = .ready
+        return .started(startup.receipt)
     }
 
     private static func startupActivity(

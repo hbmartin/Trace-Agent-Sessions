@@ -1081,6 +1081,331 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(f.model.messages.isEmpty)
     }
 
+    func testTransientExplicitSelectionCompletesOnceAcrossAllPublishers() async throws {
+        for publisher in 0..<4 {
+            let f = try await fixture(count: 2)
+            let session = try XCTUnwrap(f.model.sessions.first)
+            let events = ReviewSelectionEvents()
+            let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { events.windows += 1 }
+            }
+            let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+            defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
+            await f.model.receiveProgress(.init(phase: .indexing))
+            _ = try await f.database.synchronizeConfiguredRoots([])
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            if publisher == 1 { f.model.selectionTranscriptGateForTesting = held }
+            if publisher >= 2 { await f.database.failTranscriptReadsForTesting(count: publisher == 3 ? 4 : 1) }
+            f.model.selectSession(session.id, showWindow: true)
+            if publisher == 1 {
+                try await wait { f.model.selectionTranscriptWaitingForTesting }
+                await f.model.refreshSummariesForTesting(terminal: false)
+            } else if publisher >= 2 {
+                try await wait { f.model.transcriptRecoveryPendingForTesting }
+                await f.clock.advance(by: .milliseconds(250))
+                if publisher == 3 {
+                    let reads = await f.database.transcriptReadCountForTesting()
+                    await f.clock.advance(by: .seconds(1))
+                    try await wait { await f.database.transcriptReadCountForTesting() > reads }
+                    await f.clock.advance(by: .seconds(4))
+                    try await wait { !f.model.transcriptRecoveryPendingForTesting }
+                    f.model.retrySelectedTranscript()
+                    await f.clock.advance()
+                }
+            }
+            try await wait { f.model.transcriptIsTemporarilyUnavailable }
+            XCTAssertEqual(f.model.selectedSessionID, session.id)
+            XCTAssertEqual(f.model.settings.lastSessionID, session.id)
+            XCTAssertEqual(events.windows, 1, "missing data must expose the main window promptly")
+            XCTAssertEqual(events.scrolls, 0)
+            let before = await f.model.diagnostics.value()
+            XCTAssertEqual(before.days.reduce(0) { $0 + $1.openCount }, 0)
+            XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
+            XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("temporarily unavailable"))
+            await f.coordinator.indexAll(scope: .proseOnly)
+            await f.model.refreshSummariesForTesting(terminal: false)
+            try await wait { await f.model.diagnostics.value().days.reduce(0) { $0 + $1.openCount } == 1 }
+            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertFalse(f.model.messages.isEmpty)
+            XCTAssertEqual(events.scrolls, 1)
+            await gate.open()
+            await f.model.refreshSummariesForTesting(terminal: false)
+            XCTAssertEqual(events.windows, 1)
+            XCTAssertEqual(events.scrolls, 1)
+        }
+    }
+
+    func testTransientSummaryPreservesCacheAndFencesOlderRecovery() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id)
+        try await wait { !f.model.messages.isEmpty }
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.hydrate(message)
+        try await wait { f.model.hydratedMessages[message.id] != nil }
+        let rows = f.model.messages, project = f.model.selectedProjectID
+        await f.model.receiveProgress(.init(phase: .indexing))
+        await f.database.failTranscriptReadOnceForTesting()
+        await f.model.refreshSummariesForTesting(terminal: false)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.transcriptRecoveryPublicationGateForTesting = held
+        _ = try await f.database.synchronizeConfiguredRoots([])
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
+        await f.model.refreshSummariesForTesting(terminal: false)
+        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
+        XCTAssertNotNil(f.model.hydratedMessages[message.id])
+        XCTAssertEqual(f.model.selectedProjectID, project)
+        XCTAssertEqual(f.model.settings.lastSessionID, session.id)
+        XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
+        f.model.transcriptRecoveryPublicationGateForTesting = nil
+        f.model.retrySelectedTranscript()
+        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable, "manual Retry preserves absence feedback")
+        await f.clock.advance()
+        try await wait { !f.model.transcriptRecoveryPendingForTesting }
+        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        await f.coordinator.indexAll(scope: .proseOnly)
+        await f.model.refreshSummariesForTesting(terminal: false)
+        await gate.open()
+        try await wait { !f.model.transcriptRecoveryPublicationWaitingForTesting }
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
+        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
+    }
+
+    func testTransientAbsenceClearsAtTerminalPassAndSelectionBoundaries() async throws {
+        for boundary in 0..<7 {
+            let f = try await fixture(count: 2)
+            let session = try XCTUnwrap(f.model.sessions.first)
+            let other = try XCTUnwrap(f.model.sessions.first { $0.id != session.id })
+            f.model.selectSession(session.id)
+            try await wait { !f.model.messages.isEmpty }
+            var pass = IndexProgress(phase: .indexing)
+            await f.model.receiveProgress(pass)
+            _ = try await f.database.synchronizeConfiguredRoots([])
+            await f.model.refreshSummariesForTesting(terminal: false)
+            XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+            switch boundary {
+            case 0, 1, 2:
+                pass.phase = [.complete, .failed, .cancelled][boundary]
+                await f.model.receiveProgress(pass)
+                XCTAssertNil(f.model.selectedSessionID)
+                XCTAssertNil(f.model.settings.lastSessionID)
+            case 3: f.model.clearSession()
+            case 4:
+                await f.coordinator.indexAll(scope: .proseOnly)
+                f.model.selectSession(other.id)
+                try await wait { f.model.selectedSession?.id == other.id && !f.model.messages.isEmpty }
+            case 5:
+                let replacement = try await fixture(count: 3)
+                await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+            default: await f.model.prepareToTerminate()
+            }
+            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertNil(f.model.transcriptLoadError)
+        }
+    }
+
+    func testSavedSessionTemporaryAbsenceNeverOpensWindow() async throws {
+        let f = try await fixture(count: 2), session = try XCTUnwrap(f.model.sessions.first)
+        await f.model.prepareToTerminate()
+        let model = try uninstalledModel(clock: f.clock,
+            diagnosticsURL: f.root.appendingPathComponent("transient-restoration.json"), savedSessionID: session.id)
+        let source = ClaudeCodeSource(roots: [f.root])
+        await model.attach(database: f.database,
+            coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
+        await model.refreshSummariesForTesting(lightweight: false)
+        try await wait { model.selectedSessionID == session.id && !model.messages.isEmpty }
+        await model.receiveProgress(.init(phase: .indexing))
+        _ = try await f.database.synchronizeConfiguredRoots([])
+        let events = ReviewSelectionEvents()
+        let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { events.windows += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        await model.refreshSummariesForTesting(terminal: false)
+        try await wait { model.transcriptIsTemporarilyUnavailable }
+        XCTAssertEqual(model.settings.lastSessionID, session.id)
+        await f.coordinator.indexAll(scope: .proseOnly)
+        await model.refreshSummariesForTesting(terminal: false)
+        XCTAssertEqual(model.selectedSessionID, session.id)
+        XCTAssertFalse(model.messages.isEmpty)
+        XCTAssertFalse(model.transcriptIsTemporarilyUnavailable)
+        XCTAssertEqual(events.windows, 0)
+    }
+
+    func testFailedMonitoringRetriesOneOwnedReconciliationAndRestoresDelivery() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        let source = ClaudeCodeSource(roots: [f.root])
+        f.model.failsWatcherStartForTesting = true
+        let first = await f.model.startWatchingForTesting([source])
+        XCTAssertTrue(first)
+        XCTAssertEqual(f.model.activeWatcherCountForTesting, 0)
+        XCTAssertFalse(f.model.monitoringWarnings.isEmpty)
+        f.model.startIndexing(sources: [source])
+        try await wait { f.model.progress.phase == .complete && f.model.safetyVerificationActiveForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        try line(98).write(to: f.root.appendingPathComponent("watcher-gap.jsonl"))
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.watcherPreparationGateForTesting = held
+        f.model.failsWatcherStartForTesting = false
+        let second = Task { await f.model.startWatchingForTesting([source]) }
+        try await wait { f.model.watcherPreparationWaitingForTesting }
+        let third = Task { await f.model.startWatchingForTesting([source]) }
+        await gate.open()
+        let secondStarted = await second.value, thirdStarted = await third.value
+        XCTAssertTrue(secondStarted)
+        XCTAssertTrue(thirdStarted)
+        XCTAssertEqual(f.model.watcherStartCountForTesting, 2)
+        XCTAssertEqual(f.model.activeWatcherCountForTesting, 1)
+        XCTAssertTrue(f.model.watcherRequiresRootReconciliationForTesting)
+        f.model.startIndexing(sources: [source])
+        f.model.startIndexing(sources: [source])
+        try await wait { f.model.startupSubmissionCountForTesting == 2 && f.model.progress.phase == .complete
+            && f.model.safetyVerificationActiveForTesting }
+        XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
+        let reconciled = try await f.database.sessions(limit: 100)
+        XCTAssertTrue(reconciled.contains { $0.title == "NavigationNeedle 98" }, "the retry scans changes from the monitoring gap")
+        try line(99).write(to: f.root.appendingPathComponent("watcher-resumed.jsonl"))
+        try await wait {
+            await f.clock.advance(by: .milliseconds(250))
+            return (try? await f.database.sessions(limit: 100).contains { $0.title == "NavigationNeedle 99" }) == true
+        }
+    }
+
+    func testInstalledStreamsRetireOnOnboardingReversalAndResumeOnce() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.watcherReadinessGateForTesting = held
+        f.model.failSourceConfigurationForTesting = false
+        f.model.retrySourceConfiguration()
+        try await wait { f.model.watcherReadinessWaitingForTesting }
+        XCTAssertEqual(f.model.activeWatcherCountForTesting, 1)
+        XCTAssertTrue(f.model.metadataWatcherAttachedForTesting)
+        let generation = f.model.watcherGenerationForTesting
+        f.model.settings.onboardingComplete = false
+        await gate.open()
+        try await wait { f.model.progress.phase == .waiting && !f.model.watcherReadinessWaitingForTesting }
+        XCTAssertGreaterThan(f.model.watcherGenerationForTesting, generation)
+        XCTAssertEqual(f.model.activeWatcherCountForTesting, 0)
+        XCTAssertFalse(f.model.metadataWatcherAttachedForTesting)
+        XCTAssertFalse(f.model.safetyVerificationActiveForTesting)
+        XCTAssertFalse(f.model.watcherReadyForTesting)
+        XCTAssertTrue(f.model.watcherRequiresRootReconciliationForTesting)
+        XCTAssertEqual(f.model.sourceReloadRecovery, .normal)
+        f.model.watcherReadinessGateForTesting = nil
+        f.model.settings.onboardingComplete = true
+        let source = ClaudeCodeSource(roots: [f.root])
+        let resumed = await f.model.startWatchingForTesting([source])
+        XCTAssertTrue(resumed)
+        f.model.startIndexing(sources: [source])
+        f.model.startIndexing(sources: [source])
+        try await wait { f.model.progress.phase == .complete }
+        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+        XCTAssertEqual(f.model.progress.activity, .rootRecovery)
+        XCTAssertEqual(f.model.activeWatcherCountForTesting, 1)
+    }
+
+    func testObsoleteDeferralCannotSettleSuccessorOrClearAlert() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        let readiness = ReviewReadGate(), readyHeld = Task { await readiness.wait() }
+        let outcome = ReviewReadGate(), outcomeHeld = Task { await outcome.wait() }
+        defer { readyHeld.cancel(); outcomeHeld.cancel(); Task { await readiness.open(); await outcome.open() } }
+        f.model.watcherReadinessGateForTesting = readyHeld
+        let source = ClaudeCodeSource(roots: [f.root])
+        let obsolete = Task { await f.model.startWatchingForTesting([source]) }
+        try await wait { f.model.watcherReadinessWaitingForTesting }
+        f.model.watcherOutcomeGateForTesting = outcomeHeld
+        f.model.settings.onboardingComplete = false
+        await readiness.open()
+        try await wait { f.model.watcherOutcomeWaitingForTesting }
+        XCTAssertEqual(f.model.activeWatcherCountForTesting, 0)
+        f.model.watcherOutcomeGateForTesting = nil
+        f.model.watcherReadinessGateForTesting = nil
+        f.model.settings.onboardingComplete = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.progress.phase == .complete && f.model.watcherReadyForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let progress = IndexProgress(phase: .indexing)
+        await f.model.receiveProgress(progress)
+        f.model.startupError = "Unrelated successor error"
+        let generation = f.model.watcherGenerationForTesting
+        await outcome.open()
+        let started = await obsolete.value
+        XCTAssertFalse(started)
+        XCTAssertEqual(f.model.progress.passID, progress.passID)
+        XCTAssertEqual(f.model.progress.phase, .indexing)
+        XCTAssertTrue(f.model.watcherReadyForTesting)
+        XCTAssertEqual(f.model.watcherGenerationForTesting, generation)
+        XCTAssertEqual(f.model.startupError, "Unrelated successor error")
+    }
+
+    func testMonitoringWarningReentrancyCannotPublishReadyAfterDeferral() async throws {
+        for replacesConfiguration in [false, true] {
+            let f = try await fixture(count: 2)
+            f.model.settings.onboardingComplete = true
+            f.model.failsWatcherStartForTesting = true
+            var handled = false
+            let subscription = f.model.$monitoringWarnings.sink { warnings in
+                guard !warnings.isEmpty, !handled else { return }
+                handled = true
+                if replacesConfiguration {
+                    f.model.failsWatcherStartForTesting = false
+                    f.model.reloadSourcesAndRebuild()
+                } else { f.model.settings.onboardingComplete = false }
+            }
+            defer { subscription.cancel() }
+            let started = await f.model.startWatchingForTesting([ClaudeCodeSource(roots: [f.root])])
+            XCTAssertFalse(started)
+            if replacesConfiguration {
+                try await wait { f.model.watcherReadyForTesting && f.model.progress.phase == .complete }
+                XCTAssertEqual(f.model.activeWatcherCountForTesting, 1)
+                XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+                XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
+            } else {
+                XCTAssertFalse(f.model.watcherReadyForTesting)
+                XCTAssertEqual(f.model.activeWatcherCountForTesting, 0)
+                XCTAssertFalse(f.model.metadataWatcherAttachedForTesting)
+                XCTAssertTrue(f.model.watcherRequiresRootReconciliationForTesting)
+                XCTAssertEqual(f.model.progress.phase, .waiting)
+            }
+        }
+    }
+
+    func testInitialAttachmentFailureFeedbackSurvivesDismissalAndClearsOnInstallation() async throws {
+        let f = try await fixture(count: 2)
+        await f.model.prepareToTerminate()
+        let model = try uninstalledModel(clock: f.clock,
+            diagnosticsURL: f.root.appendingPathComponent("initial-failure.json"))
+        model.settings.onboardingComplete = true
+        model.initialIndexOpenErrorForTesting = "Synthetic startup error"
+        model.start()
+        try await wait { model.progress.phase == .failed && model.startupError != nil }
+        model.startupError = nil
+        XCTAssertFalse(model.canRebuildIndex)
+        XCTAssertEqual(model.rebuildUnavailableReason,
+            "Rebuild is unavailable because index startup failed. Resolve the startup error and restart Trace.")
+        model.startupError = "Unrelated copy error"
+        let source = ClaudeCodeSource(roots: [f.root])
+        await model.attach(database: f.database,
+            coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
+        XCTAssertTrue(model.canRebuildIndex)
+        XCTAssertNil(model.rebuildUnavailableReason)
+        XCTAssertEqual(model.startupError, "Unrelated copy error")
+    }
+
     func testWatcherStartupCoalescesAndMergesForcedReconciliation() async throws {
         let f = try await fixture(count: 2)
         await f.model.prepareToTerminate()
