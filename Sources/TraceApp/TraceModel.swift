@@ -207,7 +207,10 @@ final class TraceModel: ObservableObject {
     @Published var expandedReasoningIDs: Set<Int64> = [] {
         didSet { transcriptContentRevision &+= 1 }
     }
-    @Published var startupError: String?
+    @Published var startupError: String? {
+        didSet { sourceReloadAlertError = nil }
+    }
+    private var sourceReloadAlertError: String?
     @Published private(set) var monitoringWarnings: [String] = []
     private var metadataMonitoringWarnings: [String] = []
     private var sourceMonitoringWarnings: [String] = []
@@ -695,7 +698,10 @@ final class TraceModel: ObservableObject {
         indexWorkflow = .init()
         progress.phase = phase
         progress.error = error
-        if let error { startupError = error }
+        if let error {
+            startupError = error
+            if pending.intent == .sourceReload { sourceReloadAlertError = error }
+        }
         updateCostsTotalsUpdating()
     }
 
@@ -734,7 +740,9 @@ final class TraceModel: ObservableObject {
         scheduler = makeScheduler(coordinator, database: database, generation: pending.token)
         pendingAttachment = nil
         if pending.intent == .installation { sourceReloadRecovery = .normal }
-        startupError = nil
+        if let ownedError = sourceReloadAlertError, startupError == ownedError {
+            startupError = nil
+        }
         updateCostsTotalsUpdating()
         if pending.intent == .installation, pendingRebuild { rebuildIndex() }
         return true
@@ -1043,7 +1051,9 @@ final class TraceModel: ObservableObject {
     }
 
     func rebuildIndex() {
-        guard settings.onboardingComplete else { return }
+        // Startup's first pass already uses the latest scope. Do not reset its
+        // saved navigation before the first coordinator is installed.
+        guard !terminating, settings.onboardingComplete, coordinator != nil else { return }
         pendingRebuild = true
         if pendingAttachment != nil {
             beginIndexReplacement()
@@ -2272,6 +2282,7 @@ final class TraceModel: ObservableObject {
 
     func prepareToTerminate() async {
         terminating = true
+        sourceReloadAlertError = nil
         sourceReloadRecovery = .normal
         pendingAttachment = nil
         pendingSelectionCompletion = nil

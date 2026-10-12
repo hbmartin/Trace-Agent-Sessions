@@ -72,6 +72,20 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.results.count == expectedCount }
     }
 
+    private func uninstalledModel(clock: TestClock<Duration>, diagnosticsURL: URL,
+                                  savedSessionID: Int64? = nil) throws -> TraceModel {
+        let suite = "TraceAppReview.Uninstalled.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let settings = AppSettings(defaults: defaults)
+        settings.lastSessionID = savedSessionID
+        let model = TraceModel(settings: settings, clock: clock, diagnosticsURL: diagnosticsURL)
+        addTeardownBlock { @MainActor in
+            await model.prepareToTerminate()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        return model
+    }
+
     func testRecoveryBudgetCoalescesFailuresAndManualRetryPreservesRows() async throws {
         let f = try await fixture(count: 2)
         let session = try XCTUnwrap(f.model.sessions.first)
@@ -788,6 +802,114 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
         XCTAssertFalse(f.model.pendingRebuildForTesting)
         XCTAssertNil(f.model.startupError)
+    }
+
+    func testInitialAndReplacementAttachmentsPreserveUnrelatedAlerts() async throws {
+        let f = try await fixture(count: 2)
+        await f.model.prepareToTerminate()
+        let source = ClaudeCodeSource(roots: [f.root])
+        for error in ["Could not load pending index recovery", "Could not copy message",
+                      "Could not update the login item", "Could not load source failures"] {
+            let model = try uninstalledModel(clock: f.clock,
+                diagnosticsURL: f.root.appendingPathComponent("alert-\(UUID()).json"))
+            model.startupError = error
+            await model.attach(database: f.database,
+                               coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
+            XCTAssertEqual(model.startupError, error, "initial attachment must preserve the alert")
+            await model.attach(database: f.database,
+                               coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
+            XCTAssertEqual(model.startupError, error, "replacement must preserve the alert")
+            await model.prepareToTerminate()
+        }
+    }
+
+    func testSuccessfulReloadClearsOnlyItsOwnedAlert() async throws {
+        for assignment in 0..<4 {
+            let f = try await fixture(count: 2)
+            f.model.settings.onboardingComplete = true
+            f.model.failSourceConfigurationForTesting = true
+            f.model.reloadSourcesAndRebuild()
+            try await wait { f.model.sourceReloadRecovery.error != nil }
+            let error = try XCTUnwrap(f.model.startupError)
+            let expected: String?
+            switch assignment {
+            case 0: expected = nil
+            case 1:
+                f.model.startupError = nil
+                expected = nil
+            case 2:
+                f.model.startupError = "Unrelated copy failure"
+                expected = "Unrelated copy failure"
+            default:
+                // Identical text from another action must still relinquish ownership.
+                f.model.startupError = error
+                expected = error
+            }
+            f.model.failSourceConfigurationForTesting = false
+            f.model.retrySourceConfiguration()
+            try await wait { f.model.progress.phase == .complete }
+            XCTAssertEqual(f.model.startupError, expected)
+            XCTAssertEqual(f.model.sourceReloadRecovery, .normal)
+            await f.model.prepareToTerminate()
+        }
+    }
+
+    func testSupersededReloadCannotClearANewerAlert() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.sourceChangeAttachmentGateForTesting = task
+        f.model.failSourceConfigurationForTesting = false
+        f.model.retrySourceConfiguration()
+        try await wait { f.model.sourceChangeAttachmentWaitingForTesting }
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { !f.model.sourceReloadRecovery.isRetrying }
+        f.model.startupError = "A newer unrelated failure"
+        await gate.open()
+        try await wait { !f.model.sourceChangeAttachmentWaitingForTesting }
+        XCTAssertEqual(f.model.startupError, "A newer unrelated failure")
+        XCTAssertNotNil(f.model.sourceReloadRecovery.error)
+        XCTAssertNil(f.model.schedulerForTesting)
+    }
+
+    func testRebuildBeforeInitialAttachmentPreservesRestorationAndUsesLatestScope() async throws {
+        let f = try await fixture(count: 2)
+        let saved = try XCTUnwrap(f.model.sessions.first)
+        await f.model.prepareToTerminate()
+        let model = try uninstalledModel(clock: f.clock,
+            diagnosticsURL: f.root.appendingPathComponent("startup-rebuild.json"), savedSessionID: saved.id)
+        model.settings.onboardingComplete = true
+        model.settings.indexScope = .everything
+        model.rebuildIndex()
+        model.rebuildIndex()
+        XCTAssertFalse(model.pendingRebuildForTesting)
+        XCTAssertEqual(model.settings.lastSessionID, saved.id)
+        XCTAssertFalse(model.indexingPassActiveForTesting)
+        let tool = try JSONSerialization.data(withJSONObject: ["type": "assistant", "uuid": "startup-tool",
+            "sessionId": "s-0", "cwd": "/tmp/NavigationReview", "timestamp": 1_700_000_100_000,
+            "message": ["content": [["type": "tool_use", "id": "startup-tool", "name": "Bash",
+                                     "input": ["command": "StartupScopeNeedle"]]]]]) + Data([10])
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        var data = try Data(contentsOf: file)
+        data.append(tool)
+        try data.write(to: file)
+        let source = ClaudeCodeSource(roots: [f.root])
+        await model.attach(database: f.database,
+                           coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
+        await model.refreshSummariesForTesting(lightweight: false)
+        try await wait { model.selectedSessionID == saved.id && !model.messages.isEmpty }
+        model.startIndexing(sources: [source])
+        try await wait { model.progress.phase == .complete }
+        let indexed = try await f.database.search(query: "StartupScopeNeedle", filters: .init(), sort: .relevance)
+        XCTAssertEqual(indexed.results.count, 1)
+        XCTAssertEqual(model.settings.lastSessionID, saved.id)
+        XCTAssertEqual(model.selectedSessionID, saved.id)
+        XCTAssertEqual(model.rebuildSubmissionCountForTesting, 0)
     }
 
     func testSourceReloadRetrySurvivesAlertDismissalAndCoalescesUntilProgress() async throws {

@@ -3607,7 +3607,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(disclosure.frame.minY, headerY, accuracy: 64)
     }
 
-    private func launchWithFailedSourceReload() throws -> (XCUIApplication, URL) {
+    private func launchWithFailedSourceReload(settingsOnlyControl: Bool = false,
+                                             holdMetadataOnRetry: Bool = false) throws -> (XCUIApplication, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let additional = directory.appendingPathComponent("AdditionalClaude")
         try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
@@ -3617,6 +3618,16 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_PICK_CLAUDE_ROOT_PATH"] = additional.path
         app.launchEnvironment["TRACE_TEST_FAIL_SOURCE_RELOAD_ONCE"] = "1"
         app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        if settingsOnlyControl {
+            app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+        }
+        if holdMetadataOnRetry {
+            let release = directory.appendingPathComponent("release-retry-metadata")
+            try Data().write(to: release)
+            app.launchEnvironment["TRACE_TEST_METADATA_START_DELAY_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_METADATA_START_RELEASE_PATH"] = release.path
+            app.launchEnvironment["TRACE_TEST_METADATA_START_ENTERED_PATH"] = directory.appendingPathComponent("retry-metadata-entered").path
+        }
         app.launch()
         XCTAssertTrue(waitForFile(completed, timeout: 20))
         app.typeKey(",", modifierFlags: .command)
@@ -3634,6 +3645,102 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(settings.buttons["retrySourceConfiguration"].isEnabled)
         app.typeKey(",", modifierFlags: .command)
         return (app, directory)
+    }
+
+    func testSourceReloadRetryAvailabilityTracksSettingsWithoutModelPublication() throws {
+        let (app, _) = try launchWithFailedSourceReload(settingsOnlyControl: true)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForNonExistence(timeout: 5))
+        let main = app.windows["Trace"]
+        let retry = main.buttons["retrySourceConfiguration"]
+        let toggle = main.buttons["testToggleOnboardingOnly"]
+        XCTAssertTrue(retry.isEnabled)
+        toggle.click()
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: false, timeout: 5))
+        XCTAssertEqual(main.buttons["indexProgress"].label, "Updates paused")
+        toggle.click()
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+        XCTAssertEqual(main.buttons["indexProgress"].label, "Updates paused")
+        attach(app, name: "retry-settings-only-observation")
+    }
+
+    func testSourceReloadRetryDetailsDescribeResumingAndPreserveDiagnostics() throws {
+        let (app, directory) = try launchWithFailedSourceReload(holdMetadataOnRetry: true)
+        let settings = app.windows["Trace Settings"]
+        // SwiftUI exposes the busy label as an activity indicator while its
+        // spinner is visible; the control retains the same identifier/action.
+        let status = settings.descendants(matching: .any).matching(identifier: "indexProgress").firstMatch
+        status.click()
+        let paused = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "Live updates are paused."))
+            .firstMatch
+        XCTAssertTrue(paused.waitForExistence(timeout: 5))
+        let previousDetails = try XCTUnwrap(paused.value as? String)
+        let counts = previousDetails.split(separator: "\n").map(String.init).filter {
+            $0.contains("files checked") || $0.contains(" indexed · ")
+        }
+        XCTAssertEqual(counts.count, 2)
+        status.click()
+        let release = directory.appendingPathComponent("release-retry-metadata")
+        let entered = directory.appendingPathComponent("retry-metadata-entered")
+        try FileManager.default.removeItem(at: release)
+        try FileManager.default.removeItem(at: entered)
+        settings.buttons["retrySourceConfiguration"].click()
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        XCTAssertEqual(status.label, "Resuming updates…")
+        XCTAssertFalse(settings.buttons["retrySourceConfiguration"].isEnabled)
+        status.click()
+        let resuming = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@",
+            "Applying your source settings and checking for changes. Indexed sessions remain available.")).firstMatch
+        XCTAssertTrue(resuming.waitForExistence(timeout: 5))
+        let details = try XCTUnwrap(resuming.value as? String)
+        XCTAssertTrue(details.contains("Synthetic source configuration failure"))
+        for count in counts { XCTAssertTrue(details.contains(count)) }
+        XCTAssertFalse(details.contains("Retry to apply your source settings"))
+        attach(app, name: "retry-resuming-details")
+        status.click()
+        try Data().write(to: release)
+        XCTAssertTrue(settings.buttons["retrySourceConfiguration"].waitForNonExistence(timeout: 15))
+    }
+
+    func testStartupScopeEditPreservesSavedSessionAndUsesLatestScope() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
+        app.staticTexts["TraceUIExample"].firstMatch.click()
+        openSidebarSession("Find the sample answer", in: app)
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        app.terminate()
+        let entered = directory.appendingPathComponent("startup-scope-entered")
+        let release = directory.appendingPathComponent("release-startup-scope")
+        let completed = directory.appendingPathComponent("startup-scope-completed")
+        let activity = directory.appendingPathComponent("startup-scope-activity")
+        app.launchArguments.append("--ui-show-settings")
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_STARTED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activity.path
+        app.launch()
+        XCTAssertTrue(waitForFile(entered, timeout: 15))
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["General"].firstMatch.click()
+        let scope = nativeMenu(titled: "Prose only", in: app)
+        XCTAssertTrue(scope.exists)
+        scope.click()
+        app.menuItems["Everything"].click()
+        try Data().write(to: release)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 15),
+                      "scope edits before attachment must preserve the saved session")
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        XCTAssertFalse(fileLines(in: activity).contains("rebuild"))
+        XCTAssertEqual(try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT count(*) FROM message_fts WHERE message_fts MATCH 'UniqueOutput'"), 1,
+            "startup must index tool output using the latest scope")
+        attach(app, name: "startup-scope-preserves-session")
     }
 
     func testPausedSourceReloadRecoveryIsVisibleOnEverySurfaceAfterAlertDismissal() throws {

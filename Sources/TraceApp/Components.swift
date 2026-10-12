@@ -51,6 +51,12 @@ struct AgentBadge: View {
 
 struct IndexStatusView: View {
     @ObservedObject var model: TraceModel
+    @ObservedObject private var settings: AppSettings
+
+    init(model: TraceModel) {
+        self.model = model
+        settings = model.settings
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -59,8 +65,13 @@ struct IndexStatusView: View {
             if model.sourceReloadRecovery.error != nil {
                 Button("Retry") { model.retrySourceConfiguration() }
                     .buttonStyle(.borderless)
-                    .disabled(model.sourceReloadRecovery.isRetrying || !model.settings.onboardingComplete)
+                    .disabled(model.sourceReloadRecovery.isRetrying || !settings.onboardingComplete)
                     .accessibilityIdentifier("retrySourceConfiguration")
+            }
+            if TraceTestHooks.showsTestControls,
+               TraceTestHooks.environment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] == "1" {
+                Button("Toggle onboarding (test)") { settings.onboardingComplete.toggle() }
+                    .accessibilityIdentifier("testToggleOnboardingOnly")
             }
         }
     }
@@ -109,7 +120,9 @@ struct IndexProgressLabel: View {
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
         lines.append(contentsOf: unresolvedFailureMessages)
         if let error = sourceReloadRecovery.error {
-            lines.append("Live updates are paused. Indexed sessions remain available. Retry to apply your source settings and check for changes.")
+            lines.append(sourceReloadRecovery.isRetrying
+                ? "Applying your source settings and checking for changes. Indexed sessions remain available."
+                : "Live updates are paused. Indexed sessions remain available. Retry to apply your source settings and check for changes.")
             if error != progress.error { lines.append(error) }
         }
         if let agent = progress.agent { lines.append("Provider: \(agent.displayName)") }
