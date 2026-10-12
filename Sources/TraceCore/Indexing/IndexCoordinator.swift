@@ -447,7 +447,16 @@ public actor IndexCoordinator {
             }
             try await database.setIndexScope(scope)
             status.mutationRevision = await mutations.version()
+            let scopeResetDelay = oldScope != scope ? TraceTestHooks.delayMilliseconds(
+                for: "TRACE_TEST_SCOPE_RESET_HOLD_MS", cappedAt: 30_000,
+                marker: .touch(pathKey: "TRACE_TEST_SCOPE_RESET_ENTERED_PATH")
+            ) : nil
             await progress(status)
+            if let delay = scopeResetDelay {
+                try await TraceTestHooks.waitForRelease(
+                    pathKey: "TRACE_TEST_SCOPE_RESET_RELEASE_PATH", timeoutMilliseconds: delay
+                )
+            }
             var rootIDs: [String: Int64] = [:]
             var rootsByID: [String: SourceRoot] = [:]
             var sourcesByRootID: [String: any SessionSource] = [:]

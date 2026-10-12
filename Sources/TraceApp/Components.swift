@@ -73,6 +73,11 @@ struct IndexStatusView: View {
                 Button("Toggle onboarding (test)") { settings.onboardingComplete.toggle() }
                     .accessibilityIdentifier("testToggleOnboardingOnly")
             }
+            if TraceTestHooks.showsTestControls,
+               TraceTestHooks.environment["TRACE_TEST_STARTUP_RESUME_CONTROL"] == "1" {
+                Button("Resume startup (test)") { model.completeOnboarding(enableLoginItem: false) }
+                    .accessibilityIdentifier("testResumeStartup")
+            }
         }
     }
 }
