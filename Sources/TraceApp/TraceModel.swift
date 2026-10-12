@@ -1877,7 +1877,7 @@ final class TraceModel: ObservableObject {
                 case .failed(let error): lastError = error
                 case .snapshot(let snapshot):
                     guard acceptTranscript(snapshot) == .accepted else { continue }
-                    applyTranscript(snapshot)
+                    applyTranscript(snapshot, reconcilingProject: true)
                     return
                 }
             }
@@ -1982,7 +1982,8 @@ final class TraceModel: ObservableObject {
 
     /// Called on the main actor without suspension: no hydration request can
     /// observe new source metadata paired with the old locator rows.
-    private func applyTranscript(_ snapshot: SessionTranscriptSnapshot, deletionIsConfirmed: Bool = true) {
+    private func applyTranscript(_ snapshot: SessionTranscriptSnapshot, deletionIsConfirmed: Bool = true,
+                                 reconcilingProject: Bool = false) {
         if snapshot.session == nil, deletionIsConfirmed || pendingSelectionCompletion != nil {
             // Deletion is a terminal navigation outcome, even when no transcript
             // was available to complete the original selection.
@@ -2017,7 +2018,10 @@ final class TraceModel: ObservableObject {
         // suspension. Explicit selections reconcile regardless of a running pass.
         let completingSelection = pendingSelectionCompletion != nil
         if completingSelection || !indexingPassActive { reconcileSidebarReveal(with: snapshot) }
-        if let session = snapshot.session, adoptProjectIdentity(from: session) {
+        // Ordinary summaries update the transcript without changing the project
+        // being browsed. Selection completion and recovery retain their navigation.
+        if completingSelection || reconcilingProject,
+           let session = snapshot.session, adoptProjectIdentity(from: session) {
             let preservingSearch = pendingSelectionCompletion?.preservingMainSearch ?? hasSearchReturnContext
             if !preservingSearch { deferMainSearchForSessionNavigation() }
             loadProjectSessions(ensuring: session.id)

@@ -1549,6 +1549,29 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.messages.map(\.locator), current.messages?.map(\.locator))
     }
 
+    func testBackgroundProjectMoveKeepsBrowsingProjectUntilExplicitNavigation() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.openSession(session)
+        try await wait { !f.model.messages.isEmpty && !f.model.isLoadingSessions }
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        var moved = Data()
+        for index in 0..<6 { moved.append(try line(index, project: "MovedReview")) }
+        try moved.write(to: file, options: .atomic)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting()
+        let current = try XCTUnwrap(f.model.selectedSession)
+        XCTAssertNotEqual(current.projectCanonicalKey, session.projectCanonicalKey)
+        XCTAssertEqual(f.model.selectedProjectCanonicalKey, session.projectCanonicalKey,
+                       "a background summary must retain the project being browsed")
+        XCTAssertNil(f.model.sidebarRevealRequest)
+        f.model.openSession(current)
+        try await wait { !f.model.isLoadingSessions }
+        XCTAssertEqual(f.model.selectedProjectCanonicalKey, current.projectCanonicalKey)
+        XCTAssertEqual(f.model.sidebarRevealRequest?.projectCanonicalKey, current.projectCanonicalKey)
+        XCTAssertEqual(f.model.selectedSessionID, current.id)
+    }
+
     private struct RowRecovery {
         let fixture: Fixture
         let snapshot: SessionTranscriptSnapshot
