@@ -183,7 +183,8 @@ final class AppReviewFollowupTests: XCTestCase {
                 try await wait { await f.database.transcriptReadCountForTesting() >= initialReadCount + 3 }
                 await f.clock.advance(by: .seconds(4))
                 try await wait { f.model.transcriptLoadError != nil }
-                XCTAssertEqual(events.windows, 0)
+                XCTAssertEqual(events.windows, 1, "exhausted recovery must expose the Retry button")
+                XCTAssertEqual(events.scrolls, 0)
                 f.model.retrySelectedTranscript()
                 await f.clock.advance()
             } else if publisher == 2 {
@@ -248,6 +249,68 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.refreshSummariesForTesting()
         XCTAssertEqual(events.windows, 1)
         XCTAssertEqual(events.scrolls, 1)
+    }
+
+    func testReselectingExhaustedSelectionShowsWindowWithoutCompletingOpen() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        let events = ReviewSelectionEvents()
+        let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { events.windows += 1 }
+        }
+        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
+        await f.database.failTranscriptReadsForTesting(count: 4)
+        f.model.selectSession(session.id)
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        let before = await f.database.transcriptReadCountForTesting()
+        for (index, delay) in [Duration.milliseconds(250), .seconds(1), .seconds(4)].enumerated() {
+            await f.clock.advance(by: delay)
+            try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
+        }
+        try await wait { f.model.transcriptLoadError != nil }
+        XCTAssertEqual(events.windows, 0)
+        f.model.selectSession(session.id, showWindow: true)
+        XCTAssertEqual(events.windows, 1)
+        XCTAssertEqual(events.scrolls, 0)
+        let failedDiagnostics = await f.model.diagnostics.value()
+        XCTAssertEqual(failedDiagnostics.days.reduce(0) { $0 + $1.openCount }, 0)
+        f.model.retrySelectedTranscript()
+        await f.clock.advance()
+        try await wait { !f.model.messages.isEmpty }
+        try await wait { await f.model.diagnostics.value().days.reduce(0) { $0 + $1.openCount } == 1 }
+        XCTAssertEqual(events.windows, 1)
+        XCTAssertEqual(events.scrolls, 1)
+    }
+
+    func testDeletedLauncherSelectionShowsWindowAndClearsSelection() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        let events = ReviewSelectionEvents()
+        let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { events.windows += 1 }
+        }
+        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
+        f.model.selectionTranscriptReadGateForTesting = task
+        f.model.openSession(session)
+        try await wait { f.model.selectionTranscriptReadWaitingForTesting }
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        try FileManager.default.removeItem(at: file)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        await gate.open()
+        try await wait { events.windows == 1 }
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertNil(f.model.settings.lastSessionID)
+        XCTAssertNil(f.model.sidebarRevealRequest)
+        XCTAssertTrue(f.model.messages.isEmpty)
+        XCTAssertEqual(events.scrolls, 0)
+        await f.model.refreshSummariesForTesting()
+        let diagnostics = await f.model.diagnostics.value()
+        XCTAssertEqual(diagnostics.days.reduce(0) { $0 + $1.openCount }, 0)
+        XCTAssertEqual(events.windows, 1)
     }
 
     func testRecoveryNewerMissingSelectionAlreadyPublishedNeedsNoConfirmation() async throws {
@@ -427,8 +490,8 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.schedulerProgressGateForTesting = nil
         await gate.open()
         try await wait { f.model.schedulerForTesting != nil && f.model.pendingDatabaseForTesting == nil }
-        XCTAssertTrue(f.model.indexingPassActiveForTesting, "replacement remains active until its pass starts")
-        XCTAssertEqual(f.model.progress.phase, .indexing)
+        XCTAssertFalse(f.model.indexingPassActiveForTesting, "onboarding defers the replacement pass")
+        XCTAssertEqual(f.model.progress.phase, .waiting)
         XCTAssertEqual(f.model.progress.unresolvedDiscoveryFailures, 3)
         let current = try XCTUnwrap(f.model.schedulerForTesting)
         await current.request(reconcile: true)
@@ -466,6 +529,37 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(sessions.allSatisfy { $0.sourcePath.hasPrefix(newest.root.path) })
         let installedSessions = try await f.database.sessions(limit: 100)
         XCTAssertEqual(installedSessions.count, 6)
+    }
+
+    func testReloadRetainsReplacementAndCountsUntilWatchingPassStarts() async throws {
+        let f = try await fixture(count: 2)
+        let previous = try XCTUnwrap(f.model.schedulerForTesting)
+        let retirementGate = ReviewReadGate(), retirementTask = Task { await retirementGate.wait() }
+        let replacementGate = ReviewReadGate(), replacementTask = Task { await replacementGate.wait() }
+        defer {
+            retirementTask.cancel(); replacementTask.cancel()
+            Task { await retirementGate.open(); await replacementGate.open() }
+        }
+        f.model.schedulerProgressGateForTesting = retirementTask
+        await previous.request(reconcile: true)
+        try await wait { f.model.schedulerProgressWaitingForTesting }
+        var loaded = IndexProgress(phase: .indexing)
+        loaded.unresolvedFailedFiles = 2
+        loaded.unresolvedDiscoveryFailures = 3
+        await f.model.receiveProgress(loaded)
+        f.model.settings.onboardingComplete = true
+        f.model.reloadSourcesAndRebuild()
+        f.model.schedulerProgressGateForTesting = replacementTask
+        await retirementGate.open()
+        try await wait { f.model.schedulerForTesting != nil && f.model.schedulerProgressWaitingForTesting }
+        XCTAssertTrue(f.model.indexingPassActiveForTesting)
+        XCTAssertEqual(f.model.progress.phase, .indexing)
+        XCTAssertEqual(f.model.progress.unresolvedFailedFiles, 2)
+        XCTAssertEqual(f.model.progress.unresolvedDiscoveryFailures, 3)
+        f.model.schedulerProgressGateForTesting = nil
+        await replacementGate.open()
+        try await wait { f.model.progress.phase == .complete }
+        XCTAssertFalse(f.model.indexingPassActiveForTesting)
     }
 
     func testCancelledAttachmentRetainsInstalledReadersAndAllowsAnotherAttachment() async throws {
@@ -638,6 +732,62 @@ final class AppReviewFollowupTests: XCTestCase {
         let after = try await f.database.search(query: "QueuedScopeNeedle", filters: .init(), sort: .relevance)
         XCTAssertEqual(after.results.count, 1)
         XCTAssertFalse(f.model.indexingPassActiveForTesting)
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
+        XCTAssertFalse(f.model.pendingRebuildForTesting)
+    }
+
+    func testStartupDoesNotResubmitRebuildWaitingForFirstProgress() async throws {
+        let f = try await fixture(count: 2)
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.settings.onboardingComplete = true
+        f.model.schedulerProgressGateForTesting = task
+        f.model.selectionTranscriptReadGateForTesting = task
+        f.model.rebuildIndex()
+        try await wait { f.model.schedulerProgressWaitingForTesting }
+        XCTAssertFalse(f.model.pendingRebuildForTesting)
+        // A second reset would erase this navigation while the rebuild is held.
+        f.model.selectSession(-123)
+        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(f.model.selectedSessionID, -123)
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
+        f.model.schedulerProgressGateForTesting = nil
+        await gate.open()
+        await scheduler.waitUntilIdle()
+        XCTAssertFalse(f.model.pendingRebuildForTesting)
+    }
+
+    func testFailedReloadDiscardsQueuedRebuildAndManualRebuildRetries() async throws {
+        let f = try await fixture(count: 2)
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        let gate = ReviewReadGate(), task = Task { await gate.wait() }
+        defer { task.cancel(); Task { await gate.open() } }
+        f.model.schedulerProgressGateForTesting = task
+        await scheduler.request(reconcile: true)
+        try await wait { f.model.schedulerProgressWaitingForTesting }
+        f.model.settings.onboardingComplete = true
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        f.model.rebuildIndex()
+        XCTAssertTrue(f.model.pendingRebuildForTesting)
+        f.model.schedulerProgressGateForTesting = nil
+        await gate.open()
+        try await wait { f.model.progress.phase == .failed }
+        XCTAssertFalse(f.model.pendingRebuildForTesting)
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 0)
+        // An unrelated installation must not resurrect the abandoned request.
+        await f.model.attach(database: f.database, coordinator: f.coordinator)
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 0)
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.progress.phase == .failed }
+        f.model.failSourceConfigurationForTesting = false
+        f.model.rebuildIndex()
+        try await wait { f.model.schedulerForTesting != nil && f.model.progress.phase == .complete }
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
+        XCTAssertFalse(f.model.pendingRebuildForTesting)
+        XCTAssertNil(f.model.startupError)
     }
 
     func testSelectionCannotOverwriteRefreshAndBreakAnUnchangedSnapshot() async throws {
@@ -1328,6 +1478,8 @@ final class AppReviewFollowupTests: XCTestCase {
             f.model.openSession(session)
             try await wait { !f.model.messages.isEmpty && !f.model.isLoadingSessions }
             let token = try XCTUnwrap(f.model.sidebarRevealRequest?.token)
+            var pass = IndexProgress(phase: .indexing)
+            await f.model.receiveProgress(pass)
             let file = f.root.appendingPathComponent("sessions.jsonl")
             let original = try Data(contentsOf: file)
             var moved = Data()
@@ -1341,11 +1493,40 @@ final class AppReviewFollowupTests: XCTestCase {
                 try original.write(to: file, options: .atomic)
                 await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
             }
-            await f.model.refreshSummariesForTesting()
+            pass.phase = .complete
+            await f.model.receiveProgress(pass)
             if restoresOriginal { XCTAssertEqual(f.model.sidebarRevealRequest?.token, token) }
             else { XCTAssertNil(f.model.sidebarRevealRequest) }
             XCTAssertEqual(f.model.selectedSessionID, session.id)
         }
+    }
+
+    func testRecoveryUsesPassStateAtPublicationRatherThanScheduling() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.openSession(session)
+        try await wait { !f.model.messages.isEmpty && !f.model.isLoadingSessions }
+        let token = try XCTUnwrap(f.model.sidebarRevealRequest?.token)
+        await f.database.failTranscriptReadOnceForTesting()
+        await f.model.refreshSummariesForTesting()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        // The failed terminal summary scheduled recovery while no pass was active.
+        var pass = IndexProgress(phase: .indexing)
+        pass.incremental = true
+        await f.model.receiveProgress(pass)
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        var moved = Data()
+        for index in 0..<6 { moved.append(try line(index, project: "TemporaryReview")) }
+        try moved.write(to: file, options: .atomic)
+        await f.coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { f.model.selectedSession?.projectCanonicalKey != session.projectCanonicalKey }
+        XCTAssertEqual(f.model.sidebarRevealRequest?.token, token)
+        XCTAssertTrue(f.model.indexingPassActiveForTesting)
+        pass.phase = .complete
+        await f.model.receiveProgress(pass)
+        XCTAssertNil(f.model.sidebarRevealRequest)
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
     }
 
     func testCurrentSessionProjectChangeCancelsRevealWithoutClearingTranscript() async throws {
@@ -2140,7 +2321,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.mainSearch.results.count == 400 && !f.model.mainSearch.isSearching }
         let ids = f.model.mainSearch.results.map(\.id)
         f.model.openSearchResult(try XCTUnwrap(f.model.mainSearch.results.first), fromMainSearch: true)
-        try await wait { f.model.selectedSession != nil }
+        try await wait { !f.model.messages.isEmpty }
         for terminal in [false, true] {
             let gate = ReviewReadGate(), task = Task { await gate.wait() }
             defer { task.cancel(); Task { await gate.open() } }

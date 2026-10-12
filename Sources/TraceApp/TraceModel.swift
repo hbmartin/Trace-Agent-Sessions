@@ -365,6 +365,8 @@ final class TraceModel: ObservableObject {
     var databaseForTesting: IndexDatabase? { database }
     var pendingDatabaseForTesting: IndexDatabase? { pendingAttachment?.database }
     var indexingPassActiveForTesting: Bool { indexingPassActive }
+    var pendingRebuildForTesting: Bool { pendingRebuild }
+    private(set) var rebuildSubmissionCountForTesting = 0
     var sourceReloadSourcesForTesting: [any SessionSource]?
     var failSourceConfigurationForTesting = false
     var transcriptCopyForTesting: ((String) -> Void)?
@@ -578,6 +580,7 @@ final class TraceModel: ObservableObject {
 
     private func receiveSchedulerProgress(_ update: IndexProgress, database: IndexDatabase,
                                           generation: UUID) async {
+        guard attachmentIsCurrent(database: database, generation: generation) else { return }
         #if DEBUG
         if let gate = schedulerProgressGateForTesting {
             schedulerProgressWaitingForTesting = true
@@ -663,6 +666,7 @@ final class TraceModel: ObservableObject {
                                 error: String? = nil) {
         guard pendingAttachmentIsCurrent(pending) else { return }
         pendingAttachment = nil
+        pendingRebuild = false
         indexWorkflow = .init()
         progress.phase = phase
         progress.error = error
@@ -704,6 +708,7 @@ final class TraceModel: ObservableObject {
         mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
         scheduler = makeScheduler(coordinator, database: database, generation: pending.token)
         pendingAttachment = nil
+        startupError = nil
         updateCostsTotalsUpdating()
         if pending.intent == .installation, pendingRebuild { rebuildIndex() }
         return true
@@ -720,7 +725,6 @@ final class TraceModel: ObservableObject {
 
     func receiveProgress(_ update: IndexProgress) async {
         let disposition = indexWorkflow.receive(update)
-        if !disposition.passTerminal, update.activity == .rebuild { pendingRebuild = false }
         if !disposition.passTerminal { usageSnapshotRequestID = UUID() }
         if disposition.passTerminal {
             TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
@@ -952,12 +956,12 @@ final class TraceModel: ObservableObject {
         let revision = configurationRevision ?? sourceConfigurationRevision
         guard revision == sourceConfigurationRevision, settings.onboardingComplete,
               !initialIndexRequested, let scheduler else { return }
-        if pendingRebuild { prepareForIndexReset() }
         let generation = watcherGeneration
+        let attachment = attachmentGeneration
         initialIndexRequested = true
         Task { [weak self] in
             guard let self, !Task.isCancelled, revision == self.sourceConfigurationRevision,
-                  generation == self.watcherGeneration else { return }
+                  generation == self.watcherGeneration, attachment == self.attachmentGeneration else { return }
             let buffered = self.bufferedSourceChanges
             self.bufferedSourceChanges = SourceChanges()
             let recovery = self.pendingStartupRecovery
@@ -974,14 +978,15 @@ final class TraceModel: ObservableObject {
             } ?? baseActivity
             let satisfiesSafetyReconciliation = baseActivity.satisfiesSafetyReconciliation
                 || (recoveryActivity?.satisfiesSafetyReconciliation ?? false)
-            let requestedActivity: IndexActivity = self.pendingRebuild ? .rebuild : activity
+            let rebuild = self.takePendingRebuild(generation: attachment, revision: revision)
+            let requestedActivity: IndexActivity = rebuild ? .rebuild : activity
             self.startupActivityObserver(requestedActivity)
             await scheduler.request(
                 paths: buffered.paths.union(recovery.filePaths),
                 reconciliationPaths: self.startupReconciliationPaths
                     .union(buffered.reconciliationPaths)
                     .union(recovery.reconciliationPaths),
-                rebuild: self.pendingRebuild,
+                rebuild: rebuild,
                 scope: self.settings.indexScope,
                 activity: requestedActivity,
                 satisfiesSafetyReconciliation: satisfiesSafetyReconciliation,
@@ -1006,20 +1011,45 @@ final class TraceModel: ObservableObject {
 
     func rebuildIndex() {
         guard settings.onboardingComplete else { return }
+        pendingRebuild = true
         if pendingAttachment != nil {
-            pendingRebuild = true
             beginIndexReplacement()
             return
         }
-        guard let scheduler else { return }
-        pendingRebuild = true
+        guard let scheduler else {
+            // A manual rebuild also retries a failed source configuration.
+            reloadSourcesAndRebuild()
+            return
+        }
         beginIndexReplacement()
-        prepareForIndexReset()
         let generation = attachmentGeneration, revision = sourceConfigurationRevision
         Task {
-            guard !terminating, generation == attachmentGeneration, revision == sourceConfigurationRevision else { return }
+            guard takePendingRebuild(generation: generation, revision: revision) else { return }
             await scheduler.request(rebuild: true, scope: settings.indexScope)
         }
+    }
+
+    /// Consume at handoff, before reset or suspension. Progress cannot acknowledge
+    /// an outstanding request because another submission may already be queued.
+    private func takePendingRebuild(generation: UUID, revision: UInt64) -> Bool {
+        guard !terminating, pendingAttachment == nil, pendingRebuild,
+              generation == attachmentGeneration, revision == sourceConfigurationRevision else { return false }
+        pendingRebuild = false
+        prepareForIndexReset()
+        #if DEBUG
+        rebuildSubmissionCountForTesting += 1
+        #endif
+        return true
+    }
+
+    private func settleDeferredSourceReload(revision: UInt64) {
+        guard !terminating, revision == sourceConfigurationRevision, pendingAttachment == nil else { return }
+        indexWorkflow = .init()
+        let counts = (progress.unresolvedFailedFiles, progress.unresolvedDiscoveryFailures)
+        progress = .init(phase: .waiting)
+        progress.unresolvedFailedFiles = counts.0
+        progress.unresolvedDiscoveryFailures = counts.1
+        updateCostsTotalsUpdating()
     }
 
     func reloadSourcesAndRebuild() {
@@ -1065,7 +1095,10 @@ final class TraceModel: ObservableObject {
             guard await finishAttachment(pending, coordinator: coordinator) else { return }
             initialIndexRequested = false
             startupSetupComplete = true
-            guard await startWatching(sources, forceRootReconciliation: true) else { return }
+            guard await startWatching(sources, forceRootReconciliation: true) else {
+                settleDeferredSourceReload(revision: revision)
+                return
+            }
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             // Root changes reconcile existing files; unchanged sources retain their index.
             startIndexing(sources: sources, configurationRevision: revision)
@@ -1437,6 +1470,7 @@ final class TraceModel: ObservableObject {
         if selectedSessionID == sessionID, selectedSession != nil, messageID == nil {
             if pendingSelectionCompletion != nil {
                 if showWindow { pendingSelectionCompletion?.showWindow = true }
+                if transcriptLoadError != nil { showPendingSelectionWindow() }
             } else if showWindow {
                 NotificationCenter.default.post(name: .traceShowMainWindow, object: nil)
             }
@@ -1505,8 +1539,7 @@ final class TraceModel: ObservableObject {
             let acceptance = acceptTranscript(snapshot)
             assert(acceptance != .requiresRows, "Selection reads always contain complete rows")
             if acceptance == .accepted {
-                reconcileSidebarReveal(with: snapshot)
-                applyTranscript(snapshot)
+                applyTranscript(snapshot, deletionIsConfirmed: false)
             }
         }
     }
@@ -1815,12 +1848,11 @@ final class TraceModel: ObservableObject {
         guard let database, let sessionID = selectedSessionID, !terminating else { return }
         cancelTranscriptRecovery()
         scheduleTranscriptRecovery(error: "Could not read the selected session.", database: database,
-                                   sessionID: sessionID, request: sessionRequestID, immediately: true,
-                                   reconcileSidebar: pendingSelectionCompletion != nil || !indexingPassActive)
+                                   sessionID: sessionID, request: sessionRequestID, immediately: true)
     }
 
     private func scheduleTranscriptRecovery(error: String, database: IndexDatabase, sessionID: Int64,
-                                            request: UUID, immediately: Bool = false, reconcileSidebar: Bool = true) {
+                                            request: UUID, immediately: Bool = false) {
         guard !terminating, transcriptRecoveryID == nil,
               transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
         let recoveryID = UUID()
@@ -1845,29 +1877,21 @@ final class TraceModel: ObservableObject {
                 case .failed(let error): lastError = error
                 case .snapshot(let snapshot):
                     guard acceptTranscript(snapshot) == .accepted else { continue }
-                    if snapshot.session == nil { returnFromSession() }
-                    else {
-                        if reconcileSidebar { reconcileSidebarReveal(with: snapshot) }
-                        applyTranscript(snapshot)
-                        if let session = snapshot.session, adoptProjectIdentity(from: session) {
-                            if !hasSearchReturnContext { deferMainSearchForSessionNavigation() }
-                            loadProjectSessions(ensuring: sessionID)
-                        }
-                    }
+                    applyTranscript(snapshot)
                     return
                 }
             }
             transcriptLoadError = lastError
+            showPendingSelectionWindow()
         }
     }
 
     private func recoverableSnapshot(_ outcome: TranscriptReadOutcome, database: IndexDatabase,
-                                     sessionID: Int64, request: UUID, reconcileSidebar: Bool = true) -> SessionTranscriptSnapshot? {
+                                     sessionID: Int64, request: UUID) -> SessionTranscriptSnapshot? {
         switch outcome {
         case .snapshot(let snapshot): return snapshot
         case .failed(let error):
-            scheduleTranscriptRecovery(error: error, database: database, sessionID: sessionID, request: request,
-                                       reconcileSidebar: reconcileSidebar)
+            scheduleTranscriptRecovery(error: error, database: database, sessionID: sessionID, request: request)
             return nil
         case .superseded: return nil
         }
@@ -1875,7 +1899,7 @@ final class TraceModel: ObservableObject {
 
     private func reconcileMissingTranscript(
         _ snapshot: SessionTranscriptSnapshot, database: IndexDatabase,
-        sessionID: Int64, request: UUID, summary: UUID, reconcileSidebar: Bool
+        sessionID: Int64, request: UUID, summary: UUID
     ) async -> SessionTranscriptSnapshot? {
         guard snapshot.readRevision > highestObservedTranscriptReadRevision else { return nil }
         guard let pending = pendingSelectionTranscriptRead,
@@ -1892,14 +1916,12 @@ final class TraceModel: ObservableObject {
         guard !Task.isCancelled,
               transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary),
               let selectionSnapshot = recoverableSnapshot(selectionOutcome, database: database,
-                                                           sessionID: sessionID, request: request,
-                                                           reconcileSidebar: reconcileSidebar) else { return nil }
+                                                           sessionID: sessionID, request: request) else { return nil }
         if selectionSnapshot.readRevision > snapshot.readRevision {
             return selectionSnapshot.session == nil ? selectionSnapshot : nil
         }
         let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request, summary: summary)
-        return recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request,
-                                   reconcileSidebar: reconcileSidebar)
+        return recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request)
     }
 
     private func finishPreviouslyAppliedMissingTranscript(_ snapshot: SessionTranscriptSnapshot) -> Bool {
@@ -1918,15 +1940,14 @@ final class TraceModel: ObservableObject {
 
     private func refreshSelectedTranscript(
         _ loaded: SessionTranscriptSnapshot, database: IndexDatabase,
-        sessionID: Int64, request: UUID, summary: UUID, projectReconciliation: ProjectReconciliationMode
+        sessionID: Int64, request: UUID, summary: UUID
     ) async {
         guard transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return }
         if finishPreviouslyAppliedMissingTranscript(loaded) { return }
         var snapshot = loaded
         if snapshot.session == nil {
             guard let reconciled = await reconcileMissingTranscript(snapshot, database: database,
-                                                                   sessionID: sessionID, request: request, summary: summary,
-                                                                   reconcileSidebar: projectReconciliation != .ongoing) else { return }
+                                                                   sessionID: sessionID, request: request, summary: summary) else { return }
             snapshot = reconciled
         }
         guard !Task.isCancelled,
@@ -1935,17 +1956,12 @@ final class TraceModel: ObservableObject {
         var acceptance = acceptTranscript(snapshot)
         if acceptance == .requiresRows {
             let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request, summary: summary)
-            guard let recovered = recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request,
-                                                       reconcileSidebar: projectReconciliation != .ongoing) else { return }
+            guard let recovered = recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request) else { return }
             snapshot = recovered
             acceptance = acceptTranscript(recovered)
         }
         guard acceptance == .accepted else { return }
-        if snapshot.session == nil { returnFromSession() }
-        else {
-            if projectReconciliation != .ongoing { reconcileSidebarReveal(with: snapshot) }
-            applyTranscript(snapshot)
-        }
+        applyTranscript(snapshot)
     }
 
     /// After acceptance, apply the snapshot or navigate back without suspension.
@@ -1966,7 +1982,15 @@ final class TraceModel: ObservableObject {
 
     /// Called on the main actor without suspension: no hydration request can
     /// observe new source metadata paired with the old locator rows.
-    private func applyTranscript(_ snapshot: SessionTranscriptSnapshot) {
+    private func applyTranscript(_ snapshot: SessionTranscriptSnapshot, deletionIsConfirmed: Bool = true) {
+        if snapshot.session == nil, deletionIsConfirmed || pendingSelectionCompletion != nil {
+            // Deletion is a terminal navigation outcome, even when no transcript
+            // was available to complete the original selection.
+            let showWindow = pendingSelectionCompletion?.showWindow == true
+            returnFromSession()
+            if showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
+            return
+        }
         cancelTranscriptRecovery()
         lastAppliedTranscriptReadRevision = snapshot.readRevision
         let changed = selectedSession?.transcriptIdentity != snapshot.session?.transcriptIdentity
@@ -1989,8 +2013,26 @@ final class TraceModel: ObservableObject {
         }
         selectedSession = snapshot.session
         if let rows = snapshot.messages { messages = rows }
-        if snapshot.session == nil { pendingSelectionCompletion = nil }
-        else { completeSelectionIfPending(snapshot) }
+        // Evaluate background navigation at publication, after any read/retry
+        // suspension. Explicit selections reconcile regardless of a running pass.
+        let completingSelection = pendingSelectionCompletion != nil
+        if completingSelection || !indexingPassActive { reconcileSidebarReveal(with: snapshot) }
+        if let session = snapshot.session, adoptProjectIdentity(from: session) {
+            let preservingSearch = pendingSelectionCompletion?.preservingMainSearch ?? hasSearchReturnContext
+            if !preservingSearch { deferMainSearchForSessionNavigation() }
+            loadProjectSessions(ensuring: session.id)
+        }
+        completeSelectionIfPending(snapshot)
+    }
+
+    private func showPendingSelectionWindow() {
+        guard let completion = pendingSelectionCompletion, completion.showWindow,
+              transcriptRequestIsCurrent(database: completion.database, sessionID: completion.sessionID,
+                                         request: completion.requestID) else { return }
+        // Consume only window visibility; a later successful read still completes
+        // scrolling and diagnostics exactly once.
+        pendingSelectionCompletion?.showWindow = false
+        NotificationCenter.default.post(name: .traceShowMainWindow, object: nil)
     }
 
     private func completeSelectionIfPending(_ snapshot: SessionTranscriptSnapshot) {
@@ -2000,11 +2042,6 @@ final class TraceModel: ObservableObject {
               let session = snapshot.session, session.id == completion.sessionID else { return }
         // Consume before publishing actions, including notifications that can reenter the model.
         pendingSelectionCompletion = nil
-        reconcileSidebarReveal(with: snapshot)
-        if adoptProjectIdentity(from: session) {
-            if !completion.preservingMainSearch { deferMainSearchForSessionNavigation() }
-            loadProjectSessions(ensuring: session.id)
-        }
         scrollRequest = UUID()
         if completion.showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
         Task { [diagnostics] in try? await diagnostics.recordOpen() }
@@ -2645,8 +2682,7 @@ final class TraceModel: ObservableObject {
                 loadedTranscript = nil
                 if !Task.isCancelled, !(error is CancellationError), summaryRequestID == refresh {
                     scheduleTranscriptRecovery(error: error.localizedDescription, database: database,
-                                               sessionID: ensuredSessionID, request: selectedSessionRequest,
-                                               reconcileSidebar: projectReconciliation != .ongoing)
+                                               sessionID: ensuredSessionID, request: selectedSessionRequest)
                 }
             }
         } else {
@@ -2674,7 +2710,7 @@ final class TraceModel: ObservableObject {
                                       request: selectedSessionRequest, summary: refresh) {
             await refreshSelectedTranscript(loadedTranscript, database: database,
                                             sessionID: sessionID, request: selectedSessionRequest,
-                                            summary: refresh, projectReconciliation: projectReconciliation)
+                                            summary: refresh)
         }
         if lightweight || self.database !== database || summaryRequestID != refresh { return }
         #if DEBUG
