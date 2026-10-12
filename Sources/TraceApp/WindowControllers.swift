@@ -4,7 +4,7 @@ import Combine
 import TraceCore
 
 @MainActor
-final class StatusItemController: NSObject, NSPopoverDelegate {
+final class StatusItemController: NSObject, NSPopoverDelegate, NSMenuItemValidation {
     private let model: TraceModel
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = NSPopover()
@@ -69,7 +69,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     @objc private func openTrace() { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
     @objc private func openPreferences() { NotificationCenter.default.post(name: .traceShowPreferences, object: nil) }
     @objc private func quit() { NSApp.terminate(nil) }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(rebuild) else { return true }
+        menuItem.toolTip = model.rebuildUnavailableReason
+        return model.canRebuildIndex
+    }
     @objc private func rebuild() {
+        guard model.canRebuildIndex else { return }
         let alert = NSAlert()
         alert.messageText = "Rebuild Trace’s index?"
         alert.informativeText = "The disposable local index will be recreated from your session files. Source files are never modified."

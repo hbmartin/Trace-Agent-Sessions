@@ -3647,6 +3647,125 @@ final class TraceUITests: XCTestCase {
         return (app, directory)
     }
 
+    func testManualRebuildIsDisabledUntilInitialAttachmentCommits() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main", "--ui-show-settings"])
+        let entered = directory.appendingPathComponent("rebuild-startup-entered")
+        let release = directory.appendingPathComponent("rebuild-startup-release")
+        let completed = directory.appendingPathComponent("rebuild-startup-completed")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_STARTED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_FAILURE_COUNTS_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(waitForFile(entered, timeout: 15))
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        let rebuild = settings.buttons["rebuildIndex"]
+        XCTAssertTrue(rebuild.exists)
+        XCTAssertFalse(rebuild.isEnabled)
+        XCTAssertTrue(settings.staticTexts["Rebuild is available after the index finishes opening."].exists)
+        let statusItem = app.statusItems["Trace"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        statusItem.rightClick()
+        let menuRebuild = app.menuItems.matching(NSPredicate(format: "title == %@", "Rebuild Index…")).firstMatch
+        XCTAssertTrue(menuRebuild.waitForExistence(timeout: 5))
+        XCTAssertFalse(menuRebuild.isEnabled)
+        app.typeKey(.escape, modifierFlags: [])
+        try Data().write(to: release)
+        XCTAssertTrue(rebuild.wait(for: \.isEnabled, toEqual: true, timeout: 15))
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        app.typeKey(",", modifierFlags: .command)
+        let toggle = settings.buttons["testToggleOnboardingOnly"]
+        toggle.click()
+        XCTAssertTrue(rebuild.wait(for: \.isEnabled, toEqual: false, timeout: 5))
+        toggle.click()
+        XCTAssertTrue(rebuild.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+        app.activate()
+        statusItem.rightClick()
+        let readyMenuRebuild = app.menuItems.matching(NSPredicate(format: "title == %@", "Rebuild Index…")).firstMatch
+        XCTAssertTrue(readyMenuRebuild.waitForExistence(timeout: 5))
+        XCTAssertTrue(readyMenuRebuild.isEnabled)
+        app.typeKey(.escape, modifierFlags: [])
+        attach(app, name: "rebuild-startup-availability")
+    }
+
+    func testQueuedRebuildCancellationIsExplainedAfterSourceFailure() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let additional = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
+        let completed = directory.appendingPathComponent("cancelled-rebuild-completed")
+        let entered = directory.appendingPathComponent("source-preparation-entered")
+        let release = directory.appendingPathComponent("source-preparation-release")
+        let activities = directory.appendingPathComponent("cancelled-rebuild-activities")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launchEnvironment["TRACE_TEST_PICK_CLAUDE_ROOT_PATH"] = additional.path
+        app.launchEnvironment["TRACE_TEST_FAIL_SOURCE_RELOAD_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launchEnvironment["TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"] = activities.path
+        app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_PREPARATION_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_PREPARATION_ENTERED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_PREPARATION_RELEASE_PATH"] = release.path
+        app.launch()
+        XCTAssertTrue(waitForFile(completed, timeout: 20))
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        settings.buttons["Add Folder…"].click()
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        XCTAssertTrue(settings.buttons["rebuildIndex"].isEnabled)
+        settings.buttons["rebuildIndex"].click()
+        try Data().write(to: release)
+        let notice = "The queued index rebuild was cancelled. Retry resumes updates without rebuilding. Choose Rebuild Index again to rebuild."
+        let alert = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", notice)).firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 10))
+        app.sheets.firstMatch.buttons["OK"].click()
+        app.typeKey(",", modifierFlags: .command)
+        settings.buttons["indexProgress"].click()
+        let details = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", notice)).firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertTrue((details.value as? String)?.contains("Synthetic source configuration failure") == true)
+        settings.buttons["indexProgress"].click()
+        try FileManager.default.removeItem(at: completed)
+        settings.buttons["retrySourceConfiguration"].click()
+        XCTAssertTrue(settings.buttons["retrySourceConfiguration"].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(waitForFile(completed, timeout: 15))
+        XCTAssertFalse(fileLines(in: activities).contains("rebuild"))
+        attach(app, name: "queued-rebuild-cancellation-feedback")
+    }
+
+    func testRebuildDuringHeldRetryKeepsResumingFeedbackUntilWatcherStartupCompletes() throws {
+        let (app, directory) = try launchWithFailedSourceReload(holdMetadataOnRetry: true)
+        let settings = app.windows["Trace Settings"]
+        let release = directory.appendingPathComponent("release-retry-metadata")
+        let entered = directory.appendingPathComponent("retry-metadata-entered")
+        let completed = directory.appendingPathComponent("initial-pass-completed")
+        try FileManager.default.removeItem(at: release)
+        try FileManager.default.removeItem(at: entered)
+        try FileManager.default.removeItem(at: completed)
+        settings.buttons["retrySourceConfiguration"].click()
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        XCTAssertTrue(settings.buttons["rebuildIndex"].isEnabled)
+        settings.buttons["rebuildIndex"].click()
+        XCTAssertTrue(waitForFile(completed, timeout: 15), "manual Rebuild publishes while readiness is held")
+        let status = settings.descendants(matching: .any).matching(identifier: "indexProgress").firstMatch
+        XCTAssertEqual(status.label, "Resuming updates…")
+        XCTAssertFalse(settings.buttons["retrySourceConfiguration"].isEnabled)
+        status.click()
+        let details = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@",
+            "Applying your source settings and checking for changes.")).firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertTrue((details.value as? String)?.contains("Synthetic source configuration failure") == true)
+        status.click()
+        try Data().write(to: release)
+        XCTAssertTrue(settings.buttons["retrySourceConfiguration"].waitForNonExistence(timeout: 15))
+        attach(app, name: "rebuild-retains-resuming-until-ready")
+    }
+
     func testSourceReloadRetryAvailabilityTracksSettingsWithoutModelPublication() throws {
         let (app, _) = try launchWithFailedSourceReload(settingsOnlyControl: true)
         app.typeKey("w", modifierFlags: .command)

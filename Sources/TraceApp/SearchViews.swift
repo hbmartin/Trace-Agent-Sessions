@@ -199,6 +199,8 @@ struct LauncherView: View {
                 Spacer()
                 if TraceTestHooks.showsTestControls {
                     Button("Rebuild Index") { model.rebuildIndex() }
+                        .disabled(!model.canRebuildIndex)
+                        .help(model.rebuildUnavailableReason ?? "Recreate the index from your session files.")
                         .accessibilityIdentifier("testRebuildIndex")
                 }
                 Text("↩ Open  ·  esc Close")

@@ -219,9 +219,43 @@ final class TraceModel: ObservableObject {
 
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
+    @Published private var rebuildAttachmentReady = false
+    var canRebuildIndex: Bool { rebuildAttachmentReady && settings.onboardingComplete && !terminating }
+    var rebuildUnavailableReason: String? {
+        if !rebuildAttachmentReady { return "Rebuild is available after the index finishes opening." }
+        if !settings.onboardingComplete { return "Complete onboarding to rebuild the index." }
+        return nil
+    }
     private var watchers: [FSEventsWatcher] = []
     private var metadataWatcher: CodexMetadataWatcher?
     private var watcherTeardownTask: Task<Void, Never>?
+    private struct WatcherOwner: Equatable, Sendable {
+        let database: IndexDatabase
+        let attachment: UUID
+        let revision: UInt64
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.database === rhs.database && lhs.attachment == rhs.attachment && lhs.revision == rhs.revision
+        }
+    }
+    private enum WatcherStartOutcome: Sendable {
+        case started(WatcherOwner)
+        case deferredByOnboarding(WatcherOwner)
+        case superseded
+    }
+    private final class WatcherStartup {
+        let owner: WatcherOwner
+        let generation: UInt64
+        var forceRootReconciliation: Bool
+        var ready = false
+        var task: Task<WatcherStartOutcome, Never>?
+        init(owner: WatcherOwner, generation: UInt64, forceRootReconciliation: Bool) {
+            self.owner = owner
+            self.generation = generation
+            self.forceRootReconciliation = forceRootReconciliation
+        }
+    }
+    private var watcherStartup: WatcherStartup?
+    private var sourceReloadActivation: WatcherOwner?
     private var scheduler: IndexScheduler?
     private var attachmentGeneration = UUID()
     private var schedulerTeardownTask: Task<Void, Never>?
@@ -379,6 +413,22 @@ final class TraceModel: ObservableObject {
     var schedulerProgressGateForTesting: Task<Void, Never>?
     var schedulerCompletionGateForTesting: Task<Void, Never>?
     var sourceChangeAttachmentGateForTesting: Task<Void, Never>?
+    var watcherPreparationGateForTesting: Task<Void, Never>?
+    var watcherReadinessGateForTesting: Task<Void, Never>?
+    private(set) var watcherPreparationWaitingForTesting = false
+    private(set) var watcherReadinessWaitingForTesting = false
+    private(set) var watcherStartCountForTesting = 0
+    private(set) var startupSubmissionCountForTesting = 0
+    var watcherReadyForTesting: Bool { watcherStartup?.ready == true }
+    var watcherRequiresRootReconciliationForTesting: Bool { watcherStartup?.forceRootReconciliation == true }
+    var watcherGenerationForTesting: UInt64 { watcherGeneration }
+    var startupReconciliationPathsForTesting: Set<String> { startupReconciliationPaths }
+    func startWatchingForTesting(_ sources: [any SessionSource], force: Bool = false) async -> Bool {
+        if case .started(let owner) = await startWatching(sources, forceRootReconciliation: force) {
+            return watcherReadyIsCurrent(owner)
+        }
+        return false
+    }
     private(set) var schedulerProgressWaitingForTesting = false
     private(set) var schedulerCompletionWaitingForTesting = false
     private(set) var sourceChangeAttachmentWaitingForTesting = false
@@ -524,7 +574,8 @@ final class TraceModel: ObservableObject {
                 guard configuredRevision == sourceConfigurationRevision else { return }
                 startupSetupComplete = true
                 if settings.onboardingComplete {
-                    guard await startWatching(sources) else { return }
+                    guard case .started(let owner) = await startWatching(sources),
+                          watcherReadyIsCurrent(owner) else { return }
                     guard configuredRevision == sourceConfigurationRevision else { return }
                     if ProcessInfo.processInfo.arguments.contains("--index-smoke"), TraceRuntime.testDirectory != nil {
                         await scheduler?.request(reconcile: true, scope: settings.indexScope)
@@ -571,7 +622,8 @@ final class TraceModel: ObservableObject {
                 let revision = self.sourceConfigurationRevision
                 let sources = await self.makeSources()
                 guard revision == self.sourceConfigurationRevision else { return }
-                guard await self.startWatching(sources) else { return }
+                guard case .started(let owner) = await self.startWatching(sources),
+                      self.watcherReadyIsCurrent(owner) else { return }
                 guard revision == self.sourceConfigurationRevision else { return }
                 self.startIndexing(sources: sources, configurationRevision: revision)
             }
@@ -667,6 +719,8 @@ final class TraceModel: ObservableObject {
                 await previousScheduler.stop()
             }
         }
+        sourceReloadActivation = intent == .sourceReload
+            ? WatcherOwner(database: database, attachment: pending.token, revision: pending.configurationRevision) : nil
         return pending
     }
 
@@ -688,6 +742,12 @@ final class TraceModel: ObservableObject {
     private func failAttachment(_ pending: PendingAttachment, phase: IndexProgress.Phase = .failed,
                                 error: String? = nil) {
         guard pendingAttachmentIsCurrent(pending) else { return }
+        let error = error.map { message in
+            pending.intent == .sourceReload && pendingRebuild
+                ? message + "\nThe queued index rebuild was cancelled. Retry resumes updates without rebuilding. Choose Rebuild Index again to rebuild."
+                : message
+        }
+        sourceReloadActivation = nil
         if pending.intent == .sourceReload, let error {
             sourceReloadRecovery = .failed(error)
         } else if let previousError = sourceReloadRecovery.error {
@@ -744,6 +804,7 @@ final class TraceModel: ObservableObject {
             startupError = nil
         }
         updateCostsTotalsUpdating()
+        if !rebuildAttachmentReady { rebuildAttachmentReady = true }
         if pending.intent == .installation, pendingRebuild { rebuildIndex() }
         return true
     }
@@ -824,8 +885,13 @@ final class TraceModel: ObservableObject {
 
     private func publishProgress(_ update: IndexProgress) {
         let generation = attachmentGeneration
+        let activation = sourceReloadActivation
         progress = update
         guard !terminating, generation == attachmentGeneration else { return }
+        guard let activation, activation == sourceReloadActivation,
+              watcherOwnerIsCurrent(activation), let startup = watcherStartup,
+              startup.owner == activation, startup.ready, watcherStartupIsCurrent(startup) else { return }
+        sourceReloadActivation = nil
         if sourceReloadRecovery.isRetrying { sourceReloadRecovery = .normal }
     }
 
@@ -1021,6 +1087,9 @@ final class TraceModel: ObservableObject {
                 || (recoveryActivity?.satisfiesSafetyReconciliation ?? false)
             let rebuild = self.takePendingRebuild(generation: attachment, revision: revision)
             let requestedActivity: IndexActivity = rebuild ? .rebuild : activity
+            #if DEBUG
+            self.startupSubmissionCountForTesting += 1
+            #endif
             self.startupActivityObserver(requestedActivity)
             await scheduler.request(
                 paths: buffered.paths.union(recovery.filePaths),
@@ -1085,13 +1154,17 @@ final class TraceModel: ObservableObject {
         return true
     }
 
-    private func settleDeferredSourceReload(revision: UInt64) {
-        guard !terminating, revision == sourceConfigurationRevision, pendingAttachment == nil else { return }
-        indexWorkflow = .init()
-        let counts = (progress.unresolvedFailedFiles, progress.unresolvedDiscoveryFailures)
-        progress = .init(phase: .waiting)
-        progress.unresolvedFailedFiles = counts.0
-        progress.unresolvedDiscoveryFailures = counts.1
+    private func settleDeferredSourceReload(owner: WatcherOwner) {
+        guard watcherOwnerIsCurrent(owner), !settings.onboardingComplete else { return }
+        // A deliberately deferred startup cannot erase an independently running pass.
+        if indexWorkflow.activePassID == nil {
+            indexWorkflow = .init()
+            let counts = (progress.unresolvedFailedFiles, progress.unresolvedDiscoveryFailures)
+            progress = .init(phase: .waiting)
+            progress.unresolvedFailedFiles = counts.0
+            progress.unresolvedDiscoveryFailures = counts.1
+        }
+        // Keep the root scan requirement until onboarding eventually submits it.
         sourceReloadRecovery = .normal
         updateCostsTotalsUpdating()
     }
@@ -1115,6 +1188,14 @@ final class TraceModel: ObservableObject {
         let pending = beginAttachment(database: database, intent: .sourceReload)
         sourceChangeTask = Task {
             guard await waitForAttachmentRetirement(pending) else { return }
+            if let delay = TraceTestHooks.delayMilliseconds(
+                for: "TRACE_TEST_SOURCE_RELOAD_PREPARATION_HOLD_MS", cappedAt: 30_000,
+                marker: .touch(pathKey: "TRACE_TEST_SOURCE_RELOAD_PREPARATION_ENTERED_PATH")
+            ) {
+                try? await TraceTestHooks.waitForRelease(
+                    pathKey: "TRACE_TEST_SOURCE_RELOAD_PREPARATION_RELEASE_PATH", timeoutMilliseconds: delay)
+            }
+            guard !Task.isCancelled, pendingAttachmentIsCurrent(pending) else { return }
             let sources = await makeSources()
             guard !Task.isCancelled, pendingAttachmentIsCurrent(pending) else { return }
             do {
@@ -1149,9 +1230,14 @@ final class TraceModel: ObservableObject {
             guard await finishAttachment(pending, coordinator: coordinator) else { return }
             initialIndexRequested = false
             startupSetupComplete = true
-            guard await startWatching(sources, forceRootReconciliation: true) else {
-                settleDeferredSourceReload(revision: revision)
+            switch await startWatching(sources, forceRootReconciliation: true) {
+            case .deferredByOnboarding(let owner):
+                settleDeferredSourceReload(owner: owner)
                 return
+            case .superseded:
+                return
+            case .started(let owner):
+                guard watcherReadyIsCurrent(owner) else { return }
             }
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             // Root changes reconcile existing files; unchanged sources retain their index.
@@ -2015,6 +2101,10 @@ final class TraceModel: ObservableObject {
             acceptance = acceptTranscript(recovered)
         }
         guard acceptance == .accepted else { return }
+        // A scope reset can temporarily remove cached rows during a running pass.
+        // Accept its revision to fence older reads, but confirm background deletion
+        // only after the pass settles. Explicit selection retains its own handling.
+        if snapshot.session == nil, indexWorkflow.activePassID != nil { return }
         applyTranscript(snapshot)
     }
 
@@ -2282,6 +2372,7 @@ final class TraceModel: ObservableObject {
 
     func prepareToTerminate() async {
         terminating = true
+        rebuildAttachmentReady = false
         sourceReloadAlertError = nil
         sourceReloadRecovery = .normal
         pendingAttachment = nil
@@ -2349,16 +2440,68 @@ final class TraceModel: ObservableObject {
         }.value
     }
 
+    private func watcherOwnerIsCurrent(_ owner: WatcherOwner) -> Bool {
+        attachmentIsCurrent(database: owner.database, generation: owner.attachment)
+            && owner.revision == sourceConfigurationRevision && pendingAttachment == nil
+    }
+
+    private func watcherStartupIsCurrent(_ startup: WatcherStartup) -> Bool {
+        watcherStartup === startup && startup.generation == watcherGeneration
+            && watcherOwnerIsCurrent(startup.owner)
+    }
+
+    private func watcherReadyIsCurrent(_ owner: WatcherOwner) -> Bool {
+        guard let startup = watcherStartup, startup.owner == owner, startup.ready else { return false }
+        return watcherStartupIsCurrent(startup)
+    }
+
     private func startWatching(
         _ sources: [any SessionSource], forceRootReconciliation: Bool = false,
         reconfigureWatchers: Bool = false
-    ) async -> Bool {
-        guard settings.onboardingComplete, let database else { return false }
-        if !forceRootReconciliation, !reconfigureWatchers, !watchers.isEmpty { return true }
+    ) async -> WatcherStartOutcome {
+        guard !terminating, !Task.isCancelled, let database else { return .superseded }
+        let owner = WatcherOwner(database: database, attachment: attachmentGeneration,
+                                 revision: sourceConfigurationRevision)
+        guard watcherOwnerIsCurrent(owner) else { return .superseded }
+        guard settings.onboardingComplete else { return .deferredByOnboarding(owner) }
+        let force = forceRootReconciliation || sourceReloadActivation == owner
+        if !reconfigureWatchers, let startup = watcherStartup, watcherStartupIsCurrent(startup) {
+            if startup.ready, !force || startup.forceRootReconciliation { return .started(owner) }
+            if let task = startup.task {
+                startup.forceRootReconciliation = startup.forceRootReconciliation || force
+                let outcome = await task.value
+                guard !Task.isCancelled, watcherStartupIsCurrent(startup) else { return .superseded }
+                return outcome
+            }
+        }
         if !reconfigureWatchers { liveWatcherReplayStarts = [:] }
-        let generation = beginWatcherConfiguration()
+        let startup = WatcherStartup(owner: owner, generation: beginWatcherConfiguration(),
+                                     forceRootReconciliation: force)
+        watcherStartup = startup
+        let task = Task { [weak self] in
+            defer { startup.task = nil }
+            guard let self else { return WatcherStartOutcome.superseded }
+            return await self.configureWatchers(sources, startup: startup)
+        }
+        startup.task = task
+        let outcome = await task.value
+        guard !Task.isCancelled, watcherStartupIsCurrent(startup) else { return .superseded }
+        return outcome
+    }
+
+    private func configureWatchers(_ sources: [any SessionSource], startup: WatcherStartup) async -> WatcherStartOutcome {
+        let database = startup.owner.database
+        let generation = startup.generation
+        #if DEBUG
+        watcherStartCountForTesting += 1
+        if let gate = watcherPreparationGateForTesting {
+            watcherPreparationWaitingForTesting = true
+            await gate.value
+            watcherPreparationWaitingForTesting = false
+        }
+        #endif
         await watcherTeardownTask?.value
-        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         let roots = sources.flatMap(\.roots).map(\.scanURL)
         let metadataRoots = sources.filter { $0.agent == .codex }
             .flatMap(\.roots).map { $0.url.deletingLastPathComponent() }
@@ -2366,13 +2509,13 @@ final class TraceModel: ObservableObject {
             (CodexMetadataSidecarMapping(metadataDirectories: metadataRoots),
              roots.map { TraceFileIO.canonicalPath($0.path) })
         }.value
-        guard generation == watcherGeneration else { return false }
-        var reconciliationPaths = forceRootReconciliation
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
+        var reconciliationPaths = startup.forceRootReconciliation
             ? Set(canonicalRoots.map(\.path))
             : []
 
         let statistics = try? await database.statistics()
-        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         let hasCachedIndex = (statistics?.sourceFileCount ?? 0) > 0
         var grouped: [String: [URL]] = [:]
         for root in roots {
@@ -2386,7 +2529,7 @@ final class TraceModel: ObservableObject {
         for (groupingID, groupRoots) in grouped.sorted(by: { $0.key < $1.key }) {
             let persistedCheckpoint = try? await database.eventCheckpoint(volumeID: groupingID)
             let checkpoint = persistedCheckpoint ?? liveWatcherReplayStarts[groupingID]
-            guard generation == watcherGeneration, !Task.isCancelled else { return false }
+            guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
             if checkpoint == nil {
                 let sourcePaths = groupRoots.map { TraceFileIO.canonicalPath($0.path) }
                     .filter { candidate in canonicalRoots.contains { $0.comparisonKey == candidate.comparisonKey } }
@@ -2400,14 +2543,14 @@ final class TraceModel: ObservableObject {
             configurations.append((groupingID, groupRoots, checkpoint))
         }
 
-        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
         watcherStartupPending = true
         bufferedSourceChanges = SourceChanges()
         startupReconciliationPaths = reconciliationPaths
         startupActivity = Self.startupActivity(
             hasCachedIndex: hasCachedIndex,
-            forceRootReconciliation: forceRootReconciliation,
+            forceRootReconciliation: startup.forceRootReconciliation,
             reconciliationPaths: startupReconciliationPaths
         )
 
@@ -2444,7 +2587,7 @@ final class TraceModel: ObservableObject {
                 }
             })
         }
-        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         var started: [FSEventsWatcher] = []
         var failedRoots: [URL] = []
         for (configuration, watcher) in replacements {
@@ -2464,9 +2607,21 @@ final class TraceModel: ObservableObject {
         }
         self.metadataWatcher = metadataWatcher
         TraceTestHooks.appendLine("enter,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
-        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         await metadataWatcher.start()
-        guard generation == watcherGeneration, !Task.isCancelled else { return false }
+        #if DEBUG
+        if let gate = watcherReadinessGateForTesting {
+            watcherReadinessWaitingForTesting = true
+            await gate.value
+            watcherReadinessWaitingForTesting = false
+        }
+        #endif
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
+        guard settings.onboardingComplete else { return .deferredByOnboarding(startup.owner) }
+        // A coalesced caller may strengthen reconciliation while preparation is suspended.
+        if startup.forceRootReconciliation {
+            startupReconciliationPaths.formUnion(canonicalRoots.map(\.path))
+        }
         TraceTestHooks.appendLine("started,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
         if !failedRoots.isEmpty {
             let failedCanonical = failedRoots.map { TraceFileIO.canonicalPath($0.path) }
@@ -2477,11 +2632,17 @@ final class TraceModel: ObservableObject {
             updateMonitoringWarnings()
             startupActivity = Self.startupActivity(
                 hasCachedIndex: hasCachedIndex,
-                forceRootReconciliation: forceRootReconciliation,
+                forceRootReconciliation: startup.forceRootReconciliation,
                 reconciliationPaths: startupReconciliationPaths
             )
         }
-        return true
+        guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
+        guard settings.onboardingComplete else { return .deferredByOnboarding(startup.owner) }
+        startupActivity = Self.startupActivity(
+            hasCachedIndex: hasCachedIndex, forceRootReconciliation: startup.forceRootReconciliation,
+            reconciliationPaths: startupReconciliationPaths)
+        startup.ready = true
+        return .started(startup.owner)
     }
 
     private static func startupActivity(
@@ -2537,6 +2698,8 @@ final class TraceModel: ObservableObject {
     }
 
     private func beginWatcherConfiguration() -> UInt64 {
+        watcherStartup?.task?.cancel()
+        watcherStartup = nil
         watcherGeneration &+= 1
         let retiring = watchers
         let retiringMetadata = metadataWatcher
@@ -2562,6 +2725,7 @@ final class TraceModel: ObservableObject {
     }
 
     private func invalidateWatchers() {
+        sourceReloadActivation = nil
         _ = beginWatcherConfiguration()
         watchedSourceRoots = []
         liveWatcherReplayStarts = [:]
