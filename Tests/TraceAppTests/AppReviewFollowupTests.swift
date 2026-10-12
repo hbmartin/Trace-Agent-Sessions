@@ -73,12 +73,14 @@ final class AppReviewFollowupTests: XCTestCase {
     }
 
     private func uninstalledModel(clock: TestClock<Duration>, diagnosticsURL: URL,
-                                  savedSessionID: Int64? = nil) throws -> TraceModel {
+                                  savedSessionID: Int64? = nil,
+                                  startupActivityObserver: @escaping (IndexActivity) -> Void = { _ in }) throws -> TraceModel {
         let suite = "TraceAppReview.Uninstalled.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let settings = AppSettings(defaults: defaults)
         settings.lastSessionID = savedSessionID
-        let model = TraceModel(settings: settings, clock: clock, diagnosticsURL: diagnosticsURL)
+        let model = TraceModel(settings: settings, clock: clock,
+                               startupActivityObserver: startupActivityObserver, diagnosticsURL: diagnosticsURL)
         addTeardownBlock { @MainActor in
             await model.prepareToTerminate()
             defaults.removePersistentDomain(forName: suite)
@@ -903,6 +905,9 @@ final class AppReviewFollowupTests: XCTestCase {
                            coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
         await model.refreshSummariesForTesting(lightweight: false)
         try await wait { model.selectedSessionID == saved.id && !model.messages.isEmpty }
+        // Real startup can spend long enough opening the index for its first
+        // discovering publication to refresh summaries during the scope reset.
+        await f.clock.advance(by: .milliseconds(300))
         model.startIndexing(sources: [source])
         try await wait { model.progress.phase == .complete }
         let indexed = try await f.database.search(query: "StartupScopeNeedle", filters: .init(), sort: .relevance)
@@ -1056,17 +1061,254 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertNil(f.model.pendingDatabaseForTesting)
     }
 
+    func testBackgroundAbsenceDuringPassPreservesTranscriptUntilTerminalDeletion() async throws {
+        let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id)
+        try await wait { !f.model.messages.isEmpty }
+        let messages = f.model.messages
+        var pass = IndexProgress(phase: .indexing)
+        await f.model.receiveProgress(pass)
+        _ = try await f.database.synchronizeConfiguredRoots([])
+        await f.model.refreshSummariesForTesting(terminal: false)
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
+        XCTAssertEqual(f.model.settings.lastSessionID, session.id)
+        XCTAssertEqual(f.model.messages.map(\.id), messages.map(\.id))
+        pass.phase = .complete
+        await f.model.receiveProgress(pass)
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertNil(f.model.settings.lastSessionID)
+        XCTAssertTrue(f.model.messages.isEmpty)
+    }
+
+    func testWatcherStartupCoalescesAndMergesForcedReconciliation() async throws {
+        let f = try await fixture(count: 2)
+        await f.model.prepareToTerminate()
+        var activities: [IndexActivity] = []
+        let model = try uninstalledModel(clock: f.clock,
+            diagnosticsURL: f.root.appendingPathComponent("shared-watchers.json"),
+            startupActivityObserver: { activities.append($0) })
+        model.settings.onboardingComplete = true
+        let source = ClaudeCodeSource(roots: [f.root])
+        await model.attach(database: f.database,
+            coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        model.watcherPreparationGateForTesting = held
+        let first = Task { await model.startWatchingForTesting([source]) }
+        try await wait { model.watcherPreparationWaitingForTesting }
+        let generation = model.watcherGenerationForTesting
+        let second = Task { await model.startWatchingForTesting([source], force: true) }
+        try await wait { model.watcherRequiresRootReconciliationForTesting }
+        XCTAssertEqual(model.watcherStartCountForTesting, 1)
+        XCTAssertFalse(model.watcherReadyForTesting)
+        await gate.open()
+        let firstStarted = await first.value, secondStarted = await second.value
+        XCTAssertTrue(firstStarted)
+        XCTAssertTrue(secondStarted)
+        XCTAssertEqual(model.watcherGenerationForTesting, generation)
+        XCTAssertTrue(model.watcherReadyForTesting)
+        XCTAssertTrue(model.startupReconciliationPathsForTesting.contains(TraceFileIO.canonicalPath(f.root.path).path))
+        model.startIndexing(sources: [source])
+        model.startIndexing(sources: [source])
+        try await wait { model.progress.phase == .complete }
+        XCTAssertEqual(model.startupSubmissionCountForTesting, 1)
+        XCTAssertEqual(activities, [.rootRecovery])
+    }
+
+    func testObsoleteWatcherStartupCannotResetItsSuccessor() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.watcherPreparationGateForTesting = held
+        f.model.failSourceConfigurationForTesting = false
+        f.model.retrySourceConfiguration()
+        try await wait { f.model.watcherPreparationWaitingForTesting }
+        let retiredGeneration = f.model.watcherGenerationForTesting
+        f.model.watcherPreparationGateForTesting = nil
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.progress.phase == .complete && f.model.watcherReadyForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertGreaterThan(f.model.watcherGenerationForTesting, retiredGeneration)
+        var ongoing = IndexProgress(phase: .indexing)
+        ongoing.unresolvedFailedFiles = 2
+        ongoing.unresolvedDiscoveryFailures = 3
+        await f.model.receiveProgress(ongoing)
+        let currentGeneration = f.model.watcherGenerationForTesting
+        await gate.open()
+        try await wait { !f.model.watcherPreparationWaitingForTesting }
+        XCTAssertEqual(f.model.progress.passID, ongoing.passID)
+        XCTAssertEqual(f.model.progress.phase, .indexing)
+        XCTAssertTrue(f.model.indexingPassActiveForTesting)
+        XCTAssertEqual(f.model.progress.unresolvedFailedFiles, 2)
+        XCTAssertEqual(f.model.progress.unresolvedDiscoveryFailures, 3)
+        XCTAssertEqual(f.model.watcherGenerationForTesting, currentGeneration)
+        XCTAssertEqual(f.model.sourceReloadRecovery, .normal)
+    }
+
+    func testRebuildProgressCannotFinishRetryBeforeWatcherReadiness() async throws {
+        for changesScope in [false, true] {
+            let f = try await fixture(count: 2)
+            f.model.settings.onboardingComplete = true
+            f.model.failSourceConfigurationForTesting = true
+            f.model.reloadSourcesAndRebuild()
+            try await wait { f.model.sourceReloadRecovery.error != nil }
+            let error = try XCTUnwrap(f.model.sourceReloadRecovery.error)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            let progressGate = ReviewReadGate(), progressHeld = Task { await progressGate.wait() }
+            defer {
+                held.cancel(); progressHeld.cancel()
+                Task { await gate.open(); await progressGate.open() }
+            }
+            f.model.watcherReadinessGateForTesting = held
+            f.model.failSourceConfigurationForTesting = false
+            f.model.retrySourceConfiguration()
+            try await wait { f.model.watcherReadinessWaitingForTesting }
+            if changesScope { f.model.settings.indexScope = .everything }
+            f.model.rebuildIndex()
+            try await wait { f.model.rebuildSubmissionCountForTesting == 1 && f.model.progress.phase == .complete }
+            await f.model.schedulerForTesting?.waitUntilIdle()
+            XCTAssertEqual(f.model.sourceReloadRecovery, .retrying(error))
+            XCTAssertFalse(f.model.watcherReadyForTesting)
+            f.model.schedulerProgressGateForTesting = progressHeld
+            await gate.open()
+            try await wait { f.model.schedulerProgressWaitingForTesting }
+            XCTAssertTrue(f.model.watcherReadyForTesting)
+            XCTAssertEqual(f.model.sourceReloadRecovery, .retrying(error), "early progress is not a completion credit")
+            f.model.schedulerProgressGateForTesting = nil
+            await progressGate.open()
+            try await wait { f.model.sourceReloadRecovery == .normal && f.model.progress.phase == .complete }
+            XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+        }
+    }
+
+    func testOnboardingDeferredReloadRetainsForcedReconciliationForResume() async throws {
+        let f = try await fixture(count: 2), added = try await fixture(count: 3)
+        let source = ClaudeCodeSource(roots: [f.root, added.root])
+        f.model.sourceReloadSourcesForTesting = [source]
+        f.model.settings.onboardingComplete = false
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.pendingDatabaseForTesting == nil && f.model.schedulerForTesting != nil
+            && f.model.progress.phase == .waiting }
+        let cached = try await f.database.sessions(limit: 100)
+        XCTAssertFalse(cached.contains { $0.sourcePath.hasPrefix(added.root.path) })
+        XCTAssertEqual(f.model.sourceReloadRecovery, .normal)
+        f.model.settings.onboardingComplete = true
+        let started = await f.model.startWatchingForTesting([source])
+        XCTAssertTrue(started)
+        XCTAssertTrue(f.model.watcherRequiresRootReconciliationForTesting)
+        f.model.startIndexing(sources: [source])
+        try await wait { f.model.progress.phase == .complete }
+        let current = try await f.database.sessions(limit: 100)
+        XCTAssertTrue(current.contains { $0.sourcePath.hasPrefix(added.root.path) })
+        XCTAssertEqual(f.model.progress.activity, .rootRecovery)
+    }
+
+    func testTerminationRejectsHeldWatcherReadiness() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.watcherReadinessGateForTesting = held
+        f.model.failSourceConfigurationForTesting = false
+        f.model.retrySourceConfiguration()
+        try await wait { f.model.watcherReadinessWaitingForTesting }
+        await f.model.prepareToTerminate()
+        await gate.open()
+        try await wait { !f.model.watcherReadinessWaitingForTesting }
+        XCTAssertEqual(f.model.sourceReloadRecovery, .normal)
+        XCTAssertFalse(f.model.watcherReadyForTesting)
+        XCTAssertFalse(f.model.canRebuildIndex)
+        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 0)
+    }
+
+    func testRebuildAvailabilityTracksInstallationSettingsRetirementAndFailure() async throws {
+        let f = try await fixture(count: 2)
+        await f.model.prepareToTerminate()
+        let model = try uninstalledModel(clock: f.clock,
+            diagnosticsURL: f.root.appendingPathComponent("rebuild-availability.json"))
+        model.settings.onboardingComplete = true
+        XCTAssertFalse(model.canRebuildIndex)
+        XCTAssertEqual(model.rebuildUnavailableReason, "Rebuild is available after the index finishes opening.")
+        let source = ClaudeCodeSource(roots: [f.root])
+        await model.attach(database: f.database,
+            coordinator: IndexCoordinator(database: f.database, sources: [source], clock: f.clock))
+        XCTAssertTrue(model.canRebuildIndex)
+        model.settings.onboardingComplete = false
+        XCTAssertFalse(model.canRebuildIndex)
+        model.settings.onboardingComplete = true
+        XCTAssertTrue(model.canRebuildIndex)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        model.schedulerProgressGateForTesting = held
+        await model.schedulerForTesting?.request(reconcile: true)
+        try await wait { model.schedulerProgressWaitingForTesting }
+        model.sourceReloadSourcesForTesting = [source]
+        model.failSourceConfigurationForTesting = true
+        model.reloadSourcesAndRebuild()
+        XCTAssertTrue(model.canRebuildIndex, "readable attachment permits queued rebuilds")
+        model.schedulerProgressGateForTesting = nil
+        await gate.open()
+        try await wait { model.sourceReloadRecovery.error != nil }
+        XCTAssertTrue(model.canRebuildIndex, "manual Rebuild can retry configuration failure")
+        await model.prepareToTerminate()
+        XCTAssertFalse(model.canRebuildIndex)
+    }
+
+    func testFailedReloadExplainsQueuedRebuildCancellationAndRetryDoesNotRebuild() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.schedulerProgressGateForTesting = held
+        await f.model.schedulerForTesting?.request(reconcile: true)
+        try await wait { f.model.schedulerProgressWaitingForTesting }
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        f.model.rebuildIndex()
+        f.model.schedulerProgressGateForTesting = nil
+        await gate.open()
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        let notice = "The queued index rebuild was cancelled. Retry resumes updates without rebuilding. Choose Rebuild Index again to rebuild."
+        XCTAssertTrue(try XCTUnwrap(f.model.startupError).contains(notice))
+        XCTAssertTrue(try XCTUnwrap(f.model.sourceReloadRecovery.error).contains(notice))
+        XCTAssertFalse(f.model.pendingRebuildForTesting)
+        f.model.startupError = nil
+        XCTAssertTrue(try XCTUnwrap(f.model.sourceReloadRecovery.error).contains(notice))
+        f.model.failSourceConfigurationForTesting = false
+        f.model.retrySourceConfiguration()
+        try await wait { f.model.sourceReloadRecovery == .normal && f.model.progress.phase == .complete }
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 0)
+        f.model.rebuildIndex()
+        try await wait { f.model.rebuildSubmissionCountForTesting == 1 && f.model.progress.phase == .complete }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
+    }
+
     func testSourceReloadRetryReconcilesPausedFileChangesWithLatestRootsAndScope() async throws {
         let f = try await fixture(count: 2), removed = try await fixture(count: 3), latest = try await fixture(count: 4)
         f.model.settings.onboardingComplete = true
         let deletedFile = f.root.appendingPathComponent("deleted-during-pause.jsonl")
         try line(90).write(to: deletedFile)
-        await f.coordinator.refresh(paths: [deletedFile.path], scope: .proseOnly)
+        f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root, removed.root])]
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.progress.phase == .complete && f.model.watcherReadyForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let initiallyIndexed = try await f.database.sessions(limit: 100)
+        XCTAssertTrue(initiallyIndexed.contains { $0.sourcePath.hasPrefix(removed.root.path) })
         f.model.failSourceConfigurationForTesting = true
         f.model.reloadSourcesAndRebuild()
         try await wait { f.model.sourceReloadRecovery.error != nil }
         let cached = try await f.database.sessions(limit: 100)
-        XCTAssertEqual(cached.count, 7)
+        XCTAssertEqual(cached.count, 14)
+        XCTAssertTrue(cached.contains { $0.sourcePath.hasPrefix(removed.root.path) })
         let file = f.root.appendingPathComponent("sessions.jsonl")
         // Drop s-1, rewrite s-0, and append a new session while no watcher runs.
         var changed = Data(String(decoding: try line(0), as: UTF8.self)
@@ -1079,7 +1321,6 @@ final class AppReviewFollowupTests: XCTestCase {
         changed.append(tool)
         try changed.write(to: file, options: .atomic)
         try FileManager.default.removeItem(at: deletedFile)
-        f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root, removed.root])]
         f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root, latest.root])]
         f.model.settings.indexScope = .everything
         let stillCached = try await f.database.sessions(limit: 100)

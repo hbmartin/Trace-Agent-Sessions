@@ -155,7 +155,16 @@ private struct SourcesPreferences: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Rebuild Index…") { model.rebuildIndex() }
+                VStack(alignment: .trailing, spacing: 4) {
+                    Button("Rebuild Index…") { model.rebuildIndex() }
+                        .disabled(!model.canRebuildIndex)
+                        .help(model.rebuildUnavailableReason ?? "Recreate the index from your session files.")
+                        .accessibilityHint(model.rebuildUnavailableReason ?? "Recreate the index from your session files.")
+                        .accessibilityIdentifier("rebuildIndex")
+                    if let reason = model.rebuildUnavailableReason {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .padding()
