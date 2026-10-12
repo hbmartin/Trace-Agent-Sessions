@@ -3607,6 +3607,95 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(disclosure.frame.minY, headerY, accuracy: 64)
     }
 
+    private func launchWithFailedSourceReload() throws -> (XCUIApplication, URL) {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let additional = directory.appendingPathComponent("AdditionalClaude")
+        try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
+        let completed = directory.appendingPathComponent("initial-pass-completed")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+        app.launchEnvironment["TRACE_TEST_PICK_CLAUDE_ROOT_PATH"] = additional.path
+        app.launchEnvironment["TRACE_TEST_FAIL_SOURCE_RELOAD_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
+        app.launch()
+        XCTAssertTrue(waitForFile(completed, timeout: 20))
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        settings.buttons["Add Folder…"].click()
+        XCTAssertNotNil(poll(timeout: 15) {
+            settings.buttons["indexProgress"].label == "Updates paused" ? true : nil
+        })
+        let dismiss = app.sheets.firstMatch.buttons["OK"]
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 10))
+        dismiss.click()
+        XCTAssertEqual(settings.buttons["indexProgress"].label, "Updates paused")
+        XCTAssertTrue(settings.buttons["retrySourceConfiguration"].isEnabled)
+        app.typeKey(",", modifierFlags: .command)
+        return (app, directory)
+    }
+
+    func testPausedSourceReloadRecoveryIsVisibleOnEverySurfaceAfterAlertDismissal() throws {
+        let (app, _) = try launchWithFailedSourceReload()
+        let settings = app.windows["Trace Settings"]
+        settings.buttons["indexProgress"].click()
+        let explanation = "Live updates are paused. Indexed sessions remain available. Retry to apply your source settings and check for changes."
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", explanation))
+            .firstMatch.waitForExistence(timeout: 5))
+        settings.buttons["indexProgress"].click()
+        attach(app, name: "sources-settings-updates-paused")
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+        let main = app.windows["Trace"]
+        XCTAssertEqual(main.buttons["indexProgress"].label, "Updates paused")
+        XCTAssertTrue(main.buttons["retrySourceConfiguration"].isEnabled)
+        attach(app, name: "main-updates-paused")
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(main.waitForNonExistence(timeout: 5))
+        ensurePopoverOpen(app)
+        XCTAssertEqual(app.buttons["indexProgress"].label, "Updates paused")
+        XCTAssertTrue(app.buttons["retrySourceConfiguration"].isEnabled)
+        attach(app, name: "popover-updates-paused")
+        let popover = app.textFields["Search all sessions"]
+        popover.click(); popover.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.textFields["Search Claude Code, Codex, and Gemini"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["indexProgress"].label, "Updates paused")
+        XCTAssertTrue(app.buttons["retrySourceConfiguration"].isEnabled)
+        attach(app, name: "launcher-updates-paused")
+    }
+
+    func testLauncherRetriesPausedSourceReloadWithoutOpeningMainWindowAndFindsFileChanges() throws {
+        let (app, directory) = try launchWithFailedSourceReload()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForNonExistence(timeout: 5))
+        let main = app.windows["Trace"]
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(main.waitForNonExistence(timeout: 5))
+        let appended: [String: Any] = ["type": "user", "uuid": "paused-retry-append",
+            "sessionId": "test-session", "cwd": "/tmp/TraceUIExample",
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "message": ["content": "PausedRetryNeedle after source failure"]]
+        let file = directory.appendingPathComponent("Sources/Claude/session.jsonl")
+        var records = try Data(contentsOf: file)
+        records.append(try JSONSerialization.data(withJSONObject: appended) + Data([10]))
+        try records.write(to: file, options: .atomic)
+        ensurePopoverOpen(app)
+        let popover = app.textFields["Search all sessions"]
+        popover.click(); popover.typeKey(.return, modifierFlags: [])
+        let search = app.textFields["Search Claude Code, Codex, and Gemini"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.click(); search.typeText("PausedRetryNeedle")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "PausedRetryNeedle")).firstMatch
+        XCTAssertFalse(result.exists, "the paused index must not incorporate new file contents")
+        app.buttons["retrySourceConfiguration"].click()
+        XCTAssertTrue(result.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["retrySourceConfiguration"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(main.exists, "retry from the launcher must not open the main window")
+        XCTAssertEqual(search.value as? String, "PausedRetryNeedle")
+        attach(app, name: "launcher-recovered-paused-file-change")
+    }
+
     func testMonitoringWarningsAreVisibleOnAllSearchSurfaces() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let sidecar = directory.appendingPathComponent("Sources/session_index.jsonl")

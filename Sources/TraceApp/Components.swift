@@ -49,11 +49,31 @@ struct AgentBadge: View {
     }
 }
 
+struct IndexStatusView: View {
+    @ObservedObject var model: TraceModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings,
+                               sourceReloadRecovery: model.sourceReloadRecovery)
+            if model.sourceReloadRecovery.error != nil {
+                Button("Retry") { model.retrySourceConfiguration() }
+                    .buttonStyle(.borderless)
+                    .disabled(model.sourceReloadRecovery.isRetrying || !model.settings.onboardingComplete)
+                    .accessibilityIdentifier("retrySourceConfiguration")
+            }
+        }
+    }
+}
+
 struct IndexProgressLabel: View {
     let progress: IndexProgress
     var monitoringWarnings: [String] = []
+    var sourceReloadRecovery: SourceReloadRecoveryState = .normal
     @State private var showingDetails = false
-    private var busy: Bool { ![.waiting, .complete, .cancelled, .failed].contains(progress.phase) }
+    private var busy: Bool {
+        sourceReloadRecovery.isRetrying || ![.waiting, .complete, .cancelled, .failed].contains(progress.phase)
+    }
 
     var body: some View {
         Button { showingDetails.toggle() } label: {
@@ -62,6 +82,7 @@ struct IndexProgressLabel: View {
                 Text(label).font(.caption)
                     .foregroundStyle(statusColor)
                     .lineLimit(1).truncationMode(.middle)
+                    .accessibilityIdentifier(sourceReloadRecovery.error == nil ? "indexProgressText" : "sourceReloadRecoveryStatus")
             }
             .contentShape(Rectangle())
         }
@@ -87,6 +108,10 @@ struct IndexProgressLabel: View {
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
         lines.append(contentsOf: unresolvedFailureMessages)
+        if let error = sourceReloadRecovery.error {
+            lines.append("Live updates are paused. Indexed sessions remain available. Retry to apply your source settings and check for changes.")
+            if error != progress.error { lines.append(error) }
+        }
         if let agent = progress.agent { lines.append("Provider: \(agent.displayName)") }
         if let project = progress.projectName { lines.append("Project: \(project)") }
         if let path = progress.currentPath {
@@ -101,7 +126,10 @@ struct IndexProgressLabel: View {
     }
 
     private var label: String {
-        switch progress.phase {
+        if sourceReloadRecovery.error != nil {
+            return sourceReloadRecovery.isRetrying ? "Resuming updates…" : "Updates paused"
+        }
+        return switch progress.phase {
         case .waiting: "Ready to build index"
         case .discovering:
             switch progress.activity {
@@ -143,6 +171,8 @@ struct IndexProgressLabel: View {
     }
 
     private var statusColor: Color {
+        if sourceReloadRecovery.isRetrying { return .secondary }
+        if sourceReloadRecovery.error != nil { return .red }
         if progress.phase == .failed || hasUnresolvedFailures || progress.failedFiles > 0 { return .red }
         if progress.phase == .complete && !monitoringWarnings.isEmpty { return .orange }
         return .secondary

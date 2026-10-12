@@ -11,6 +11,24 @@ struct SidebarRevealRequest: Equatable {
     let sessionID: Int64
 }
 
+enum SourceReloadRecoveryState: Equatable {
+    case normal
+    case failed(String)
+    case retrying(String)
+
+    var error: String? {
+        switch self {
+        case .normal: nil
+        case .failed(let error), .retrying(let error): error
+        }
+    }
+
+    var isRetrying: Bool {
+        if case .retrying = self { return true }
+        return false
+    }
+}
+
 enum WatcherGroupingPolicy {
     case byVolume
     case byRoot
@@ -128,6 +146,7 @@ final class TraceModel: ObservableObject {
     let diagnostics: DiagnosticsStore
 
     @Published private(set) var progress = IndexProgress(phase: .waiting)
+    @Published private(set) var sourceReloadRecovery: SourceReloadRecoveryState = .normal
     @Published private(set) var projects: [ProjectSummary] = []
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var totalSessionCount = 0
@@ -627,6 +646,7 @@ final class TraceModel: ObservableObject {
         let pending = PendingAttachment(database: database, configurationRevision: sourceConfigurationRevision,
                                         intent: intent)
         pendingAttachment = pending
+        if case .failed(let error) = sourceReloadRecovery { sourceReloadRecovery = .retrying(error) }
         // Fence producers immediately, but keep the installed read dependencies usable.
         attachmentGeneration = UUID()
         incrementalProgressTask?.cancel()
@@ -665,6 +685,11 @@ final class TraceModel: ObservableObject {
     private func failAttachment(_ pending: PendingAttachment, phase: IndexProgress.Phase = .failed,
                                 error: String? = nil) {
         guard pendingAttachmentIsCurrent(pending) else { return }
+        if pending.intent == .sourceReload, let error {
+            sourceReloadRecovery = .failed(error)
+        } else if let previousError = sourceReloadRecovery.error {
+            sourceReloadRecovery = .failed(previousError)
+        }
         pendingAttachment = nil
         pendingRebuild = false
         indexWorkflow = .init()
@@ -708,6 +733,7 @@ final class TraceModel: ObservableObject {
         mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
         scheduler = makeScheduler(coordinator, database: database, generation: pending.token)
         pendingAttachment = nil
+        if pending.intent == .installation { sourceReloadRecovery = .normal }
         startupError = nil
         updateCostsTotalsUpdating()
         if pending.intent == .installation, pendingRebuild { rebuildIndex() }
@@ -742,7 +768,7 @@ final class TraceModel: ObservableObject {
                    IndexProgress.shouldPublishIncrementalTerminal(
                     update, after: progress, wasVisible: incrementalProgressVisible
                    ) {
-                    progress = update
+                    publishProgress(update)
                 }
                 incrementalProgressVisible = false
             } else {
@@ -753,14 +779,14 @@ final class TraceModel: ObservableObject {
                         do { try await clock.sleep(for: .milliseconds(300)) }
                         catch { return }
                         guard let self, let pending = self.pendingIncrementalProgress else { return }
-                        self.progress = pending
+                        self.publishProgress(pending)
                         self.incrementalProgressVisible = true
                         self.incrementalProgressTask = nil
                     }
                 }
             }
         } else if !disposition.supersededTerminal {
-            progress = update
+            publishProgress(update)
         }
 
         if disposition.passTerminal {
@@ -786,6 +812,13 @@ final class TraceModel: ObservableObject {
                 terminalPhase: disposition.workflowTerminal ? update.phase : nil
             )
         }
+    }
+
+    private func publishProgress(_ update: IndexProgress) {
+        let generation = attachmentGeneration
+        progress = update
+        guard !terminating, generation == attachmentGeneration else { return }
+        if sourceReloadRecovery.isRetrying { sourceReloadRecovery = .normal }
     }
 
     private func handleTerminalUsageProgress(_ update: IndexProgress, finalize: Bool) {
@@ -1049,7 +1082,15 @@ final class TraceModel: ObservableObject {
         progress = .init(phase: .waiting)
         progress.unresolvedFailedFiles = counts.0
         progress.unresolvedDiscoveryFailures = counts.1
+        sourceReloadRecovery = .normal
         updateCostsTotalsUpdating()
+    }
+
+    func retrySourceConfiguration() {
+        guard !terminating, settings.onboardingComplete, pendingAttachment == nil,
+              case .failed(let error) = sourceReloadRecovery else { return }
+        sourceReloadRecovery = .retrying(error)
+        reloadSourcesAndRebuild()
     }
 
     func reloadSourcesAndRebuild() {
@@ -1067,6 +1108,9 @@ final class TraceModel: ObservableObject {
             let sources = await makeSources()
             guard !Task.isCancelled, pendingAttachmentIsCurrent(pending) else { return }
             do {
+                if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_SOURCE_RELOAD_ONCE") {
+                    throw SessionSourceError.unreadableFile("Synthetic source configuration failure")
+                }
                 #if DEBUG
                 if failSourceConfigurationForTesting {
                     throw SessionSourceError.unreadableFile("Synthetic source configuration failure")
@@ -2228,6 +2272,7 @@ final class TraceModel: ObservableObject {
 
     func prepareToTerminate() async {
         terminating = true
+        sourceReloadRecovery = .normal
         pendingAttachment = nil
         pendingSelectionCompletion = nil
         attachmentGeneration = UUID()

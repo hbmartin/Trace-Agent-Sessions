@@ -92,6 +92,7 @@ private struct SourcesPreferences: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            IndexStatusView(model: model)
             GroupBox("Source health") {
                 VStack(spacing: 0) {
                     if model.sourceHealth.isEmpty {
