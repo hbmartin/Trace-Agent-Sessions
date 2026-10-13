@@ -16,10 +16,17 @@ struct RecentPopoverView: View {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search all sessions", text: $search.query)
+                TextField("Search all sessions", text: Binding(get: { search.query }, set: { value in
+                    guard search.query != value else { return }
+                    model.cancelLaunchRestorationForUserIntent()
+                    search.query = value
+                }))
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
-                    .onSubmit { NotificationCenter.default.post(name: .traceShowLauncher, object: nil) }
+                    .onSubmit {
+                        model.cancelLaunchRestorationForUserIntent()
+                        NotificationCenter.default.post(name: .traceShowLauncher, object: nil)
+                    }
                     .onChange(of: search.query) { _, query in
                         if search.shouldSearchAfterQueryChange(to: query) { model.search() }
                     }
@@ -33,7 +40,10 @@ struct RecentPopoverView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Clear filters") { model.clearGlobalSearchFilters() }
+                    Button("Clear filters") {
+                        model.cancelLaunchRestorationForUserIntent()
+                        model.clearGlobalSearchFilters()
+                    }
                         .font(.caption)
                         .buttonStyle(.borderless)
                 }
@@ -106,7 +116,11 @@ struct LauncherView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                TextField("Search Claude Code, Codex, and Gemini", text: $search.query)
+                TextField("Search Claude Code, Codex, and Gemini", text: Binding(get: { search.query }, set: { value in
+                    guard search.query != value else { return }
+                    model.cancelLaunchRestorationForUserIntent()
+                    search.query = value
+                }))
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .focused($searchFocused)
@@ -133,6 +147,7 @@ struct LauncherView: View {
                         title: agent.displayName,
                         selected: search.filters.agents.contains(agent)
                     ) {
+                        model.cancelLaunchRestorationForUserIntent()
                         if search.filters.agents.contains(agent) {
                             search.filters.agents.remove(agent)
                         } else {
@@ -142,6 +157,7 @@ struct LauncherView: View {
                     }
                 }
                 FilterChip(title: "Errors", selected: search.filters.errorsOnly) {
+                    model.cancelLaunchRestorationForUserIntent()
                     search.filters.errorsOnly.toggle()
                     model.search()
                 }
@@ -169,7 +185,11 @@ struct LauncherView: View {
                 .fixedSize()
                 .accessibilityIdentifier("searchDateFilter")
                 Spacer()
-                Picker("Sort", selection: $settings.searchSort) {
+                Picker("Sort", selection: Binding(get: { settings.searchSort }, set: { value in
+                    guard settings.searchSort != value else { return }
+                    model.cancelLaunchRestorationForUserIntent()
+                    settings.searchSort = value
+                })) {
                     Text("Recent").tag(SearchSort.recency)
                     Text("Relevant").tag(SearchSort.relevance)
                 }
@@ -229,11 +249,13 @@ struct LauncherView: View {
     }
 
     private func selectProject(_ project: ProjectSummary?) {
+        model.cancelLaunchRestorationForUserIntent()
         search.selectProject(project)
         model.search()
     }
 
     private func selectDate(_ preset: SearchDatePreset) {
+        model.cancelLaunchRestorationForUserIntent()
         search.datePreset = preset
         model.search()
     }
@@ -241,12 +263,14 @@ struct LauncherView: View {
     private func moveSelection(by delta: Int) {
         let results = search.results
         guard !results.isEmpty else { return }
+        model.cancelLaunchRestorationForUserIntent()
         let current = selectedResultID.flatMap { selected in results.firstIndex(where: { $0.id == selected }) } ?? -1
         let next = min(results.count - 1, max(0, current + delta))
         selectedResultID = results[next].id
     }
 
     private func openSelectedResult() {
+        model.cancelLaunchRestorationForUserIntent()
         guard let selectedResultID,
               let result = search.results.first(where: { $0.id == selectedResultID }) else { return }
         model.openSearchResult(result)
@@ -339,6 +363,7 @@ struct SearchResultList: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("Refresh") {
+                            model.cancelLaunchRestorationForUserIntent()
                             if isMainSearch { model.searchMain() }
                             else { model.search() }
                         }

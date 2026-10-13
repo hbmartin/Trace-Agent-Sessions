@@ -42,7 +42,11 @@ private struct GeneralPreferences: View {
                     ForEach(IndexScope.allCases) { scope in Text(scope.title).tag(scope) }
                 }
                 .onChange(of: settings.indexScope) { _, _ in model.rebuildIndex() }
-                Picker("Default ordering", selection: $settings.searchSort) {
+                Picker("Default ordering", selection: Binding(get: { settings.searchSort }, set: { value in
+                    guard settings.searchSort != value else { return }
+                    model.cancelLaunchRestorationForUserIntent()
+                    settings.searchSort = value
+                })) {
                     Text("Most recent").tag(SearchSort.recency)
                     Text("BM25 relevance").tag(SearchSort.relevance)
                 }
