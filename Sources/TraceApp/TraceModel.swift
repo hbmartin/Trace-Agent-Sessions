@@ -409,21 +409,27 @@ final class TraceModel: ObservableObject {
             }
         }
     }
-    var transcriptFeedback: TranscriptFeedback? {
+    struct TranscriptBannerPresentation: Equatable {
+        let feedback: TranscriptFeedback
+        let details: String
+
+        var message: String { feedback.message }
+    }
+    var transcriptBanner: TranscriptBannerPresentation? {
+        let error = transcriptReadError
         if let absence = transientTranscriptAbsence,
            transcriptRequestIsCurrent(database: absence.database, sessionID: absence.sessionID, request: absence.requestID) {
-            return absence.paused ? .paused : .updating
+            let feedback: TranscriptFeedback = absence.paused ? .paused : .updating
+            return .init(feedback: feedback, details: error.map { feedback.message + "\n" + $0 } ?? feedback.message)
         }
-        return transcriptReadError == nil ? nil : .readError
+        guard let error else { return nil }
+        return .init(feedback: .readError, details: error)
     }
+    var transcriptFeedback: TranscriptFeedback? { transcriptBanner?.feedback }
     var transcriptIsTemporarilyUnavailable: Bool {
         transcriptFeedback == .updating
     }
-    var transcriptLoadError: String? {
-        guard let feedback = transcriptFeedback else { return nil }
-        if feedback == .readError { return transcriptReadError }
-        return transcriptReadError.map { feedback.message + "\n" + $0 } ?? feedback.message
-    }
+    var transcriptLoadError: String? { transcriptBanner?.details }
     private struct TranscriptSettlement {
         let id = UUID()
         let database: IndexDatabase
@@ -2197,7 +2203,7 @@ final class TraceModel: ObservableObject {
             && attachmentGeneration == owner.attachment && sourceConfigurationRevision == owner.configuration
             && indexWorkflow.generation == owner.workflow && !indexWorkflow.isActive && pendingAttachment == nil
             && selectedSessionID == owner.sessionID && sessionRequestID == owner.requestID
-            && summaryRequestID == current.summaryID
+            && summaryRequestID == owner.summaryID
     }
 
     private func resumePausedTranscriptFeedback() {
@@ -3398,7 +3404,9 @@ final class TraceModel: ObservableObject {
         }
         if mayRestoreSession {
             if let stored = settings.lastSessionID {
-                let restored = try? await database.session(id: stored)
+                let restored: Result<SessionSummary?, Error>
+                do { restored = .success(try await database.session(id: stored)) }
+                catch { restored = .failure(error) }
                 #if DEBUG
                 if let gate = summaryRestorationGateForTesting {
                     summaryRestorationWaitingForTesting = true
@@ -3408,10 +3416,15 @@ final class TraceModel: ObservableObject {
                 #endif
                 guard isCurrent() else { return }
                 if mayRestoreSession, settings.lastSessionID == stored, selectedSessionID == nil {
-                    if restored != nil {
+                    switch restored {
+                    case .success(.some):
                         selectSession(stored)
-                    } else if restorationIsTerminal() {
-                        mayRestoreSession = false
+                    case .success(.none):
+                        if restorationIsTerminal() { mayRestoreSession = false }
+                    case .failure:
+                        // A failed lookup cannot confirm deletion. Keep restoration
+                        // eligible for the next ordinary full summary refresh.
+                        break
                     }
                 }
             } else if restorationIsTerminal() {

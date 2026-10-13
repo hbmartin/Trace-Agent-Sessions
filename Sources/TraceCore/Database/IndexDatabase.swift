@@ -2124,6 +2124,7 @@ public actor IndexDatabase {
     private var sessionListReadGate: Task<Void, Never>?
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
+    private var nextSessionReadError: DatabaseError?
     private var failingTranscriptReads = 0
     private var sidebarSnapshotPublicationGate: Task<Void, Never>?
     private(set) var sidebarSnapshotWaitingForTesting = false
@@ -2133,6 +2134,7 @@ public actor IndexDatabase {
     func gateSessionListReadsForTesting(_ gate: Task<Void, Never>?) { sessionListReadGate = gate }
     func sessionListReadCountForTesting() -> Int { sessionListReadCount }
     func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }
+    func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }
     func failTranscriptReadOnceForTesting() { failingTranscriptReads = 1 }
     func failTranscriptReadsForTesting(count: Int) { failingTranscriptReads = max(0, count) }
     func transcriptReadCountForTesting() -> UInt64 { transcriptReadRevision }
@@ -2151,7 +2153,13 @@ public actor IndexDatabase {
     }
 
     public func session(id: Int64) throws -> SessionSummary? {
-        try pool.read { db in try transcriptSession(id: id, in: db) }
+        #if DEBUG
+        if let error = nextSessionReadError {
+            nextSessionReadError = nil
+            throw error
+        }
+        #endif
+        return try pool.read { db in try transcriptSession(id: id, in: db) }
     }
 
     public func messages(sessionID: Int64) throws -> [MessageSummary] {
