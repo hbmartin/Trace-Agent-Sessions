@@ -638,6 +638,13 @@ public actor IndexDatabase {
     }
 
     public func statistics() throws -> IndexStatistics {
+        #if DEBUG
+        statisticsReadAttempts += 1
+        if let error = nextStatisticsReadError {
+            nextStatisticsReadError = nil
+            throw error
+        }
+        #endif
         let counts = try pool.read { db -> (Int, Int, Int, Int) in
             let files = try Int.fetchOne(
                 db, sql: "SELECT count(*) FROM source_file WHERE agent IN (SELECT agent FROM supported_agent)"
@@ -2125,6 +2132,11 @@ public actor IndexDatabase {
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
     private var nextSessionReadError: DatabaseError?
+    private var sessionReadAttempts = 0
+    private var sourceHealthReadAttempts = 0
+    private var statisticsReadAttempts = 0
+    private var nextSourceHealthReadError: DatabaseError?
+    private var nextStatisticsReadError: DatabaseError?
     private var failingTranscriptReads = 0
     private var sidebarSnapshotPublicationGate: Task<Void, Never>?
     private(set) var sidebarSnapshotWaitingForTesting = false
@@ -2135,6 +2147,13 @@ public actor IndexDatabase {
     func sessionListReadCountForTesting() -> Int { sessionListReadCount }
     func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }
     func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }
+    func sessionReadCountForTesting() -> Int { sessionReadAttempts }
+    func sessionReadFailurePendingForTesting() -> Bool { nextSessionReadError != nil }
+    func failSourceHealthReadOnceForTesting(_ error: DatabaseError) { nextSourceHealthReadError = error }
+    func failStatisticsReadOnceForTesting(_ error: DatabaseError) { nextStatisticsReadError = error }
+    func summaryMetadataReadCountsForTesting() -> (health: Int, statistics: Int) {
+        (sourceHealthReadAttempts, statisticsReadAttempts)
+    }
     func failTranscriptReadOnceForTesting() { failingTranscriptReads = 1 }
     func failTranscriptReadsForTesting(count: Int) { failingTranscriptReads = max(0, count) }
     func transcriptReadCountForTesting() -> UInt64 { transcriptReadRevision }
@@ -2154,6 +2173,7 @@ public actor IndexDatabase {
 
     public func session(id: Int64) throws -> SessionSummary? {
         #if DEBUG
+        sessionReadAttempts += 1
         if let error = nextSessionReadError {
             nextSessionReadError = nil
             throw error
@@ -2235,7 +2255,14 @@ public actor IndexDatabase {
     }
 
     public func sourceHealth() throws -> [SourceHealth] {
-        try pool.read { db in
+        #if DEBUG
+        sourceHealthReadAttempts += 1
+        if let error = nextSourceHealthReadError {
+            nextSourceHealthReadError = nil
+            throw error
+        }
+        #endif
+        return try pool.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 WITH scan_health AS (
                     SELECT root_id, max(error) AS error

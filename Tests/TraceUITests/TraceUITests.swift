@@ -3804,6 +3804,109 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "terminal-deletion-refreshed-source-statistics")
     }
 
+    private func launchWithFailedPendingRestoration() throws -> (XCUIApplication, URL, URL) {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
+        app.staticTexts["TraceUIExample"].firstMatch.click()
+        openSidebarSession("Find the sample answer", in: app)
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        app.terminate()
+        let release = directory.appendingPathComponent("restoration-startup-release")
+        let held = directory.appendingPathComponent("restoration-startup-held")
+        let failed = directory.appendingPathComponent("restoration-lookup-failed")
+        app.launchEnvironment["TRACE_TEST_FAIL_SESSION_RESTORATION_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SESSION_RESTORATION_FAILED_PATH"] = failed.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = held.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = directory.appendingPathComponent("restoration-index-completed").path
+        app.launch()
+        XCTAssertTrue(waitForFile(held, timeout: 10))
+        XCTAssertTrue(waitForFile(failed, timeout: 5))
+        XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+        return (app, directory, release)
+    }
+
+    private func releasePendingRestoration(_ release: URL, directory: URL) throws {
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("restoration-index-completed"), timeout: 15))
+    }
+
+    func testPendingLaunchRestorationDoesNotInterruptMainSearch() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration()
+        let search = app.textFields["mainSearch"]
+        search.click(); search.typeText("sample answer")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Find the sample answer")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        try releasePendingRestoration(release, directory: directory)
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertEqual(search.value as? String, "sample answer")
+        XCTAssertTrue(result.exists)
+        XCTAssertFalse(app.buttons["backToProject"].exists)
+        attach(app, name: "pending-restoration-main-search-intent")
+    }
+
+    func testPendingLaunchRestorationDoesNotInterruptGlobalSearch() throws {
+        for launcher in [false, true] {
+            let (app, directory, release) = try launchWithFailedPendingRestoration()
+            let search: XCUIElement
+            if launcher {
+                // Open without submitting a popover query, so this checks the
+                // launcher's own input binding rather than the Enter action.
+                app.typeKey(" ", modifierFlags: [.command, .shift])
+                search = app.textFields["Search Claude Code, Codex, and Gemini"]
+            } else {
+                app.statusItems["Trace"].click()
+                // The main field has the same placeholder. Exclude its stable ID.
+                search = app.textFields.matching(identifier: "Search all sessions")
+                    .matching(NSPredicate(format: "identifier != %@", "mainSearch")).firstMatch
+            }
+            XCTAssertTrue(search.waitForExistence(timeout: 5))
+            search.click(); search.typeText("sample answer")
+            try releasePendingRestoration(release, directory: directory)
+            XCTAssertTrue(search.waitForExistence(timeout: 5))
+            XCTAssertEqual(search.value as? String, "sample answer")
+            XCTAssertFalse(app.buttons["backToProject"].exists)
+            XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+            attach(app, name: launcher ? "pending-restoration-launcher-intent" : "pending-restoration-popover-intent")
+            app.terminate()
+        }
+    }
+
+    func testPendingLaunchRestorationRespectsSidebarAndCostsIntent() throws {
+        for costs in [false, true] {
+            let (app, directory, release) = try launchWithFailedPendingRestoration()
+            if costs {
+                let control = app.radioButtons["Costs"]
+                XCTAssertTrue(control.waitForExistence(timeout: 5))
+                control.click()
+            } else {
+                let filter = app.textFields["projectFilter"]
+                filter.click(); filter.typeText("No matching project")
+            }
+            try releasePendingRestoration(release, directory: directory)
+            XCTAssertFalse(app.buttons["backToProject"].exists)
+            XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+            if costs { XCTAssertEqual(app.radioButtons["Costs"].value as? Int, 1) }
+            else { XCTAssertEqual(app.textFields["projectFilter"].value as? String, "No matching project") }
+            attach(app, name: costs ? "pending-restoration-costs-intent" : "pending-restoration-sidebar-intent")
+            app.terminate()
+        }
+    }
+
+    func testPendingLaunchRestorationResumesWithoutUserIntent() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration()
+        // Activation and startup-driven view appearance do not take navigation.
+        app.activate()
+        try releasePendingRestoration(release, directory: directory)
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 10))
+        attach(app, name: "pending-restoration-retries-on-ordinary-refresh")
+    }
+
     func testSavedSessionRestoresAfterTransientStartupAbsence() throws {
         let (app, _, release) = try launchWithTransientSavedSelection(hiddenLauncher: false)
         try Data().write(to: release)

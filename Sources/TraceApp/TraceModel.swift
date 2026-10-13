@@ -3,6 +3,8 @@ import Clocks
 import CryptoKit
 import Darwin
 import Foundation
+import GRDB
+import os
 import TraceCore
 
 struct SidebarRevealRequest: Equatable {
@@ -425,11 +427,6 @@ final class TraceModel: ObservableObject {
         guard let error else { return nil }
         return .init(feedback: .readError, details: error)
     }
-    var transcriptFeedback: TranscriptFeedback? { transcriptBanner?.feedback }
-    var transcriptIsTemporarilyUnavailable: Bool {
-        transcriptFeedback == .updating
-    }
-    var transcriptLoadError: String? { transcriptBanner?.details }
     private struct TranscriptSettlement {
         let id = UUID()
         let database: IndexDatabase
@@ -469,6 +466,8 @@ final class TraceModel: ObservableObject {
     @Published private(set) var scrollRequest = UUID()
     private(set) var requestedMessageID: Int64?
     private var mayRestoreSession = true
+    enum SummaryReadOperation: String { case restoration, sourceHealth, statistics }
+    private static let summaryReadLog = Logger(subsystem: "me.haroldmartin.Trace", category: "Summary reads")
     private var started = false
     private var initialIndexRequested = false
     private var sidebarProjectRevealAcknowledged = false
@@ -518,6 +517,14 @@ final class TraceModel: ObservableObject {
     private(set) var summaryTranscriptFailureWaitingForTesting = false
     var summaryRestorationGateForTesting: Task<Void, Never>?
     private(set) var summaryRestorationWaitingForTesting = false
+    struct SummaryReadFailure: Equatable {
+        let operation: SummaryReadOperation
+        let primaryCode: Int32?
+        let extendedCode: Int32?
+    }
+    var summaryReadFailureForTesting: ((SummaryReadFailure) -> Void)?
+    var summaryMetadataGateForTesting: Task<Void, Never>?
+    private(set) var summaryMetadataWaitingForTesting = false
     var transcriptRecoveryReadGateForTesting: Task<Void, Never>?
     var transcriptRecoveryPublicationGateForTesting: Task<Void, Never>?
     var transcriptSettlementGateForTesting: Task<Void, Never>?
@@ -1402,6 +1409,12 @@ final class TraceModel: ObservableObject {
         if reset { globalSearchNeedsRefresh = false }
         globalSearch.search(sort: settings.searchSort, reset: reset)
     }
+
+    // Only explicit UI intent ends launch restoration. Background search and
+    // reconciliation may use the same search methods without taking navigation.
+    func cancelLaunchRestorationForUserIntent() {
+        mayRestoreSession = false
+    }
     func searchMain() {
         guard !hasSearchReturnContext else { mainSearch.markResultsStale(); return }
         mainSearchNeedsRefresh = false
@@ -1772,7 +1785,7 @@ final class TraceModel: ObservableObject {
         if selectedSessionID == sessionID, selectedSession != nil, messageID == nil {
             if pendingSelectionCompletion != nil {
                 if showWindow { pendingSelectionCompletion?.showWindow = true }
-                if transcriptLoadError != nil { showPendingSelectionWindow() }
+                if transcriptBanner != nil { showPendingSelectionWindow() }
             } else if showWindow {
                 NotificationCenter.default.post(name: .traceShowMainWindow, object: nil)
             }
@@ -3389,14 +3402,34 @@ final class TraceModel: ObservableObject {
         }
         #endif
         guard isCurrent() else { return }
-        let loadedSourceHealth = try? await database.sourceHealth()
-        let loadedStatistics = try? await database.statistics()
+        let loadedSourceHealth: Result<[SourceHealth], Error>
+        do { loadedSourceHealth = .success(try await database.sourceHealth()) }
+        catch { loadedSourceHealth = .failure(error) }
         guard isCurrent() else { return }
-        sourceHealth = loadedSourceHealth ?? []
+        let loadedStatistics: Result<IndexStatistics, Error>
+        do { loadedStatistics = .success(try await database.statistics()) }
+        catch { loadedStatistics = .failure(error) }
+        #if DEBUG
+        if let gate = summaryMetadataGateForTesting {
+            summaryMetadataWaitingForTesting = true
+            await gate.value
+            summaryMetadataWaitingForTesting = false
+        }
+        #endif
         guard isCurrent() else { return }
-        statistics = loadedStatistics
+        switch loadedSourceHealth {
+        case .success(let health): sourceHealth = health
+        case .failure(let error): recordSummaryReadFailure(error, operation: .sourceHealth)
+        }
         guard isCurrent() else { return }
-        if let bytes = statistics?.databaseBytes { try? await diagnostics.recordIndexSize(bytes: bytes) }
+        switch loadedStatistics {
+        case .success(let snapshot): statistics = snapshot
+        case .failure(let error): recordSummaryReadFailure(error, operation: .statistics)
+        }
+        guard isCurrent() else { return }
+        if case .success(let snapshot) = loadedStatistics {
+            try? await diagnostics.recordIndexSize(bytes: snapshot.databaseBytes)
+        }
         guard isCurrent() else { return }
         func restorationIsTerminal() -> Bool {
             !indexWorkflow.isActive
@@ -3405,7 +3438,15 @@ final class TraceModel: ObservableObject {
         if mayRestoreSession {
             if let stored = settings.lastSessionID {
                 let restored: Result<SessionSummary?, Error>
-                do { restored = .success(try await database.session(id: stored)) }
+                do {
+                    #if DEBUG
+                    if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_SESSION_RESTORATION_ONCE") {
+                        TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_RESTORATION_FAILED_PATH")
+                        throw DatabaseError(resultCode: .SQLITE_BUSY, message: "Synthetic restoration failure")
+                    }
+                    #endif
+                    restored = .success(try await database.session(id: stored))
+                }
                 catch { restored = .failure(error) }
                 #if DEBUG
                 if let gate = summaryRestorationGateForTesting {
@@ -3421,10 +3462,10 @@ final class TraceModel: ObservableObject {
                         selectSession(stored)
                     case .success(.none):
                         if restorationIsTerminal() { mayRestoreSession = false }
-                    case .failure:
+                    case .failure(let error):
                         // A failed lookup cannot confirm deletion. Keep restoration
                         // eligible for the next ordinary full summary refresh.
-                        break
+                        recordSummaryReadFailure(error, operation: .restoration)
                     }
                 }
             } else if restorationIsTerminal() {
@@ -3436,6 +3477,20 @@ final class TraceModel: ObservableObject {
         guard isCurrent() else { return }
         refreshDiagnostics()
         if let fullReceipt, pendingFullSummaryRefresh?.id == fullReceipt.id { pendingFullSummaryRefresh = nil }
+    }
+
+    private func recordSummaryReadFailure(_ error: Error, operation: SummaryReadOperation) {
+        guard !(error is CancellationError) else { return }
+        let databaseError = error as? DatabaseError
+        let primary = databaseError?.resultCode.rawValue
+        let extended = databaseError?.extendedResultCode.rawValue
+        // DatabaseError's description can include SQL and arguments. Use only
+        // the underlying message, and keep even that private in the system log.
+        let message = databaseError.map { $0.message ?? "SQLite read failed" } ?? error.localizedDescription
+        Self.summaryReadLog.error("\(operation.rawValue, privacy: .public) read failed; SQLite primary=\(primary.map(String.init) ?? "n/a", privacy: .public) extended=\(extended.map(String.init) ?? "n/a", privacy: .public); \(message, privacy: .private)")
+        #if DEBUG
+        summaryReadFailureForTesting?(.init(operation: operation, primaryCode: primary, extendedCode: extended))
+        #endif
     }
 
     private func reconcileSelectedProject(in loadedProjects: [ProjectSummary]) {

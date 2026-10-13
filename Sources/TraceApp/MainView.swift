@@ -58,7 +58,11 @@ struct MainView: View {
                             .accessibilityIdentifier("testProbeTranscriptPosition")
                         }
                     } else {
-                        Picker("Section", selection: $section) {
+                        Picker("Section", selection: Binding(get: { section }, set: { value in
+                            guard section != value else { return }
+                            model.cancelLaunchRestorationForUserIntent()
+                            section = value
+                        })) {
                             Text("Transcript").tag(MainSection.transcript)
                             Text("Costs").tag(MainSection.costs)
                         }
@@ -276,7 +280,11 @@ private struct SessionSidebar: View {
                         Spacer()
                         Text("\(model.projects.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }.padding(12)
-                    TextField("Filter projects", text: $model.projectFilter)
+                    TextField("Filter projects", text: Binding(get: { model.projectFilter }, set: { value in
+                        guard model.projectFilter != value else { return }
+                        model.cancelLaunchRestorationForUserIntent()
+                        model.projectFilter = value
+                    }))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("projectFilter")
                         .padding(.horizontal, 12).padding(.bottom, 8)
@@ -449,7 +457,11 @@ struct TranscriptView: View {
                         model.selectedProjectCanonicalKey == nil
                             ? "Search all sessions"
                             : "Search this project",
-                        text: $search.query
+                        text: Binding(get: { search.query }, set: { value in
+                            guard search.query != value else { return }
+                            model.cancelLaunchRestorationForUserIntent()
+                            search.query = value
+                        })
                     )
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("mainSearch")
@@ -459,7 +471,10 @@ struct TranscriptView: View {
                             }
                         }
                     if !search.query.isEmpty {
-                        Button("Clear search", systemImage: "xmark.circle.fill") { search.query = "" }
+                        Button("Clear search", systemImage: "xmark.circle.fill") {
+                            model.cancelLaunchRestorationForUserIntent()
+                            search.query = ""
+                        }
                             .labelStyle(.iconOnly).buttonStyle(.plain)
                     }
                 }

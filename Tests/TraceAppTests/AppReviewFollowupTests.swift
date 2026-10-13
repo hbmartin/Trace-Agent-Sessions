@@ -107,14 +107,22 @@ final class AppReviewFollowupTests: XCTestCase {
         for code in [ResultCode.SQLITE_BUSY, .SQLITE_IOERR] {
             for phase in [IndexProgress.Phase.complete, .failed, .cancelled] {
                 let (f, saved) = try await restorationFixture()
+                var failures: [TraceModel.SummaryReadFailure] = []
+                f.model.summaryReadFailureForTesting = { failures.append($0) }
                 var pass = IndexProgress(phase: .indexing)
                 await f.model.receiveProgress(pass)
                 await f.database.failSessionReadOnceForTesting(DatabaseError(resultCode: code, message: "Synthetic restoration failure"))
+                let attemptsBefore = await f.database.sessionReadCountForTesting()
                 var costPublications = 0
                 let subscription = f.model.$usage.dropFirst().sink { _ in costPublications += 1 }
                 defer { subscription.cancel() }
                 pass.phase = phase
                 await f.model.receiveProgress(pass)
+                let attemptsAfter = await f.database.sessionReadCountForTesting()
+                let injectionPending = await f.database.sessionReadFailurePendingForTesting()
+                XCTAssertEqual(attemptsAfter, attemptsBefore + 1)
+                XCTAssertFalse(injectionPending)
+                XCTAssertEqual(failures, [.init(operation: .restoration, primaryCode: code.rawValue, extendedCode: code.rawValue)])
                 XCTAssertNil(f.model.selectedSessionID)
                 XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
                 XCTAssertNil(f.model.startupError)
@@ -122,7 +130,15 @@ final class AppReviewFollowupTests: XCTestCase {
                 try await assertFullSummary(f, messageCount: 6)
                 let present = try await f.database.session(id: saved.id)
                 XCTAssertNotNil(present)
+                let idleAttempts = await f.database.sessionReadCountForTesting()
                 await f.clock.advance(by: .seconds(60))
+                // Observe scheduled work as well as selection: no hidden lookup may
+                // consume an attempt without finishing navigation yet.
+                for _ in 0..<3 {
+                    await Task.yield()
+                    let currentAttempts = await f.database.sessionReadCountForTesting()
+                    XCTAssertEqual(currentAttempts, idleAttempts)
+                }
                 XCTAssertNil(f.model.selectedSessionID, "lookup failures add no automatic restoration retry")
                 await f.model.refreshSummariesForTesting(lightweight: false)
                 try await wait { f.model.selectedSessionID == saved.id && !f.model.messages.isEmpty }
@@ -174,6 +190,8 @@ final class AppReviewFollowupTests: XCTestCase {
             for boundary in 0..<6 {
                 let (f, saved) = try await restorationFixture()
                 let sessions = try await f.database.sessions()
+                var failures: [TraceModel.SummaryReadFailure] = []
+                f.model.summaryReadFailureForTesting = { failures.append($0) }
                 let other = try XCTUnwrap(sessions.first { $0.id != saved.id })
                 if fails {
                     await f.database.failSessionReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR, message: "Synthetic restoration failure"))
@@ -214,8 +232,238 @@ final class AppReviewFollowupTests: XCTestCase {
                 XCTAssertEqual(f.model.messages.map(\.locator), rows)
                 XCTAssertEqual(f.model.startupError, alert)
                 XCTAssertNotEqual(f.model.selectedSessionID, saved.id)
+                XCTAssertTrue(failures.isEmpty, "obsolete restoration failures must not be logged")
             }
         }
+    }
+
+    private func takeBrowsingIntent(_ model: TraceModel, action: Int) {
+        model.cancelLaunchRestorationForUserIntent()
+        model.cancelLaunchRestorationForUserIntent() // Repeated controls are harmless.
+        switch action {
+        case 0: model.mainSearch.query = "New main search"; model.searchMain()
+        case 1: model.globalSearch.query = "New global search"; model.search()
+        case 2: model.projectFilter = "OtherReview"
+        case 3: model.globalSearch.filters.errorsOnly = true
+        case 4: model.globalSearch.filters.agents = [.codex]
+        case 5: model.settings.searchSort = .relevance
+        case 6: model.mainSearch.query = ""; model.searchMain()
+        default: model.setMainSearchPanelVisible(false)
+        }
+    }
+
+    func testBrowsingIntentEndsFailedLaunchRestorationWithoutClearingSavedSession() async throws {
+        for action in 0..<8 {
+            let (f, saved) = try await restorationFixture()
+            await f.database.failSessionReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            XCTAssertNil(f.model.selectedSessionID)
+            takeBrowsingIntent(f.model, action: action)
+            let mainQuery = f.model.mainSearch.query, globalQuery = f.model.globalSearch.query
+            let attempts = await f.database.sessionReadCountForTesting()
+            await f.model.receiveProgress(.init(phase: .complete))
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            let after = await f.database.sessionReadCountForTesting()
+            XCTAssertEqual(after, attempts, "user intent ends even later launch lookups")
+            XCTAssertNil(f.model.selectedSessionID)
+            XCTAssertNil(f.model.selectedProjectCanonicalKey)
+            XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+            XCTAssertEqual(f.model.mainSearch.query, mainQuery)
+            XCTAssertEqual(f.model.globalSearch.query, globalQuery)
+            if action == 2 { XCTAssertEqual(f.model.projectFilter, "OtherReview") }
+            if action == 3 { XCTAssertTrue(f.model.globalSearch.filters.errorsOnly) }
+            if action == 4 { XCTAssertEqual(f.model.globalSearch.filters.agents, [.codex]) }
+        }
+    }
+
+    func testBrowsingIntentRejectsGatedSuccessfulRestorationButCompletesFullTail() async throws {
+        for action in 0..<8 {
+            let (f, saved) = try await restorationFixture()
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.summaryRestorationGateForTesting = held
+            let refresh = Task { await f.model.receiveProgress(.init(phase: .complete)) }
+            try await wait { f.model.summaryRestorationWaitingForTesting }
+            takeBrowsingIntent(f.model, action: action)
+            var costPublications = 0
+            let subscription = f.model.$usage.dropFirst().sink { _ in costPublications += 1 }
+            defer { subscription.cancel() }
+            await gate.open(); await refresh.value
+            XCTAssertNil(f.model.selectedSessionID)
+            XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+            XCTAssertEqual(costPublications, 1)
+            try await assertFullSummary(f, messageCount: 6)
+        }
+    }
+
+    func testAutomaticSearchAndVisibilityDoNotEndLaunchRestoration() async throws {
+        let (f, saved) = try await restorationFixture()
+        await f.database.failSessionReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        f.model.setMainWindowVisible(true)
+        f.model.setMainSearchPanelVisible(true)
+        f.model.mainSearch.query = "NavigationNeedle"
+        f.model.searchMain()
+        f.model.globalSearch.query = "NavigationNeedle"
+        f.model.search()
+        f.model.projectFilter = "NavigationReview"
+        f.model.settings.searchSort = .relevance
+        await f.clock.advance(by: .milliseconds(100))
+        try await wait { !f.model.mainSearch.isSearching && !f.model.globalSearch.isSearching }
+        f.model.mainSearch.search(reset: false)
+        f.model.globalSearch.search(reset: false)
+        await f.clock.advance(by: .milliseconds(100))
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { f.model.selectedSession?.id == saved.id && !f.model.messages.isEmpty }
+        XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+    }
+
+    func testMetadataReadFailuresRetainIndependentCachedValuesAndCompleteTail() async throws {
+        for mask in 1...3 {
+            let f = try await fixture(count: 2)
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            let healthFiles = f.model.sourceHealth.map(\.fileCount)
+            let old = try XCTUnwrap(f.model.statistics)
+            XCTAssertFalse(healthFiles.isEmpty)
+            XCTAssertEqual(old.messageCount, 6)
+            let queue = try DatabaseQueue(path: f.root.appendingPathComponent("index.sqlite").path)
+            try await queue.write { db in try db.execute(sql: "DELETE FROM source_root") }
+            try await f.model.diagnostics.reset()
+            if mask & 1 != 0 {
+                await f.database.failSourceHealthReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR_READ))
+            }
+            if mask & 2 != 0 {
+                await f.database.failStatisticsReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+            }
+            var failures: [TraceModel.SummaryReadFailure] = []
+            f.model.summaryReadFailureForTesting = { failures.append($0) }
+            var costs = 0
+            let subscription = f.model.$usage.dropFirst().sink { _ in costs += 1 }
+            defer { subscription.cancel() }
+            let before = await f.database.summaryMetadataReadCountsForTesting()
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            let after = await f.database.summaryMetadataReadCountsForTesting()
+            XCTAssertEqual(after.health, before.health + 1)
+            XCTAssertEqual(after.statistics, before.statistics + 1)
+            XCTAssertEqual(costs, 1)
+            XCTAssertEqual(f.model.sourceHealth.map(\.fileCount), mask & 1 != 0 ? healthFiles : [])
+            XCTAssertEqual(f.model.statistics?.messageCount, mask & 2 != 0 ? old.messageCount : 0)
+            XCTAssertEqual(failures.map(\.operation), (mask & 1 != 0 ? [.sourceHealth] : []) + (mask & 2 != 0 ? [.statistics] : []))
+            if mask & 1 != 0 {
+                XCTAssertEqual(failures.first?.primaryCode, ResultCode.SQLITE_IOERR.rawValue)
+                XCTAssertEqual(failures.first?.extendedCode, ResultCode.SQLITE_IOERR_READ.rawValue)
+            }
+            let snapshot = await f.model.diagnostics.value()
+            if mask & 2 != 0 {
+                XCTAssertFalse(snapshot.days.contains { $0.indexSizeBytes > 0 }, "failed statistics must not record cached bytes")
+                XCTAssertEqual(f.model.statistics?.databaseBytes, old.databaseBytes)
+            } else { XCTAssertTrue(snapshot.days.contains { $0.indexSizeBytes > 0 }) }
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            XCTAssertTrue(f.model.sourceHealth.isEmpty)
+            XCTAssertEqual(f.model.statistics?.messageCount, 0)
+            XCTAssertEqual(costs, 2)
+            XCTAssertEqual(failures.count, mask == 3 ? 2 : 1, "success must not repeat failure diagnostics")
+        }
+    }
+
+    func testMetadataReadFailureDoesNotPreventSavedSessionRestoration() async throws {
+        let (f, saved) = try await restorationFixture()
+        await f.database.failSourceHealthReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR))
+        await f.database.failStatisticsReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        var failures: [TraceModel.SummaryReadFailure] = []
+        f.model.summaryReadFailureForTesting = { failures.append($0) }
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { f.model.selectedSession?.id == saved.id && !f.model.messages.isEmpty }
+        XCTAssertEqual(failures.map(\.operation), [.sourceHealth, .statistics])
+        XCTAssertNil(f.model.startupError)
+    }
+
+    func testGatedMetadataFailuresRejectObsoleteSummaryOwners() async throws {
+        for boundary in 0..<5 {
+            let f = try await fixture(count: 2)
+            await f.database.failSourceHealthReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+            await f.database.failStatisticsReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR))
+            var failures: [TraceModel.SummaryReadFailure] = []
+            f.model.summaryReadFailureForTesting = { failures.append($0) }
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.summaryMetadataGateForTesting = held
+            let refresh = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+            try await wait { f.model.summaryMetadataWaitingForTesting }
+            f.model.summaryMetadataGateForTesting = nil
+            switch boundary {
+            case 0: await f.model.refreshSummariesForTesting(lightweight: false)
+            case 1:
+                f.model.failSourceConfigurationForTesting = true
+                f.model.reloadSourcesAndRebuild()
+                try await wait { f.model.sourceReloadRecovery.error != nil }
+            case 2:
+                let replacement = try IndexDatabase(url: f.root.appendingPathComponent("metadata-replacement.sqlite"))
+                await f.model.attachForTesting(database: replacement, sources: [])
+            case 3: await f.model.prepareToTerminate()
+            default: refresh.cancel()
+            }
+            let messages = f.model.statistics?.messageCount, health = f.model.sourceHealth.map(\.fileCount)
+            await gate.open(); await refresh.value
+            XCTAssertTrue(failures.isEmpty)
+            XCTAssertEqual(f.model.statistics?.messageCount, messages)
+            XCTAssertEqual(f.model.sourceHealth.map(\.fileCount), health)
+        }
+    }
+
+    func testCancelledRestorationFailureCannotLogOrRestore() async throws {
+        let (f, saved) = try await restorationFixture()
+        await f.database.failSessionReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR))
+        var failures: [TraceModel.SummaryReadFailure] = []
+        f.model.summaryReadFailureForTesting = { failures.append($0) }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.summaryRestorationGateForTesting = held
+        let refresh = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+        try await wait { f.model.summaryRestorationWaitingForTesting }
+        refresh.cancel()
+        await gate.open(); await refresh.value
+        XCTAssertTrue(failures.isEmpty)
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+        f.model.summaryRestorationGateForTesting = nil
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { f.model.selectedSession?.id == saved.id }
+    }
+
+    func testUserIntentRejectsGatedRestorationFailureDiagnostics() async throws {
+        let (f, saved) = try await restorationFixture()
+        await f.database.failSessionReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR))
+        var failures: [TraceModel.SummaryReadFailure] = []
+        f.model.summaryReadFailureForTesting = { failures.append($0) }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.summaryRestorationGateForTesting = held
+        let refresh = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+        try await wait { f.model.summaryRestorationWaitingForTesting }
+        takeBrowsingIntent(f.model, action: 0)
+        await gate.open(); await refresh.value
+        XCTAssertTrue(failures.isEmpty)
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+        try await assertFullSummary(f, messageCount: 6)
+    }
+
+    func testFailureObservationReentrancyRejectsRemainingSummaryTail() async throws {
+        let f = try await fixture(count: 2)
+        defer { f.model.summaryReadFailureForTesting = nil }
+        await f.database.failSourceHealthReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.database.failStatisticsReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR))
+        f.model.failSourceConfigurationForTesting = true
+        var failures: [TraceModel.SummaryReadFailure] = []
+        f.model.summaryReadFailureForTesting = {
+            failures.append($0)
+            f.model.reloadSourcesAndRebuild()
+        }
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        XCTAssertEqual(failures.map(\.operation), [.sourceHealth])
+        XCTAssertNil(f.model.statistics)
     }
 
     func testRecoveryBudgetCoalescesFailuresAndManualRetryPreservesRows() async throws {
@@ -237,7 +485,7 @@ final class AppReviewFollowupTests: XCTestCase {
             try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
             XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
         }
-        try await wait { f.model.transcriptLoadError != nil && !f.model.transcriptRecoveryPendingForTesting }
+        try await wait { f.model.transcriptBanner?.details != nil && !f.model.transcriptRecoveryPendingForTesting }
         await f.clock.advance(by: .seconds(60))
         let exhausted = await f.database.transcriptReadCountForTesting()
         XCTAssertEqual(exhausted, before + 3, "exhaustion must stop automatic reads")
@@ -245,11 +493,11 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.refreshSummariesForTesting()
         XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting, "fresh failures do not reset an exhausted episode")
         f.model.retrySelectedTranscript()
-        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertNil(f.model.transcriptBanner?.details)
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertNil(f.model.transcriptBanner?.details)
         XCTAssertEqual(f.model.selectedSessionID, session.id)
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
     }
@@ -286,7 +534,7 @@ final class AppReviewFollowupTests: XCTestCase {
             XCTAssertEqual(f.model.selectedSessionID, selected)
             XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
             XCTAssertEqual(f.model.transcriptMessageRevision, revision)
-            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertNil(f.model.transcriptBanner?.details)
             XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
         }
     }
@@ -301,7 +549,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.clock.advance(by: .milliseconds(250))
         try await wait { !f.model.messages.isEmpty }
         XCTAssertEqual(f.model.selectedSessionID, session.id)
-        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertNil(f.model.transcriptBanner?.details)
     }
 
     func testRecoveredSelectionCompletesNavigationOnceAcrossAllPublishers() async throws {
@@ -328,7 +576,7 @@ final class AppReviewFollowupTests: XCTestCase {
                 await f.clock.advance(by: .seconds(1))
                 try await wait { await f.database.transcriptReadCountForTesting() >= initialReadCount + 3 }
                 await f.clock.advance(by: .seconds(4))
-                try await wait { f.model.transcriptLoadError != nil }
+                try await wait { f.model.transcriptBanner?.details != nil }
                 XCTAssertEqual(events.windows, 1, "exhausted recovery must expose the Retry button")
                 XCTAssertEqual(events.scrolls, 0)
                 f.model.retrySelectedTranscript()
@@ -414,7 +662,7 @@ final class AppReviewFollowupTests: XCTestCase {
             await f.clock.advance(by: delay)
             try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
         }
-        try await wait { f.model.transcriptLoadError != nil }
+        try await wait { f.model.transcriptBanner?.details != nil }
         XCTAssertEqual(events.windows, 0)
         f.model.selectSession(session.id, showWindow: true)
         XCTAssertEqual(events.windows, 1)
@@ -1244,7 +1492,7 @@ final class AppReviewFollowupTests: XCTestCase {
                     await f.clock.advance()
                 }
             }
-            try await wait { f.model.transcriptIsTemporarilyUnavailable }
+            try await wait { (f.model.transcriptBanner?.feedback == .updating) }
             XCTAssertEqual(f.model.selectedSessionID, session.id)
             XCTAssertEqual(f.model.settings.lastSessionID, session.id)
             XCTAssertEqual(events.windows, 1, "missing data must expose the main window promptly")
@@ -1252,11 +1500,11 @@ final class AppReviewFollowupTests: XCTestCase {
             let before = await f.model.diagnostics.value()
             XCTAssertEqual(before.days.reduce(0) { $0 + $1.openCount }, 0)
             XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
-            XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("temporarily unavailable"))
+            XCTAssertTrue(try XCTUnwrap(f.model.transcriptBanner?.details).contains("temporarily unavailable"))
             await f.coordinator.indexAll(scope: .proseOnly)
             await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
             try await wait { await f.model.diagnostics.value().days.reduce(0) { $0 + $1.openCount } == 1 }
-            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
             XCTAssertFalse(f.model.messages.isEmpty)
             XCTAssertEqual(events.scrolls, 1)
             await gate.open()
@@ -1285,7 +1533,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.clock.advance(by: .milliseconds(250))
         try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
-        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
         XCTAssertNotNil(f.model.hydratedMessages[message.id])
         XCTAssertEqual(f.model.selectedProjectID, project)
@@ -1293,17 +1541,17 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
         f.model.transcriptRecoveryPublicationGateForTesting = nil
         f.model.retrySelectedTranscript()
-        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable, "manual Retry preserves absence feedback")
+        XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating), "manual Retry preserves absence feedback")
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
         await f.coordinator.indexAll(scope: .proseOnly)
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
         await gate.open()
         try await wait { !f.model.transcriptRecoveryPublicationWaitingForTesting }
         XCTAssertEqual(f.model.selectedSessionID, session.id)
-        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
-        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
+        XCTAssertNil(f.model.transcriptBanner?.details)
         XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
     }
 
@@ -1318,7 +1566,7 @@ final class AppReviewFollowupTests: XCTestCase {
             await f.model.receiveProgress(pass)
             _ = try await f.database.synchronizeConfiguredRoots([])
             await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
-            XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
             switch boundary {
             case 0, 1, 2:
                 pass.phase = [.complete, .failed, .cancelled][boundary]
@@ -1335,8 +1583,8 @@ final class AppReviewFollowupTests: XCTestCase {
                 await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
             default: await f.model.prepareToTerminate()
             }
-            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
-            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
+            XCTAssertNil(f.model.transcriptBanner?.details)
         }
     }
 
@@ -1344,7 +1592,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.transcriptRecoveryPendingForTesting }
         let before = await f.database.transcriptReadCountForTesting()
         for (index, delay) in [Duration.milliseconds(250), .seconds(1), .seconds(4)].enumerated() {
-            XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable, "feedback remains until the budget finishes")
+            XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating), "feedback remains until the budget finishes")
             await f.clock.advance(by: delay)
             try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
         }
@@ -1368,11 +1616,11 @@ final class AppReviewFollowupTests: XCTestCase {
             await f.database.failTranscriptReadsForTesting(count: 4)
             pass.phase = phase
             await f.model.receiveProgress(pass)
-            XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
             try await exhaustReadRecovery(f)
-            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
-            XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
-            XCTAssertFalse(try XCTUnwrap(f.model.transcriptLoadError).contains("wait for indexing"))
+            XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
+            XCTAssertTrue(try XCTUnwrap(f.model.transcriptBanner?.details).contains("Synthetic transcript read failure"))
+            XCTAssertFalse(try XCTUnwrap(f.model.transcriptBanner?.details).contains("wait for indexing"))
             XCTAssertEqual(f.model.selectedSessionID, session.id)
             XCTAssertEqual(f.model.settings.lastSessionID, session.id)
             XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
@@ -1386,7 +1634,7 @@ final class AppReviewFollowupTests: XCTestCase {
             f.model.retrySelectedTranscript()
             await f.clock.advance()
             try await wait { !f.model.transcriptRecoveryPendingForTesting }
-            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertNil(f.model.transcriptBanner?.details)
             XCTAssertEqual(f.model.selectedSessionID, session.id)
         }
     }
@@ -1403,13 +1651,13 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.receiveProgress(pass)
         _ = try await f.database.synchronizeConfiguredRoots([])
         f.model.selectSession(session.id, showWindow: true)
-        try await wait { f.model.transcriptIsTemporarilyUnavailable }
+        try await wait { (f.model.transcriptBanner?.feedback == .updating) }
         XCTAssertEqual(events.windows, 1)
         await f.database.failTranscriptReadsForTesting(count: 4)
         pass.phase = .complete
         await f.model.receiveProgress(pass)
         try await exhaustReadRecovery(f)
-        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertEqual(f.model.selectedSessionID, session.id)
         XCTAssertEqual(f.model.settings.lastSessionID, session.id)
         XCTAssertEqual(events.scrolls, 0)
@@ -1419,7 +1667,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.retrySelectedTranscript()
         await f.clock.advance()
         try await wait { await f.model.diagnostics.value().days.reduce(0) { $0 + $1.openCount } == 1 }
-        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertNil(f.model.transcriptBanner?.details)
         XCTAssertFalse(f.model.messages.isEmpty)
         XCTAssertEqual(events.windows, 1)
         XCTAssertEqual(events.scrolls, 1)
@@ -1442,15 +1690,15 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.database.failTranscriptReadsForTesting(count: 4)
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
         try await exhaustReadRecovery(f)
-        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable, "an active pass retains temporary feedback")
-        XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
+        XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating), "an active pass retains temporary feedback")
+        XCTAssertTrue(try XCTUnwrap(f.model.transcriptBanner?.details).contains("Synthetic transcript read failure"))
         let before = await f.database.transcriptReadCountForTesting()
         await f.database.failTranscriptReadOnceForTesting()
         pass.phase = .complete
         await f.model.receiveProgress(pass)
-        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
-        XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
+        XCTAssertTrue(try XCTUnwrap(f.model.transcriptBanner?.details).contains("Synthetic transcript read failure"))
         await f.clock.advance(by: .seconds(60))
         let after = await f.database.transcriptReadCountForTesting()
         XCTAssertEqual(after, before + 1, "terminal feedback does not renew the exhausted budget")
@@ -1482,15 +1730,15 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.receiveProgress(successor)
         await gate.open()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertTrue(f.model.indexingPassActiveForTesting)
-        XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
+        XCTAssertTrue(try XCTUnwrap(f.model.transcriptBanner?.details).contains("Synthetic transcript read failure"))
         await f.database.failTranscriptReadOnceForTesting()
         successor.phase = .complete
         await f.model.receiveProgress(successor)
-        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
-        XCTAssertNotNil(f.model.transcriptLoadError)
+        XCTAssertNotNil(f.model.transcriptBanner?.details)
     }
 
     func testObsoleteTerminalReadFailureCannotPublishFeedback() async throws {
@@ -1526,8 +1774,8 @@ final class AppReviewFollowupTests: XCTestCase {
             }
             await gate.open()
             await terminal.value
-            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
-            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
+            XCTAssertNil(f.model.transcriptBanner?.details)
             XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
         }
     }
@@ -1571,8 +1819,8 @@ final class AppReviewFollowupTests: XCTestCase {
             }
             await gate.open()
             try await wait { !f.model.transcriptRecoveryPublicationWaitingForTesting }
-            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
-            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
+            XCTAssertNil(f.model.transcriptBanner?.details)
             XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
         }
     }
@@ -1604,7 +1852,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.database.failTranscriptReadsForTesting(count: 4)
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
         try await exhaustReadRecovery(f)
-        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
     }
 
     func testExhaustedRecoveryRetiresAfterSupersedingNonterminalFailure() async throws {
@@ -1627,8 +1875,8 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.summaryTranscriptFailureGateForTesting = nil
         await f.database.failTranscriptReadOnceForTesting()
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
-        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
-        XCTAssertNotNil(f.model.transcriptLoadError)
+        XCTAssertFalse((f.model.transcriptBanner?.feedback == .updating))
+        XCTAssertNotNil(f.model.transcriptBanner?.details)
         XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
         XCTAssertEqual(f.model.selectedSessionID, session.id)
         XCTAssertEqual(f.model.settings.lastSessionID, session.id)
@@ -1649,7 +1897,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.retrySelectedTranscript()
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
         try await exhaustTransientRecovery(f)
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
@@ -1658,10 +1906,10 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
         XCTAssertEqual(f.model.messages.first?.id, message.id)
         XCTAssertNotNil(f.model.hydratedMessages[message.id])
-        XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("wait for indexing"))
+        XCTAssertTrue(try XCTUnwrap(f.model.transcriptBanner?.details).contains("wait for indexing"))
         await gate.open()
-        try await wait { f.model.progress.phase == .complete && !f.model.transcriptIsTemporarilyUnavailable }
-        XCTAssertNil(f.model.transcriptLoadError)
+        try await wait { f.model.progress.phase == .complete && !(f.model.transcriptBanner?.feedback == .updating) }
+        XCTAssertNil(f.model.transcriptBanner?.details)
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
         XCTAssertFalse(f.model.messages.isEmpty)
         XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
@@ -1678,7 +1926,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         f.model.selectSession(sessionID, showWindow: true)
-        try await wait { f.model.transcriptIsTemporarilyUnavailable && events.windows == 1 }
+        try await wait { (f.model.transcriptBanner?.feedback == .updating) && events.windows == 1 }
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
         XCTAssertEqual(f.model.settings.lastSessionID, sessionID)
         XCTAssertEqual(events.scrolls, 0)
@@ -1688,7 +1936,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await gate.open()
         try await wait { await f.model.diagnostics.value().days.reduce(0) { $0 + $1.openCount } == before + 1 }
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
-        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertNil(f.model.transcriptBanner?.details)
         XCTAssertEqual(events.windows, 1)
         XCTAssertEqual(events.scrolls, 1)
         await f.model.refreshSummariesForTesting()
@@ -1729,9 +1977,9 @@ final class AppReviewFollowupTests: XCTestCase {
                 let committed = await f.model.attach(database: f.database, coordinator: f.coordinator)
                 XCTAssertTrue(committed)
             }
-            try await wait { !f.model.transcriptIsTemporarilyUnavailable }
+            try await wait { !(f.model.transcriptBanner?.feedback == .updating) }
             XCTAssertFalse(f.model.indexingPassActiveForTesting)
-            XCTAssertNotNil(f.model.transcriptLoadError)
+            XCTAssertNotNil(f.model.transcriptBanner?.details)
             XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
             XCTAssertEqual(f.model.selectedSessionID, sessionID)
             XCTAssertEqual(f.model.settings.lastSessionID, sessionID)
@@ -1779,14 +2027,14 @@ final class AppReviewFollowupTests: XCTestCase {
             let rows = f.model.messages, hydrated = f.model.hydratedMessages, project = f.model.selectedProjectID
             let before = await f.database.transcriptReadCountForTesting()
             try await stopReplacement(f, gate: gate, boundary: boundary)
-            XCTAssertEqual(f.model.transcriptFeedback, .paused)
+            XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
             XCTAssertFalse(f.model.indexingPassActiveForTesting)
             XCTAssertEqual(f.model.selectedSessionID, sessionID)
             XCTAssertEqual(f.model.settings.lastSessionID, sessionID)
             XCTAssertEqual(f.model.selectedProjectID, project)
             XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
             XCTAssertEqual(f.model.hydratedMessages.keys.sorted(), hydrated.keys.sorted())
-            XCTAssertEqual(f.model.transcriptLoadError, TraceModel.TranscriptFeedback.paused.message)
+            XCTAssertEqual(f.model.transcriptBanner?.details, TraceModel.TranscriptFeedback.paused.message)
             let settled = await f.database.transcriptReadCountForTesting()
             XCTAssertEqual(settled, before + 1)
             await f.clock.advance(by: .seconds(60))
@@ -1803,18 +2051,18 @@ final class AppReviewFollowupTests: XCTestCase {
             f.model.retrySelectedTranscript()
             await f.clock.advance()
             try await wait { !f.model.transcriptRecoveryPendingForTesting }
-            XCTAssertEqual(f.model.transcriptFeedback, .paused)
+            XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
             XCTAssertEqual(f.model.selectedSessionID, sessionID)
             XCTAssertEqual(f.model.settings.lastSessionID, sessionID)
             XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
             var successor = IndexProgress(phase: .indexing)
             await f.model.receiveProgress(successor)
-            XCTAssertEqual(f.model.transcriptFeedback, .updating)
+            XCTAssertEqual(f.model.transcriptBanner?.feedback, .updating)
             successor.phase = phase
             await f.model.receiveProgress(successor)
             XCTAssertNil(f.model.selectedSessionID)
             XCTAssertNil(f.model.settings.lastSessionID)
-            XCTAssertNil(f.model.transcriptFeedback)
+            XCTAssertNil(f.model.transcriptBanner?.feedback)
         }
     }
 
@@ -1828,9 +2076,9 @@ final class AppReviewFollowupTests: XCTestCase {
         let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         f.model.selectSession(sessionID, showWindow: true)
-        try await wait { f.model.transcriptIsTemporarilyUnavailable && events.windows == 1 }
+        try await wait { (f.model.transcriptBanner?.feedback == .updating) && events.windows == 1 }
         try await stopReplacement(f, gate: gate, boundary: 0)
-        XCTAssertEqual(f.model.transcriptFeedback, .paused)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
         f.model.retrySelectedTranscript()
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
@@ -1840,7 +2088,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.retrySelectedTranscript()
         await f.clock.advance()
         try await wait { await f.model.diagnostics.value().days.reduce(0) { $0 + $1.openCount } == before + 1 }
-        XCTAssertNil(f.model.transcriptFeedback)
+        XCTAssertNil(f.model.transcriptBanner?.feedback)
         XCTAssertNil(f.model.transcriptBanner)
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
         XCTAssertEqual(events.windows, 1)
@@ -2072,20 +2320,20 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.transcriptSettlementGateForTesting = held
         var feedback: [TraceModel.TranscriptFeedback] = []
         let subscription = f.model.objectWillChange.sink {
-            if let value = f.model.transcriptFeedback { feedback.append(value) }
+            if let value = f.model.transcriptBanner?.feedback { feedback.append(value) }
         }
         defer { subscription.cancel() }
         f.model.failSourceConfigurationForTesting = true
         f.model.reloadSourcesAndRebuild()
         try await wait { f.model.transcriptSettlementWaitingForTesting }
-        XCTAssertEqual(f.model.transcriptFeedback, .updating)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .updating)
         let updatingBanner = try XCTUnwrap(f.model.transcriptBanner)
         XCTAssertEqual(updatingBanner.message, "This session is temporarily unavailable while the index updates. Retry now or wait for indexing to finish.")
         XCTAssertEqual(updatingBanner.details, updatingBanner.message + "\nUnable to read Synthetic transcript read failure")
         XCTAssertFalse(feedback.contains(.paused))
         await publicationGate.open()
         try await wait { !f.model.transcriptSettlementPendingForTesting }
-        XCTAssertEqual(f.model.transcriptFeedback, .readError)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .readError)
         let readErrorBanner = try XCTUnwrap(f.model.transcriptBanner)
         XCTAssertEqual(readErrorBanner.message, "Could not refresh this session. Try again.")
         XCTAssertEqual(readErrorBanner.details, "Unable to read Synthetic transcript read failure")
@@ -2097,7 +2345,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
         XCTAssertEqual(f.model.selectedSessionID, sessionID, "exhausted feedback keeps private paused selection protection")
-        XCTAssertEqual(f.model.transcriptFeedback, .paused)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
         let pausedBanner = try XCTUnwrap(f.model.transcriptBanner)
         XCTAssertEqual(pausedBanner.message, "This session is unavailable because index updates are paused. Retry now or resume indexing to check again.")
         XCTAssertEqual(pausedBanner.details, pausedBanner.message)
@@ -2134,7 +2382,7 @@ final class AppReviewFollowupTests: XCTestCase {
             await f.coordinator.indexAll(scope: .proseOnly)
             var feedback: [TraceModel.TranscriptFeedback] = []
             let subscription = f.model.objectWillChange.sink {
-                if let value = f.model.transcriptFeedback { feedback.append(value) }
+                if let value = f.model.transcriptBanner?.feedback { feedback.append(value) }
             }
             let deliveryGate = ReviewReadGate(), publicationGate = ReviewReadGate()
             let held = Task { await publicationGate.wait() }
@@ -2150,11 +2398,11 @@ final class AppReviewFollowupTests: XCTestCase {
             if cancelledDelivery { delivery.cancel() }
             await deliveryGate.open()
             try await wait { f.model.summaryTranscriptWaitingForTesting }
-            XCTAssertEqual(f.model.transcriptFeedback, .updating)
+            XCTAssertEqual(f.model.transcriptBanner?.feedback, .updating)
             XCTAssertFalse(feedback.contains(.readError))
             await publicationGate.open()
             await delivery.value
-            XCTAssertNil(f.model.transcriptFeedback)
+            XCTAssertNil(f.model.transcriptBanner?.feedback)
             XCTAssertEqual(f.model.selectedSessionID, session.id)
             XCTAssertFalse(feedback.contains(.readError), "even synchronous publications must not expose the old error")
         }
@@ -2170,10 +2418,10 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.reloadSourcesAndRebuild()
         try await wait { f.model.transcriptSettlementWaitingForTesting }
         f.model.failSelectedTranscriptForTesting("Newer retained read error")
-        XCTAssertEqual(f.model.transcriptLoadError, "Newer retained read error")
+        XCTAssertEqual(f.model.transcriptBanner?.details, "Newer retained read error")
         await publicationGate.open()
         try await wait { !f.model.transcriptSettlementPendingForTesting }
-        XCTAssertEqual(f.model.transcriptLoadError, "Newer retained read error")
+        XCTAssertEqual(f.model.transcriptBanner?.details, "Newer retained read error")
         await gate.open()
     }
 
@@ -2205,12 +2453,12 @@ final class AppReviewFollowupTests: XCTestCase {
                 await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
             default: await f.model.prepareToTerminate()
             }
-            let selected = f.model.selectedSessionID, feedback = f.model.transcriptLoadError
+            let selected = f.model.selectedSessionID, feedback = f.model.transcriptBanner?.details
             let rows = f.model.messages, before = await f.database.transcriptReadCountForTesting()
             await publicationGate.open()
             try await wait { !f.model.transcriptSettlementWaitingForTesting }
             XCTAssertEqual(f.model.selectedSessionID, selected)
-            XCTAssertEqual(f.model.transcriptLoadError, feedback)
+            XCTAssertEqual(f.model.transcriptBanner?.details, feedback)
             XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
             let after = await f.database.transcriptReadCountForTesting()
             XCTAssertEqual(after, before)
@@ -2227,11 +2475,11 @@ final class AppReviewFollowupTests: XCTestCase {
         try await stopReplacement(f, gate: gate, boundary: 0)
         let settled = await f.database.transcriptReadCountForTesting()
         XCTAssertEqual(settled, before)
-        XCTAssertEqual(f.model.transcriptFeedback, .paused)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
         await f.clock.advance(by: .milliseconds(250))
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
-        XCTAssertEqual(f.model.transcriptFeedback, .paused)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
         let recovered = await f.database.transcriptReadCountForTesting()
         XCTAssertEqual(recovered, before + 1)
     }
@@ -2261,11 +2509,11 @@ final class AppReviewFollowupTests: XCTestCase {
                 await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
             default: await f.model.prepareToTerminate()
             }
-            let selected = f.model.selectedSessionID, feedback = f.model.transcriptLoadError, rows = f.model.messages
+            let selected = f.model.selectedSessionID, feedback = f.model.transcriptBanner?.details, rows = f.model.messages
             await publicationGate.open()
             try await wait { !f.model.transcriptRecoveryPublicationWaitingForTesting }
             XCTAssertEqual(f.model.selectedSessionID, selected)
-            XCTAssertEqual(f.model.transcriptLoadError, feedback)
+            XCTAssertEqual(f.model.transcriptBanner?.details, feedback)
             XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
             await gate.open()
         }
@@ -2285,7 +2533,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let before = await f.database.transcriptReadCountForTesting()
         await f.clock.advance(by: .milliseconds(250))
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertEqual(f.model.transcriptFeedback, .paused)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
         await publicationGate.open()
         try await wait { !f.model.transcriptSettlementPendingForTesting }
@@ -2301,17 +2549,17 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.transcriptRecoveryPendingForTesting }
         let before = await f.database.transcriptReadCountForTesting()
         for (index, delay) in [Duration.milliseconds(250), .seconds(1), .seconds(4)].enumerated() {
-            XCTAssertEqual(f.model.transcriptFeedback, .paused)
+            XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
             await f.clock.advance(by: delay)
             try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
         }
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertEqual(f.model.transcriptFeedback, .readError)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .readError)
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
         f.model.retrySelectedTranscript()
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertEqual(f.model.transcriptFeedback, .paused)
+        XCTAssertEqual(f.model.transcriptBanner?.feedback, .paused)
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
     }
 
@@ -2358,13 +2606,13 @@ final class AppReviewFollowupTests: XCTestCase {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         await model.refreshSummariesForTesting(terminalProjectReconciliation: false)
-        try await wait { model.transcriptIsTemporarilyUnavailable }
+        try await wait { (model.transcriptBanner?.feedback == .updating) }
         XCTAssertEqual(model.settings.lastSessionID, session.id)
         await f.coordinator.indexAll(scope: .proseOnly)
         await model.refreshSummariesForTesting(terminalProjectReconciliation: false)
         XCTAssertEqual(model.selectedSessionID, session.id)
         XCTAssertFalse(model.messages.isEmpty)
-        XCTAssertFalse(model.transcriptIsTemporarilyUnavailable)
+        XCTAssertFalse((model.transcriptBanner?.feedback == .updating))
         XCTAssertEqual(events.windows, 0)
     }
 
@@ -3693,7 +3941,7 @@ final class AppReviewFollowupTests: XCTestCase {
             try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
         }
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
-        XCTAssertNotNil(f.model.transcriptLoadError)
+        XCTAssertNotNil(f.model.transcriptBanner?.details)
         XCTAssertEqual(f.model.selectedSessionID, recovery.snapshot.session?.id)
         await f.database.failTranscriptReadOnceForTesting()
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
@@ -3705,7 +3953,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.retrySelectedTranscript()
         await f.clock.advance()
         try await wait { !f.model.messages.isEmpty }
-        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertNil(f.model.transcriptBanner?.details)
         try await assertRecovered(recovery)
     }
 
