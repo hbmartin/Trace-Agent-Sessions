@@ -432,7 +432,7 @@ final class TraceModel: ObservableObject {
         let workflow: UUID
         let sessionID: Int64?
         let requestID: UUID
-        var summaryID: UUID
+        let summaryID: UUID
         let revalidateAbsence: Bool
     }
     private var transcriptSettlement: TranscriptSettlement?
@@ -3214,7 +3214,7 @@ final class TraceModel: ObservableObject {
                 }
             }
             guard !Task.isCancelled, summaryRefreshIsCurrent(owner) else { return }
-            await reloadSummaries(projectReconciliation: reconciliation, owner: owner, terminal: receipt)
+            await reloadSummaries(owner: owner, terminal: receipt)
         }
         return terminalSummaryTask
     }
@@ -3422,7 +3422,6 @@ final class TraceModel: ObservableObject {
         if loadCosts || fullReceipt != nil { reloadCosts() }
         guard isCurrent() else { return }
         refreshDiagnostics()
-        guard isCurrent() else { return }
         if let fullReceipt, pendingFullSummaryRefresh?.id == fullReceipt.id { pendingFullSummaryRefresh = nil }
     }
 
