@@ -3647,7 +3647,7 @@ final class TraceUITests: XCTestCase {
         return (app, directory)
     }
 
-    private func launchWithTransientSavedSelection(hiddenLauncher: Bool) throws -> (XCUIApplication, URL, URL) {
+    private func launchWithTransientSavedSelection(hiddenLauncher: Bool, failTerminalReads: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
         app.launch()
@@ -3674,6 +3674,10 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_SCOPE_RESET_HOLD_MS"] = "30000"
         app.launchEnvironment["TRACE_TEST_SCOPE_RESET_ENTERED_PATH"] = resetEntered.path
         app.launchEnvironment["TRACE_TEST_SCOPE_RESET_RELEASE_PATH"] = resetRelease.path
+        if failTerminalReads {
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_READ_FAILURE_PATH"] = directory.appendingPathComponent("fail-transcript-reads").path
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RECOVERY_EXHAUSTED_PATH"] = directory.appendingPathComponent("transcript-recovery-exhausted").path
+        }
         if hiddenLauncher { app.launchArguments.removeAll { $0 == "--ui-show-main" } }
         app.launch()
         XCTAssertTrue(waitForFile(finalizing, timeout: 15))
@@ -3711,6 +3715,28 @@ final class TraceUITests: XCTestCase {
         try Data().write(to: release)
         XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].exists)
+    }
+
+    func testTemporarySelectionShowsReadErrorAfterTerminalRecoveryExhausts() throws {
+        let (app, directory, release) = try launchWithTransientSavedSelection(hiddenLauncher: true, failTerminalReads: true)
+        let failure = directory.appendingPathComponent("fail-transcript-reads")
+        let exhausted = directory.appendingPathComponent("transcript-recovery-exhausted")
+        try Data().write(to: failure)
+        try Data().write(to: release)
+        let banner = app.staticTexts["transcriptLoadError"]
+        XCTAssertEqual(banner.value as? String,
+            "This session is temporarily unavailable while the index updates. Retry now or wait for indexing to finish.")
+        XCTAssertTrue(waitForFile(exhausted, timeout: 15))
+        XCTAssertTrue(banner.waitForExistence(timeout: 5))
+        XCTAssertEqual(banner.value as? String, "Could not refresh this session. Try again.")
+        XCTAssertTrue(app.buttons["backToProject"].exists)
+        XCTAssertTrue(app.buttons["retrySelectedTranscript"].isEnabled)
+        attach(app, name: "terminal-transcript-recovery-error")
+        try FileManager.default.removeItem(at: failure)
+        app.buttons["retrySelectedTranscript"].click()
+        XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.scrollViews["transcriptScroll"].exists)
     }
 
