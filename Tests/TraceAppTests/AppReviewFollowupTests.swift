@@ -1210,6 +1210,243 @@ final class AppReviewFollowupTests: XCTestCase {
         }
     }
 
+    private func exhaustReadRecovery(_ f: Fixture) async throws {
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        let before = await f.database.transcriptReadCountForTesting()
+        for (index, delay) in [Duration.milliseconds(250), .seconds(1), .seconds(4)].enumerated() {
+            XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable, "feedback remains until the budget finishes")
+            await f.clock.advance(by: delay)
+            try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
+        }
+        try await wait { !f.model.transcriptRecoveryPendingForTesting }
+    }
+
+    func testTerminalReadRecoveryRetiresTemporaryFeedbackAfterBudget() async throws {
+        for phase in [IndexProgress.Phase.complete, .failed, .cancelled] {
+            let f = try await fixture(count: 2)
+            let session = try XCTUnwrap(f.model.sessions.first)
+            f.model.selectSession(session.id)
+            try await wait { !f.model.messages.isEmpty }
+            let message = try XCTUnwrap(f.model.messages.first)
+            f.model.hydrate(message)
+            try await wait { f.model.hydratedMessages[message.id] != nil }
+            let rows = f.model.messages, project = f.model.selectedProjectID
+            var pass = IndexProgress(phase: .indexing)
+            await f.model.receiveProgress(pass)
+            _ = try await f.database.synchronizeConfiguredRoots([])
+            await f.model.refreshSummariesForTesting(terminal: false)
+            await f.database.failTranscriptReadsForTesting(count: 4)
+            pass.phase = phase
+            await f.model.receiveProgress(pass)
+            XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+            try await exhaustReadRecovery(f)
+            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
+            XCTAssertFalse(try XCTUnwrap(f.model.transcriptLoadError).contains("wait for indexing"))
+            XCTAssertEqual(f.model.selectedSessionID, session.id)
+            XCTAssertEqual(f.model.settings.lastSessionID, session.id)
+            XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
+            XCTAssertNotNil(f.model.hydratedMessages[message.id])
+            XCTAssertEqual(f.model.selectedProjectID, project)
+            let exhausted = await f.database.transcriptReadCountForTesting()
+            await f.clock.advance(by: .seconds(60))
+            let after = await f.database.transcriptReadCountForTesting()
+            XCTAssertEqual(after, exhausted, "exhaustion adds no automatic reads")
+            await f.coordinator.indexAll(scope: .proseOnly)
+            f.model.retrySelectedTranscript()
+            await f.clock.advance()
+            try await wait { !f.model.transcriptRecoveryPendingForTesting }
+            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertEqual(f.model.selectedSessionID, session.id)
+        }
+    }
+
+    func testPendingTransientSelectionCompletesOnceAfterTerminalRecoveryFailure() async throws {
+        let f = try await fixture(count: 2), session = try XCTUnwrap(f.model.sessions.first)
+        let events = ReviewSelectionEvents()
+        let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { events.windows += 1 }
+        }
+        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
+        var pass = IndexProgress(phase: .indexing)
+        await f.model.receiveProgress(pass)
+        _ = try await f.database.synchronizeConfiguredRoots([])
+        f.model.selectSession(session.id, showWindow: true)
+        try await wait { f.model.transcriptIsTemporarilyUnavailable }
+        XCTAssertEqual(events.windows, 1)
+        await f.database.failTranscriptReadsForTesting(count: 4)
+        pass.phase = .complete
+        await f.model.receiveProgress(pass)
+        try await exhaustReadRecovery(f)
+        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
+        XCTAssertEqual(f.model.settings.lastSessionID, session.id)
+        XCTAssertEqual(events.scrolls, 0)
+        let before = await f.model.diagnostics.value()
+        XCTAssertEqual(before.days.reduce(0) { $0 + $1.openCount }, 0)
+        await f.coordinator.indexAll(scope: .proseOnly)
+        f.model.retrySelectedTranscript()
+        await f.clock.advance()
+        try await wait { await f.model.diagnostics.value().days.reduce(0) { $0 + $1.openCount } == 1 }
+        XCTAssertNil(f.model.transcriptLoadError)
+        XCTAssertFalse(f.model.messages.isEmpty)
+        XCTAssertEqual(events.windows, 1)
+        XCTAssertEqual(events.scrolls, 1)
+        await f.model.refreshSummariesForTesting()
+        await f.clock.advance(by: .seconds(60))
+        let after = await f.model.diagnostics.value()
+        XCTAssertEqual(after.days.reduce(0) { $0 + $1.openCount }, 1)
+        XCTAssertEqual(events.windows, 1)
+        XCTAssertEqual(events.scrolls, 1)
+    }
+
+    func testAlreadyExhaustedRecoveryRetiresAbsenceOnTerminalReadFailure() async throws {
+        let f = try await fixture(count: 2), session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id)
+        try await wait { !f.model.messages.isEmpty }
+        var pass = IndexProgress(phase: .indexing)
+        await f.model.receiveProgress(pass)
+        _ = try await f.database.synchronizeConfiguredRoots([])
+        await f.model.refreshSummariesForTesting(terminal: false)
+        await f.database.failTranscriptReadsForTesting(count: 4)
+        await f.model.refreshSummariesForTesting(terminal: false)
+        try await exhaustReadRecovery(f)
+        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable, "an active pass retains temporary feedback")
+        XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
+        let before = await f.database.transcriptReadCountForTesting()
+        await f.database.failTranscriptReadOnceForTesting()
+        pass.phase = .complete
+        await f.model.receiveProgress(pass)
+        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
+        XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
+        await f.clock.advance(by: .seconds(60))
+        let after = await f.database.transcriptReadCountForTesting()
+        XCTAssertEqual(after, before + 1, "terminal feedback does not renew the exhausted budget")
+    }
+
+    func testNewerPassKeepsAbsenceWhenOlderRecoveryExhausts() async throws {
+        let f = try await fixture(count: 2), session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id)
+        try await wait { !f.model.messages.isEmpty }
+        var oldPass = IndexProgress(phase: .indexing)
+        await f.model.receiveProgress(oldPass)
+        _ = try await f.database.synchronizeConfiguredRoots([])
+        await f.model.refreshSummariesForTesting(terminal: false)
+        await f.database.failTranscriptReadsForTesting(count: 4)
+        oldPass.phase = .complete
+        await f.model.receiveProgress(oldPass)
+        let before = await f.database.transcriptReadCountForTesting()
+        for (index, delay) in [Duration.milliseconds(250), .seconds(1)].enumerated() {
+            await f.clock.advance(by: delay)
+            try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
+        }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.transcriptRecoveryPublicationGateForTesting = held
+        await f.clock.advance(by: .seconds(4))
+        try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
+        var successor = IndexProgress(phase: .indexing)
+        successor.incremental = true // Start a pass without requesting another summary.
+        await f.model.receiveProgress(successor)
+        await gate.open()
+        try await wait { !f.model.transcriptRecoveryPendingForTesting }
+        XCTAssertTrue(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertTrue(f.model.indexingPassActiveForTesting)
+        XCTAssertTrue(try XCTUnwrap(f.model.transcriptLoadError).contains("Synthetic transcript read failure"))
+        await f.database.failTranscriptReadOnceForTesting()
+        successor.phase = .complete
+        await f.model.receiveProgress(successor)
+        XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+        XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
+        XCTAssertNotNil(f.model.transcriptLoadError)
+    }
+
+    func testObsoleteTerminalReadFailureCannotPublishFeedback() async throws {
+        for boundary in 0..<4 {
+            let f = try await fixture(count: 2), session = try XCTUnwrap(f.model.sessions.first)
+            let other = try XCTUnwrap(f.model.sessions.first { $0.id != session.id })
+            f.model.selectSession(session.id)
+            try await wait { !f.model.messages.isEmpty }
+            var pass = IndexProgress(phase: .indexing)
+            await f.model.receiveProgress(pass)
+            _ = try await f.database.synchronizeConfiguredRoots([])
+            await f.model.refreshSummariesForTesting(terminal: false)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.summaryTranscriptFailureGateForTesting = held
+            await f.database.failTranscriptReadOnceForTesting()
+            pass.phase = .complete
+            let terminal = Task { await f.model.receiveProgress(pass) }
+            try await wait { f.model.summaryTranscriptFailureWaitingForTesting }
+            switch boundary {
+            case 0:
+                await f.coordinator.indexAll(scope: .proseOnly)
+                await f.model.refreshSummariesForTesting(terminal: false)
+            case 1:
+                await f.coordinator.indexAll(scope: .proseOnly)
+                f.model.selectSession(other.id)
+                try await wait { f.model.selectedSession?.id == other.id && !f.model.messages.isEmpty }
+            case 2:
+                let replacement = try await fixture(count: 3)
+                await replacement.model.prepareToTerminate()
+                await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+            default: await f.model.prepareToTerminate()
+            }
+            await gate.open()
+            await terminal.value
+            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
+        }
+    }
+
+    func testObsoleteRecoveryExhaustionCannotPublishFeedback() async throws {
+        for boundary in 0..<4 {
+            let f = try await fixture(count: 2), session = try XCTUnwrap(f.model.sessions.first)
+            let other = try XCTUnwrap(f.model.sessions.first { $0.id != session.id })
+            f.model.selectSession(session.id)
+            try await wait { !f.model.messages.isEmpty }
+            var pass = IndexProgress(phase: .indexing)
+            await f.model.receiveProgress(pass)
+            _ = try await f.database.synchronizeConfiguredRoots([])
+            await f.model.refreshSummariesForTesting(terminal: false)
+            await f.database.failTranscriptReadsForTesting(count: 4)
+            pass.phase = .complete
+            await f.model.receiveProgress(pass)
+            let before = await f.database.transcriptReadCountForTesting()
+            for (index, delay) in [Duration.milliseconds(250), .seconds(1)].enumerated() {
+                await f.clock.advance(by: delay)
+                try await wait { await f.database.transcriptReadCountForTesting() == before + UInt64(index + 1) }
+            }
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.transcriptRecoveryPublicationGateForTesting = held
+            await f.clock.advance(by: .seconds(4))
+            try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
+            switch boundary {
+            case 0:
+                await f.coordinator.indexAll(scope: .proseOnly)
+                await f.model.refreshSummariesForTesting(terminal: false)
+            case 1:
+                await f.coordinator.indexAll(scope: .proseOnly)
+                f.model.selectSession(other.id)
+                try await wait { f.model.selectedSession?.id == other.id && !f.model.messages.isEmpty }
+            case 2:
+                let replacement = try await fixture(count: 3)
+                await replacement.model.prepareToTerminate()
+                await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+            default: await f.model.prepareToTerminate()
+            }
+            await gate.open()
+            try await wait { !f.model.transcriptRecoveryPublicationWaitingForTesting }
+            XCTAssertFalse(f.model.transcriptIsTemporarilyUnavailable)
+            XCTAssertNil(f.model.transcriptLoadError)
+            XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting)
+        }
+    }
+
     func testSavedSessionTemporaryAbsenceNeverOpensWindow() async throws {
         let f = try await fixture(count: 2), session = try XCTUnwrap(f.model.sessions.first)
         await f.model.prepareToTerminate()

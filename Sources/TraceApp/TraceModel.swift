@@ -437,6 +437,8 @@ final class TraceModel: ObservableObject {
     var selectionTranscriptReadGateForTesting: Task<Void, Never>?
     var selectionTranscriptGateForTesting: Task<Void, Never>?
     var summaryTranscriptGateForTesting: Task<Void, Never>?
+    var summaryTranscriptFailureGateForTesting: Task<Void, Never>?
+    private(set) var summaryTranscriptFailureWaitingForTesting = false
     var transcriptRecoveryReadGateForTesting: Task<Void, Never>?
     var transcriptRecoveryPublicationGateForTesting: Task<Void, Never>?
     var hydrationPublicationGateForTesting: Task<Void, Never>?
@@ -2055,6 +2057,27 @@ final class TraceModel: ObservableObject {
                                    sessionID: sessionID, request: sessionRequestID, immediately: true)
     }
 
+    private func publishExhaustedTranscriptReadError(
+        _ error: String, database: IndexDatabase, sessionID: Int64, request: UUID,
+        recoveryID: UUID, summary: UUID? = nil
+    ) {
+        func isCurrent() -> Bool {
+            !terminating && !Task.isCancelled && transcriptRecoveryID == recoveryID
+                && transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary)
+        }
+        guard isCurrent() else { return }
+        transcriptReadError = error
+        // Publications can synchronously replace the selection or start another pass.
+        guard isCurrent() else { return }
+        if indexWorkflow.activePassID == nil, let absence = transientTranscriptAbsence,
+           absence.database === database, absence.sessionID == sessionID, absence.requestID == request {
+            transientTranscriptAbsence = nil
+        }
+        guard isCurrent() else { return }
+        TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RECOVERY_EXHAUSTED_PATH")
+        showPendingSelectionWindow()
+    }
+
     private func scheduleTranscriptRecovery(error: String, database: IndexDatabase, sessionID: Int64,
                                             request: UUID, immediately: Bool = false) {
         guard !terminating, transcriptRecoveryID == nil,
@@ -2085,8 +2108,8 @@ final class TraceModel: ObservableObject {
                     return
                 }
             }
-            transcriptReadError = lastError
-            showPendingSelectionWindow()
+            publishExhaustedTranscriptReadError(lastError, database: database, sessionID: sessionID,
+                                                request: request, recoveryID: recoveryID)
         }
     }
 
@@ -3022,9 +3045,26 @@ final class TraceModel: ObservableObject {
                 )
             } catch {
                 loadedTranscript = nil
-                if !Task.isCancelled, !(error is CancellationError), summaryRequestID == refresh {
+                #if DEBUG
+                if let gate = summaryTranscriptFailureGateForTesting {
+                    summaryTranscriptFailureWaitingForTesting = true
+                    await gate.value
+                    summaryTranscriptFailureWaitingForTesting = false
+                }
+                #endif
+                if !terminating, !Task.isCancelled, !(error is CancellationError),
+                   transcriptRequestIsCurrent(database: database, sessionID: ensuredSessionID,
+                                              request: selectedSessionRequest, summary: refresh) {
                     scheduleTranscriptRecovery(error: error.localizedDescription, database: database,
                                                sessionID: ensuredSessionID, request: selectedSessionRequest)
+                    // An exhausted episode cannot start more automatic reads. A current
+                    // terminal failure must still retire its temporary indexing feedback.
+                    if terminalPhase != nil, let recoveryID = transcriptRecoveryID,
+                       transcriptRecoveryTask == nil, transcriptReadError != nil {
+                        publishExhaustedTranscriptReadError(error.localizedDescription, database: database,
+                            sessionID: ensuredSessionID, request: selectedSessionRequest,
+                            recoveryID: recoveryID, summary: refresh)
+                    }
                 }
             }
         } else {

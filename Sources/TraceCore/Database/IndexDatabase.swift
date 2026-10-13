@@ -2166,6 +2166,11 @@ public actor IndexDatabase {
         transcriptReadRevision += 1
         let readRevision = transcriptReadRevision
         #if DEBUG
+        if TraceTestHooks.isUITesting,
+           let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_READ_FAILURE_PATH"],
+           FileManager.default.fileExists(atPath: path) {
+            throw SessionSourceError.unreadableFile("Synthetic transcript read failure")
+        }
         if failingTranscriptReads > 0 {
             failingTranscriptReads -= 1
             throw SessionSourceError.unreadableFile("Synthetic transcript read failure")
