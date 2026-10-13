@@ -429,12 +429,11 @@ struct TranscriptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.selectedSessionID != nil, let feedback = model.transcriptFeedback,
-               let error = model.transcriptLoadError {
+            if model.selectedSessionID != nil, let banner = model.transcriptBanner {
                 HStack {
-                    Text(feedback.message)
+                    Text(banner.message)
                         .font(.callout)
-                        .help(error)
+                        .help(banner.details)
                         .accessibilityIdentifier("transcriptLoadError")
                     Spacer()
                     Button("Retry") { model.retrySelectedTranscript() }
