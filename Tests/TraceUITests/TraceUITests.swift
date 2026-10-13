@@ -3792,7 +3792,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
         attach(app, name: "temporary-selection-terminal-deletion")
         let messageCount = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
-                                            sql: "SELECT count(*) FROM message")
+                                            sql: """
+                                            SELECT coalesce(sum(message_count), 0)
+                                            FROM session
+                                            WHERE agent IN (SELECT agent FROM supported_agent)
+                                            """)
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows["Trace Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5))

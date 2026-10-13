@@ -429,9 +429,10 @@ struct TranscriptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.selectedSessionID != nil, let error = model.transcriptLoadError {
+            if model.selectedSessionID != nil, let feedback = model.transcriptFeedback,
+               let error = model.transcriptLoadError {
                 HStack {
-                    Text(model.transcriptFeedback?.message ?? TraceModel.TranscriptFeedback.readError.message)
+                    Text(feedback.message)
                         .font(.callout)
                         .help(error)
                         .accessibilityIdentifier("transcriptLoadError")
