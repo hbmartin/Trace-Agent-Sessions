@@ -431,7 +431,7 @@ struct TranscriptView: View {
         VStack(spacing: 0) {
             if model.selectedSessionID != nil, let error = model.transcriptLoadError {
                 HStack {
-                    Text(model.transcriptFeedback?.message ?? "Could not refresh this session. Try again.")
+                    Text(model.transcriptFeedback?.message ?? TraceModel.TranscriptFeedback.readError.message)
                         .font(.callout)
                         .help(error)
                         .accessibilityIdentifier("transcriptLoadError")
