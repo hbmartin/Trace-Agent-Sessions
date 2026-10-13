@@ -3647,7 +3647,8 @@ final class TraceUITests: XCTestCase {
         return (app, directory)
     }
 
-    private func launchWithTransientSavedSelection(hiddenLauncher: Bool, failTerminalReads: Bool = false) throws -> (XCUIApplication, URL, URL) {
+    private func launchWithTransientSavedSelection(hiddenLauncher: Bool, failTerminalReads: Bool = false,
+                                                   failReplacement: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
         app.launch()
@@ -3677,6 +3678,14 @@ final class TraceUITests: XCTestCase {
         if failTerminalReads {
             app.launchEnvironment["TRACE_TEST_TRANSCRIPT_READ_FAILURE_PATH"] = directory.appendingPathComponent("fail-transcript-reads").path
             app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RECOVERY_EXHAUSTED_PATH"] = directory.appendingPathComponent("transcript-recovery-exhausted").path
+        }
+        if failReplacement {
+            let additional = directory.appendingPathComponent("PausedSelectionAdditional")
+            try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
+            app.launchEnvironment["TRACE_TEST_DYNAMIC_CLAUDE_ROOTS"] = "1"
+            app.launchEnvironment["TRACE_TEST_PICK_CLAUDE_ROOT_PATH"] = additional.path
+            app.launchEnvironment["TRACE_TEST_FAIL_SOURCE_RELOAD_ONCE"] = "1"
+            app.launchEnvironment["TRACE_TEST_TRANSCRIPT_PAUSED_PATH"] = directory.appendingPathComponent("transcript-paused").path
         }
         if hiddenLauncher { app.launchArguments.removeAll { $0 == "--ui-show-main" } }
         app.launch()
@@ -3718,6 +3727,37 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.scrollViews["transcriptScroll"].exists)
     }
 
+    func testPausedReplacementSelectionSurvivesMissingRetryAndRecovers() throws {
+        let (app, directory, release) = try launchWithTransientSavedSelection(hiddenLauncher: true, failReplacement: true)
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        settings.buttons["Add Folder…"].click()
+        let dismiss = app.sheets.firstMatch.buttons["OK"]
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 15))
+        dismiss.click()
+        XCTAssertEqual(settings.buttons["indexProgress"].label, "Updates paused")
+        app.typeKey(",", modifierFlags: .command)
+        let banner = app.staticTexts["transcriptLoadError"]
+        let paused = "This session is unavailable because index updates are paused. Retry now or resume indexing to check again."
+        XCTAssertNotNil(poll(timeout: 10) { banner.value as? String == paused ? true : nil })
+        let marker = directory.appendingPathComponent("transcript-paused")
+        XCTAssertTrue(waitForFile(marker, timeout: 5))
+        try FileManager.default.removeItem(at: marker)
+        app.buttons["retrySelectedTranscript"].click()
+        XCTAssertTrue(waitForFile(marker, timeout: 5))
+        XCTAssertEqual(banner.value as? String, paused)
+        XCTAssertTrue(app.buttons["backToProject"].exists)
+        attach(app, name: "paused-selection-survives-missing-retry")
+        try Data().write(to: release)
+        let main = app.windows.containing(.button, identifier: "backToProject").firstMatch
+        main.buttons["retrySourceConfiguration"].click()
+        XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].exists)
+    }
+
     func testTemporarySelectionShowsReadErrorAfterTerminalRecoveryExhausts() throws {
         let (app, directory, release) = try launchWithTransientSavedSelection(hiddenLauncher: true, failTerminalReads: true)
         let failure = directory.appendingPathComponent("fail-transcript-reads")
@@ -3732,6 +3772,7 @@ final class TraceUITests: XCTestCase {
             banner.exists && banner.value as? String == "Could not refresh this session. Try again."
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [refreshedFeedback], timeout: 5), .completed)
+        XCTAssertEqual(banner.value as? String, "Could not refresh this session. Try again.")
         XCTAssertTrue(app.buttons["backToProject"].exists)
         XCTAssertTrue(app.buttons["retrySelectedTranscript"].isEnabled)
         attach(app, name: "terminal-transcript-recovery-error")
@@ -4083,6 +4124,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 10))
         search.click(); search.typeText("PausedRetryNeedle")
         let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "PausedRetryNeedle")).firstMatch
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 10),
+                      "wait for the paused search and launcher layout before clicking Retry")
         XCTAssertFalse(result.exists, "the paused index must not incorporate new file contents")
         app.buttons["retrySourceConfiguration"].click()
         XCTAssertTrue(result.waitForExistence(timeout: 20))
