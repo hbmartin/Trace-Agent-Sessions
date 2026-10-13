@@ -3791,6 +3791,17 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
         attach(app, name: "temporary-selection-terminal-deletion")
+        let messageCount = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+                                            sql: "SELECT count(*) FROM message")
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Trace Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["Sources"].firstMatch.click()
+        let statistics = settings.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@",
+            "\(messageCount.formatted()) messages · ")).firstMatch
+        XCTAssertTrue(statistics.waitForExistence(timeout: 10),
+                      "confirmed deletion must refresh Sources statistics as well as navigation")
+        attach(app, name: "terminal-deletion-refreshed-source-statistics")
     }
 
     func testSavedSessionRestoresAfterTransientStartupAbsence() throws {
