@@ -84,11 +84,13 @@ final class TraceModel: ObservableObject {
         }
 
         private(set) var activePassID: UUID?
+        private(set) var terminalPhase: IndexProgress.Phase?
         private var replacement: Replacement?
 
         var isActive: Bool { activePassID != nil || replacement != nil }
 
         mutating func beginReplacement() {
+            terminalPhase = nil
             if replacement == nil {
                 replacement = .init(displacedPassIDs: [])
             }
@@ -123,6 +125,8 @@ final class TraceModel: ObservableObject {
             }
 
             let workflowTerminal = passTerminal && !supersededTerminal
+            if workflowTerminal { terminalPhase = update.phase }
+            else if !passTerminal { terminalPhase = nil }
             let projectReconciliation: ProjectReconciliationMode
             if !workflowTerminal {
                 projectReconciliation = .ongoing
@@ -368,7 +372,18 @@ final class TraceModel: ObservableObject {
     }
     private var pendingSelectionCompletion: SelectionCompletion?
     private var transcriptRecoveryTask: Task<Void, Never>?
-    private var transcriptRecoveryID: UUID?
+    private struct TranscriptRecoveryEpisode {
+        enum Phase {
+            case running
+            case exhausted(String)
+        }
+        let id = UUID()
+        let database: IndexDatabase
+        let sessionID: Int64
+        let requestID: UUID
+        var phase: Phase = .running
+    }
+    private var transcriptRecoveryEpisode: TranscriptRecoveryEpisode?
     private struct TranscriptAbsence {
         let database: IndexDatabase
         let sessionID: Int64
@@ -428,9 +443,11 @@ final class TraceModel: ObservableObject {
         await attach(database: database, coordinator: coordinator)
     }
 
-    func refreshSummariesForTesting(terminal: Bool = true, lightweight: Bool = true) async {
+    // This flag controls project reconciliation, not the indexing workflow.
+    // Tests of terminal passes must deliver terminal progress through receiveProgress.
+    func refreshSummariesForTesting(terminalProjectReconciliation: Bool = true, lightweight: Bool = true) async {
         await reloadSummaries(lightweight: lightweight,
-                              projectReconciliation: terminal ? .terminalRetaining : .ongoing)
+                              projectReconciliation: terminalProjectReconciliation ? .terminalRetaining : .ongoing)
     }
 
     func queueMainSearchRefreshForTesting() { mainSearchNeedsRefresh = true }
@@ -478,6 +495,7 @@ final class TraceModel: ObservableObject {
     var databaseForTesting: IndexDatabase? { database }
     var pendingDatabaseForTesting: IndexDatabase? { pendingAttachment?.database }
     var indexingPassActiveForTesting: Bool { indexingPassActive }
+    var activeIndexPassIDForTesting: UUID? { indexWorkflow.activePassID }
     var pendingRebuildForTesting: Bool { pendingRebuild }
     private(set) var rebuildSubmissionCountForTesting = 0
     var sourceReloadSourcesForTesting: [any SessionSource]?
@@ -813,6 +831,18 @@ final class TraceModel: ObservableObject {
             if pending.intent == .sourceReload { sourceReloadAlertError = error }
         }
         updateCostsTotalsUpdating()
+        if Task.isCancelled, let episode = transcriptRecoveryEpisode {
+            // A current cancelled attachment still owns settlement, but its task
+            // cannot publish read feedback. Complete it in an owned, uncancelled task.
+            let generation = attachmentGeneration, revision = sourceConfigurationRevision
+            Task {
+                guard attachmentIsCurrent(database: episode.database, generation: generation),
+                      sourceConfigurationRevision == revision, pendingAttachment == nil else { return }
+                publishExhaustedTranscriptReadError(episode)
+            }
+        } else {
+            reevaluateExhaustedTranscriptFeedback()
+        }
     }
 
     private func finishAttachment(_ pending: PendingAttachment, coordinator: IndexCoordinator) async -> Bool {
@@ -857,6 +887,7 @@ final class TraceModel: ObservableObject {
         initialAttachmentFailure = nil
         if !rebuildAttachmentReady { rebuildAttachmentReady = true }
         if pending.intent == .installation, pendingRebuild { rebuildIndex() }
+        reevaluateExhaustedTranscriptFeedback()
         return true
     }
 
@@ -920,6 +951,7 @@ final class TraceModel: ObservableObject {
             updateCostsTotalsUpdating()
         }
         observeSearchMutation(update, terminal: disposition.workflowTerminal)
+        if disposition.workflowTerminal { reevaluateExhaustedTranscriptFeedback() }
 
         let shouldRefresh = disposition.passTerminal
             || ((!update.incremental || incrementalProgressVisible)
@@ -928,8 +960,7 @@ final class TraceModel: ObservableObject {
             lastSummaryRefresh = clock.now
             await reloadSummaries(
                 lightweight: !disposition.workflowTerminal,
-                projectReconciliation: disposition.projectReconciliation,
-                terminalPhase: disposition.workflowTerminal ? update.phase : nil
+                projectReconciliation: disposition.projectReconciliation
             )
         }
     }
@@ -1218,6 +1249,7 @@ final class TraceModel: ObservableObject {
         // Keep the root scan requirement until onboarding eventually submits it.
         sourceReloadRecovery = .normal
         updateCostsTotalsUpdating()
+        reevaluateExhaustedTranscriptFeedback()
     }
 
     func retrySourceConfiguration() {
@@ -2044,7 +2076,7 @@ final class TraceModel: ObservableObject {
     }
 
     private func cancelTranscriptRecovery() {
-        transcriptRecoveryID = nil
+        transcriptRecoveryEpisode = nil
         transcriptRecoveryTask?.cancel()
         transcriptRecoveryTask = nil
         transcriptReadError = nil
@@ -2057,48 +2089,61 @@ final class TraceModel: ObservableObject {
                                    sessionID: sessionID, request: sessionRequestID, immediately: true)
     }
 
-    private func publishExhaustedTranscriptReadError(
-        _ error: String, database: IndexDatabase, sessionID: Int64, request: UUID,
-        recoveryID: UUID, summary: UUID? = nil
-    ) {
-        func isCurrent() -> Bool {
-            !terminating && !Task.isCancelled && transcriptRecoveryID == recoveryID
-                && transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary)
-        }
-        guard isCurrent() else { return }
+    private func transcriptRecoveryIsCurrent(_ episode: TranscriptRecoveryEpisode, summary: UUID? = nil) -> Bool {
+        !terminating && !Task.isCancelled && transcriptRecoveryEpisode?.id == episode.id
+            && transcriptRequestIsCurrent(database: episode.database, sessionID: episode.sessionID,
+                                          request: episode.requestID, summary: summary)
+    }
+
+    private func publishExhaustedTranscriptReadError(_ episode: TranscriptRecoveryEpisode, summary: UUID? = nil) {
+        guard case .exhausted(let error) = episode.phase,
+              transcriptRecoveryIsCurrent(episode, summary: summary) else { return }
         transcriptReadError = error
-        // Publications can synchronously replace the selection or start another pass.
-        guard isCurrent() else { return }
-        if indexWorkflow.activePassID == nil, let absence = transientTranscriptAbsence,
-           absence.database === database, absence.sessionID == sessionID, absence.requestID == request {
+        // Publications can synchronously replace the selection or start another workflow.
+        guard transcriptRecoveryIsCurrent(episode, summary: summary) else { return }
+        if !indexWorkflow.isActive, let absence = transientTranscriptAbsence,
+           absence.database === episode.database, absence.sessionID == episode.sessionID,
+           absence.requestID == episode.requestID {
             transientTranscriptAbsence = nil
         }
-        guard isCurrent() else { return }
+        guard transcriptRecoveryIsCurrent(episode, summary: summary) else { return }
         TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RECOVERY_EXHAUSTED_PATH")
         showPendingSelectionWindow()
     }
 
+    private func reevaluateExhaustedTranscriptFeedback() {
+        guard let episode = transcriptRecoveryEpisode, case .exhausted = episode.phase else { return }
+        publishExhaustedTranscriptReadError(episode)
+    }
+
     private func scheduleTranscriptRecovery(error: String, database: IndexDatabase, sessionID: Int64,
-                                            request: UUID, immediately: Bool = false) {
-        guard !terminating, transcriptRecoveryID == nil,
-              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
-        let recoveryID = UUID()
-        transcriptRecoveryID = recoveryID
+                                            request: UUID, immediately: Bool = false, summary: UUID? = nil) {
+        guard !terminating, !Task.isCancelled,
+              transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return }
+        if var episode = transcriptRecoveryEpisode {
+            guard transcriptRecoveryIsCurrent(episode, summary: summary) else { return }
+            if case .exhausted = episode.phase {
+                episode.phase = .exhausted(error)
+                transcriptRecoveryEpisode = episode
+                publishExhaustedTranscriptReadError(episode, summary: summary)
+            }
+            return
+        }
+        let episode = TranscriptRecoveryEpisode(database: database, sessionID: sessionID, requestID: request)
+        transcriptRecoveryEpisode = episode
         transcriptRecoveryTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                if transcriptRecoveryID == recoveryID { transcriptRecoveryTask = nil }
+                if transcriptRecoveryEpisode?.id == episode.id { transcriptRecoveryTask = nil }
             }
             var lastError = error
             let delays: [Duration] = immediately ? [.zero, .milliseconds(250), .seconds(1), .seconds(4)]
                                                  : [.milliseconds(250), .seconds(1), .seconds(4)]
             for delay in delays {
                 do { try await clock.sleep(for: delay) } catch { return }
-                guard !Task.isCancelled, transcriptRecoveryID == recoveryID,
-                      transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
+                guard transcriptRecoveryIsCurrent(episode) else { return }
                 let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request)
-                guard !Task.isCancelled, transcriptRecoveryID == recoveryID,
-                      transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return }
+                guard transcriptRecoveryIsCurrent(episode) else { return }
                 switch outcome {
                 case .superseded: return
                 case .failed(let error): lastError = error
@@ -2108,17 +2153,20 @@ final class TraceModel: ObservableObject {
                     return
                 }
             }
-            publishExhaustedTranscriptReadError(lastError, database: database, sessionID: sessionID,
-                                                request: request, recoveryID: recoveryID)
+            guard transcriptRecoveryIsCurrent(episode) else { return }
+            var exhausted = episode
+            exhausted.phase = .exhausted(lastError)
+            transcriptRecoveryEpisode = exhausted
+            publishExhaustedTranscriptReadError(exhausted)
         }
     }
 
     private func recoverableSnapshot(_ outcome: TranscriptReadOutcome, database: IndexDatabase,
-                                     sessionID: Int64, request: UUID) -> SessionTranscriptSnapshot? {
+                                     sessionID: Int64, request: UUID, summary: UUID? = nil) -> SessionTranscriptSnapshot? {
         switch outcome {
         case .snapshot(let snapshot): return snapshot
         case .failed(let error):
-            scheduleTranscriptRecovery(error: error, database: database, sessionID: sessionID, request: request)
+            scheduleTranscriptRecovery(error: error, database: database, sessionID: sessionID, request: request, summary: summary)
             return nil
         case .superseded: return nil
         }
@@ -2143,12 +2191,12 @@ final class TraceModel: ObservableObject {
         guard !Task.isCancelled,
               transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary),
               let selectionSnapshot = recoverableSnapshot(selectionOutcome, database: database,
-                                                           sessionID: sessionID, request: request) else { return nil }
+                                                           sessionID: sessionID, request: request, summary: summary) else { return nil }
         if selectionSnapshot.readRevision > snapshot.readRevision {
             return selectionSnapshot.session == nil ? selectionSnapshot : nil
         }
         let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request, summary: summary)
-        return recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request)
+        return recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request, summary: summary)
     }
 
     private func finishPreviouslyAppliedMissingTranscript(_ snapshot: SessionTranscriptSnapshot) -> Bool {
@@ -2183,7 +2231,7 @@ final class TraceModel: ObservableObject {
         var acceptance = acceptTranscript(snapshot)
         if acceptance == .requiresRows {
             let outcome = await completeTranscriptRead(database: database, sessionID: sessionID, request: request, summary: summary)
-            guard let recovered = recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request) else { return }
+            guard let recovered = recoverableSnapshot(outcome, database: database, sessionID: sessionID, request: request, summary: summary) else { return }
             snapshot = recovered
             acceptance = acceptTranscript(recovered)
         }
@@ -2211,7 +2259,7 @@ final class TraceModel: ObservableObject {
     /// observe new source metadata paired with the old locator rows.
     private func applyTranscript(_ snapshot: SessionTranscriptSnapshot, deletionIsConfirmed: Bool = true,
                                  reconcilingProject: Bool = false) {
-        if snapshot.session == nil, indexWorkflow.activePassID != nil,
+        if snapshot.session == nil, indexWorkflow.isActive,
            let database, let sessionID = selectedSessionID {
             // All publishers share this policy. Accept the revision, preserve the
             // cached view, and end an older read-error episode without applying absence.
@@ -2962,8 +3010,7 @@ final class TraceModel: ObservableObject {
     private func reloadSummaries(
         lightweight: Bool = false,
         loadCosts: Bool = true,
-        projectReconciliation: ProjectReconciliationMode = .ongoing,
-        terminalPhase: IndexProgress.Phase? = nil
+        projectReconciliation: ProjectReconciliationMode = .ongoing
     ) async {
         guard let database else { return }
         let refresh = UUID()
@@ -3056,15 +3103,7 @@ final class TraceModel: ObservableObject {
                    transcriptRequestIsCurrent(database: database, sessionID: ensuredSessionID,
                                               request: selectedSessionRequest, summary: refresh) {
                     scheduleTranscriptRecovery(error: error.localizedDescription, database: database,
-                                               sessionID: ensuredSessionID, request: selectedSessionRequest)
-                    // An exhausted episode cannot start more automatic reads. A current
-                    // terminal failure must still retire its temporary indexing feedback.
-                    if terminalPhase != nil, let recoveryID = transcriptRecoveryID,
-                       transcriptRecoveryTask == nil, transcriptReadError != nil {
-                        publishExhaustedTranscriptReadError(error.localizedDescription, database: database,
-                            sessionID: ensuredSessionID, request: selectedSessionRequest,
-                            recoveryID: recoveryID, summary: refresh)
-                    }
+                                               sessionID: ensuredSessionID, request: selectedSessionRequest, summary: refresh)
                 }
             }
         } else {
@@ -3110,9 +3149,8 @@ final class TraceModel: ObservableObject {
         statistics = loadedStatistics
         if let bytes = statistics?.databaseBytes { try? await diagnostics.recordIndexSize(bytes: bytes) }
         guard self.database === database, summaryRequestID == refresh else { return }
-        let restorationTerminal = terminalPhase.map {
-            [.complete, .failed, .cancelled].contains($0)
-        } ?? [.complete, .failed].contains(progress.phase)
+        let restorationTerminal = !indexWorkflow.isActive
+            && [.complete, .failed, .cancelled].contains(indexWorkflow.terminalPhase ?? progress.phase)
         if mayRestoreSession {
             if let stored = settings.lastSessionID {
                 let restored = try? await database.session(id: stored)

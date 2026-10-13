@@ -3728,8 +3728,10 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(banner.value as? String,
             "This session is temporarily unavailable while the index updates. Retry now or wait for indexing to finish.")
         XCTAssertTrue(waitForFile(exhausted, timeout: 15))
-        XCTAssertTrue(banner.waitForExistence(timeout: 5))
-        XCTAssertEqual(banner.value as? String, "Could not refresh this session. Try again.")
+        let refreshedFeedback = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            banner.exists && banner.value as? String == "Could not refresh this session. Try again."
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [refreshedFeedback], timeout: 5), .completed)
         XCTAssertTrue(app.buttons["backToProject"].exists)
         XCTAssertTrue(app.buttons["retrySelectedTranscript"].isEnabled)
         attach(app, name: "terminal-transcript-recovery-error")
