@@ -2015,6 +2015,12 @@ public actor IndexDatabase {
 
     public func sessionsPage(projectCanonicalKey: String? = nil, cursor: SessionCursor? = nil,
                              limit: Int = IndexDatabase.sessionPageSize) throws -> SessionPage {
+        #if DEBUG
+        if failsNextSessionPageRead {
+            failsNextSessionPageRead = false
+            throw SessionSourceError.unreadableFile("Synthetic session-page read failure")
+        }
+        #endif
         guard cursor == nil || cursor?.projectCanonicalKey == projectCanonicalKey else {
             throw IndexDatabaseError.invalidSessionCursor
         }
@@ -2131,6 +2137,8 @@ public actor IndexDatabase {
     private var sessionListReadGate: Task<Void, Never>?
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
+    private var failsNextSessionPageRead = false
+    private var nextUsageReadError: DatabaseError?
     private var nextSessionReadError: DatabaseError?
     private var sessionReadAttempts = 0
     private var sourceHealthReadAttempts = 0
@@ -2146,6 +2154,8 @@ public actor IndexDatabase {
     func gateSessionListReadsForTesting(_ gate: Task<Void, Never>?) { sessionListReadGate = gate }
     func sessionListReadCountForTesting() -> Int { sessionListReadCount }
     func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }
+    func failSessionPageReadOnceForTesting() { failsNextSessionPageRead = true }
+    func failUsageReadOnceForTesting(_ error: DatabaseError) { nextUsageReadError = error }
     func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }
     func sessionReadCountForTesting() -> Int { sessionReadAttempts }
     func sessionReadFailurePendingForTesting() -> Bool { nextSessionReadError != nil }
@@ -2295,7 +2305,13 @@ public actor IndexDatabase {
     }
 
     public func usage(fromDay: String?, throughDay: String?, includeSidechains: Bool) throws -> [UsageRollup] {
-        try pool.read { db in
+        #if DEBUG
+        if let error = nextUsageReadError {
+            nextUsageReadError = nil
+            throw error
+        }
+        #endif
+        return try pool.read { db in
             var predicates: [String] = []
             var arguments = StatementArguments()
             if let fromDay { predicates.append("u.day >= ?"); arguments += [fromDay] }

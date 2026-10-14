@@ -163,6 +163,8 @@ final class TraceModel: ObservableObject {
     @Published private(set) var hasMoreSessions = false
     @Published private(set) var isLoadingSessions = false
     @Published private(set) var sessionListError: String?
+    @Published private(set) var sidebarSummaryError: String?
+    @Published private(set) var isRetryingSidebarSummary = false
     @Published private(set) var hasSearchReturnContext = false
     var mainSearchReturnAnchor: SearchResultAnchor?
     private struct MainSearchReturnContext {
@@ -177,19 +179,22 @@ final class TraceModel: ObservableObject {
     private typealias LoadedSessionPages = SessionListSnapshot
     private var sessionListTask: Task<Void, Never>?
     private enum SessionListRetry {
-        case summary
         case reload
         case nextPage
     }
     private var sessionPageError: String?
     private struct SidebarSummaryFailure {
         let database: IndexDatabase
-        let project: String?
         let error: String
+        let workflow: UUID
+        let configuration: UInt64
+        let reconciliation: ProjectReconciliationMode
+        let startedAt: AnyClock<Duration>.Instant
     }
     private var sidebarSummaryFailure: SidebarSummaryFailure?
     private var sidebarSummaryRetryTask: Task<Void, Never>?
     private var sidebarSummaryRetryOwner: SummaryRefreshOwner?
+    private var pendingSidebarSummaryRetry = false
     private var sessionListRetry: SessionListRetry?
     private var backgroundSidebarRequest: UUID?
     private enum PendingSidebarAction { case loadMore, retry(SessionListRetry) }
@@ -360,6 +365,7 @@ final class TraceModel: ObservableObject {
     private var usageRefreshPending = false
     private var usageRepairPending = false
     private var deferredUsageRepairTask: Task<Void, Never>?
+    private var deferredUsageRepairID: UUID?
     private var indexWorkflow = IndexWorkflowState()
     private var indexingPassActive: Bool { indexWorkflow.isActive }
     private var lastAutomaticSearchRefresh: AnyClock<Duration>.Instant?
@@ -473,6 +479,7 @@ final class TraceModel: ObservableObject {
         let database: IndexDatabase
         var sidebar = true
         var statistics = true
+        var usage = true
     }
     private var pendingRootSummaryRefresh: RootSummaryRefresh?
     private var rootSynchronizationTask: Task<Bool, Error>?
@@ -490,7 +497,13 @@ final class TraceModel: ObservableObject {
     @Published private(set) var scrollRequest = UUID()
     private(set) var requestedMessageID: Int64?
     private var mayRestoreSession = true
-    enum SummaryReadOperation: String { case sidebar, restoration, sourceHealth, statistics }
+    enum SummaryReadOperation: String, Hashable { case sidebar, restoration, sourceHealth, statistics }
+    private struct SummaryReadFailureIdentity: Hashable {
+        let primary: Int32?
+        let extended: Int32?
+        let message: String
+    }
+    private var summaryReadFailures: [SummaryReadOperation: Set<SummaryReadFailureIdentity>] = [:]
     private static let summaryReadLog = Logger(subsystem: "me.haroldmartin.Trace", category: "Summary reads")
     private var started = false
     private var initialIndexRequested = false
@@ -541,6 +554,8 @@ final class TraceModel: ObservableObject {
     private(set) var summaryTranscriptFailureWaitingForTesting = false
     var summaryRestorationGateForTesting: Task<Void, Never>?
     private(set) var summaryRestorationWaitingForTesting = false
+    var usageSnapshotGateForTesting: Task<Void, Never>?
+    private(set) var usageSnapshotWaitingForTesting = false
     struct SummaryReadFailure: Equatable {
         let operation: SummaryReadOperation
         let primaryCode: Int32?
@@ -551,6 +566,7 @@ final class TraceModel: ObservableObject {
     private(set) var summaryMetadataWaitingForTesting = false
     struct FullSummaryCompletion: Codable {
         let summaryID: UUID
+        let terminalWorkflowID: UUID?
         let mayRestoreSession: Bool
         let selectedSessionID: Int64?
         let selectedProjectCanonicalKey: String?
@@ -564,7 +580,7 @@ final class TraceModel: ObservableObject {
     private(set) var rootSynchronizationBookkeepingWaitingForTesting = false
     var summarySidebarGateForTesting: Task<Void, Never>?
     private(set) var summarySidebarWaitingForTesting = false
-    var sidebarSummaryRetryPendingForTesting: Bool { sidebarSummaryRetryOwner != nil }
+    var sidebarSummaryRetryPendingForTesting: Bool { sidebarSummaryRetryOwner != nil || pendingSidebarSummaryRetry }
     var configuredRootsPublicationGateForTesting: Task<Void, Never>?
     private(set) var configuredRootsPublicationWaitingForTesting = false
     var transcriptRecoveryReadGateForTesting: Task<Void, Never>?
@@ -756,6 +772,14 @@ final class TraceModel: ObservableObject {
                         timeoutMilliseconds: delay
                     )
                 }
+                #if DEBUG
+                if let delay = TraceTestHooks.delayMilliseconds(
+                    for: "TRACE_TEST_STARTUP_POST_RELEASE_HOLD_MS", cappedAt: 30_000,
+                    marker: .touch(pathKey: "TRACE_TEST_STARTUP_POST_RELEASE_STARTED_PATH")) {
+                    try await TraceTestHooks.waitForRelease(
+                        pathKey: "TRACE_TEST_STARTUP_POST_RELEASE_RELEASE_PATH", timeoutMilliseconds: delay)
+                }
+                #endif
                 guard configuredRevision == sourceConfigurationRevision else { return }
                 startupSetupComplete = true
                 if settings.onboardingComplete {
@@ -1006,7 +1030,14 @@ final class TraceModel: ObservableObject {
         guard self.database !== database else { return }
         // A first installation must retain the saved session for startup restoration.
         if self.database != nil { prepareForIndexReset() }
-        pendingRootSummaryRefresh = nil
+        if pendingRootSummaryRefresh?.database !== database { pendingRootSummaryRefresh = nil }
+        clearSidebarSummaryFailure()
+        pendingSidebarSummaryRetry = false
+        sidebarSummaryRetryTask?.cancel()
+        sidebarSummaryRetryTask = nil
+        sidebarSummaryRetryOwner = nil
+        isRetryingSidebarSummary = false
+        summaryReadFailures = [:]
         highestObservedTranscriptReadRevision = 0
         lastAppliedTranscriptReadRevision = 0
         self.database = database
@@ -1400,6 +1431,11 @@ final class TraceModel: ObservableObject {
             if changed, !terminating,
                self.database === database || pendingAttachment?.database === database {
                 pendingRootSummaryRefresh = .init(database: database)
+                usageSnapshotRequestID = UUID()
+                completedUsageRevision += 1
+                usageRepairPending = true
+                usageRefreshPending = true
+                updateCostsTotalsUpdating()
             }
             return changed
         }
@@ -1415,11 +1451,13 @@ final class TraceModel: ObservableObject {
     }
 
     private func acknowledgeRootSummary(_ receipt: RootSummaryRefresh?, sidebar: Bool = false,
-                                        statistics: Bool = false) {
+                                        statistics: Bool = false, usage: Bool = false) {
         guard let receipt, pendingRootSummaryRefresh?.id == receipt.id else { return }
         if sidebar { pendingRootSummaryRefresh?.sidebar = false }
         if statistics { pendingRootSummaryRefresh?.statistics = false }
-        if pendingRootSummaryRefresh?.sidebar == false, pendingRootSummaryRefresh?.statistics == false {
+        if usage { pendingRootSummaryRefresh?.usage = false }
+        if pendingRootSummaryRefresh?.sidebar == false, pendingRootSummaryRefresh?.statistics == false,
+           pendingRootSummaryRefresh?.usage == false {
             pendingRootSummaryRefresh = nil
         }
     }
@@ -1495,6 +1533,7 @@ final class TraceModel: ObservableObject {
             switch await startWatching(sources, forceRootReconciliation: true) {
             case .deferredByOnboarding(let owner):
                 settleDeferredSourceReload(receipt: owner)
+                scheduleRootUsageRefresh()
                 return
             case .superseded:
                 return
@@ -1738,22 +1777,37 @@ final class TraceModel: ObservableObject {
     }
 
     private var currentSidebarSummaryFailure: SidebarSummaryFailure? {
-        guard let failure = sidebarSummaryFailure, database === failure.database,
-              selectedProjectCanonicalKey == failure.project else { return nil }
+        guard let failure = sidebarSummaryFailure, database === failure.database else { return nil }
         return failure
     }
 
-    private var currentSidebarRetry: SessionListRetry? {
-        currentSidebarSummaryFailure != nil ? .summary : sessionListRetry
+    private func sidebarRecoveryReconciliation() -> ProjectReconciliationMode {
+        guard !indexWorkflow.isActive else { return .ongoing }
+        if let failure = currentSidebarSummaryFailure,
+           failure.workflow == indexWorkflow.generation,
+           failure.configuration == sourceConfigurationRevision,
+           failure.reconciliation != .ongoing { return failure.reconciliation }
+        return .terminalRetaining
     }
 
     private func publishSessionListError() {
-        let error = currentSidebarSummaryFailure?.error ?? sessionPageError
-        if sessionListError != error { sessionListError = error }
+        if sessionListError != sessionPageError { sessionListError = sessionPageError }
     }
 
-    private func retrySidebarSummary() {
+    private func clearSidebarSummaryFailure() {
+        sidebarSummaryFailure = nil
+        summaryReadFailures[.sidebar] = nil
+        if sidebarSummaryError != nil { sidebarSummaryError = nil }
+    }
+
+    func retrySidebarSummary() {
         guard !terminating, let database, currentSidebarSummaryFailure != nil else { return }
+        if let owner = sidebarSummaryRetryOwner, summaryRefreshIsCurrent(owner) { return }
+        if backgroundSidebarRequest != nil || isLoadingSessions {
+            pendingSidebarSummaryRetry = true
+            isRetryingSidebarSummary = true
+            return
+        }
         let owner = SummaryRefreshOwner(database: database, attachment: attachmentGeneration,
                                         configuration: sourceConfigurationRevision)
         summaryRequestID = owner.id
@@ -1765,34 +1819,36 @@ final class TraceModel: ObservableObject {
                 if sidebarSummaryRetryOwner?.id == owner.id {
                     sidebarSummaryRetryOwner = nil
                     sidebarSummaryRetryTask = nil
+                    isRetryingSidebarSummary = pendingSidebarSummaryRetry
                 }
             }
             guard !Task.isCancelled, summaryRefreshIsCurrent(owner) else { return }
-            await reloadSummaries(owner: owner)
+            await reloadSummaries(projectReconciliation: sidebarRecoveryReconciliation(), owner: owner)
         }
+        isRetryingSidebarSummary = true
     }
 
-    private func loadProjectSessions(ensuring ensuringSessionID: Int64? = nil) {
+    private func loadProjectSessions(ensuring ensuringSessionID: Int64? = nil, requestedPageCount: Int? = nil) {
         if sessionListProjectKey != selectedProjectCanonicalKey { resetSessionPagination() }
         sessionListProjectKey = selectedProjectCanonicalKey
         let request = UUID()
         projectRequestID = request
         sessionListTask?.cancel()
         let key = selectedProjectCanonicalKey
-        let pageCount = loadedSessionPageCount
+        let pageCount = requestedPageCount ?? loadedSessionPageCount
         isLoadingSessions = true
         sessionPageError = nil
         sessionListRetry = nil
         publishSessionListError()
         guard let database else { isLoadingSessions = false; sessionListTask = nil; return }
-        let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
+        let configuration = sourceConfigurationRevision
         func isCurrent() -> Bool {
             !terminating && !Task.isCancelled && self.database === database
-                && attachmentGeneration == attachment && sourceConfigurationRevision == configuration
+                && sourceConfigurationRevision == configuration
                 && projectRequestID == request && selectedProjectCanonicalKey == key
         }
         sessionListTask = Task {
-            defer { finishSessionListRequest(request) }
+            defer { finishSessionListRequest(request, database: database, project: key, configuration: configuration) }
             do {
                 let page = try await database.sessionListSnapshot(
                     projectCanonicalKey: key, pageCount: pageCount, ensuringSessionID: ensuringSessionID
@@ -1809,10 +1865,18 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    private func finishSessionListRequest(_ request: UUID) {
+    private func finishSessionListRequest(_ request: UUID, database: IndexDatabase,
+                                          project: String?, configuration: UInt64, additionalPage: Bool = false) {
         guard projectRequestID == request else { return }
-        isLoadingSessions = false
         sessionListTask = nil
+        isLoadingSessions = false
+        guard projectRequestID == request else { return }
+        if !terminating, !Task.isCancelled, self.database === database,
+           selectedProjectCanonicalKey == project, sourceConfigurationRevision != configuration {
+            loadProjectSessions(ensuring: selectedSessionID,
+                                requestedPageCount: loadedSessionPageCount + (additionalPage ? 1 : 0))
+            return
+        }
         drainPendingSidebarAction()
     }
 
@@ -1824,15 +1888,20 @@ final class TraceModel: ObservableObject {
 
     private func drainPendingSidebarAction() {
         guard backgroundSidebarRequest == nil, !isLoadingSessions else { return }
+        if pendingSidebarSummaryRetry {
+            pendingSidebarSummaryRetry = false
+            if currentSidebarSummaryFailure != nil { retrySidebarSummary() }
+            else if sidebarSummaryRetryOwner == nil { isRetryingSidebarSummary = false }
+        }
         guard let pending = pendingSidebarAction else { return }
         pendingSidebarAction = nil
         guard pending.project == selectedProjectCanonicalKey else { return }
         switch pending.action {
         case .loadMore: loadMoreSessions()
-        case .retry(.reload), .retry(.summary):
+        case .retry(.reload):
             // A successful background or explicit reload already satisfies this
             // intent. A failed read retains the current retry operation.
-            if let retry = currentSidebarRetry { performSidebarRetry(retry) }
+            if let retry = sessionListRetry { performSidebarRetry(retry) }
         case .retry(.nextPage): loadMoreSessions()
         }
     }
@@ -1848,7 +1917,6 @@ final class TraceModel: ObservableObject {
         hasMoreSessions = false
         loadedSessionPageCount = 1
         sessionPageError = nil
-        sidebarSummaryFailure = nil
         sessionListRetry = nil
         publishSessionListError()
         isLoadingSessions = false
@@ -1866,8 +1934,7 @@ final class TraceModel: ObservableObject {
     }
 
     func retrySessionLoad() {
-        guard !terminating, let retry = currentSidebarRetry else { return }
-        if let owner = sidebarSummaryRetryOwner, summaryRefreshIsCurrent(owner) { return }
+        guard !terminating, let retry = sessionListRetry else { return }
         if backgroundSidebarRequest != nil {
             pendingSidebarAction = (selectedProjectCanonicalKey, .retry(retry))
             return
@@ -1878,7 +1945,6 @@ final class TraceModel: ObservableObject {
 
     private func performSidebarRetry(_ retry: SessionListRetry) {
         switch retry {
-        case .summary: retrySidebarSummary()
         case .reload: loadProjectSessions(ensuring: selectedSessionID)
         case .nextPage: loadMoreSessions()
         }
@@ -1894,10 +1960,10 @@ final class TraceModel: ObservableObject {
         guard !isLoadingSessions, let cursor = nextSessionCursor, let database else { return }
         let key = selectedProjectCanonicalKey
         let request = UUID()
-        let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
+        let configuration = sourceConfigurationRevision
         func isCurrent() -> Bool {
             !terminating && !Task.isCancelled && self.database === database
-                && attachmentGeneration == attachment && sourceConfigurationRevision == configuration
+                && sourceConfigurationRevision == configuration
                 && projectRequestID == request && selectedProjectCanonicalKey == key
         }
         projectRequestID = request
@@ -1906,7 +1972,10 @@ final class TraceModel: ObservableObject {
         sessionListRetry = nil
         publishSessionListError()
         sessionListTask = Task {
-            defer { finishSessionListRequest(request) }
+            defer {
+                finishSessionListRequest(request, database: database, project: key,
+                                         configuration: configuration, additionalPage: true)
+            }
             do {
                 let page = try await database.sessionsPage(projectCanonicalKey: key, cursor: cursor)
                 #if DEBUG
@@ -2741,35 +2810,46 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    private func scheduleDeferredUsageRepair() {
+    private func scheduleRootUsageRefresh() {
+        guard !terminating, let receipt = pendingRootSummaryRefresh,
+              receipt.database === database, receipt.usage, !indexingPassActive else { return }
+        scheduleDeferredUsageRepair(immediately: true)
+    }
+
+    private func scheduleDeferredUsageRepair(immediately: Bool = false) {
         usageRepairPending = true
         usageRefreshPending = true
         updateCostsTotalsUpdating()
         guard deferredUsageRepairTask == nil else { return }
+        let id = UUID()
+        deferredUsageRepairID = id
         deferredUsageRepairTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.deferredUsageRepairID == id {
+                    self.deferredUsageRepairTask = nil
+                    self.deferredUsageRepairID = nil
+                }
+            }
             await self.scheduler?.waitUntilIdle()
             guard !Task.isCancelled else { return }
             if self.indexingPassActive {
-                self.deferredUsageRepairTask = nil
                 return
             }
             TraceTestHooks.touch(
                 pathKey: "TRACE_TEST_USAGE_REPAIR_QUIET_PERIOD_STARTED_PATH"
             )
-            let delay = TraceTestHooks.delayMilliseconds(
+            let delay = immediately ? 0 : TraceTestHooks.delayMilliseconds(
                 for: "TRACE_TEST_USAGE_REPAIR_QUIET_DELAY_MS", cappedAt: 5_000
             ) ?? 1_000
-            do { try await self.clock.sleep(for: .milliseconds(delay)) }
+            do { if delay > 0 { try await self.clock.sleep(for: .milliseconds(delay)) } }
             catch { return }
             guard !Task.isCancelled else { return }
             await self.scheduler?.waitUntilIdle()
             guard !Task.isCancelled else { return }
             if self.indexingPassActive {
-                self.deferredUsageRepairTask = nil
                 return
             }
-            self.deferredUsageRepairTask = nil
             if self.usageRepairPending {
                 await self.refreshCompletedUsage(repairIfDirty: true)
             }
@@ -2777,20 +2857,23 @@ final class TraceModel: ObservableObject {
     }
 
     private func refreshCompletedUsage(repairIfDirty: Bool) async {
+        let repairsUsage = repairIfDirty || (pendingRootSummaryRefresh?.database === database
+            && pendingRootSummaryRefresh?.usage == true)
         usageRefreshPending = true
-        if repairIfDirty { usageRepairPending = true }
+        if repairsUsage { usageRepairPending = true }
         updateCostsTotalsUpdating()
         guard let database else {
             usageRefreshPending = false
-            if repairIfDirty { usageRepairPending = false }
+            if repairsUsage { usageRepairPending = false }
             updateCostsTotalsUpdating()
             return
         }
-        if repairIfDirty && indexingPassActive {
+        if repairsUsage && indexingPassActive {
             usageRepairPending = true
             return
         }
         let request = UUID()
+        let rootReceipt = pendingRootSummaryRefresh.flatMap { $0.database === database ? $0 : nil }
         usageSnapshotRequestID = request
         do {
             if let delay = TraceTestHooks.delayMilliseconds(
@@ -2800,32 +2883,40 @@ final class TraceModel: ObservableObject {
             ) {
                 try await Task.sleep(for: .milliseconds(delay))
             }
-            guard usageSnapshotRequestID == request else { return }
-            if repairIfDirty { try await database.rebuildUsageRollupsIfDirty() }
+            guard !terminating, self.database === database, usageSnapshotRequestID == request else { return }
+            if repairsUsage { try await database.rebuildUsageRollupsIfDirty() }
             let snapshot = try await database.usage(
                 fromDay: nil, throughDay: nil, includeSidechains: true
             )
-            guard usageSnapshotRequestID == request else { return }
+            #if DEBUG
+            if let gate = usageSnapshotGateForTesting {
+                usageSnapshotWaitingForTesting = true
+                await gate.value
+                usageSnapshotWaitingForTesting = false
+            }
+            #endif
+            guard !terminating, self.database === database, usageSnapshotRequestID == request else { return }
             if indexingPassActive {
-                usageRepairPending = usageRepairPending || repairIfDirty
+                usageRepairPending = usageRepairPending || repairsUsage
                 return
             }
             completedUsage = snapshot
             completedUsageRevision += 1
-            if repairIfDirty { usageRepairPending = false }
+            acknowledgeRootSummary(rootReceipt, usage: true)
+            if repairsUsage { usageRepairPending = false }
             usageRefreshPending = usageRepairPending
             costsError = nil
             updateCostsTotalsUpdating()
             reloadCosts()
         } catch is CancellationError {
-            guard usageSnapshotRequestID == request else { return }
-            usageRepairPending = usageRepairPending || repairIfDirty
+            guard !terminating, self.database === database, usageSnapshotRequestID == request else { return }
+            usageRepairPending = usageRepairPending || repairsUsage
             usageRefreshPending = usageRepairPending
             updateCostsTotalsUpdating()
         } catch {
-            guard usageSnapshotRequestID == request else { return }
+            guard !terminating, self.database === database, usageSnapshotRequestID == request else { return }
             costsError = "Could not update token totals: \(error.localizedDescription)"
-            if repairIfDirty { usageRepairPending = false }
+            if repairsUsage { usageRepairPending = false }
             usageRefreshPending = usageRepairPending
             updateCostsTotalsUpdating()
         }
@@ -2860,6 +2951,10 @@ final class TraceModel: ObservableObject {
         sidebarSummaryRetryTask?.cancel()
         sidebarSummaryRetryTask = nil
         sidebarSummaryRetryOwner = nil
+        pendingSidebarSummaryRetry = false
+        clearSidebarSummaryFailure()
+        isRetryingSidebarSummary = false
+        summaryReadFailures = [:]
         pausedTranscriptPreservation = nil
         rebuildAttachmentReady = false
         sourceReloadAlertError = nil
@@ -3419,7 +3514,7 @@ final class TraceModel: ObservableObject {
         let refresh = owner.id
         let fullReceipt = pendingFullSummaryRefresh
         let rootReceipt = pendingRootSummaryRefresh.flatMap { $0.database === database ? $0 : nil }
-        let fullRefresh = !lightweight || fullReceipt != nil || rootReceipt != nil
+        let fullRefresh = !lightweight || fullReceipt != nil
         func isCurrent() -> Bool {
             !Task.isCancelled && summaryRefreshIsCurrent(owner)
         }
@@ -3427,9 +3522,17 @@ final class TraceModel: ObservableObject {
             isCurrent() && terminalSummaryTranscriptIsCurrent(terminal)
         }
         func currentReconciliation() -> ProjectReconciliationMode {
-            guard let receipt = terminal ?? fullReceipt else { return projectReconciliation }
-            return receipt.workflow == indexWorkflow.generation && !indexWorkflow.isActive
-                ? receipt.reconciliation : .ongoing
+            if let receipt = terminal ?? fullReceipt {
+                return receipt.workflow == indexWorkflow.generation && !indexWorkflow.isActive
+                    ? receipt.reconciliation : .ongoing
+            }
+            if let failure = currentSidebarSummaryFailure,
+               failure.workflow == indexWorkflow.generation,
+               failure.configuration == sourceConfigurationRevision,
+               failure.reconciliation != .ongoing, !indexWorkflow.isActive {
+                return failure.reconciliation
+            }
+            return projectReconciliation
         }
         while let sessionListTask {
             await sessionListTask.value
@@ -3472,16 +3575,20 @@ final class TraceModel: ObservableObject {
         let loadedRecent = sidebar?.recentSessions ?? recentSessions
         let loadedSessions = sidebar?.sessionList
         guard isCurrent() else { return }
-        if let sidebarError, !(sidebarError is CancellationError),
-           projectRequestID == projectRequest, selectedProjectCanonicalKey == projectCanonicalKey {
-            sidebarSummaryFailure = .init(database: database, project: projectCanonicalKey,
-                                          error: sidebarError.localizedDescription)
-            publishSessionListError()
-            guard isCurrent() else { return }
-            if projectRequestID == projectRequest, selectedProjectCanonicalKey == projectCanonicalKey {
-                recordSummaryReadFailure(sidebarError, operation: .sidebar)
-                guard isCurrent() else { return }
+        if let sidebarError, !(sidebarError is CancellationError) {
+            let reconciliation = currentReconciliation()
+            let startedAt = currentSidebarSummaryFailure?.startedAt ?? clock.now
+            sidebarSummaryFailure = .init(database: database, error: sidebarError.localizedDescription,
+                workflow: indexWorkflow.generation, configuration: sourceConfigurationRevision,
+                reconciliation: reconciliation, startedAt: startedAt)
+            if fullRefresh || startedAt.duration(to: clock.now) >= .seconds(1) {
+                if sidebarSummaryError != sidebarError.localizedDescription {
+                    sidebarSummaryError = sidebarError.localizedDescription
+                }
             }
+            guard isCurrent() else { return }
+            recordSummaryReadFailure(sidebarError, operation: .sidebar)
+            guard isCurrent() else { return }
         }
         let reconciliation = currentReconciliation()
         let globalProjectFilterReconciliation: SessionSearchModel.ProjectFilterReconciliation
@@ -3543,13 +3650,13 @@ final class TraceModel: ObservableObject {
             applySessionPages(loadedSessions)
             guard isCurrent() else { return }
             if projectRequestID == projectRequest, selectedProjectCanonicalKey == projectCanonicalKey {
-                sidebarSummaryFailure = nil
-                publishSessionListError()
-                guard isCurrent() else { return }
-                if projectRequestID == projectRequest, selectedProjectCanonicalKey == projectCanonicalKey {
-                    acknowledgeRootSummary(rootReceipt, sidebar: true)
-                }
+                acknowledgeRootSummary(rootReceipt, sidebar: true)
             }
+        }
+        if loadedProjects != nil {
+            clearSidebarSummaryFailure()
+            guard isCurrent() else { return }
+            acknowledgeRootSummary(rootReceipt, sidebar: true)
         }
         finishBackgroundSidebarRequest(projectRequest)
         let loadedTranscript: SessionTranscriptSnapshot?
@@ -3604,6 +3711,13 @@ final class TraceModel: ObservableObject {
         }
         if !fullRefresh || !isCurrent() { return }
         #if DEBUG
+        if sidebarSummaryRetryOwner?.id == owner.id,
+           let delay = TraceTestHooks.delayMilliseconds(
+               for: "TRACE_TEST_SIDEBAR_RETRY_TAIL_HOLD_MS", cappedAt: 30_000,
+               marker: .touch(pathKey: "TRACE_TEST_SIDEBAR_RETRY_TAIL_STARTED_PATH")) {
+            try? await TraceTestHooks.waitForRelease(
+                pathKey: "TRACE_TEST_SIDEBAR_RETRY_TAIL_RELEASE_PATH", timeoutMilliseconds: delay)
+        }
         if let gate = summaryTailGateForTesting {
             summaryTailWaitingForTesting = true
             await gate.value
@@ -3627,12 +3741,16 @@ final class TraceModel: ObservableObject {
         #endif
         guard isCurrent() else { return }
         switch loadedSourceHealth {
-        case .success(let health): sourceHealth = health
+        case .success(let health):
+            summaryReadFailures[.sourceHealth] = nil
+            sourceHealth = health
         case .failure(let error): recordSummaryReadFailure(error, operation: .sourceHealth)
         }
         guard isCurrent() else { return }
         switch loadedStatistics {
-        case .success(let snapshot): statistics = snapshot
+        case .success(let snapshot):
+            summaryReadFailures[.statistics] = nil
+            statistics = snapshot
         case .failure(let error): recordSummaryReadFailure(error, operation: .statistics)
         }
         guard isCurrent() else { return }
@@ -3669,8 +3787,10 @@ final class TraceModel: ObservableObject {
                 if mayRestoreSession, settings.lastSessionID == stored, selectedSessionID == nil {
                     switch restored {
                     case .success(.some):
+                        summaryReadFailures[.restoration] = nil
                         selectSession(stored)
                     case .success(.none):
+                        summaryReadFailures[.restoration] = nil
                         if restorationIsTerminal() { mayRestoreSession = false }
                     case .failure(let error):
                         // A failed lookup cannot confirm deletion. Keep restoration
@@ -3683,13 +3803,20 @@ final class TraceModel: ObservableObject {
             }
         }
         guard isCurrent() else { return }
-        if loadCosts || fullReceipt != nil || rootReceipt != nil { reloadCosts() }
+        if loadCosts { reloadCosts() }
+        guard isCurrent() else { return }
+        scheduleRootUsageRefresh()
         guard isCurrent() else { return }
         refreshDiagnostics()
         if let fullReceipt, pendingFullSummaryRefresh?.id == fullReceipt.id { pendingFullSummaryRefresh = nil }
         #if DEBUG
         guard isCurrent() else { return }
-        let completion = FullSummaryCompletion(summaryID: refresh, mayRestoreSession: mayRestoreSession,
+        let terminalReceipt = terminal ?? fullReceipt
+        let terminalWorkflowID = terminalReceipt.flatMap {
+            $0.workflow == indexWorkflow.generation && !indexWorkflow.isActive ? $0.workflow : nil
+        }
+        let completion = FullSummaryCompletion(summaryID: refresh, terminalWorkflowID: terminalWorkflowID,
+            mayRestoreSession: mayRestoreSession,
             selectedSessionID: selectedSessionID, selectedProjectCanonicalKey: selectedProjectCanonicalKey,
             loadedSessionPageCount: loadedSessionPageCount)
         fullSummaryCompletionForTesting = completion
@@ -3709,6 +3836,8 @@ final class TraceModel: ObservableObject {
         // DatabaseError's description can include SQL and arguments. Use only
         // the underlying message, and keep even that private in the system log.
         let message = databaseError.map { $0.message ?? "SQLite read failed" } ?? error.localizedDescription
+        let identity = SummaryReadFailureIdentity(primary: primary, extended: extended, message: message)
+        guard summaryReadFailures[operation, default: []].insert(identity).inserted else { return }
         Self.summaryReadLog.error("\(operation.rawValue, privacy: .public) read failed; SQLite primary=\(primary.map(String.init) ?? "n/a", privacy: .public) extended=\(extended.map(String.init) ?? "n/a", privacy: .public); \(message, privacy: .private)")
         #if DEBUG
         summaryReadFailureForTesting?(.init(operation: operation, primaryCode: primary, extendedCode: extended))

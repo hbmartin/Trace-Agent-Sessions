@@ -3806,6 +3806,7 @@ final class TraceUITests: XCTestCase {
 
     private struct RestorationCompletion: Decodable {
         let summaryID: UUID
+        let terminalWorkflowID: UUID?
         let mayRestoreSession: Bool
         let selectedSessionID: Int64?
         let selectedProjectCanonicalKey: String?
@@ -3813,7 +3814,9 @@ final class TraceUITests: XCTestCase {
     }
 
     private func launchWithFailedPendingRestoration(extraSessions: Int = 0,
-                                                    failSidebarLoad: Bool = false) throws -> (XCUIApplication, URL, URL) {
+                                                    failSidebarLoad: Bool = false,
+                                                    holdRetryTail: Bool = false,
+                                                    holdAfterRelease: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         if extraSessions > 0 {
             var data = Data()
@@ -3850,6 +3853,16 @@ final class TraceUITests: XCTestCase {
             app.launchEnvironment["TRACE_TEST_FAIL_STARTUP_SIDEBAR_LOAD_ONCE"] = "1"
             app.launchEnvironment["TRACE_TEST_STARTUP_SIDEBAR_FAILURE_CONSUMED_PATH"] = sidebarFailure.path
         }
+        if holdRetryTail {
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_RETRY_TAIL_HOLD_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_RETRY_TAIL_STARTED_PATH"] = directory.appendingPathComponent("retry-tail-started").path
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_RETRY_TAIL_RELEASE_PATH"] = directory.appendingPathComponent("retry-tail-release").path
+        }
+        if holdAfterRelease {
+            app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_HOLD_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_STARTED_PATH"] = directory.appendingPathComponent("post-release-started").path
+            app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_RELEASE_PATH"] = directory.appendingPathComponent("post-release-release").path
+        }
         app.launch()
         XCTAssertTrue(waitForFile(held, timeout: 10))
         XCTAssertTrue(waitForFile(failed, timeout: 5))
@@ -3868,14 +3881,23 @@ final class TraceUITests: XCTestCase {
     }
 
     @discardableResult
+    private func terminalRestorationCompletion(at path: URL, after summaryID: UUID) -> RestorationCompletion? {
+        guard let data = try? Data(contentsOf: path),
+              let completion = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
+              completion.summaryID != summaryID, completion.terminalWorkflowID != nil else { return nil }
+        return completion
+    }
+
+    @discardableResult
     private func releasePendingRestoration(_ release: URL, directory: URL,
                                            expectRestored: Bool = false, expectedPages: Int = 1) throws -> RestorationCompletion {
         let path = directory.appendingPathComponent("restoration-summary-completed.json")
         let previous = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
         try FileManager.default.removeItem(at: path)
         try Data().write(to: release)
-        XCTAssertTrue(waitForFile(path, timeout: 15), "wait for the accepted full summary's restoration decision")
-        let completion = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        let completion = try XCTUnwrap(poll(timeout: 15) {
+            self.terminalRestorationCompletion(at: path, after: previous.summaryID)
+        }, "wait for the accepted terminal workflow's restoration decision")
         XCTAssertNotEqual(completion.summaryID, previous.summaryID)
         XCTAssertFalse(completion.mayRestoreSession)
         XCTAssertEqual(completion.loadedSessionPageCount, expectedPages)
@@ -3983,17 +4005,53 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "pending-restoration-all-projects-pagination")
     }
 
-    func testPendingLaunchRestorationRespectsSessionPageRetryWithoutEarlierIntent() throws {
-        let (app, directory, release) = try launchWithFailedPendingRestoration(failSidebarLoad: true)
-        let retry = app.buttons["retrySessionPage"]
+    func testPendingLaunchRestorationRespectsSidebarSummaryRetryWithoutEarlierIntent() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration(failSidebarLoad: true, holdRetryTail: true)
+        let path = directory.appendingPathComponent("restoration-summary-completed.json")
+        let initial = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        let retry = app.buttons["retrySidebarSummary"]
         XCTAssertTrue(retry.wait(for: \.isHittable, toEqual: true, timeout: 5))
         retry.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("retry-tail-started"), timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["sidebarSummaryRetryProgress"].firstMatch.exists)
+        XCTAssertFalse(retry.isEnabled)
+        XCTAssertEqual(try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path)).summaryID, initial.summaryID)
+        try Data().write(to: directory.appendingPathComponent("retry-tail-release"))
+        let retried = try XCTUnwrap(poll(timeout: 10) {
+            guard let data = try? Data(contentsOf: path),
+                  let completion = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
+                  completion.summaryID != initial.summaryID else { return nil as RestorationCompletion? }
+            return completion
+        })
+        XCTAssertNil(retried.terminalWorkflowID)
         XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
         try releasePendingRestoration(release, directory: directory)
         XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "1")
         XCTAssertFalse(app.buttons["backToProject"].exists)
         XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
         attach(app, name: "pending-restoration-independent-session-retry")
+    }
+
+    func testDelayedSidebarRetryReceiptCannotSatisfyTerminalRestorationWait() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration(
+            failSidebarLoad: true, holdRetryTail: true, holdAfterRelease: true)
+        let path = directory.appendingPathComponent("restoration-summary-completed.json")
+        let initial = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        app.buttons["retrySidebarSummary"].click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("retry-tail-started"), timeout: 5))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("post-release-started"), timeout: 5))
+        try Data().write(to: directory.appendingPathComponent("retry-tail-release"))
+        XCTAssertNotNil(poll(timeout: 10) {
+            guard let data = try? Data(contentsOf: path),
+                  let receipt = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
+                  receipt.summaryID != initial.summaryID else { return nil as RestorationCompletion? }
+            return receipt
+        })
+        XCTAssertNil(terminalRestorationCompletion(at: path, after: initial.summaryID),
+            "a real Retry receipt written after startup release is not terminal completion")
+        try releasePendingRestoration(directory.appendingPathComponent("post-release-release"), directory: directory)
+        XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
     }
 
     func testPendingLaunchRestorationRespectsLauncherAndPreferenceOrdering() throws {
