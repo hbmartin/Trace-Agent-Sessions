@@ -525,6 +525,17 @@ final class TraceModel: ObservableObject {
     var summaryReadFailureForTesting: ((SummaryReadFailure) -> Void)?
     var summaryMetadataGateForTesting: Task<Void, Never>?
     private(set) var summaryMetadataWaitingForTesting = false
+    struct FullSummaryCompletion: Codable {
+        let summaryID: UUID
+        let mayRestoreSession: Bool
+        let selectedSessionID: Int64?
+        let selectedProjectCanonicalKey: String?
+        let loadedSessionPageCount: Int
+    }
+    private(set) var fullSummaryCompletionForTesting: FullSummaryCompletion?
+    var launchRestorationEligibleForTesting: Bool { mayRestoreSession }
+    var configuredRootsPublicationGateForTesting: Task<Void, Never>?
+    private(set) var configuredRootsPublicationWaitingForTesting = false
     var transcriptRecoveryReadGateForTesting: Task<Void, Never>?
     var transcriptRecoveryPublicationGateForTesting: Task<Void, Never>?
     var transcriptSettlementGateForTesting: Task<Void, Never>?
@@ -706,6 +717,13 @@ final class TraceModel: ObservableObject {
                 loadPricing()
                 await reloadSummaries(loadCosts: false)
                 await loadCachedUsageAtStartup()
+                #if DEBUG
+                if TraceTestHooks.isUITesting,
+                   TraceTestHooks.environment["TRACE_TEST_FAIL_STARTUP_SIDEBAR_LOAD_ONCE"] == "1" {
+                    loadProjectSessions()
+                    await sessionListTask?.value
+                }
+                #endif
                 if let delay = TraceTestHooks.delayMilliseconds(
                     for: "TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS", cappedAt: 30_000,
                     marker: .touch(pathKey: "TRACE_TEST_STARTUP_FINALIZATION_PATH")
@@ -1367,7 +1385,21 @@ final class TraceModel: ObservableObject {
                     throw SessionSourceError.unreadableFile("Synthetic source configuration failure")
                 }
                 #endif
-                let rootsChanged = try await database.synchronizeConfiguredRoots(sources.flatMap(\.roots))
+                let roots = sources.flatMap(\.roots)
+                let rootsChanged = try await database.synchronizeConfiguredRoots(roots)
+                #if DEBUG
+                if let gate = configuredRootsPublicationGateForTesting {
+                    configuredRootsPublicationWaitingForTesting = true
+                    await gate.value
+                    configuredRootsPublicationWaitingForTesting = false
+                }
+                #endif
+                guard !Task.isCancelled, pendingAttachmentIsCurrent(pending) else { return }
+                if self.database === database {
+                    let configured = Set(roots.map(\.id))
+                    let retained = sourceHealth.filter { configured.contains("\($0.agent.rawValue):\($0.rootPath)") }
+                    if retained.count != sourceHealth.count { sourceHealth = retained }
+                }
                 guard !Task.isCancelled, pendingAttachmentIsCurrent(pending) else { return }
                 if rootsChanged, self.database === database {
                     await reloadSummaries(
@@ -1650,6 +1682,11 @@ final class TraceModel: ObservableObject {
         sessionListTask = Task {
             defer { finishSessionListRequest(request) }
             do {
+                #if DEBUG
+                if TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_STARTUP_SIDEBAR_LOAD_ONCE") {
+                    throw DatabaseError(resultCode: .SQLITE_BUSY, message: "Synthetic startup sidebar load failure")
+                }
+                #endif
                 let page = try await database.sessionListSnapshot(
                     projectCanonicalKey: key, pageCount: pageCount, ensuringSessionID: ensuringSessionID
                 )
@@ -3477,6 +3514,18 @@ final class TraceModel: ObservableObject {
         guard isCurrent() else { return }
         refreshDiagnostics()
         if let fullReceipt, pendingFullSummaryRefresh?.id == fullReceipt.id { pendingFullSummaryRefresh = nil }
+        #if DEBUG
+        guard isCurrent() else { return }
+        let completion = FullSummaryCompletion(summaryID: refresh, mayRestoreSession: mayRestoreSession,
+            selectedSessionID: selectedSessionID, selectedProjectCanonicalKey: selectedProjectCanonicalKey,
+            loadedSessionPageCount: loadedSessionPageCount)
+        fullSummaryCompletionForTesting = completion
+        if TraceTestHooks.isUITesting,
+           let path = TraceTestHooks.environment["TRACE_TEST_FULL_SUMMARY_COMPLETED_PATH"],
+           let data = try? JSONEncoder().encode(completion) {
+            try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+        #endif
     }
 
     private func recordSummaryReadFailure(_ error: Error, operation: SummaryReadOperation) {

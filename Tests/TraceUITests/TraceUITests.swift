@@ -3804,14 +3804,36 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "terminal-deletion-refreshed-source-statistics")
     }
 
-    private func launchWithFailedPendingRestoration() throws -> (XCUIApplication, URL, URL) {
+    private struct RestorationCompletion: Decodable {
+        let summaryID: UUID
+        let mayRestoreSession: Bool
+        let selectedSessionID: Int64?
+        let selectedProjectCanonicalKey: String?
+        let loadedSessionPageCount: Int
+    }
+
+    private func launchWithFailedPendingRestoration(extraSessions: Int = 0,
+                                                    failSidebarLoad: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        if extraSessions > 0 {
+            var data = Data()
+            for index in 0..<extraSessions {
+                let record: [String: Any] = ["type": "user", "uuid": "paging-\(index)", "sessionId": "paging-\(index)",
+                    "cwd": "/tmp/PagingIntent", "timestamp": 1_700_000_000_000 + index,
+                    "message": ["content": "Paging intent session \(index)"]]
+                data.append(try JSONSerialization.data(withJSONObject: record)); data.append(10)
+            }
+            try data.write(to: directory.appendingPathComponent("Sources/Claude/paging.jsonl"))
+        }
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        let initialPass = directory.appendingPathComponent("restoration-initial-pass")
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = initialPass.path
         app.launch()
         XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
         app.staticTexts["TraceUIExample"].firstMatch.click()
         openSidebarSession("Find the sample answer", in: app)
         XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForFile(initialPass, timeout: 15), "seed every paging fixture session before relaunch")
         app.terminate()
         let release = directory.appendingPathComponent("restoration-startup-release")
         let held = directory.appendingPathComponent("restoration-startup-held")
@@ -3822,17 +3844,44 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = held.path
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = release.path
         app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = directory.appendingPathComponent("restoration-index-completed").path
+        app.launchEnvironment["TRACE_TEST_FULL_SUMMARY_COMPLETED_PATH"] = directory.appendingPathComponent("restoration-summary-completed.json").path
+        if failSidebarLoad { app.launchEnvironment["TRACE_TEST_FAIL_STARTUP_SIDEBAR_LOAD_ONCE"] = "1" }
         app.launch()
         XCTAssertTrue(waitForFile(held, timeout: 10))
         XCTAssertTrue(waitForFile(failed, timeout: 5))
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+        let initial = try JSONDecoder().decode(RestorationCompletion.self,
+            from: Data(contentsOf: directory.appendingPathComponent("restoration-summary-completed.json")))
+        XCTAssertTrue(initial.mayRestoreSession, "the failed startup read must leave restoration pending")
+        XCTAssertNil(initial.selectedSessionID)
         return (app, directory, release)
     }
 
-    private func releasePendingRestoration(_ release: URL, directory: URL) throws {
+    @discardableResult
+    private func releasePendingRestoration(_ release: URL, directory: URL,
+                                           expectRestored: Bool = false, expectedPages: Int = 1) throws -> RestorationCompletion {
+        let path = directory.appendingPathComponent("restoration-summary-completed.json")
+        let previous = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        try FileManager.default.removeItem(at: path)
         try Data().write(to: release)
-        XCTAssertTrue(waitForFile(directory.appendingPathComponent("restoration-index-completed"), timeout: 15))
+        XCTAssertTrue(waitForFile(path, timeout: 15), "wait for the accepted full summary's restoration decision")
+        let completion = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        XCTAssertNotEqual(completion.summaryID, previous.summaryID)
+        XCTAssertFalse(completion.mayRestoreSession)
+        XCTAssertEqual(completion.loadedSessionPageCount, expectedPages)
+        let saved = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+                                     sql: "SELECT id FROM session WHERE external_id='test-session';")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)"))
+        XCTAssertEqual((defaults.object(forKey: "lastSessionID") as? NSNumber)?.int64Value, saved)
+        if expectRestored {
+            XCTAssertEqual(completion.selectedSessionID, saved)
+            XCTAssertNotNil(completion.selectedProjectCanonicalKey)
+        } else {
+            XCTAssertNil(completion.selectedSessionID, "restoration must not take over before UI assertions")
+            XCTAssertNil(completion.selectedProjectCanonicalKey)
+        }
+        return completion
     }
 
     func testPendingLaunchRestorationDoesNotInterruptMainSearch() throws {
@@ -3901,10 +3950,66 @@ final class TraceUITests: XCTestCase {
         let (app, directory, release) = try launchWithFailedPendingRestoration()
         // Activation and startup-driven view appearance do not take navigation.
         app.activate()
-        try releasePendingRestoration(release, directory: directory)
+        try releasePendingRestoration(release, directory: directory, expectRestored: true)
         XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Here is the visible answer"].firstMatch.waitForExistence(timeout: 10))
         attach(app, name: "pending-restoration-retries-on-ordinary-refresh")
+    }
+
+    func testPendingLaunchRestorationRespectsAllProjectsPagination() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration(extraSessions: 230)
+        let list = app.descendants(matching: .any)["sessionSidebarList"].firstMatch
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        let more = app.buttons["loadMoreSessions"]
+        XCTAssertTrue(more.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        more.click()
+        XCTAssertTrue(more.waitForNonExistence(timeout: 10))
+        try releasePendingRestoration(release, directory: directory, expectedPages: 2)
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "231")
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        let oldest = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+                                      sql: "SELECT id FROM session WHERE external_id='paging-0';")
+        XCTAssertTrue(app.descendants(matching: .any)["sessionSidebarRow-\(oldest)"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["backToProject"].exists)
+        attach(app, name: "pending-restoration-all-projects-pagination")
+    }
+
+    func testPendingLaunchRestorationRespectsSessionPageRetryWithoutEarlierIntent() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration(failSidebarLoad: true)
+        let retry = app.buttons["retrySessionPage"]
+        XCTAssertTrue(retry.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        retry.click()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
+        try releasePendingRestoration(release, directory: directory)
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "1")
+        XCTAssertFalse(app.buttons["backToProject"].exists)
+        XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+        attach(app, name: "pending-restoration-independent-session-retry")
+    }
+
+    func testPendingLaunchRestorationRespectsLauncherAndPreferenceOrdering() throws {
+        for launcher in [true, false] {
+            let (app, directory, release) = try launchWithFailedPendingRestoration()
+            if launcher {
+                app.typeKey(" ", modifierFlags: [.command, .shift])
+                let relevant = app.radioButtons["Relevant"]
+                XCTAssertTrue(relevant.waitForExistence(timeout: 5))
+                relevant.click()
+                XCTAssertEqual(relevant.value as? Int, 1)
+            } else {
+                app.typeKey(",", modifierFlags: .command)
+                XCTAssertTrue(app.windows["Trace Settings"].waitForExistence(timeout: 5))
+                let ordering = nativeMenu(titled: "defaultSearchOrdering", in: app)
+                XCTAssertTrue(ordering.waitForExistence(timeout: 5))
+                ordering.click()
+                app.menuItems["BM25 relevance"].click()
+            }
+            try releasePendingRestoration(release, directory: directory)
+            XCTAssertFalse(app.buttons["backToProject"].exists)
+            XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+            attach(app, name: launcher ? "pending-restoration-launcher-ordering" : "pending-restoration-preference-ordering")
+            app.terminate()
+        }
     }
 
     func testSavedSessionRestoresAfterTransientStartupAbsence() throws {

@@ -16,11 +16,7 @@ struct RecentPopoverView: View {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search all sessions", text: Binding(get: { search.query }, set: { value in
-                    guard search.query != value else { return }
-                    model.cancelLaunchRestorationForUserIntent()
-                    search.query = value
-                }))
+                TextField("Search all sessions", text: userIntentBinding($search.query, model: model))
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit {
@@ -116,11 +112,7 @@ struct LauncherView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                TextField("Search Claude Code, Codex, and Gemini", text: Binding(get: { search.query }, set: { value in
-                    guard search.query != value else { return }
-                    model.cancelLaunchRestorationForUserIntent()
-                    search.query = value
-                }))
+                TextField("Search Claude Code, Codex, and Gemini", text: userIntentBinding($search.query, model: model))
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .focused($searchFocused)
@@ -185,11 +177,7 @@ struct LauncherView: View {
                 .fixedSize()
                 .accessibilityIdentifier("searchDateFilter")
                 Spacer()
-                Picker("Sort", selection: Binding(get: { settings.searchSort }, set: { value in
-                    guard settings.searchSort != value else { return }
-                    model.cancelLaunchRestorationForUserIntent()
-                    settings.searchSort = value
-                })) {
+                Picker("Sort", selection: userIntentBinding($settings.searchSort, model: model)) {
                     Text("Recent").tag(SearchSort.recency)
                     Text("Relevant").tag(SearchSort.relevance)
                 }
