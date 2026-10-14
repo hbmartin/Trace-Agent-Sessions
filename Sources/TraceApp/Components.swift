@@ -5,11 +5,11 @@ import TraceCore
 
 @MainActor
 func userIntentBinding<Value: Equatable>(_ binding: Binding<Value>, model: TraceModel) -> Binding<Value> {
-    Binding(get: { binding.wrappedValue }, set: { value in
+    Binding(get: { binding.wrappedValue }, set: { value, transaction in
         guard binding.wrappedValue != value else { return }
         model.cancelLaunchRestorationForUserIntent()
-        binding.wrappedValue = value
-    })
+        binding.transaction(transaction).wrappedValue = value
+    }).transaction(binding.transaction)
 }
 
 enum TraceTheme {
