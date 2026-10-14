@@ -3807,6 +3807,7 @@ final class TraceUITests: XCTestCase {
     private struct RestorationCompletion: Decodable {
         let summaryID: UUID
         let terminalWorkflowID: UUID?
+        let storedSessionID: Int64?
         let mayRestoreSession: Bool
         let selectedSessionID: Int64?
         let selectedProjectCanonicalKey: String?
@@ -3903,8 +3904,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(completion.loadedSessionPageCount, expectedPages)
         let saved = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
                                      sql: "SELECT id FROM session WHERE external_id='test-session';")
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)"))
-        XCTAssertEqual((defaults.object(forKey: "lastSessionID") as? NSNumber)?.int64Value, saved)
+        XCTAssertEqual(completion.storedSessionID, saved,
+                       "read the app's saved selection from its accepted receipt, not the runner's defaults domain")
         if expectRestored {
             XCTAssertEqual(completion.selectedSessionID, saved)
             XCTAssertNotNil(completion.selectedProjectCanonicalKey)

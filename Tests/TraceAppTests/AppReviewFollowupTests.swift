@@ -289,6 +289,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.receiveProgress(.init(phase: .complete))
         XCTAssertNil(f.model.selectedSessionID)
         XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+        XCTAssertEqual(f.model.fullSummaryCompletionForTesting?.storedSessionID, saved.id)
         XCTAssertFalse(f.model.launchRestorationEligibleForTesting)
     }
 

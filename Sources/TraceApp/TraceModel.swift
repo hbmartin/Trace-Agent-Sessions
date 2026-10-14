@@ -567,6 +567,7 @@ final class TraceModel: ObservableObject {
     struct FullSummaryCompletion: Codable {
         let summaryID: UUID
         let terminalWorkflowID: UUID?
+        let storedSessionID: Int64?
         let mayRestoreSession: Bool
         let selectedSessionID: Int64?
         let selectedProjectCanonicalKey: String?
@@ -3816,6 +3817,7 @@ final class TraceModel: ObservableObject {
             $0.workflow == indexWorkflow.generation && !indexWorkflow.isActive ? $0.workflow : nil
         }
         let completion = FullSummaryCompletion(summaryID: refresh, terminalWorkflowID: terminalWorkflowID,
+            storedSessionID: settings.lastSessionID,
             mayRestoreSession: mayRestoreSession,
             selectedSessionID: selectedSessionID, selectedProjectCanonicalKey: selectedProjectCanonicalKey,
             loadedSessionPageCount: loadedSessionPageCount)
