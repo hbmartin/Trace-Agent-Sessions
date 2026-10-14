@@ -276,6 +276,21 @@ private struct SessionSidebar: View {
                         Spacer()
                         Text("\(model.projects.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }.padding(12)
+                    #if DEBUG
+                    if TraceTestHooks.showsTestControls,
+                       TraceTestHooks.environment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] == "1" {
+                        HStack {
+                            Button("Fail") { model.cancelLaunchRestorationForUserIntent(); model.failSidebarSummaryForUITesting() }
+                                .accessibilityIdentifier("testFailSidebarSummary")
+                            Button("Reload") { model.cancelLaunchRestorationForUserIntent(); model.reloadSourcesAndRebuild() }
+                                .accessibilityIdentifier("testReloadSidebarSources")
+                                .accessibilityValue(settings.onboardingComplete ? "complete" : "deferred")
+                            Button("Rebuild") { model.cancelLaunchRestorationForUserIntent(); model.rebuildIndex() }
+                                .accessibilityIdentifier("testRebuildSidebarIndex")
+                        }
+                        .font(.caption)
+                    }
+                    #endif
                     TextField("Filter projects", text: userIntentBinding($model.projectFilter, model: model))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("projectFilter")
@@ -402,6 +417,7 @@ private struct SessionSidebar: View {
                             }
                             if model.isLoadingSessions {
                                 ProgressView().controlSize(.small)
+                                    .accessibilityIdentifier("sessionPageLoadingProgress")
                             } else if let error = model.sessionListError {
                                 VStack(alignment: .leading) {
                                     Text(error).font(.caption).foregroundStyle(.secondary)
