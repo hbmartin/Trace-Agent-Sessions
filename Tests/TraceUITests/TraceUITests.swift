@@ -3870,7 +3870,9 @@ final class TraceUITests: XCTestCase {
         let failed = directory.appendingPathComponent("restoration-lookup-failed")
         app.launchEnvironment["TRACE_TEST_FAIL_SESSION_RESTORATION_ONCE"] = "1"
         app.launchEnvironment["TRACE_TEST_SESSION_RESTORATION_FAILED_PATH"] = failed.path
-        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "30000"
+        // Pagination gestures on the CI desktop can take longer than 30 seconds.
+        // Keep the explicit release authoritative with a bounded wall-clock backstop.
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "120000"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = held.path
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = release.path
         app.launchEnvironment.removeValue(forKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")

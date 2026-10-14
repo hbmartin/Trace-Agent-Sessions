@@ -765,7 +765,7 @@ final class TraceModel: ObservableObject {
                 await reloadSummaries(loadCosts: false, sidebarReadContext: .startup)
                 await loadCachedUsageAtStartup()
                 if let delay = TraceTestHooks.delayMilliseconds(
-                    for: "TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS", cappedAt: 30_000,
+                    for: "TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS", cappedAt: 120_000,
                     marker: .touch(pathKey: "TRACE_TEST_STARTUP_FINALIZATION_PATH")
                 ) {
                     try await TraceTestHooks.waitForRelease(
