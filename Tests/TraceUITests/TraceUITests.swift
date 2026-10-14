@@ -1912,8 +1912,10 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
         XCTAssertEqual(launcherSearch.value as? String, "Find",
                        "handoff must retain the shared query while launcher is visible")
-        launcherSearch.typeKey(.escape, modifierFlags: [])
-        XCTAssertFalse(launcherSearch.exists)
+        // Exercise the close transition through the public launcher toggle;
+        // XCTest can drop Escape when targeting this nonactivating panel.
+        app.typeKey(" ", modifierFlags: [.command, .shift])
+        XCTAssertTrue(launcherSearch.waitForNonExistence(timeout: 5))
         ensurePopoverOpen(app)
         XCTAssertTrue(popoverSearch.waitForExistence(timeout: 10))
         XCTAssertEqual(popoverSearch.value as? String, "",
@@ -1957,6 +1959,12 @@ final class TraceUITests: XCTestCase {
 
     func testDateFiltersSurviveRebuildAndAnyTimeIsUnbounded() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let resetEntered = directory.appendingPathComponent("rebuild-reset-entered")
+        let resetRelease = directory.appendingPathComponent("rebuild-reset-release")
+        try Data().write(to: resetRelease)
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_ENTERED_PATH"] = resetEntered.path
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_RELEASE_PATH"] = resetRelease.path
         let completed = directory.appendingPathComponent("index-pass-completed")
         let reconciliationStarted = directory.appendingPathComponent(
             "project-reconciliation-started"
@@ -2019,13 +2027,17 @@ final class TraceUITests: XCTestCase {
 
         try? FileManager.default.removeItem(at: completed)
         try? FileManager.default.removeItem(at: reconciliationStarted)
+        try? FileManager.default.removeItem(at: resetEntered)
+        try FileManager.default.removeItem(at: resetRelease)
         let rebuild = app.buttons["testRebuildIndex"]
         XCTAssertTrue(rebuild.waitForExistence(timeout: 5))
         rebuild.click()
         rebuild.click()
+        XCTAssertTrue(waitForFile(resetEntered, timeout: 5))
         let resolving = app.descendants(matching: .any)["projectFilterResolving"].firstMatch
         XCTAssertTrue(resolving.waitForExistence(timeout: 5),
                       "a retained launcher filter must show reconciliation progress")
+        try Data().write(to: resetRelease)
         XCTAssertTrue(waitForFile(reconciliationStarted, timeout: 20))
         XCTAssertTrue(waitForFile(completed, timeout: 20))
 
@@ -2067,6 +2079,12 @@ final class TraceUITests: XCTestCase {
 
     func testFailedRebuildRetainsAndUnblocksGlobalProjectFilter() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-popover"])
+        let resetEntered = directory.appendingPathComponent("failed-rebuild-reset-entered")
+        let resetRelease = directory.appendingPathComponent("failed-rebuild-reset-release")
+        try Data().write(to: resetRelease)
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_ENTERED_PATH"] = resetEntered.path
+        app.launchEnvironment["TRACE_TEST_SCOPE_RESET_RELEASE_PATH"] = resetRelease.path
         app.launchEnvironment["TRACE_TEST_PROJECT_RECONCILIATION_DELAY_MS"] = "1000"
         let otherSource = directory.appendingPathComponent(
             "Sources/Claude/failed-rebuild-other.jsonl"
@@ -2103,9 +2121,13 @@ final class TraceUITests: XCTestCase {
         sqlite.waitUntilExit()
         XCTAssertEqual(sqlite.terminationStatus, 0)
 
+        try? FileManager.default.removeItem(at: resetEntered)
+        try FileManager.default.removeItem(at: resetRelease)
         app.buttons["testRebuildIndex"].click()
+        XCTAssertTrue(waitForFile(resetEntered, timeout: 5))
         let resolving = app.descendants(matching: .any)["projectFilterResolving"].firstMatch
         XCTAssertTrue(resolving.waitForExistence(timeout: 5))
+        try Data().write(to: resetRelease)
         let indexProgress = app.descendants(matching: .any)["indexProgress"].firstMatch
         let failureLabel = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label CONTAINS %@", "forced rebuild failure"),
@@ -2299,8 +2321,8 @@ final class TraceUITests: XCTestCase {
         popoverSearch.typeKey(.return, modifierFlags: [])
         let launcherSearch = app.textFields["Search Claude Code, Codex, and Gemini"]
         XCTAssertTrue(launcherSearch.waitForExistence(timeout: 10))
-        launcherSearch.typeKey(.escape, modifierFlags: [])
-        XCTAssertFalse(launcherSearch.exists)
+        app.typeKey(" ", modifierFlags: [.command, .shift])
+        XCTAssertTrue(launcherSearch.waitForNonExistence(timeout: 5))
         let before = try String(contentsOf: requests, encoding: .utf8)
             .components(separatedBy: "automatic\n").count - 1
         try? FileManager.default.removeItem(at: completed)
@@ -2331,6 +2353,7 @@ final class TraceUITests: XCTestCase {
 
     func testCostsControlsUseCompletedSnapshotUntilAggregation() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
         let file = directory.appendingPathComponent("Sources/Claude/costs.jsonl")
         let audit = directory.appendingPathComponent("rollup-rebuilds")
         let completed = directory.appendingPathComponent("index-pass-completed")
@@ -2339,7 +2362,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_INDEX_BATCH_DELAY_MS"] = "5000"
         let initial: [String: Any] = [
             "type": "assistant", "uuid": "cost-original", "sessionId": "cost-session",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["id": "cost-original-response", "model": "claude-sonnet-5",
                         "content": "Cost fixture", "usage": ["input_tokens": 10, "output_tokens": 2]],
         ]
@@ -2360,7 +2383,7 @@ final class TraceUITests: XCTestCase {
                 : ["content": "Additional row \(index)"]
             let row: [String: Any] = [
                 "type": "assistant", "uuid": "cost-added-\(index)", "sessionId": "cost-session",
-                "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:10:00Z",
+                "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
                 "message": message,
             ]
             added.append(try JSONSerialization.data(withJSONObject: row))
@@ -2399,7 +2422,7 @@ final class TraceUITests: XCTestCase {
         try? FileManager.default.removeItem(at: completed)
         let failedUsage: [String: Any] = [
             "type": "assistant", "uuid": "cost-failed", "sessionId": "cost-session",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:20:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["id": "cost-failed-response", "model": "claude-sonnet-5",
                         "content": "Failed rollup fixture", "usage": ["input_tokens": 6, "output_tokens": 1]],
         ]
@@ -2420,13 +2443,14 @@ final class TraceUITests: XCTestCase {
 
     func testFailedPassDefersDirtyUsageRepairAndKeepsCompletedSnapshot() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
         let file = directory.appendingPathComponent("Sources/Claude/failed-pass-costs.jsonl")
         let repairStarted = directory.appendingPathComponent("deferred-rollup-started")
         let initialCompleted = directory.appendingPathComponent("initial-pass-completed")
         app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = initialCompleted.path
         let initial: [String: Any] = [
             "type": "assistant", "uuid": "failed-pass-initial", "sessionId": "failed-pass",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["id": "failed-pass-initial-response", "model": "claude-sonnet-5",
                         "content": "Failed pass baseline",
                         "usage": ["input_tokens": 10, "output_tokens": 2]],
@@ -2452,7 +2476,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(sqlite.terminationStatus, 0)
         let added: [String: Any] = [
             "type": "assistant", "uuid": "failed-pass-added", "sessionId": "failed-pass",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["id": "failed-pass-added-response", "model": "claude-sonnet-5",
                         "content": "Failed pass committed mutation",
                         "usage": ["input_tokens": 6, "output_tokens": 1]],
@@ -2478,6 +2502,7 @@ final class TraceUITests: XCTestCase {
 
     func testRollupErrorKeepsCompletedSnapshotUntilDeferredRepairSucceeds() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
         let file = directory.appendingPathComponent("Sources/Claude/repair-costs.jsonl")
         let repairStarted = directory.appendingPathComponent("rollup-repair-started")
         let repairAudit = directory.appendingPathComponent("rollup-repair-audit")
@@ -2494,7 +2519,7 @@ final class TraceUITests: XCTestCase {
             quietPeriodStarted.path
         let initial: [String: Any] = [
             "type": "assistant", "uuid": "repair-initial", "sessionId": "repair",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["id": "repair-initial-response", "model": "claude-sonnet-5",
                         "content": "Repair snapshot baseline",
                         "usage": ["input_tokens": 10, "output_tokens": 2]],
@@ -2519,7 +2544,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(sqlite.terminationStatus, 0)
         let added: [String: Any] = [
             "type": "assistant", "uuid": "repair-added", "sessionId": "repair",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["id": "repair-added-response", "model": "claude-sonnet-5",
                         "content": "Repair snapshot added record",
                         "usage": ["input_tokens": 6, "output_tokens": 1]],
@@ -2576,7 +2601,7 @@ final class TraceUITests: XCTestCase {
 
         let retryKick: [String: Any] = [
             "type": "assistant", "uuid": "repair-retry-kick", "sessionId": "repair",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:02:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["content": "Retry dirty token rollups"],
         ]
         let retryHandle = try FileHandle(forWritingTo: file)
@@ -2700,10 +2725,11 @@ final class TraceUITests: XCTestCase {
 
     func testStartupShowsCachedCostsAndWatchesDuringRollupRepair() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
         let file = directory.appendingPathComponent("Sources/Claude/cached-costs.jsonl")
         let usage: [String: Any] = [
             "type": "assistant", "uuid": "cached-cost", "sessionId": "cached-cost-session",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:00:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["id": "cached-cost-response", "model": "claude-sonnet-5",
                         "content": "Cached Costs fixture",
                         "usage": ["input_tokens": 10, "output_tokens": 2]],
@@ -2741,7 +2767,7 @@ final class TraceUITests: XCTestCase {
         let watched = directory.appendingPathComponent("Sources/Claude/startup-watched.jsonl")
         let row: [String: Any] = [
             "type": "user", "uuid": "startup-watched", "sessionId": "startup-watched-session",
-            "cwd": "/tmp/TraceUIExample", "timestamp": "2026-09-14T10:01:00Z",
+            "cwd": "/tmp/TraceUIExample", "timestamp": usageTimestamp,
             "message": ["content": "StartupWatchNeedle arrived during repair"],
         ]
         try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(to: watched)
@@ -3806,6 +3832,8 @@ final class TraceUITests: XCTestCase {
 
     private struct RestorationCompletion: Decodable {
         let summaryID: UUID
+        let terminalWorkflowID: UUID?
+        let storedSessionID: Int64?
         let mayRestoreSession: Bool
         let selectedSessionID: Int64?
         let selectedProjectCanonicalKey: String?
@@ -3813,7 +3841,9 @@ final class TraceUITests: XCTestCase {
     }
 
     private func launchWithFailedPendingRestoration(extraSessions: Int = 0,
-                                                    failSidebarLoad: Bool = false) throws -> (XCUIApplication, URL, URL) {
+                                                    failSidebarLoad: Bool = false,
+                                                    holdRetryTail: Bool = false,
+                                                    holdAfterRelease: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         if extraSessions > 0 {
             var data = Data()
@@ -3840,7 +3870,9 @@ final class TraceUITests: XCTestCase {
         let failed = directory.appendingPathComponent("restoration-lookup-failed")
         app.launchEnvironment["TRACE_TEST_FAIL_SESSION_RESTORATION_ONCE"] = "1"
         app.launchEnvironment["TRACE_TEST_SESSION_RESTORATION_FAILED_PATH"] = failed.path
-        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "30000"
+        // Pagination gestures on the CI desktop can take longer than 30 seconds.
+        // Keep the explicit release authoritative with a bounded wall-clock backstop.
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "120000"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = held.path
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = release.path
         app.launchEnvironment.removeValue(forKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
@@ -3849,6 +3881,16 @@ final class TraceUITests: XCTestCase {
         if failSidebarLoad {
             app.launchEnvironment["TRACE_TEST_FAIL_STARTUP_SIDEBAR_LOAD_ONCE"] = "1"
             app.launchEnvironment["TRACE_TEST_STARTUP_SIDEBAR_FAILURE_CONSUMED_PATH"] = sidebarFailure.path
+        }
+        if holdRetryTail {
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_RETRY_TAIL_HOLD_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_RETRY_TAIL_STARTED_PATH"] = directory.appendingPathComponent("retry-tail-started").path
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_RETRY_TAIL_RELEASE_PATH"] = directory.appendingPathComponent("retry-tail-release").path
+        }
+        if holdAfterRelease {
+            app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_HOLD_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_STARTED_PATH"] = directory.appendingPathComponent("post-release-started").path
+            app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_RELEASE_PATH"] = directory.appendingPathComponent("post-release-release").path
         }
         app.launch()
         XCTAssertTrue(waitForFile(held, timeout: 10))
@@ -3868,21 +3910,30 @@ final class TraceUITests: XCTestCase {
     }
 
     @discardableResult
+    private func terminalRestorationCompletion(at path: URL, after summaryID: UUID) -> RestorationCompletion? {
+        guard let data = try? Data(contentsOf: path),
+              let completion = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
+              completion.summaryID != summaryID, completion.terminalWorkflowID != nil else { return nil }
+        return completion
+    }
+
+    @discardableResult
     private func releasePendingRestoration(_ release: URL, directory: URL,
                                            expectRestored: Bool = false, expectedPages: Int = 1) throws -> RestorationCompletion {
         let path = directory.appendingPathComponent("restoration-summary-completed.json")
         let previous = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
         try FileManager.default.removeItem(at: path)
         try Data().write(to: release)
-        XCTAssertTrue(waitForFile(path, timeout: 15), "wait for the accepted full summary's restoration decision")
-        let completion = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        let completion = try XCTUnwrap(poll(timeout: 15) {
+            self.terminalRestorationCompletion(at: path, after: previous.summaryID)
+        }, "wait for the accepted terminal workflow's restoration decision")
         XCTAssertNotEqual(completion.summaryID, previous.summaryID)
         XCTAssertFalse(completion.mayRestoreSession)
         XCTAssertEqual(completion.loadedSessionPageCount, expectedPages)
         let saved = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
                                      sql: "SELECT id FROM session WHERE external_id='test-session';")
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "me.haroldmartin.Trace.tests.\(directory.lastPathComponent)"))
-        XCTAssertEqual((defaults.object(forKey: "lastSessionID") as? NSNumber)?.int64Value, saved)
+        XCTAssertEqual(completion.storedSessionID, saved,
+                       "read the app's saved selection from its accepted receipt, not the runner's defaults domain")
         if expectRestored {
             XCTAssertEqual(completion.selectedSessionID, saved)
             XCTAssertNotNil(completion.selectedProjectCanonicalKey)
@@ -3983,17 +4034,53 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "pending-restoration-all-projects-pagination")
     }
 
-    func testPendingLaunchRestorationRespectsSessionPageRetryWithoutEarlierIntent() throws {
-        let (app, directory, release) = try launchWithFailedPendingRestoration(failSidebarLoad: true)
-        let retry = app.buttons["retrySessionPage"]
+    func testPendingLaunchRestorationRespectsSidebarSummaryRetryWithoutEarlierIntent() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration(failSidebarLoad: true, holdRetryTail: true)
+        let path = directory.appendingPathComponent("restoration-summary-completed.json")
+        let initial = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        let retry = app.buttons["retrySidebarSummary"]
         XCTAssertTrue(retry.wait(for: \.isHittable, toEqual: true, timeout: 5))
         retry.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("retry-tail-started"), timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["sidebarSummaryRetryProgress"].firstMatch.exists)
+        XCTAssertFalse(retry.isEnabled)
+        XCTAssertEqual(try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path)).summaryID, initial.summaryID)
+        try Data().write(to: directory.appendingPathComponent("retry-tail-release"))
+        let retried = try XCTUnwrap(poll(timeout: 10) {
+            guard let data = try? Data(contentsOf: path),
+                  let completion = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
+                  completion.summaryID != initial.summaryID else { return nil as RestorationCompletion? }
+            return completion
+        })
+        XCTAssertNil(retried.terminalWorkflowID)
         XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
         try releasePendingRestoration(release, directory: directory)
         XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "1")
         XCTAssertFalse(app.buttons["backToProject"].exists)
         XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
         attach(app, name: "pending-restoration-independent-session-retry")
+    }
+
+    func testDelayedSidebarRetryReceiptCannotSatisfyTerminalRestorationWait() throws {
+        let (app, directory, release) = try launchWithFailedPendingRestoration(
+            failSidebarLoad: true, holdRetryTail: true, holdAfterRelease: true)
+        let path = directory.appendingPathComponent("restoration-summary-completed.json")
+        let initial = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path))
+        app.buttons["retrySidebarSummary"].click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("retry-tail-started"), timeout: 5))
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("post-release-started"), timeout: 5))
+        try Data().write(to: directory.appendingPathComponent("retry-tail-release"))
+        XCTAssertNotNil(poll(timeout: 10) {
+            guard let data = try? Data(contentsOf: path),
+                  let receipt = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
+                  receipt.summaryID != initial.summaryID else { return nil as RestorationCompletion? }
+            return receipt
+        })
+        XCTAssertNil(terminalRestorationCompletion(at: path, after: initial.summaryID),
+            "a real Retry receipt written after startup release is not terminal completion")
+        try releasePendingRestoration(directory.appendingPathComponent("post-release-release"), directory: directory)
+        XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
     }
 
     func testPendingLaunchRestorationRespectsLauncherAndPreferenceOrdering() throws {

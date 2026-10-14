@@ -280,6 +280,29 @@ private struct SessionSidebar: View {
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("projectFilter")
                         .padding(.horizontal, 12).padding(.bottom, 8)
+                    if model.sidebarSummaryError != nil || model.isRetryingSidebarSummary {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let error = model.sidebarSummaryError {
+                                Text(error).font(.caption).foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("sidebarSummaryError")
+                            }
+                            HStack {
+                                if model.isRetryingSidebarSummary {
+                                    ProgressView().controlSize(.small)
+                                        .accessibilityIdentifier("sidebarSummaryRetryProgress")
+                                    Text("Retrying…").font(.caption)
+                                }
+                                Button("Retry") {
+                                    model.cancelLaunchRestorationForUserIntent()
+                                    model.retrySidebarSummary()
+                                }
+                                .disabled(model.isRetryingSidebarSummary)
+                                .accessibilityIdentifier("retrySidebarSummary")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.bottom, 8)
+                    }
                     ScrollViewReader { proxy in
                         List(selection: Binding(get: { selectedProjectID }, set: {
                             if let token = model.sidebarRevealRequest?.token { model.cancelSidebarReveal(token: token) }
