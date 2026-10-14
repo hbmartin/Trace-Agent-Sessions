@@ -447,7 +447,7 @@ public actor IndexCoordinator {
             }
             try await database.setIndexScope(scope)
             status.mutationRevision = await mutations.version()
-            let scopeResetDelay = oldScope != scope ? TraceTestHooks.delayMilliseconds(
+            let scopeResetDelay = (oldScope != scope || rebuild) ? TraceTestHooks.delayMilliseconds(
                 for: "TRACE_TEST_SCOPE_RESET_HOLD_MS", cappedAt: 30_000,
                 marker: .touch(pathKey: "TRACE_TEST_SCOPE_RESET_ENTERED_PATH")
             ) : nil

@@ -3735,6 +3735,11 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.progress.phase == .complete && f.model.watcherReadyForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
         XCTAssertGreaterThan(f.model.watcherGenerationForTesting, retiredGeneration)
+        // Keep legitimate filesystem progress from replacing the injected pass
+        // while this test releases only the obsolete watcher startup.
+        let progressGate = ReviewReadGate(), progressHeld = Task { await progressGate.wait() }
+        defer { progressHeld.cancel(); Task { await progressGate.open() } }
+        f.model.schedulerProgressGateForTesting = progressHeld
         var ongoing = IndexProgress(phase: .indexing)
         ongoing.unresolvedFailedFiles = 2
         ongoing.unresolvedDiscoveryFailures = 3
