@@ -562,6 +562,7 @@ final class AppReviewFollowupTests: XCTestCase {
                 f.model.reloadSourcesAndRebuild()
                 try await wait { f.model.sourceReloadRecovery.error != nil }
                 XCTAssertTrue(f.model.rootSummaryRefreshPendingForTesting)
+                XCTAssertFalse(f.model.costsTotalsUpdating, "installed database debt is not active work after attachment failure")
                 await f.model.refreshSummariesForTesting(lightweight: false)
                 try await wait { !f.model.rootSummaryRefreshPendingForTesting }
                 XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
@@ -1003,11 +1004,426 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.usageSnapshotGateForTesting = nil
         f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
         f.model.reloadSourcesAndRebuild()
-        try await wait { !f.model.indexingPassActiveForTesting && f.model.usage.reduce(0) { $0 + $1.inputTokens } == 10 }
+        try await wait { !f.model.indexingPassActiveForTesting && f.model.schedulerForTesting != nil }
+        XCTAssertTrue(f.model.rootSummaryRefreshPendingForTesting)
+        XCTAssertEqual(f.model.usage.reduce(0) { $0 + $1.inputTokens }, 30)
         await gate.open()
-        try await wait { !f.model.usageSnapshotWaitingForTesting }
+        try await wait { !f.model.usageSnapshotWaitingForTesting && !f.model.costsTotalsUpdating }
+        try await wait { f.model.usage.reduce(0) { $0 + $1.inputTokens } == 10 }
         XCTAssertEqual(f.model.usage.reduce(0) { $0 + $1.inputTokens }, 10)
         XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
+    }
+
+    func testRepeatedConfigurationSupersessionRetainsPageIntentAndLoading() async throws {
+        for more in [false, true] {
+            let f = try await fixture(count: 605)
+            if more { f.model.selectProject(f.project.id); try await wait { !f.model.isLoadingSessions } }
+            let first = ReviewReadGate(), firstTask = Task { await first.wait() }
+            let second = ReviewReadGate(), secondTask = Task { await second.wait() }
+            defer { firstTask.cancel(); secondTask.cancel(); Task { await first.open(); await second.open() } }
+            var states: [Bool] = []
+            let subscription = f.model.$isLoadingSessions.removeDuplicates().dropFirst().sink {
+                if $0 || !states.isEmpty { states.append($0) }
+            }
+            defer { subscription.cancel() }
+            let before = await f.database.sessionListReadCountForTesting()
+            if more { f.model.gateSessionPagesForTesting(firstTask); f.model.loadMoreSessions() }
+            else {
+                await f.database.gateSessionListReadsForTesting(firstTask)
+                f.model.selectProject(f.project.id)
+                try await wait { await f.database.sessionListReadCountForTesting() > before }
+            }
+            f.model.failSourceConfigurationForTesting = true
+            f.model.reloadSourcesAndRebuild()
+            try await wait { f.model.pendingDatabaseForTesting == nil && f.model.sourceReloadRecovery.error != nil }
+            await f.database.gateSessionListReadsForTesting(secondTask)
+            f.model.gateSessionPagesForTesting(nil)
+            await first.open()
+            let replacementCount = before + (more ? 1 : 2)
+            try await wait { await f.database.sessionListReadCountForTesting() == replacementCount }
+            f.model.reloadSourcesAndRebuild()
+            try await wait { f.model.pendingDatabaseForTesting == nil && !f.model.sourceReloadRecovery.isRetrying }
+            await f.database.gateSessionListReadsForTesting(nil)
+            await second.open()
+            try await wait { !f.model.isLoadingSessions }
+            XCTAssertEqual(states, [true, false])
+            XCTAssertEqual(f.model.sessions.count, more ? 400 : 200)
+            XCTAssertEqual(f.model.totalSessionCount, 605)
+            XCTAssertTrue(f.model.hasMoreSessions)
+            XCTAssertNil(f.model.sessionListError)
+            f.model.loadMoreSessions()
+            try await wait { !f.model.isLoadingSessions }
+            XCTAssertEqual(f.model.sessions.count, more ? 600 : 400)
+        }
+    }
+
+    func testQueuedRetryOfReissuedExtraPageRetainsRequestedDepth() async throws {
+        let f = try await fixture(count: 605)
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        let pageGate = ReviewReadGate(), heldPage = Task { await pageGate.wait() }
+        let summaryGate = ReviewReadGate(), heldSummary = Task { await summaryGate.wait() }
+        defer { heldPage.cancel(); heldSummary.cancel(); Task { await pageGate.open(); await summaryGate.open() } }
+        f.model.gateSessionPagesForTesting(heldPage)
+        f.model.loadMoreSessions()
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.pendingDatabaseForTesting == nil && f.model.sourceReloadRecovery.error != nil }
+        await f.database.failSessionListReadOnceForTesting()
+        f.model.gateSessionPagesForTesting(nil)
+        await pageGate.open()
+        try await wait { !f.model.isLoadingSessions && f.model.sessionListError != nil }
+        XCTAssertEqual(f.model.sessions.count, 200)
+        f.model.summarySidebarGateForTesting = heldSummary
+        let summary = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+        try await wait { f.model.summarySidebarWaitingForTesting }
+        f.model.retrySessionLoad()
+        f.model.summarySidebarGateForTesting = nil
+        await summaryGate.open(); await summary.value
+        try await wait { !f.model.isLoadingSessions }
+        XCTAssertEqual(f.model.sessions.count, 400)
+        XCTAssertEqual(f.model.totalSessionCount, 605)
+        XCTAssertTrue(f.model.hasMoreSessions)
+        XCTAssertNil(f.model.sessionListError)
+        f.model.loadMoreSessions()
+        try await wait { !f.model.isLoadingSessions }
+        XCTAssertEqual(f.model.sessions.count, 600)
+    }
+
+    func testQueuedSummaryRetryRetiresOnRebuildWithoutClearingFailure() async throws {
+        for summaryBlocker in [false, true] {
+            let f = try await fixture(count: 2)
+            await f.database.failSessionListReadOnceForTesting()
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            let error = try XCTUnwrap(f.model.sidebarSummaryError)
+            let blocker = ReviewReadGate(), blocked = Task { await blocker.wait() }
+            let progress = ReviewReadGate(), heldProgress = Task { await progress.wait() }
+            defer { blocked.cancel(); heldProgress.cancel(); Task { await blocker.open(); await progress.open() } }
+            var background: Task<Void, Never>?
+            if summaryBlocker {
+                f.model.summarySidebarGateForTesting = blocked
+                background = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+                try await wait { f.model.summarySidebarWaitingForTesting }
+            } else {
+                await f.database.gateSessionListReadsForTesting(blocked)
+                f.model.selectProject(f.project.id)
+                try await wait { f.model.isLoadingSessions }
+            }
+            f.model.retrySidebarSummary()
+            XCTAssertTrue(f.model.isRetryingSidebarSummary)
+            f.model.settings.onboardingComplete = true
+            f.model.schedulerProgressGateForTesting = heldProgress
+            f.model.rebuildIndex()
+            try await wait { f.model.schedulerProgressWaitingForTesting }
+            XCTAssertFalse(f.model.isRetryingSidebarSummary)
+            XCTAssertFalse(f.model.sidebarSummaryRetryPendingForTesting)
+            XCTAssertEqual(f.model.sidebarSummaryError, error)
+            f.model.summarySidebarGateForTesting = nil
+            await f.database.gateSessionListReadsForTesting(nil)
+            await blocker.open(); await background?.value
+            f.model.retrySidebarSummary()
+            try await wait { !f.model.isRetryingSidebarSummary && f.model.sidebarSummaryError == nil }
+            f.model.schedulerProgressGateForTesting = nil
+            await progress.open()
+            await f.model.schedulerForTesting?.waitUntilIdle()
+        }
+    }
+
+    func testNavigationDrainsQueuedGlobalRetryAndAttachmentRetiresIt() async throws {
+        for attachment in [false, true] {
+            let f = try await fixture(count: 2)
+            await f.database.failSessionListReadOnceForTesting()
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.summarySidebarGateForTesting = held
+            let background = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+            try await wait { f.model.summarySidebarWaitingForTesting }
+            f.model.retrySidebarSummary()
+            f.model.summarySidebarGateForTesting = nil
+            if attachment {
+                await f.model.attachForTesting(database: f.database, sources: [ClaudeCodeSource(roots: [f.root])])
+                XCTAssertFalse(f.model.isRetryingSidebarSummary)
+                XCTAssertNotNil(f.model.sidebarSummaryError)
+            } else {
+                f.model.selectProject(f.project.id)
+                try await wait { !f.model.isLoadingSessions && !f.model.isRetryingSidebarSummary }
+                XCTAssertNil(f.model.sidebarSummaryError)
+            }
+            await gate.open(); await background.value
+            XCTAssertFalse(f.model.isRetryingSidebarSummary)
+        }
+    }
+
+    func testUsageRequestsSurviveRunningWorkAndImmediatePromotesWaiting() async throws {
+        let f = try await fixture(count: 2)
+        let before = await f.database.usageReadCountForTesting()
+        f.model.requestUsageRefreshForTesting(repair: true, immediately: false)
+        try await wait { f.model.usageRefreshWaitingForTesting }
+        await f.clock.advance(by: .milliseconds(999))
+        let waiting = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(waiting, before)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.usageSnapshotGateForTesting = held
+        f.model.requestUsageRefreshForTesting(repair: true, immediately: true)
+        try await wait { f.model.usageSnapshotWaitingForTesting }
+        XCTAssertTrue(f.model.usageRefreshRunningForTesting)
+        var publications = 0
+        let subscription = f.model.$usage.dropFirst().sink { _ in publications += 1 }
+        defer { subscription.cancel() }
+        f.model.requestUsageRefreshForTesting(repair: true, immediately: false)
+        f.model.requestUsageRefreshForTesting(repair: true, immediately: true)
+        f.model.usageSnapshotGateForTesting = nil
+        await gate.open()
+        try await wait { !f.model.costsTotalsUpdating }
+        let after = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(after, before + 2)
+        XCTAssertEqual(publications, 1, "the older snapshot cannot satisfy newer requests")
+        XCTAssertNil(f.model.costsError)
+        await f.clock.advance(by: .seconds(60))
+        let idle = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(idle, after)
+    }
+
+    func testNonterminalProgressPreservesRunningUsageRepairForTerminalRecovery() async throws {
+        for repair in [false, true] {
+            let f = try await fixture(count: 2)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.usageSnapshotGateForTesting = held
+            f.model.requestUsageRefreshForTesting(repair: repair, immediately: true)
+            try await wait { f.model.usageSnapshotWaitingForTesting }
+            var pass = IndexProgress(phase: .indexing)
+            await f.model.receiveProgress(pass)
+            XCTAssertTrue(f.model.usageRefreshRunningForTesting)
+            f.model.usageSnapshotGateForTesting = nil
+            await gate.open()
+            try await wait { !f.model.usageRefreshRunningForTesting }
+            let before = await f.database.usageReadCountForTesting()
+            pass.phase = .complete
+            await f.model.receiveProgress(pass)
+            await f.clock.advance(by: .seconds(1))
+            try await wait { !f.model.costsTotalsUpdating }
+            let after = await f.database.usageReadCountForTesting()
+            XCTAssertEqual(after, before + 1)
+        }
+    }
+
+    func testOlderUsageFailureCannotConsumeNewerRepairRequest() async throws {
+        let f = try await fixture(count: 2)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        let before = await f.database.usageReadCountForTesting()
+        f.model.usageFailureGateForTesting = held
+        await f.database.failUsageReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        f.model.requestUsageRefreshForTesting(repair: true, immediately: true)
+        try await wait { f.model.usageFailureWaitingForTesting }
+        f.model.requestUsageRefreshForTesting(repair: true, immediately: true)
+        f.model.usageFailureGateForTesting = nil
+        await gate.open()
+        try await wait { !f.model.costsTotalsUpdating }
+        let after = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(after, before + 2)
+        XCTAssertNil(f.model.costsError)
+        await f.clock.advance(by: .seconds(60))
+        let idle = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(idle, after)
+    }
+
+    func testAttachmentCommitResumesQueuedInstalledUsageWork() async throws {
+        let f = try await fixture(count: 2)
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.schedulerCompletionGateForTesting = held
+        await scheduler.request(watermarks: ["usage-retirement": 1])
+        try await wait { f.model.schedulerCompletionWaitingForTesting }
+        let attachment = Task { await f.model.attachForTesting(database: f.database, sources: [ClaudeCodeSource(roots: [f.root])]) }
+        try await wait { f.model.pendingDatabaseForTesting != nil }
+        let before = await f.database.usageReadCountForTesting()
+        f.model.requestUsageRefreshForTesting(repair: true, immediately: true)
+        XCTAssertFalse(f.model.costsTotalsUpdating)
+        f.model.schedulerCompletionGateForTesting = nil
+        await gate.open(); await attachment.value
+        try await wait { !f.model.costsTotalsUpdating }
+        let after = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(after, before + 1)
+    }
+
+    func testIdleAttachmentHandoffReschedulesRunningUsageWithoutRootChanges() async throws {
+        for sourceReload in [false, true] {
+            let (f, _) = try await twoRootUsageFixture()
+            let record: [String: Any] = ["type": "assistant", "uuid": "kept-cost", "sessionId": "kept-cost",
+                "cwd": "/tmp/kept-cost", "timestamp": 1_700_000_000_000,
+                "message": ["model": "claude-sonnet-4-20250514", "content": "kept-cost",
+                            "usage": ["input_tokens": 12, "output_tokens": 1]]]
+            try (JSONSerialization.data(withJSONObject: record) + Data([10])).write(to: f.root.appendingPathComponent("sessions.jsonl"))
+            await f.coordinator.indexAll(scope: .proseOnly)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            var publications = 0
+            let subscription = f.model.$usage.dropFirst().sink { _ in publications += 1 }
+            defer { subscription.cancel() }
+            let before = await f.database.usageReadCountForTesting()
+            f.model.usageSnapshotGateForTesting = held
+            f.model.requestUsageRefreshForTesting(repair: true, immediately: true)
+            try await wait { f.model.usageSnapshotWaitingForTesting }
+            if sourceReload {
+                f.model.reloadSourcesAndRebuild()
+                try await wait { f.model.schedulerForTesting != nil && !f.model.indexingPassActiveForTesting }
+            } else {
+                let sources = try XCTUnwrap(f.model.sourceReloadSourcesForTesting)
+                await f.model.attachForTesting(database: f.database, sources: sources)
+            }
+            XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
+            XCTAssertEqual(f.model.usage.reduce(0) { $0 + $1.inputTokens }, 30)
+            f.model.usageSnapshotGateForTesting = nil
+            await gate.open()
+            try await wait { !f.model.costsTotalsUpdating }
+            let after = await f.database.usageReadCountForTesting()
+            XCTAssertEqual(after, before + 2)
+            XCTAssertEqual(publications, 1)
+            XCTAssertEqual(f.model.usage.reduce(0) { $0 + $1.inputTokens }, 32)
+        }
+    }
+
+    func testUsageOnlySourceReloadSkipsMetadataAndRepairsFailedDebt() async throws {
+        let (f, _) = try await twoRootUsageFixture()
+        await f.database.failUsageReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.schedulerForTesting != nil && !f.model.costsTotalsUpdating }
+        XCTAssertNotNil(f.model.costsError)
+        XCTAssertTrue(f.model.rootSummaryRefreshPendingForTesting)
+        XCTAssertFalse(f.model.rootMetadataRefreshPendingForTesting)
+        let metadata = await f.database.summaryMetadataReadCountsForTesting()
+        let restores = await f.database.sessionReadCountForTesting()
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.schedulerForTesting != nil && !f.model.rootSummaryRefreshPendingForTesting }
+        let after = await f.database.summaryMetadataReadCountsForTesting()
+        let restored = await f.database.sessionReadCountForTesting()
+        XCTAssertEqual(after.health, metadata.health)
+        XCTAssertEqual(after.statistics, metadata.statistics)
+        XCTAssertEqual(restored, restores)
+        XCTAssertEqual(f.model.usage.reduce(0) { $0 + $1.inputTokens }, 10)
+        XCTAssertFalse(f.model.costsTotalsUpdating)
+    }
+
+    func testRejectedRootSessionSnapshotRetainsDebtAfterReplacementFailure() async throws {
+        let (f, removed) = try await twoRootHealthFixture()
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        let removedID = try XCTUnwrap(f.model.sessions.first { $0.sourcePath.hasPrefix(removed.path) }).id
+        let searchPage = try await f.database.search(query: "NavigationNeedle")
+        let result = try XCTUnwrap(searchPage.results.first {
+            $0.projectCanonicalKey == f.project.canonicalKey && !$0.sourcePath.hasPrefix(removed.path)
+        })
+        try await f.model.synchronizeRootsForTesting(ClaudeCodeSource(roots: [f.root]).roots, database: f.database)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.summarySidebarGateForTesting = held
+        let summary = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
+        try await wait { f.model.summarySidebarWaitingForTesting }
+        await f.database.failSessionListReadOnceForTesting()
+        f.model.openSearchResult(result, fromMainSearch: true)
+        try await wait { !f.model.isLoadingSessions && f.model.sessionListError != nil }
+        f.model.summarySidebarGateForTesting = nil
+        await gate.open(); await summary.value
+        XCTAssertNil(f.model.sidebarSummaryError)
+        XCTAssertTrue(f.model.rootSessionRefreshPendingForTesting)
+        XCTAssertTrue(f.model.sessions.contains { $0.id == removedID })
+        f.model.retrySessionLoad()
+        try await wait { !f.model.isLoadingSessions }
+        XCTAssertFalse(f.model.rootSessionRefreshPendingForTesting)
+        XCTAssertFalse(f.model.sessions.contains { $0.id == removedID })
+        try await wait { !f.model.rootSummaryRefreshPendingForTesting }
+    }
+
+    func testSidebarVisibleErrorNeverIncludesDatabaseSQLOrArguments() async throws {
+        let f = try await fixture(count: 2)
+        let error = DatabaseError(resultCode: .SQLITE_BUSY, message: "private-message-sentinel",
+                                  sql: "SELECT 'private-sql-sentinel'", arguments: ["private-argument-sentinel"])
+        var logs: [TraceModel.SummaryReadFailure] = []
+        f.model.summaryReadFailureForTesting = { logs.append($0) }
+        for _ in 0..<2 {
+            await f.database.failSessionListReadOnceForTesting(error)
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            XCTAssertEqual(f.model.sidebarSummaryError, "Could not refresh projects. Try again.")
+        }
+        XCTAssertEqual(logs.count, 1)
+        await f.model.refreshSummariesForTesting()
+        XCTAssertNil(f.model.sidebarSummaryError)
+        await f.database.failSessionListReadOnceForTesting(error)
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        XCTAssertEqual(logs.count, 2)
+    }
+
+    func testPendingDatabaseRootDebtIsInheritedPromotedOrDiscardedWithoutSpinner() async throws {
+        for failure in [false, true] {
+            let f = try await fixture(count: 2), replacement = try await fixture(count: 3)
+            let previous = try XCTUnwrap(f.model.schedulerForTesting)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.schedulerCompletionGateForTesting = held
+            await previous.request(watermarks: ["retirement": 1])
+            try await wait { f.model.schedulerCompletionWaitingForTesting }
+            let first = Task { await f.model.attach(database: replacement.database, coordinator: replacement.coordinator) }
+            try await wait { f.model.pendingDatabaseForTesting === replacement.database }
+            try await f.model.synchronizeRootsForTesting([], database: replacement.database)
+            XCTAssertTrue(f.model.pendingAttachmentRootRefreshForTesting)
+            XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
+            XCTAssertFalse(f.model.costsTotalsUpdating)
+            let firstToken = f.model.pendingAttachmentTokenForTesting
+            let successor = IndexCoordinator(database: replacement.database, sources: [], clock: f.clock)
+            let second = Task { await f.model.attach(database: replacement.database, coordinator: successor) }
+            try await wait { f.model.pendingAttachmentTokenForTesting != firstToken }
+            XCTAssertTrue(f.model.pendingAttachmentRootRefreshForTesting)
+            if failure { await replacement.database.failFailureCountsOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY)) }
+            f.model.schedulerCompletionGateForTesting = nil
+            await gate.open()
+            let firstCommitted = await first.value, secondCommitted = await second.value
+            XCTAssertFalse(firstCommitted)
+            XCTAssertEqual(secondCommitted, !failure)
+            XCTAssertFalse(f.model.pendingAttachmentRootRefreshForTesting)
+            if failure {
+                XCTAssertFalse(f.model.costsTotalsUpdating)
+                XCTAssertTrue(f.model.databaseForTesting === f.database)
+                XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
+            } else {
+                // Commit makes promoted usage work eligible; its spinner lasts
+                // only until that actual repaired read completes.
+                try await wait { !f.model.costsTotalsUpdating }
+                XCTAssertTrue(f.model.rootSummaryRefreshPendingForTesting)
+                await f.model.refreshSummariesForTesting(lightweight: false)
+                try await wait { !f.model.rootSummaryRefreshPendingForTesting }
+                XCTAssertTrue(f.model.sessions.isEmpty)
+            }
+        }
+    }
+
+    func testErrorClearReentryCannotLoseAcceptedRootPageAcknowledgment() async throws {
+        let (f, _) = try await twoRootHealthFixture()
+        try await f.model.synchronizeRootsForTesting(ClaudeCodeSource(roots: [f.root]).roots, database: f.database)
+        await f.database.failSessionListReadOnceForTesting()
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { !f.model.costsTotalsUpdating }
+        XCTAssertTrue(f.model.rootSessionRefreshPendingForTesting)
+        var reentered = false
+        let subscription = f.model.$sidebarSummaryError.dropFirst().sink { error in
+            if error == nil, !reentered {
+                reentered = true
+                f.model.failSourceConfigurationForTesting = true
+                f.model.reloadSourcesAndRebuild()
+            }
+        }
+        defer { subscription.cancel() }
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        XCTAssertTrue(reentered)
+        XCTAssertFalse(f.model.rootSessionRefreshPendingForTesting)
+        XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
+        XCTAssertFalse(f.model.costsTotalsUpdating)
     }
 
     func testFullSummaryCompletionRejectsObsoleteRestorationWork() async throws {

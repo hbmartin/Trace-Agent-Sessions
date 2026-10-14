@@ -1320,7 +1320,13 @@ public actor IndexDatabase {
     }
 
     public func unresolvedSourceFailureCounts() throws -> SourceFailureCounts {
-        try pool.read { db in
+        #if DEBUG
+        if let error = nextFailureCountsError {
+            nextFailureCountsError = nil
+            throw error
+        }
+        #endif
+        return try pool.read { db in
             let files = try Int.fetchOne(db, sql: """
                 SELECT count(*) FROM source_file
                 WHERE last_error IS NOT NULL
@@ -2137,9 +2143,12 @@ public actor IndexDatabase {
     private var sessionListReadGate: Task<Void, Never>?
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
+    private var nextSessionListReadError: DatabaseError?
     private var failsNextSessionPageRead = false
     private var nextUsageReadError: DatabaseError?
+    private var usageReadAttempts = 0
     private var nextSessionReadError: DatabaseError?
+    private var nextFailureCountsError: DatabaseError?
     private var sessionReadAttempts = 0
     private var sourceHealthReadAttempts = 0
     private var statisticsReadAttempts = 0
@@ -2153,9 +2162,14 @@ public actor IndexDatabase {
     }
     func gateSessionListReadsForTesting(_ gate: Task<Void, Never>?) { sessionListReadGate = gate }
     func sessionListReadCountForTesting() -> Int { sessionListReadCount }
-    func failSessionListReadOnceForTesting() { failsNextSessionListRead = true }
+    func failSessionListReadOnceForTesting(_ error: DatabaseError? = nil) {
+        failsNextSessionListRead = true
+        nextSessionListReadError = error
+    }
     func failSessionPageReadOnceForTesting() { failsNextSessionPageRead = true }
     func failUsageReadOnceForTesting(_ error: DatabaseError) { nextUsageReadError = error }
+    func usageReadCountForTesting() -> Int { usageReadAttempts }
+    func failFailureCountsOnceForTesting(_ error: DatabaseError) { nextFailureCountsError = error }
     func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }
     func sessionReadCountForTesting() -> Int { sessionReadAttempts }
     func sessionReadFailurePendingForTesting() -> Bool { nextSessionReadError != nil }
@@ -2175,6 +2189,10 @@ public actor IndexDatabase {
         if let gate = sessionListReadGate { await gate.value }
         if failsNextSessionListRead {
             failsNextSessionListRead = false
+            if let error = nextSessionListReadError {
+                nextSessionListReadError = nil
+                throw error
+            }
             throw SessionSourceError.unreadableFile("Synthetic session-list read failure")
         }
         #endif
@@ -2306,6 +2324,7 @@ public actor IndexDatabase {
 
     public func usage(fromDay: String?, throughDay: String?, includeSidechains: Bool) throws -> [UsageRollup] {
         #if DEBUG
+        usageReadAttempts += 1
         if let error = nextUsageReadError {
             nextUsageReadError = nil
             throw error

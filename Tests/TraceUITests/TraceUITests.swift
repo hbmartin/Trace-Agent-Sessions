@@ -2353,7 +2353,7 @@ final class TraceUITests: XCTestCase {
 
     func testCostsControlsUseCompletedSnapshotUntilAggregation() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
+        let usageTimestamp = recentUsageTimestamp()
         let file = directory.appendingPathComponent("Sources/Claude/costs.jsonl")
         let audit = directory.appendingPathComponent("rollup-rebuilds")
         let completed = directory.appendingPathComponent("index-pass-completed")
@@ -2443,7 +2443,7 @@ final class TraceUITests: XCTestCase {
 
     func testFailedPassDefersDirtyUsageRepairAndKeepsCompletedSnapshot() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
+        let usageTimestamp = recentUsageTimestamp()
         let file = directory.appendingPathComponent("Sources/Claude/failed-pass-costs.jsonl")
         let repairStarted = directory.appendingPathComponent("deferred-rollup-started")
         let initialCompleted = directory.appendingPathComponent("initial-pass-completed")
@@ -2502,7 +2502,7 @@ final class TraceUITests: XCTestCase {
 
     func testRollupErrorKeepsCompletedSnapshotUntilDeferredRepairSucceeds() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
+        let usageTimestamp = recentUsageTimestamp()
         let file = directory.appendingPathComponent("Sources/Claude/repair-costs.jsonl")
         let repairStarted = directory.appendingPathComponent("rollup-repair-started")
         let repairAudit = directory.appendingPathComponent("rollup-repair-audit")
@@ -2725,7 +2725,7 @@ final class TraceUITests: XCTestCase {
 
     func testStartupShowsCachedCostsAndWatchesDuringRollupRepair() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
-        let usageTimestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
+        let usageTimestamp = recentUsageTimestamp()
         let file = directory.appendingPathComponent("Sources/Claude/cached-costs.jsonl")
         let usage: [String: Any] = [
             "type": "assistant", "uuid": "cached-cost", "sessionId": "cached-cost-session",
@@ -3843,7 +3843,9 @@ final class TraceUITests: XCTestCase {
     private func launchWithFailedPendingRestoration(extraSessions: Int = 0,
                                                     failSidebarLoad: Bool = false,
                                                     holdRetryTail: Bool = false,
-                                                    holdAfterRelease: Bool = false) throws -> (XCUIApplication, URL, URL) {
+                                                    holdAfterRelease: Bool = false,
+                                                    exerciseSidebarRecovery: Bool = false,
+                                                    holdRebuild: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         if extraSessions > 0 {
             var data = Data()
@@ -3892,6 +3894,22 @@ final class TraceUITests: XCTestCase {
             app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_STARTED_PATH"] = directory.appendingPathComponent("post-release-started").path
             app.launchEnvironment["TRACE_TEST_STARTUP_POST_RELEASE_RELEASE_PATH"] = directory.appendingPathComponent("post-release-release").path
         }
+        if exerciseSidebarRecovery {
+            app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+            app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+            app.launchEnvironment["TRACE_TEST_PROJECT_PAGE_HOLD_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_PROJECT_PAGE_STARTED_PATH"] = directory.appendingPathComponent("project-page-started").path
+            app.launchEnvironment["TRACE_TEST_PROJECT_PAGE_RELEASE_PATH"] = directory.appendingPathComponent("project-page-release").path
+            app.launchEnvironment["TRACE_TEST_SESSION_LOADING_AUDIT_PATH"] = directory.appendingPathComponent("session-loading-audit").path
+            app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_DEFERRED_PATH"] = directory.appendingPathComponent("reload-deferred").path
+        }
+        if holdRebuild {
+            // Hold before progress reaches the model: an accepted lightweight
+            // sidebar success would legitimately satisfy the queued Retry.
+            app.launchEnvironment["TRACE_TEST_REBUILD_PROGRESS_HOLD_MS"] = "120000"
+            app.launchEnvironment["TRACE_TEST_REBUILD_PROGRESS_STARTED_PATH"] = directory.appendingPathComponent("rebuild-reset-started").path
+            app.launchEnvironment["TRACE_TEST_REBUILD_PROGRESS_RELEASE_PATH"] = directory.appendingPathComponent("rebuild-reset-release").path
+        }
         app.launch()
         XCTAssertTrue(waitForFile(held, timeout: 10))
         XCTAssertTrue(waitForFile(failed, timeout: 5))
@@ -3909,11 +3927,20 @@ final class TraceUITests: XCTestCase {
         return (app, directory, release)
     }
 
-    @discardableResult
-    private func terminalRestorationCompletion(at path: URL, after summaryID: UUID) -> RestorationCompletion? {
+    private func recentUsageTimestamp() -> String {
+        ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3_600))
+    }
+
+    private func restorationCompletion(at path: URL, after summaryID: UUID) -> RestorationCompletion? {
         guard let data = try? Data(contentsOf: path),
               let completion = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
-              completion.summaryID != summaryID, completion.terminalWorkflowID != nil else { return nil }
+              completion.summaryID != summaryID else { return nil }
+        return completion
+    }
+
+    private func terminalRestorationCompletion(at path: URL, after summaryID: UUID) -> RestorationCompletion? {
+        guard let completion = restorationCompletion(at: path, after: summaryID),
+              completion.terminalWorkflowID != nil else { return nil }
         return completion
     }
 
@@ -4047,10 +4074,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: path)).summaryID, initial.summaryID)
         try Data().write(to: directory.appendingPathComponent("retry-tail-release"))
         let retried = try XCTUnwrap(poll(timeout: 10) {
-            guard let data = try? Data(contentsOf: path),
-                  let completion = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
-                  completion.summaryID != initial.summaryID else { return nil as RestorationCompletion? }
-            return completion
+            self.restorationCompletion(at: path, after: initial.summaryID)
         })
         XCTAssertNil(retried.terminalWorkflowID)
         XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
@@ -4072,15 +4096,67 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(directory.appendingPathComponent("post-release-started"), timeout: 5))
         try Data().write(to: directory.appendingPathComponent("retry-tail-release"))
         XCTAssertNotNil(poll(timeout: 10) {
-            guard let data = try? Data(contentsOf: path),
-                  let receipt = try? JSONDecoder().decode(RestorationCompletion.self, from: data),
-                  receipt.summaryID != initial.summaryID else { return nil as RestorationCompletion? }
-            return receipt
+            self.restorationCompletion(at: path, after: initial.summaryID)
         })
         XCTAssertNil(terminalRestorationCompletion(at: path, after: initial.summaryID),
             "a real Retry receipt written after startup release is not terminal completion")
         try releasePendingRestoration(directory.appendingPathComponent("post-release-release"), directory: directory)
         XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
+    }
+
+    func testSidebarPageReissueKeepsLoadingUntilRowsAppear() throws {
+        let (app, directory, _) = try launchWithFailedPendingRestoration(extraSessions: 230, exerciseSidebarRecovery: true)
+        app.activate()
+        app.buttons["testToggleOnboardingOnly"].click()
+        let reload = app.buttons["testReloadSidebarSources"]
+        let deferred = NSPredicate(format: "value == %@", "deferred")
+        expectation(for: deferred, evaluatedWith: reload)
+        waitForExpectations(timeout: 5)
+        app.staticTexts["PagingIntent"].firstMatch.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("project-page-started"), timeout: 5))
+        let spinner = app.descendants(matching: .any)["sessionPageLoadingProgress"].firstMatch
+        XCTAssertTrue(spinner.waitForExistence(timeout: 5))
+        for _ in 0..<2 {
+            let deferred = directory.appendingPathComponent("reload-deferred")
+            try? FileManager.default.removeItem(at: deferred)
+            app.activate()
+            reload.click()
+            XCTAssertTrue(waitForFile(deferred, timeout: 10))
+            XCTAssertTrue(spinner.exists)
+            XCTAssertEqual(fileLines(in: directory.appendingPathComponent("session-loading-audit")), ["loading"])
+        }
+        try Data().write(to: directory.appendingPathComponent("project-page-release"))
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "230")
+        XCTAssertEqual(fileLines(in: directory.appendingPathComponent("session-loading-audit")), ["loading", "idle"])
+        XCTAssertFalse(app.buttons["retrySessionPage"].exists)
+    }
+
+    func testQueuedSidebarRetryBecomesUsableAfterRebuildReset() throws {
+        let (app, directory, _) = try launchWithFailedPendingRestoration(
+            holdRetryTail: true, exerciseSidebarRecovery: true, holdRebuild: true)
+        app.activate()
+        app.buttons["testFailSidebarSummary"].click()
+        let error = app.staticTexts["sidebarSummaryError"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertEqual(error.value as? String, "Could not refresh projects. Try again.")
+        app.staticTexts["TraceUIExample"].firstMatch.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("project-page-started"), timeout: 5))
+        let retry = app.buttons["retrySidebarSummary"]
+        retry.click()
+        XCTAssertTrue(app.descendants(matching: .any)["sidebarSummaryRetryProgress"].firstMatch.exists)
+        XCTAssertFalse(retry.isEnabled)
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("rebuild-reset-started"), timeout: 10))
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+        XCTAssertTrue(error.exists)
+        retry.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("retry-tail-started"), timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["sidebarSummaryRetryProgress"].firstMatch.exists)
+        try Data().write(to: directory.appendingPathComponent("retry-tail-release"))
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
+        try Data().write(to: directory.appendingPathComponent("rebuild-reset-release"))
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
     }
 
     func testPendingLaunchRestorationRespectsLauncherAndPreferenceOrdering() throws {
