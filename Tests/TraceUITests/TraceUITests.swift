@@ -3843,16 +3843,25 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "30000"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = held.path
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = release.path
-        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = directory.appendingPathComponent("restoration-index-completed").path
+        app.launchEnvironment.removeValue(forKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
         app.launchEnvironment["TRACE_TEST_FULL_SUMMARY_COMPLETED_PATH"] = directory.appendingPathComponent("restoration-summary-completed.json").path
-        if failSidebarLoad { app.launchEnvironment["TRACE_TEST_FAIL_STARTUP_SIDEBAR_LOAD_ONCE"] = "1" }
+        let sidebarFailure = directory.appendingPathComponent("restoration-sidebar-failure-consumed")
+        if failSidebarLoad {
+            app.launchEnvironment["TRACE_TEST_FAIL_STARTUP_SIDEBAR_LOAD_ONCE"] = "1"
+            app.launchEnvironment["TRACE_TEST_STARTUP_SIDEBAR_FAILURE_CONSUMED_PATH"] = sidebarFailure.path
+        }
         app.launch()
         XCTAssertTrue(waitForFile(held, timeout: 10))
         XCTAssertTrue(waitForFile(failed, timeout: 5))
         XCTAssertTrue(app.textFields["mainSearch"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.scrollViews["transcriptScroll"].exists)
-        let initial = try JSONDecoder().decode(RestorationCompletion.self,
-            from: Data(contentsOf: directory.appendingPathComponent("restoration-summary-completed.json")))
+        if failSidebarLoad {
+            XCTAssertTrue(waitForFile(sidebarFailure, timeout: 5), "the actual startup sidebar read must consume the failure")
+        }
+        let receipt = directory.appendingPathComponent("restoration-summary-completed.json")
+        XCTAssertTrue(waitForFile(receipt, timeout: 5),
+            "missing initial summary receipt; held=\(FileManager.default.fileExists(atPath: held.path)), restorationFailure=\(FileManager.default.fileExists(atPath: failed.path)), sidebarFailure=\(FileManager.default.fileExists(atPath: sidebarFailure.path))")
+        let initial = try JSONDecoder().decode(RestorationCompletion.self, from: Data(contentsOf: receipt))
         XCTAssertTrue(initial.mayRestoreSession, "the failed startup read must leave restoration pending")
         XCTAssertNil(initial.selectedSessionID)
         return (app, directory, release)
