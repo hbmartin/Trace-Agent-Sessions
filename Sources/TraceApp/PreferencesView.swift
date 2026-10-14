@@ -42,14 +42,11 @@ private struct GeneralPreferences: View {
                     ForEach(IndexScope.allCases) { scope in Text(scope.title).tag(scope) }
                 }
                 .onChange(of: settings.indexScope) { _, _ in model.rebuildIndex() }
-                Picker("Default ordering", selection: Binding(get: { settings.searchSort }, set: { value in
-                    guard settings.searchSort != value else { return }
-                    model.cancelLaunchRestorationForUserIntent()
-                    settings.searchSort = value
-                })) {
+                Picker("Default ordering", selection: userIntentBinding($settings.searchSort, model: model)) {
                     Text("Most recent").tag(SearchSort.recency)
                     Text("BM25 relevance").tag(SearchSort.relevance)
                 }
+                .accessibilityIdentifier("defaultSearchOrdering")
                 Toggle("Clear global search when closing popover and launcher",
                        isOn: $settings.clearGlobalSearchOnClose)
                     .accessibilityIdentifier("clearGlobalSearchOnClose")

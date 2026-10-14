@@ -58,11 +58,7 @@ struct MainView: View {
                             .accessibilityIdentifier("testProbeTranscriptPosition")
                         }
                     } else {
-                        Picker("Section", selection: Binding(get: { section }, set: { value in
-                            guard section != value else { return }
-                            model.cancelLaunchRestorationForUserIntent()
-                            section = value
-                        })) {
+                        Picker("Section", selection: userIntentBinding($section, model: model)) {
                             Text("Transcript").tag(MainSection.transcript)
                             Text("Costs").tag(MainSection.costs)
                         }
@@ -280,11 +276,7 @@ private struct SessionSidebar: View {
                         Spacer()
                         Text("\(model.projects.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }.padding(12)
-                    TextField("Filter projects", text: Binding(get: { model.projectFilter }, set: { value in
-                        guard model.projectFilter != value else { return }
-                        model.cancelLaunchRestorationForUserIntent()
-                        model.projectFilter = value
-                    }))
+                    TextField("Filter projects", text: userIntentBinding($model.projectFilter, model: model))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("projectFilter")
                         .padding(.horizontal, 12).padding(.bottom, 8)
@@ -390,11 +382,17 @@ private struct SessionSidebar: View {
                             } else if let error = model.sessionListError {
                                 VStack(alignment: .leading) {
                                     Text(error).font(.caption).foregroundStyle(.secondary)
-                                    Button("Retry") { model.retrySessionLoad() }
+                                    Button("Retry") {
+                                        model.cancelLaunchRestorationForUserIntent()
+                                        model.retrySessionLoad()
+                                    }
                                         .accessibilityIdentifier("retrySessionPage")
                                 }
                             } else if model.hasMoreSessions {
-                                Button("Load more") { model.loadMoreSessions() }
+                                Button("Load more") {
+                                    model.cancelLaunchRestorationForUserIntent()
+                                    model.loadMoreSessions()
+                                }
                                     .accessibilityIdentifier("loadMoreSessions")
                             }
                         }
@@ -457,11 +455,7 @@ struct TranscriptView: View {
                         model.selectedProjectCanonicalKey == nil
                             ? "Search all sessions"
                             : "Search this project",
-                        text: Binding(get: { search.query }, set: { value in
-                            guard search.query != value else { return }
-                            model.cancelLaunchRestorationForUserIntent()
-                            search.query = value
-                        })
+                        text: userIntentBinding($search.query, model: model)
                     )
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("mainSearch")

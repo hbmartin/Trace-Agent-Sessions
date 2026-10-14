@@ -3,6 +3,15 @@ import Carbon
 import SwiftUI
 import TraceCore
 
+@MainActor
+func userIntentBinding<Value: Equatable>(_ binding: Binding<Value>, model: TraceModel) -> Binding<Value> {
+    Binding(get: { binding.wrappedValue }, set: { value in
+        guard binding.wrappedValue != value else { return }
+        model.cancelLaunchRestorationForUserIntent()
+        binding.wrappedValue = value
+    })
+}
+
 enum TraceTheme {
     static let accent = Color(red: 0.35, green: 0.42, blue: 0.98)
     static let panelBackground = Color(nsColor: .windowBackgroundColor).opacity(0.96)

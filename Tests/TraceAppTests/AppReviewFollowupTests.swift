@@ -3,6 +3,7 @@ import Clocks
 import Combine
 import CustomDump
 import GRDB
+import SwiftUI
 import XCTest
 @testable import TraceCore
 
@@ -88,8 +89,8 @@ final class AppReviewFollowupTests: XCTestCase {
         return model
     }
 
-    private func restorationFixture() async throws -> (Fixture, SessionSummary) {
-        let f = try await fixture(count: 2)
+    private func restorationFixture(count: Int = 2) async throws -> (Fixture, SessionSummary) {
+        let f = try await fixture(count: count)
         let saved = try XCTUnwrap(f.model.sessions.first)
         await f.model.prepareToTerminate()
         let model = try uninstalledModel(clock: f.clock,
@@ -238,17 +239,102 @@ final class AppReviewFollowupTests: XCTestCase {
     }
 
     private func takeBrowsingIntent(_ model: TraceModel, action: Int) {
-        model.cancelLaunchRestorationForUserIntent()
-        model.cancelLaunchRestorationForUserIntent() // Repeated controls are harmless.
+        func edit<Value: Equatable>(_ value: Value, _ binding: Binding<Value>) {
+            userIntentBinding(binding, model: model).wrappedValue = value
+        }
         switch action {
-        case 0: model.mainSearch.query = "New main search"; model.searchMain()
-        case 1: model.globalSearch.query = "New global search"; model.search()
-        case 2: model.projectFilter = "OtherReview"
-        case 3: model.globalSearch.filters.errorsOnly = true
-        case 4: model.globalSearch.filters.agents = [.codex]
-        case 5: model.settings.searchSort = .relevance
-        case 6: model.mainSearch.query = ""; model.searchMain()
-        default: model.setMainSearchPanelVisible(false)
+        case 0:
+            edit("New main search", Binding(get: { model.mainSearch.query }, set: { model.mainSearch.query = $0 }))
+            model.searchMain()
+        case 1:
+            edit("New global search", Binding(get: { model.globalSearch.query }, set: { model.globalSearch.query = $0 }))
+            model.search()
+        case 2: edit("OtherReview", Binding(get: { model.projectFilter }, set: { model.projectFilter = $0 }))
+        case 3: model.cancelLaunchRestorationForUserIntent(); model.globalSearch.filters.errorsOnly = true
+        case 4: model.cancelLaunchRestorationForUserIntent(); model.globalSearch.filters.agents = [.codex]
+        case 5: edit(.relevance, Binding(get: { model.settings.searchSort }, set: { model.settings.searchSort = $0 }))
+        case 6:
+            model.mainSearch.query = "Prior automatic query"
+            edit("", Binding(get: { model.mainSearch.query }, set: { model.mainSearch.query = $0 }))
+            model.searchMain()
+        default: edit(false, Binding(get: { true }, set: { model.setMainSearchPanelVisible($0) }))
+        }
+    }
+
+    func testUserIntentBindingCancelsBeforeChangedAssignmentAndIgnoresUnchangedValues() async throws {
+        let (f, saved) = try await restorationFixture()
+        var value = "existing"
+        var writes = 0
+        let binding = userIntentBinding(Binding(get: { value }, set: {
+            XCTAssertFalse(f.model.launchRestorationEligibleForTesting, "cancel before the underlying setter can reenter")
+            writes += 1
+            value = $0
+        }), model: f.model)
+        binding.wrappedValue = "existing"
+        XCTAssertEqual(writes, 0)
+        XCTAssertTrue(f.model.launchRestorationEligibleForTesting)
+        binding.wrappedValue = "edited"
+        binding.wrappedValue = "edited"
+        XCTAssertEqual(writes, 1)
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+        XCTAssertFalse(try XCTUnwrap(f.model.fullSummaryCompletionForTesting).mayRestoreSession)
+    }
+
+    func testExplicitRestorationCancellationIsIdempotentWithoutClearingSavedSession() async throws {
+        let (f, saved) = try await restorationFixture()
+        f.model.cancelLaunchRestorationForUserIntent()
+        f.model.cancelLaunchRestorationForUserIntent()
+        await f.model.receiveProgress(.init(phase: .complete))
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.settings.lastSessionID, saved.id)
+        XCTAssertFalse(f.model.launchRestorationEligibleForTesting)
+    }
+
+    func testUnchangedIntentBindingAndAutomaticPaginationKeepRestorationEligible() async throws {
+        let (f, saved) = try await restorationFixture(count: 605)
+        await f.database.failSessionReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        XCTAssertEqual(f.model.sessions.count, 200)
+        userIntentBinding(Binding(get: { f.model.projectFilter }, set: { f.model.projectFilter = $0 }),
+                          model: f.model).wrappedValue = f.model.projectFilter
+        f.model.loadMoreSessions()
+        try await wait { !f.model.isLoadingSessions && f.model.sessions.count == 400 }
+        f.model.retrySessionLoad()
+        XCTAssertTrue(f.model.launchRestorationEligibleForTesting)
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { f.model.selectedSession?.id == saved.id && !f.model.messages.isEmpty }
+        let completed = try XCTUnwrap(f.model.fullSummaryCompletionForTesting)
+        XCTAssertFalse(completed.mayRestoreSession)
+        XCTAssertEqual(completed.selectedSessionID, saved.id)
+    }
+
+    func testFullSummaryCompletionRejectsObsoleteRestorationWork() async throws {
+        for boundary in 0..<3 {
+            let (f, _) = try await restorationFixture()
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.summaryRestorationGateForTesting = held
+            let refresh = Task { await f.model.receiveProgress(.init(phase: .complete)) }
+            try await wait { f.model.summaryRestorationWaitingForTesting }
+            f.model.summaryRestorationGateForTesting = nil
+            switch boundary {
+            case 0:
+                f.model.cancelLaunchRestorationForUserIntent()
+                await f.model.refreshSummariesForTesting(lightweight: false)
+            case 1:
+                let replacement = try IndexDatabase(url: f.root.appendingPathComponent("receipt-replacement.sqlite"))
+                let committed = await f.model.attach(database: replacement,
+                    coordinator: IndexCoordinator(database: replacement, sources: [], clock: f.clock))
+                XCTAssertTrue(committed)
+            default: await f.model.prepareToTerminate()
+            }
+            let receipt = f.model.fullSummaryCompletionForTesting?.summaryID
+            await gate.open(); await refresh.value
+            XCTAssertEqual(f.model.fullSummaryCompletionForTesting?.summaryID, receipt)
+            if boundary == 0 { XCTAssertNotNil(receipt) }
+            else { XCTAssertNil(receipt) }
         }
     }
 
@@ -364,6 +450,118 @@ final class AppReviewFollowupTests: XCTestCase {
             XCTAssertEqual(costs, 2)
             XCTAssertEqual(failures.count, mask == 3 ? 2 : 1, "success must not repeat failure diagnostics")
         }
+    }
+
+    private func twoRootHealthFixture() async throws -> (Fixture, URL) {
+        let f = try await fixture(count: 2)
+        await f.model.prepareToTerminate()
+        let removed = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRemovedHealth-\(UUID())")
+        try FileManager.default.createDirectory(at: removed, withIntermediateDirectories: true)
+        try line(99).write(to: removed.appendingPathComponent("removed.jsonl"))
+        addTeardownBlock { try? FileManager.default.removeItem(at: removed) }
+        let source = ClaudeCodeSource(roots: [f.root, removed])
+        let coordinator = IndexCoordinator(database: f.database, sources: [source], clock: f.clock)
+        await coordinator.indexAll(scope: .proseOnly)
+        let model = try uninstalledModel(clock: f.clock, diagnosticsURL: f.root.appendingPathComponent("health-pruning.json"))
+        let committed = await model.attach(database: f.database, coordinator: coordinator)
+        XCTAssertTrue(committed)
+        model.sourceReloadSourcesForTesting = [source]
+        await model.refreshSummariesForTesting(lightweight: false)
+        XCTAssertEqual(Set(model.sourceHealth.map(\.rootPath)), Set([f.root.path, removed.path]))
+        return (.init(root: f.root, clock: f.clock, model: model, database: f.database,
+                      coordinator: coordinator, project: f.project), removed)
+    }
+
+    func testRootReconciliationPrunesHealthBeforeFailedReadEvenWhenRootsAreUnchanged() async throws {
+        for alreadySynchronized in [false, true] {
+            let (f, removed) = try await twoRootHealthFixture()
+            let old = try XCTUnwrap(f.model.sourceHealth.first { $0.rootPath == f.root.path })
+            let source = ClaudeCodeSource(roots: [f.root])
+            if alreadySynchronized { _ = try await f.database.synchronizeConfiguredRoots(source.roots) }
+            await f.database.failSourceHealthReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.sourceChangeAttachmentGateForTesting = held
+            f.model.sourceReloadSourcesForTesting = [source]
+            f.model.reloadSourcesAndRebuild()
+            try await wait { f.model.sourceChangeAttachmentWaitingForTesting }
+            if alreadySynchronized { await f.model.refreshSummariesForTesting(lightweight: false) }
+            XCTAssertFalse(f.model.sourceHealth.contains { $0.rootPath == removed.path })
+            let retained = try XCTUnwrap(f.model.sourceHealth.first)
+            XCTAssertEqual(retained.rootPath, old.rootPath)
+            XCTAssertEqual(retained.fileCount, old.fileCount)
+            XCTAssertEqual(retained.earliestSessionMilliseconds, old.earliestSessionMilliseconds)
+            XCTAssertEqual(retained.lastScanMilliseconds, old.lastScanMilliseconds)
+            await gate.open()
+            try await wait { !f.model.sourceChangeAttachmentWaitingForTesting && f.model.schedulerForTesting != nil }
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            XCTAssertEqual(f.model.sourceHealth.map(\.rootPath), [f.root.path])
+        }
+    }
+
+    func testFailedRootSynchronizationRetainsCachedHealth() async throws {
+        let (f, _) = try await twoRootHealthFixture()
+        let cached = f.model.sourceHealth.map(\.rootPath)
+        f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        XCTAssertEqual(f.model.sourceHealth.map(\.rootPath), cached)
+    }
+
+    func testObsoleteRootSynchronizationCannotPruneSuccessorHealth() async throws {
+        for terminate in [false, true] {
+            let (f, removed) = try await twoRootHealthFixture()
+            let cached = f.model.sourceHealth.map(\.rootPath)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.configuredRootsPublicationGateForTesting = held
+            f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
+            f.model.reloadSourcesAndRebuild()
+            try await wait { f.model.configuredRootsPublicationWaitingForTesting }
+            f.model.configuredRootsPublicationGateForTesting = nil
+            if terminate { await f.model.prepareToTerminate() }
+            else {
+                await f.database.failSourceHealthReadOnceForTesting(DatabaseError(resultCode: .SQLITE_IOERR))
+                f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root, removed])]
+                f.model.reloadSourcesAndRebuild()
+                try await wait { f.model.schedulerForTesting != nil && f.model.progress.phase == .waiting }
+            }
+            let current = f.model.sourceHealth.map(\.rootPath)
+            XCTAssertEqual(current, cached)
+            await gate.open()
+            try await wait { !f.model.configuredRootsPublicationWaitingForTesting }
+            XCTAssertEqual(f.model.sourceHealth.map(\.rootPath), current)
+        }
+    }
+
+    func testHealthPruningPublicationReentrancyRejectsRetiredConfiguration() async throws {
+        let (f, removed) = try await twoRootHealthFixture()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.configuredRootsPublicationGateForTesting = held
+        f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
+        let before = await f.database.summaryMetadataReadCountsForTesting()
+        var reentered = false
+        let subscription = f.model.$sourceHealth.dropFirst().sink { health in
+            if !reentered && !health.contains(where: { $0.rootPath == removed.path }) {
+                reentered = true
+                f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root, removed])]
+                f.model.failSourceConfigurationForTesting = true
+                f.model.reloadSourcesAndRebuild()
+            }
+        }
+        defer { subscription.cancel() }
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.configuredRootsPublicationWaitingForTesting }
+        f.model.configuredRootsPublicationGateForTesting = nil
+        await gate.open()
+        try await wait { f.model.sourceReloadRecovery.error != nil }
+        XCTAssertTrue(reentered)
+        let after = await f.database.summaryMetadataReadCountsForTesting()
+        XCTAssertEqual(after.health, before.health, "obsolete pruning must not continue into a summary refresh")
+        XCTAssertEqual(after.statistics, before.statistics)
+        XCTAssertNil(f.model.schedulerForTesting)
     }
 
     func testMetadataReadFailureDoesNotPreventSavedSessionRestoration() async throws {
