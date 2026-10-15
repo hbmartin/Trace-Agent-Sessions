@@ -271,7 +271,7 @@ final class ClockTests: XCTestCase {
         terminal.rollupError = "Synthetic rollup failure"
         await model.receiveProgress(terminal)
         await clock.advance(by: .milliseconds(999))
-        XCTAssertEqual(model.costsError, "Synthetic rollup failure")
+        XCTAssertEqual(model.costsError, "Could not update token totals.")
         XCTAssertTrue(model.costsTotalsUpdating)
         let finished = expectation(description: "Usage repair completed")
         let subscription = model.costsChanges.map(\.updating).removeDuplicates().filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
@@ -313,7 +313,7 @@ final class ClockTests: XCTestCase {
         await model.prepareToTerminate()
         try await clock.checkSuspension()
         await clock.advance(by: .seconds(1))
-        XCTAssertEqual(model.costsError, "Synthetic rollup failure", "shutdown must not run the deferred repair")
+        XCTAssertEqual(model.costsError, "Could not update token totals.", "shutdown must not run the deferred repair")
         XCTAssertNil(model.mainSearch.automaticRefreshToken)
     }
 }
