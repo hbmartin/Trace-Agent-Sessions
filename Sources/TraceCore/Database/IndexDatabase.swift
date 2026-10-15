@@ -2024,6 +2024,10 @@ public actor IndexDatabase {
         #if DEBUG
         if failsNextSessionPageRead {
             failsNextSessionPageRead = false
+            if let error = nextSessionPageReadError {
+                nextSessionPageReadError = nil
+                throw error
+            }
             throw SessionSourceError.unreadableFile("Synthetic session-page read failure")
         }
         #endif
@@ -2145,6 +2149,7 @@ public actor IndexDatabase {
     private var failsNextSessionListRead = false
     private var nextSessionListReadError: DatabaseError?
     private var failsNextSessionPageRead = false
+    private var nextSessionPageReadError: DatabaseError?
     private var nextUsageReadError: DatabaseError?
     private var usageReadAttempts = 0
     private var nextSessionReadError: DatabaseError?
@@ -2166,7 +2171,10 @@ public actor IndexDatabase {
         failsNextSessionListRead = true
         nextSessionListReadError = error
     }
-    func failSessionPageReadOnceForTesting() { failsNextSessionPageRead = true }
+    func failSessionPageReadOnceForTesting(_ error: DatabaseError? = nil) {
+        failsNextSessionPageRead = true
+        nextSessionPageReadError = error
+    }
     func failUsageReadOnceForTesting(_ error: DatabaseError) { nextUsageReadError = error }
     func usageReadCountForTesting() -> Int { usageReadAttempts }
     func failFailureCountsOnceForTesting(_ error: DatabaseError) { nextFailureCountsError = error }
