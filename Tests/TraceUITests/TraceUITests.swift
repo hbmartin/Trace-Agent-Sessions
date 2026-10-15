@@ -2431,9 +2431,7 @@ final class TraceUITests: XCTestCase {
         try failedHandle.write(contentsOf: JSONSerialization.data(withJSONObject: failedUsage) + Data([10]))
         try failedHandle.close()
         XCTAssertTrue(waitForFile(completed, timeout: 15))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "rollup unavailable"
-        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Could not update token totals."].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["14"].exists,
                       "a rollup failure must retain the last completed Costs snapshot")
         let failedRepairBanner = app.staticTexts["Updating token totals…"]
@@ -2564,9 +2562,7 @@ final class TraceUITests: XCTestCase {
             1,
             "the deferred repair must not immediately repeat the failed terminal rebuild"
         )
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "rollup unavailable"
-        )).firstMatch.exists,
+        XCTAssertTrue(app.staticTexts["Could not update token totals."].exists,
         "the original rollup error must remain visible during the quiet period")
         XCTAssertTrue(app.staticTexts["Updating token totals…"].exists)
 
@@ -2584,12 +2580,10 @@ final class TraceUITests: XCTestCase {
                       "a terminal rollup error must schedule one deferred dirty-rollup repair")
         XCTAssertTrue(app.staticTexts["10"].exists,
                       "the last completed totals must remain visible during repair")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "repair retry unavailable"
-        )).firstMatch.waitForExistence(timeout: 10),
-        "a newer repair failure must replace the earlier terminal error")
-        XCTAssertFalse(app.staticTexts["Updating token totals…"].exists,
+        XCTAssertTrue(app.staticTexts["Updating token totals…"].waitForNonExistence(timeout: 10),
                        "the updating banner must end after the deferred repair fails")
+        XCTAssertTrue(app.staticTexts["Could not update token totals."].exists,
+                      "repair failures retain the safe Costs message")
 
         let dropTrigger = Process()
         dropTrigger.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
@@ -2613,9 +2607,7 @@ final class TraceUITests: XCTestCase {
 
         XCTAssertTrue(waitForLineCount(repairAudit, line: "rebuilt", count: 1, timeout: 15))
         XCTAssertTrue(app.staticTexts["16"].waitForExistence(timeout: 15))
-        let error = app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "repair retry unavailable"
-        )).firstMatch
+        let error = app.staticTexts["Could not update token totals."]
         expectation(for: NSPredicate { _, _ in !error.exists }, evaluatedWith: nil)
         let banner = app.staticTexts["Updating token totals…"]
         expectation(for: NSPredicate { _, _ in !banner.exists }, evaluatedWith: nil)
@@ -2718,9 +2710,7 @@ final class TraceUITests: XCTestCase {
             format: "label CONTAINS %@", "Searchable usage record"
         )).firstMatch.waitForExistence(timeout: 15), "indexed search must remain usable")
         app.radioButtons["Costs"].click()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "rollup unavailable"
-        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Could not update token totals."].waitForExistence(timeout: 10))
     }
 
     func testStartupShowsCachedCostsAndWatchesDuringRollupRepair() throws {
@@ -2784,6 +2774,39 @@ final class TraceUITests: XCTestCase {
             format: "label CONTAINS %@", "StartupWatchNeedle arrived during repair"
         )).firstMatch.waitForExistence(timeout: 25),
                       "watcher should queue the new file while the first repair is running")
+    }
+
+    func testCachedCostsFailureShowsSafeTextAndExplicitRefreshRecoversWithoutFileChanges() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let row: [String: Any] = ["type": "assistant", "uuid": "safe-cost", "sessionId": "safe-cost",
+            "cwd": "/tmp/TraceUIExample", "timestamp": recentUsageTimestamp(),
+            "message": ["id": "safe-cost-response", "model": "claude-sonnet-5", "content": "Costs recovery",
+                        "usage": ["input_tokens": 10, "output_tokens": 2]]]
+        try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(
+            to: directory.appendingPathComponent("Sources/Claude/costs-recovery.jsonl"))
+        app.launch()
+        XCTAssertTrue(app.buttons["Build Index"].waitForExistence(timeout: 10))
+        app.buttons["Build Index"].click()
+        app.radioButtons["Costs"].click()
+        XCTAssertTrue(app.staticTexts["10"].waitForExistence(timeout: 15))
+        app.terminate()
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_FAIL_CACHED_USAGE_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = directory.appendingPathComponent("cached-failure-held").path
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = directory.appendingPathComponent("cached-failure-release").path
+        app.launch()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("cached-failure-held"), timeout: 10))
+        app.radioButtons["Costs"].click()
+        let error = app.staticTexts["Could not load cached token totals."]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "private-cost-")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Updating token totals…"].exists)
+        app.buttons["testRefreshSidebar"].click()
+        XCTAssertTrue(error.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10"].exists)
+        XCTAssertFalse(app.staticTexts["Updating token totals…"].exists)
+        attach(app, name: "safe-cached-costs-error-recovery")
     }
 
     func testSuccessfulIncrementalPassClearsEarlierFileFailure() throws {
@@ -3846,7 +3869,8 @@ final class TraceUITests: XCTestCase {
                                                     holdAfterRelease: Bool = false,
                                                     exerciseSidebarRecovery: Bool = false,
                                                     holdRebuild: Bool = false,
-                                                    holdNextPage: Bool = false) throws -> (XCUIApplication, URL, URL) {
+                                                    holdNextPage: Bool = false,
+                                                    holdSummary: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         if extraSessions > 0 {
             var data = Data()
@@ -3908,6 +3932,11 @@ final class TraceUITests: XCTestCase {
             app.launchEnvironment["TRACE_TEST_NEXT_PAGE_HOLD_MS"] = "30000"
             app.launchEnvironment["TRACE_TEST_NEXT_PAGE_STARTED_PATH"] = directory.appendingPathComponent("next-page-started").path
             app.launchEnvironment["TRACE_TEST_NEXT_PAGE_RELEASE_PATH"] = directory.appendingPathComponent("next-page-release").path
+        }
+        if holdSummary {
+            app.launchEnvironment["TRACE_TEST_SUMMARY_PAGE_HOLD_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_SUMMARY_PAGE_STARTED_PATH"] = directory.appendingPathComponent("summary-page-started").path
+            app.launchEnvironment["TRACE_TEST_SUMMARY_PAGE_RELEASE_PATH"] = directory.appendingPathComponent("summary-page-release").path
         }
         if holdRebuild {
             // Hold before progress reaches the model: an accepted lightweight
@@ -4171,6 +4200,39 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "431")
         XCTAssertTrue(more.exists)
         attach(app, name: "unclicked-deeper-retry-background-recovery")
+    }
+
+    func testSummaryRefreshPreservesSelectionChangedAfterItsPageRead() throws {
+        let (app, directory, _) = try launchWithFailedPendingRestoration(
+            extraSessions: 430, exerciseSidebarRecovery: true, holdSummary: true)
+        let query = app.textFields["mainSearch"]
+        query.click(); query.typeText("Paging intent session 0")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Paging intent session 0")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        result.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("project-page-started"), timeout: 5))
+        try Data().write(to: directory.appendingPathComponent("project-page-release"))
+        XCTAssertTrue(app.descendants(matching: .any)["sessionPageLoadingProgress"].firstMatch.waitForNonExistence(timeout: 10))
+        let list = app.descendants(matching: .any)["sessionSidebarList"].firstMatch
+        list.scroll(byDeltaX: 0, deltaY: 60_000)
+        openSidebarSession("Paging intent session 429", in: app)
+        app.buttons["testRefreshSidebar"].click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("summary-page-started"), timeout: 5))
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        openSidebarSession("Paging intent session 0", in: app)
+        let selected = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT id FROM session WHERE external_id='paging-0';")
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("project-page-started"))
+        try Data().write(to: directory.appendingPathComponent("summary-page-release"))
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("project-page-started"), timeout: 5),
+                      "the summary must request a replacement page for the changed selection")
+        XCTAssertTrue(app.descendants(matching: .any)["sessionPageLoadingProgress"].firstMatch.waitForNonExistence(timeout: 10))
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        XCTAssertTrue(app.descendants(matching: .any)["sessionSidebarRow-\(selected)"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "430")
+        XCTAssertTrue(app.buttons["loadMoreSessions"].exists)
+        XCTAssertFalse(app.buttons["retrySessionPage"].exists)
+        attach(app, name: "summary-page-latest-selection-retained")
     }
 
     func testPaginationFailureShowsSafeTextAndRetryRecovers() throws {
