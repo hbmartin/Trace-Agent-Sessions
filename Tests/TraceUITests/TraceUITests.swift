@@ -3845,7 +3845,8 @@ final class TraceUITests: XCTestCase {
                                                     holdRetryTail: Bool = false,
                                                     holdAfterRelease: Bool = false,
                                                     exerciseSidebarRecovery: Bool = false,
-                                                    holdRebuild: Bool = false) throws -> (XCUIApplication, URL, URL) {
+                                                    holdRebuild: Bool = false,
+                                                    holdNextPage: Bool = false) throws -> (XCUIApplication, URL, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         if extraSessions > 0 {
             var data = Data()
@@ -3902,6 +3903,11 @@ final class TraceUITests: XCTestCase {
             app.launchEnvironment["TRACE_TEST_PROJECT_PAGE_RELEASE_PATH"] = directory.appendingPathComponent("project-page-release").path
             app.launchEnvironment["TRACE_TEST_SESSION_LOADING_AUDIT_PATH"] = directory.appendingPathComponent("session-loading-audit").path
             app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_DEFERRED_PATH"] = directory.appendingPathComponent("reload-deferred").path
+        }
+        if holdNextPage {
+            app.launchEnvironment["TRACE_TEST_NEXT_PAGE_HOLD_MS"] = "30000"
+            app.launchEnvironment["TRACE_TEST_NEXT_PAGE_STARTED_PATH"] = directory.appendingPathComponent("next-page-started").path
+            app.launchEnvironment["TRACE_TEST_NEXT_PAGE_RELEASE_PATH"] = directory.appendingPathComponent("next-page-release").path
         }
         if holdRebuild {
             // Hold before progress reaches the model: an accepted lightweight
@@ -4130,6 +4136,63 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "230")
         XCTAssertEqual(fileLines(in: directory.appendingPathComponent("session-loading-audit")), ["loading", "idle"])
         XCTAssertFalse(app.buttons["retrySessionPage"].exists)
+    }
+
+    func testBackgroundRefreshRecoversUnclickedDeeperPageRetry() throws {
+        let (app, directory, _) = try launchWithFailedPendingRestoration(
+            extraSessions: 430, exerciseSidebarRecovery: true, holdNextPage: true)
+        app.buttons["testToggleOnboardingOnly"].click()
+        let reload = app.buttons["testReloadSidebarSources"]
+        expectation(for: NSPredicate(format: "value == %@", "deferred"), evaluatedWith: reload)
+        waitForExpectations(timeout: 5)
+        let list = app.descendants(matching: .any)["sessionSidebarList"].firstMatch
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        let more = app.buttons["loadMoreSessions"]
+        XCTAssertTrue(more.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        more.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("next-page-started"), timeout: 5))
+        reload.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("reload-deferred"), timeout: 10))
+        app.buttons["testFailNextSessionList"].click()
+        try Data().write(to: directory.appendingPathComponent("next-page-release"))
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("project-page-started"), timeout: 5))
+        try Data().write(to: directory.appendingPathComponent("project-page-release"))
+        let retry = app.buttons["retrySessionPage"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Could not load sessions. Try again."].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "private-page-")).firstMatch.exists)
+        app.buttons["testRefreshSidebar"].click()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
+        let expected = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT id FROM session WHERE external_id='paging-31';")
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        XCTAssertTrue(app.descendants(matching: .any)["sessionSidebarRow-\(expected)"].firstMatch.waitForExistence(timeout: 5),
+                      "background recovery must include the requested second page")
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "431")
+        XCTAssertTrue(more.exists)
+        attach(app, name: "unclicked-deeper-retry-background-recovery")
+    }
+
+    func testPaginationFailureShowsSafeTextAndRetryRecovers() throws {
+        let (app, _, _) = try launchWithFailedPendingRestoration(extraSessions: 230, exerciseSidebarRecovery: true)
+        app.buttons["testFailNextSessionPage"].click()
+        let list = app.descendants(matching: .any)["sessionSidebarList"].firstMatch
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        let more = app.buttons["loadMoreSessions"]
+        XCTAssertTrue(more.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        more.click()
+        let retry = app.buttons["retrySessionPage"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Could not load more sessions. Try again."].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "private-page-")).firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["sessionPageLoadingProgress"].firstMatch.exists)
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        XCTAssertTrue(retry.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        retry.click()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(more.exists)
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "231")
+        attach(app, name: "safe-pagination-error-and-retry")
     }
 
     func testQueuedSidebarRetryBecomesUsableAfterRebuildReset() throws {

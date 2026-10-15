@@ -279,16 +279,26 @@ private struct SessionSidebar: View {
                     #if DEBUG
                     if TraceTestHooks.showsTestControls,
                        TraceTestHooks.environment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] == "1" {
-                        HStack {
-                            Button("Fail") { model.cancelLaunchRestorationForUserIntent(); model.failSidebarSummaryForUITesting() }
-                                .accessibilityIdentifier("testFailSidebarSummary")
-                            Button("Reload") { model.cancelLaunchRestorationForUserIntent(); model.reloadSourcesAndRebuild() }
-                                .accessibilityIdentifier("testReloadSidebarSources")
-                                .accessibilityValue(settings.onboardingComplete ? "complete" : "deferred")
-                            Button("Rebuild") { model.cancelLaunchRestorationForUserIntent(); model.rebuildIndex() }
-                                .accessibilityIdentifier("testRebuildSidebarIndex")
+                        VStack {
+                            HStack {
+                                Button("Fail") { model.cancelLaunchRestorationForUserIntent(); model.failSidebarSummaryForUITesting() }
+                                    .accessibilityIdentifier("testFailSidebarSummary")
+                                Button("Reload") { model.cancelLaunchRestorationForUserIntent(); model.reloadSourcesAndRebuild() }
+                                    .accessibilityIdentifier("testReloadSidebarSources")
+                                    .accessibilityValue(settings.onboardingComplete ? "complete" : "deferred")
+                                Button("Rebuild") { model.cancelLaunchRestorationForUserIntent(); model.rebuildIndex() }
+                                    .accessibilityIdentifier("testRebuildSidebarIndex")
+                            }
+                            .font(.caption)
+                            HStack {
+                                Button("List error") { model.failNextSessionReadForUITesting(pagination: false) }
+                                    .accessibilityIdentifier("testFailNextSessionList")
+                                Button("Page error") { model.failNextSessionReadForUITesting(pagination: true) }
+                                    .accessibilityIdentifier("testFailNextSessionPage")
+                                Button("Refresh") { model.cancelLaunchRestorationForUserIntent(); model.refreshSidebarForUITesting() }
+                                    .accessibilityIdentifier("testRefreshSidebar")
+                            }.font(.caption)
                         }
-                        .font(.caption)
                     }
                     #endif
                     TextField("Filter projects", text: userIntentBinding($model.projectFilter, model: model))

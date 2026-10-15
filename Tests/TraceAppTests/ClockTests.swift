@@ -274,7 +274,7 @@ final class ClockTests: XCTestCase {
         XCTAssertEqual(model.costsError, "Synthetic rollup failure")
         XCTAssertTrue(model.costsTotalsUpdating)
         let finished = expectation(description: "Usage repair completed")
-        let subscription = model.$costsTotalsUpdating.filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
+        let subscription = model.costsChanges.map(\.updating).removeDuplicates().filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
         await clock.advance(by: .milliseconds(1))
         await fulfillment(of: [finished], timeout: 5)
         withExtendedLifetime(subscription) {}
