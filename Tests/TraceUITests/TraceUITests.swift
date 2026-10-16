@@ -1660,6 +1660,19 @@ final class TraceUITests: XCTestCase {
         return (value, latestError)
     }
 
+    private struct UsageAttemptRecord: Decodable {
+        let databaseGeneration: UUID
+        let workerID: UUID
+        let requestID: UUID
+        let outcome: String?
+    }
+
+    private func usageAttemptRecords(in path: URL) -> [UsageAttemptRecord] {
+        fileLines(in: path).compactMap {
+            try? JSONDecoder().decode(UsageAttemptRecord.self, from: Data($0.utf8))
+        }
+    }
+
     private func waitForFile(_ url: URL, timeout: TimeInterval = 10) -> Bool {
         poll(timeout: timeout) {
             FileManager.default.fileExists(atPath: url.path) ? true : nil
@@ -2508,6 +2521,10 @@ final class TraceUITests: XCTestCase {
         let quietPeriodStarted = directory.appendingPathComponent(
             "rollup-repair-quiet-period-started"
         )
+        let acceptedAttempts = directory.appendingPathComponent("accepted-usage-attempts.jsonl")
+        app.launchEnvironment["TRACE_TEST_ACCEPTED_USAGE_ATTEMPTS_PATH"] = acceptedAttempts.path
+        let attemptStarts = directory.appendingPathComponent("usage-attempt-starts.jsonl")
+        app.launchEnvironment["TRACE_TEST_USAGE_ATTEMPT_STARTED_PATH"] = attemptStarts.path
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_DELAY_MS"] = "3000"
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_STARTED_PATH"] = repairStarted.path
         app.launchEnvironment["TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH"] = repairAudit.path
@@ -2528,6 +2545,7 @@ final class TraceUITests: XCTestCase {
         app.buttons["Build Index"].click()
         app.radioButtons["Costs"].click()
         XCTAssertTrue(app.staticTexts["10"].waitForExistence(timeout: 15))
+        let earlierAttempts = Set(usageAttemptRecords(in: acceptedAttempts).map(\.requestID))
         try? FileManager.default.removeItem(at: repairStarted)
         try? FileManager.default.removeItem(at: repairAudit)
         try? FileManager.default.removeItem(at: passCompleted)
@@ -2582,6 +2600,16 @@ final class TraceUITests: XCTestCase {
                       "the last completed totals must remain visible during repair")
         XCTAssertTrue(app.staticTexts["Updating token totals…"].waitForNonExistence(timeout: 10),
                        "the updating banner must end after the deferred repair fails")
+        let repairAttempt = try XCTUnwrap(usageAttemptRecords(in: attemptStarts).last)
+        XCTAssertNil(repairAttempt.outcome, "entry alone cannot be an accepted failure")
+        let failedAttempt = try XCTUnwrap(poll(timeout: 5) {
+            self.usageAttemptRecords(in: acceptedAttempts).first {
+                $0.outcome == "failure" && !earlierAttempts.contains($0.requestID)
+                    && $0.requestID == repairAttempt.requestID && $0.workerID == repairAttempt.workerID
+                    && $0.databaseGeneration == repairAttempt.databaseGeneration
+            }
+        }, "the deferred repair failure must be accepted; a started or discarded attempt is insufficient")
+        XCTAssertEqual(failedAttempt.requestID, repairAttempt.requestID)
         XCTAssertTrue(app.staticTexts["Could not update token totals."].exists,
                       "repair failures retain the safe Costs message")
 
@@ -2696,7 +2724,7 @@ final class TraceUITests: XCTestCase {
         let sqlite = Process()
         sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
         sqlite.arguments = [directory.appendingPathComponent("index.sqlite").path,
-            "CREATE TRIGGER fail_startup_rollup BEFORE DELETE ON usage_daily BEGIN SELECT RAISE(ABORT, 'rollup unavailable'); END; UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty';"]
+            "CREATE TRIGGER fail_startup_rollup BEFORE DELETE ON usage_daily BEGIN SELECT RAISE(ABORT, 'private-rollup-ui-message'); END; UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty';"]
         try sqlite.run()
         sqlite.waitUntilExit()
         XCTAssertEqual(sqlite.terminationStatus, 0)
@@ -2711,6 +2739,24 @@ final class TraceUITests: XCTestCase {
         )).firstMatch.waitForExistence(timeout: 15), "indexed search must remain usable")
         app.radioButtons["Costs"].click()
         XCTAssertTrue(app.staticTexts["Could not update token totals."].waitForExistence(timeout: 10))
+        app.buttons["indexProgress"].click()
+        let details = app.staticTexts["indexProgressDetails"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertTrue((details.value as? String ?? details.label).contains("Token totals: Could not update token totals."))
+        XCTAssertFalse((details.value as? String ?? details.label).contains("private-rollup-ui-message"))
+        app.typeKey(.escape, modifierFlags: [])
+        let retry = app.buttons["retryCosts"]
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 15))
+        retry.click()
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 15))
+        XCTAssertTrue(app.staticTexts["Could not update token totals."].exists)
+        let repair = Process()
+        repair.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        repair.arguments = [directory.appendingPathComponent("index.sqlite").path, "DROP TRIGGER fail_startup_rollup;"]
+        try repair.run(); repair.waitUntilExit()
+        XCTAssertEqual(repair.terminationStatus, 0)
+        retry.click()
+        XCTAssertTrue(app.staticTexts["Could not update token totals."].waitForNonExistence(timeout: 15))
     }
 
     func testStartupShowsCachedCostsAndWatchesDuringRollupRepair() throws {
@@ -2776,7 +2822,7 @@ final class TraceUITests: XCTestCase {
                       "watcher should queue the new file while the first repair is running")
     }
 
-    func testCachedCostsFailureShowsSafeTextAndExplicitRefreshRecoversWithoutFileChanges() throws {
+    func testCachedCostsFailureShowsSafeTextAndProductionRetryRecoversWithoutFileChanges() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let row: [String: Any] = ["type": "assistant", "uuid": "safe-cost", "sessionId": "safe-cost",
             "cwd": "/tmp/TraceUIExample", "timestamp": recentUsageTimestamp(),
@@ -2790,8 +2836,8 @@ final class TraceUITests: XCTestCase {
         app.radioButtons["Costs"].click()
         XCTAssertTrue(app.staticTexts["10"].waitForExistence(timeout: 15))
         app.terminate()
-        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_FAIL_CACHED_USAGE_ONCE"] = "1"
+        app.launchEnvironment["TRACE_TEST_USAGE_SNAPSHOT_DELAY_MS"] = "3000"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "120000"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = directory.appendingPathComponent("cached-failure-held").path
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = directory.appendingPathComponent("cached-failure-release").path
@@ -2802,7 +2848,13 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(error.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "private-cost-")).firstMatch.exists)
         XCTAssertFalse(app.staticTexts["Updating token totals…"].exists)
-        app.buttons["testRefreshSidebar"].click()
+        XCTAssertFalse(app.buttons["testRefreshSidebar"].exists)
+        let retry = app.buttons["retryCosts"]
+        XCTAssertTrue(retry.isEnabled)
+        retry.click()
+        XCTAssertFalse(retry.isEnabled)
+        XCTAssertTrue(app.descendants(matching: .any)["costsRetryProgress"].firstMatch.exists)
+        XCTAssertTrue(error.exists, "keep the error until an accepted recovery succeeds")
         XCTAssertTrue(error.waitForNonExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["10"].exists)
         XCTAssertFalse(app.staticTexts["Updating token totals…"].exists)
@@ -3936,6 +3988,7 @@ final class TraceUITests: XCTestCase {
         if holdSummary {
             app.launchEnvironment["TRACE_TEST_SUMMARY_PAGE_HOLD_MS"] = "30000"
             app.launchEnvironment["TRACE_TEST_SUMMARY_PAGE_STARTED_PATH"] = directory.appendingPathComponent("summary-page-started").path
+            app.launchEnvironment["TRACE_TEST_SUMMARY_PAGE_REQUESTED_PATH"] = directory.appendingPathComponent("summary-page-requested").path
             app.launchEnvironment["TRACE_TEST_SUMMARY_PAGE_RELEASE_PATH"] = directory.appendingPathComponent("summary-page-release").path
         }
         if holdRebuild {
@@ -4218,6 +4271,10 @@ final class TraceUITests: XCTestCase {
         openSidebarSession("Paging intent session 429", in: app)
         app.buttons["testRefreshSidebar"].click()
         XCTAssertTrue(waitForFile(directory.appendingPathComponent("summary-page-started"), timeout: 5))
+        let requestedID = try XCTUnwrap(fileLines(in: directory.appendingPathComponent("summary-page-requested")).last)
+        let heldID = try String(contentsOf: directory.appendingPathComponent("summary-page-started"), encoding: .utf8)
+        XCTAssertNotNil(UUID(uuidString: requestedID))
+        XCTAssertEqual(heldID, requestedID, "only the explicitly requested summary may own this hold")
         list.scroll(byDeltaX: 0, deltaY: -60_000)
         openSidebarSession("Paging intent session 0", in: app)
         let selected = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),

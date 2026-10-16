@@ -56,7 +56,17 @@ struct CostsView: View {
                     .padding(.bottom, 12)
             }
             if let costsError = model.costsError {
-                Label(costsError, systemImage: "exclamationmark.triangle.fill")
+                HStack {
+                    Label(costsError, systemImage: "exclamationmark.triangle.fill")
+                        .accessibilityIdentifier("costsError")
+                    if model.costsTotalsUpdating {
+                        ProgressView().controlSize(.small)
+                            .accessibilityIdentifier("costsRetryProgress")
+                    }
+                    Button("Retry") { model.retryCosts() }
+                        .disabled(!model.canRetryCosts)
+                        .accessibilityIdentifier("retryCosts")
+                }
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 20)
