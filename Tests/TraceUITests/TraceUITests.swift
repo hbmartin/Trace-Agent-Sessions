@@ -2143,10 +2143,11 @@ final class TraceUITests: XCTestCase {
         try Data().write(to: resetRelease)
         let indexProgress = app.descendants(matching: .any)["indexProgress"].firstMatch
         let failureLabel = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@", "forced rebuild failure"),
+            predicate: NSPredicate(format: "label CONTAINS %@", "Could not update the index. Try again."),
             object: indexProgress
         )
         XCTAssertEqual(XCTWaiter.wait(for: [failureLabel], timeout: 15), .completed)
+        XCTAssertFalse(indexProgress.label.contains("forced rebuild failure"))
         XCTAssertTrue(resolving.waitForNonExistence(timeout: 10),
                       "a failed rebuild must finish project-filter resolution")
         XCTAssertTrue(nativeMenu(titled: "TraceUIExample", in: app).exists,
@@ -2759,7 +2760,9 @@ final class TraceUITests: XCTestCase {
         try FileManager.default.removeItem(at: attemptRelease)
         retry.click()
         XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: false, timeout: 5))
-        XCTAssertTrue(app.progressIndicators["costsRetryProgress"].exists)
+        let retryProgress = app.descendants(matching: .any)["costsRetryProgress"].firstMatch
+        XCTAssertTrue(retryProgress.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Updating token totals…"].exists)
         let started = try XCTUnwrap(poll(timeout: 5) {
             self.usageAttemptRecords(in: attemptStarts).first { !earlierStarts.contains($0.requestID) }
         })
@@ -2773,7 +2776,7 @@ final class TraceUITests: XCTestCase {
             }
         }, "the clicked Retry must commit its failure before recovery is allowed")
         XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
-        XCTAssertFalse(app.progressIndicators["costsRetryProgress"].exists)
+        XCTAssertTrue(retryProgress.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Could not update token totals."].exists)
         let repair = Process()
         repair.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
