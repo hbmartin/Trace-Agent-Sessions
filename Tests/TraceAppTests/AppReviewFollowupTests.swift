@@ -280,6 +280,113 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(after, before + 1)
     }
 
+    func testProductionCostsRetryRecoversWithoutSummaryAndCoalescesReentrantClicks() async throws {
+        let (f, _) = try await twoRootUsageFixture()
+        let error = DatabaseError(resultCode: .SQLITE_BUSY, message: "private-retry-message")
+        await f.database.failUsageReadOnceForTesting(error)
+        await f.model.loadCachedUsageForTesting()
+        XCTAssertTrue(f.model.canRetryCosts)
+        let reads = await f.database.usageReadCountForTesting()
+        let receipts = f.model.usageAttemptReceiptsForTesting.count
+        let sidebar = await f.database.sessionListReadCountForTesting()
+        let metadata = await f.database.summaryMetadataReadCountsForTesting()
+        let publications = OSAllocatedUnfairLock(initialState: [(Bool, Bool)]())
+        let objectSubscription = f.model.objectWillChange.sink {
+            if f.model.costsTotalsUpdating { f.model.retryCosts() }
+        }
+        let subscription = f.model.costsChanges.sink { state in
+            publications.withLock { $0.append((state.canRetry, state.updating)) }
+            if state.updating { f.model.retryCosts() }
+        }
+        defer { subscription.cancel(); objectSubscription.cancel() }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.usageFailureGateForTesting = held
+        await f.database.failUsageReadOnceForTesting(error)
+        f.model.retryCosts(); f.model.retryCosts()
+        try await wait { f.model.usageFailureWaitingForTesting }
+        XCTAssertFalse(f.model.canRetryCosts)
+        XCTAssertEqual(f.model.costsError, "Could not load cached token totals.")
+        XCTAssertEqual(f.model.usage.reduce(0) { $0 + $1.inputTokens }, 30)
+        XCTAssertEqual(f.model.usageAttemptReceiptsForTesting.count, receipts)
+        f.model.usageFailureGateForTesting = nil
+        await gate.open()
+        try await wait { f.model.canRetryCosts }
+        XCTAssertEqual(f.model.costsError, "Could not update token totals.")
+        XCTAssertEqual(f.model.usageAttemptReceiptsForTesting.dropFirst(receipts).map(\.outcome), [.failure])
+        f.model.retryCosts()
+        try await wait { !f.model.costsTotalsUpdating }
+        XCTAssertNil(f.model.costsError)
+        XCTAssertFalse(f.model.canRetryCosts)
+        XCTAssertEqual(f.model.usageAttemptReceiptsForTesting.dropFirst(receipts).map(\.outcome), [.failure, .success])
+        let after = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(after, reads + 2)
+        let sidebarAfter = await f.database.sessionListReadCountForTesting()
+        let metadataAfter = await f.database.summaryMetadataReadCountsForTesting()
+        XCTAssertEqual(sidebarAfter, sidebar)
+        XCTAssertEqual(metadataAfter.health, metadata.health)
+        XCTAssertEqual(metadataAfter.statistics, metadata.statistics)
+        XCTAssertTrue(publications.withLock { $0.contains { !$0.0 } })
+        XCTAssertTrue(publications.withLock { $0.allSatisfy { !($0.0 && $0.1) } })
+    }
+
+    func testCostsRetryIsDisabledForIndexingAttachmentAndTermination() async throws {
+        let f = try await fixture(count: 2)
+        await f.database.failUsageReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.loadCachedUsageForTesting()
+        XCTAssertTrue(f.model.canRetryCosts)
+        await f.model.receiveProgress(.init(phase: .indexing))
+        XCTAssertFalse(f.model.canRetryCosts)
+        let reads = await f.database.usageReadCountForTesting()
+        f.model.retryCosts()
+        let unchanged = await f.database.usageReadCountForTesting()
+        XCTAssertEqual(unchanged, reads)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.sourceChangeAttachmentGateForTesting = held
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceChangeAttachmentWaitingForTesting }
+        XCTAssertFalse(f.model.canRetryCosts)
+        f.model.retryCosts()
+        f.model.sourceChangeAttachmentGateForTesting = nil
+        await gate.open()
+        try await wait { f.model.pendingDatabaseForTesting == nil && !f.model.costsTotalsUpdating }
+        await f.database.failUsageReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.loadCachedUsageForTesting()
+        XCTAssertTrue(f.model.canRetryCosts)
+        await f.model.prepareToTerminate()
+        XCTAssertFalse(f.model.canRetryCosts)
+        f.model.retryCosts()
+    }
+
+    func testCostsRetryRejectsObsoleteFailureReceiptAfterReplacement() async throws {
+        let f = try await fixture(count: 2), replacement = try await fixture(count: 3)
+        await f.database.failUsageReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.loadCachedUsageForTesting()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.usageFailureGateForTesting = held
+        await f.database.failUsageReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        f.model.retryCosts()
+        try await wait { f.model.usageFailureWaitingForTesting }
+        let committed = await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+        XCTAssertTrue(committed)
+        f.model.usageFailureGateForTesting = nil
+        await gate.open()
+        try await wait { !f.model.usageFailureWaitingForTesting }
+        XCTAssertTrue(f.model.usageAttemptReceiptsForTesting.isEmpty)
+        XCTAssertNil(f.model.costsError)
+        XCTAssertFalse(f.model.canRetryCosts)
+    }
+
+    func testIndexStatusDetailsDoNotExposeRawRollupError() {
+        var progress = IndexProgress(phase: .complete)
+        progress.rollupError = "private-message SELECT private-sql 'private-argument'"
+        let details = IndexProgressLabel(progress: progress).details
+        XCTAssertTrue(details.contains("Token totals: Could not update token totals."))
+        XCTAssertFalse(details.contains("private-"))
+    }
+
     func testFailedCachedStartupReadRecordsDormantDebtAndRecoversOnDistinctEvent() async throws {
         let (f, _) = try await twoRootUsageFixture()
         XCTAssertFalse(f.model.usageDemandOwedForTesting)
@@ -394,6 +501,8 @@ final class AppReviewFollowupTests: XCTestCase {
             XCTAssertEqual(f.model.costsError, "Could not update token totals.")
         }
         XCTAssertEqual(logs.filter { $0.operation == .usageRefresh }.count, 1)
+        XCTAssertEqual(f.model.usageAttemptReceiptsForTesting.filter { $0.outcome == .failure }.count, 2,
+                       "accepted failures are receipted even when their diagnostic is deduplicated")
         for _ in 0..<2 {
             var pass = IndexProgress(phase: .complete)
             pass.rollupError = error.localizedDescription
@@ -445,6 +554,121 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(f.model.sessions.contains { $0.id == latest.sessionID })
         XCTAssertFalse(f.model.sessions.contains { $0.id == original.sessionID })
         XCTAssertEqual(f.model.sessionPageDepthForTesting, 1)
+    }
+
+    func testUnresolvedSelectionDoesNotReloadWrongProjectAndResolvesOnItsExistingTranscriptRead() async throws {
+        for direct in [false, true] {
+            for sameProject in [false, true] {
+                let f = try await fixture(count: 605)
+                f.model.selectProject(f.project.id)
+                try await wait { !f.model.isLoadingSessions }
+                f.model.loadMoreSessions()
+                try await wait { !f.model.isLoadingSessions }
+                let file = f.root.appendingPathComponent("unresolved-selection.jsonl")
+                let project = sameProject ? "NavigationReview" : "UncachedOtherProject"
+                let row: [String: Any] = ["type": "user", "uuid": "unresolved", "sessionId": "unresolved",
+                    "cwd": "/tmp/\(project)", "timestamp": 1_600_000_000_000,
+                    "message": ["content": "UnresolvedSelectionNeedle"]]
+                try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(to: file)
+                await f.coordinator.indexAll(scope: .proseOnly)
+                await f.model.refreshSummariesForTesting()
+                let targets = try await f.database.search(query: "UnresolvedSelectionNeedle")
+                let target = try XCTUnwrap(targets.results.first)
+                XCTAssertFalse((f.model.sessions + f.model.recentSessions).contains { $0.id == target.sessionID })
+                let pageGate = ReviewReadGate(), pageHeld = Task { await pageGate.wait() }
+                let transcriptGate = ReviewReadGate(), transcriptHeld = Task { await transcriptGate.wait() }
+                defer {
+                    pageHeld.cancel(); transcriptHeld.cancel()
+                    Task { await pageGate.open(); await transcriptGate.open() }
+                }
+                let before = await f.database.sessionListReadCountForTesting()
+                let summary: Task<Void, Never>?
+                if direct {
+                    await f.database.gateSessionListReadsForTesting(pageHeld)
+                    let prefixes = try await f.database.search(query: "NavigationNeedle",
+                        filters: .init(projectCanonicalKey: f.project.canonicalKey))
+                    let prefix = try XCTUnwrap(prefixes.results.first)
+                    f.model.openSearchResult(prefix)
+                    try await wait { await f.database.sessionListReadCountForTesting() > before }
+                    summary = nil
+                } else {
+                    f.model.summarySidebarGateForTesting = pageHeld
+                    summary = Task { await f.model.refreshSummariesForTesting() }
+                    try await wait { f.model.summarySidebarWaitingForTesting }
+                }
+                f.model.selectionTranscriptReadGateForTesting = transcriptHeld
+                f.model.selectSession(target.sessionID)
+                try await wait { f.model.selectionTranscriptReadWaitingForTesting }
+                XCTAssertEqual(f.model.selectedProjectCanonicalKey, f.project.canonicalKey)
+                var loading: [Bool] = []
+                let subscription = f.model.sessionPageChanges.map(\.isLoading).removeDuplicates().dropFirst().sink { loading.append($0) }
+                defer { subscription.cancel() }
+                f.model.summarySidebarGateForTesting = nil
+                await f.database.gateSessionListReadsForTesting(nil)
+                await pageGate.open()
+                await summary?.value
+                try await wait { !f.model.isLoadingSessions }
+                let withoutSpeculation = await f.database.sessionListReadCountForTesting()
+                XCTAssertEqual(withoutSpeculation, before + 1)
+                XCTAssertEqual(loading, direct ? [false] : [])
+                XCTAssertEqual(f.model.selectedProjectCanonicalKey, f.project.canonicalKey)
+                f.model.selectionTranscriptReadGateForTesting = nil
+                await transcriptGate.open()
+                try await wait {
+                    !f.model.isLoadingSessions && f.model.selectedSession?.id == target.sessionID
+                        && f.model.sessions.contains { $0.id == target.sessionID }
+                }
+                XCTAssertEqual(f.model.selectedProjectCanonicalKey, target.projectCanonicalKey)
+                XCTAssertEqual(f.model.sessionPageDepthForTesting, sameProject ? 2 : 1)
+                XCTAssertEqual(f.model.totalSessionCount, sameProject ? 606 : 1)
+                let after = await f.database.sessionListReadCountForTesting()
+                XCTAssertEqual(after, before + 2)
+            }
+        }
+    }
+
+    func testQueuedExplicitSummaryCannotDisplaceANewerSummary() async throws {
+        let f = try await fixture(count: 2)
+        let before = await f.database.sessionListReadCountForTesting()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        let queued = try XCTUnwrap(f.model.refreshSidebarForUITesting(launchGate: held))
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        let accepted = try XCTUnwrap(f.model.fullSummaryCompletionForTesting).summaryID
+        await gate.open(); await queued.value
+        let after = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(after, before + 1, "a queued older explicit refresh must retire before reading")
+        XCTAssertEqual(f.model.fullSummaryCompletionForTesting?.summaryID, accepted)
+    }
+
+    func testOwnedSummaryHoldCannotBeConsumedByBackgroundFailureOrSupersededRefresh() async throws {
+        let f = try await fixture(count: 2)
+        let backgroundGate = ReviewReadGate(), backgroundHeld = Task { await backgroundGate.wait() }
+        let ownedGate = ReviewReadGate(), ownedHeld = Task { await ownedGate.wait() }
+        defer {
+            backgroundHeld.cancel(); ownedHeld.cancel()
+            Task { await backgroundGate.open(); await ownedGate.open() }
+        }
+        f.model.summarySidebarGateForTesting = backgroundHeld
+        let background = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { f.model.summarySidebarWaitingForTesting }
+        f.model.summarySidebarGateForTesting = nil
+        let owned = Task { await f.model.refreshHeldSummaryForTesting(gate: ownedHeld) }
+        try await wait { f.model.heldSidebarSummaryIDsForTesting.count == 1 }
+        let heldID = try XCTUnwrap(f.model.heldSidebarSummaryIDsForTesting.first)
+        await backgroundGate.open(); await background.value
+        XCTAssertEqual(f.model.heldSidebarSummaryIDsForTesting, [heldID])
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        let accepted = try XCTUnwrap(f.model.fullSummaryCompletionForTesting).summaryID
+        XCTAssertNotEqual(accepted, heldID)
+        await ownedGate.open(); await owned.value
+        XCTAssertEqual(f.model.fullSummaryCompletionForTesting?.summaryID, accepted)
+        let failingGate = ReviewReadGate(), failingHeld = Task { await failingGate.wait() }
+        defer { failingHeld.cancel(); Task { await failingGate.open() } }
+        await f.model.refreshHeldSummaryForTesting(gate: failingHeld, failRead: true)
+        XCTAssertEqual(f.model.heldSidebarSummaryIDsForTesting, [heldID])
+        await f.model.refreshSummariesForTesting()
+        XCTAssertEqual(f.model.heldSidebarSummaryIDsForTesting, [heldID])
     }
 
     func testSummarySelectionChangesPreserveEnsuredRowAndLoadingThroughReplacement() async throws {
@@ -502,6 +726,9 @@ final class AppReviewFollowupTests: XCTestCase {
         let results = try await f.database.search(query: "NavigationNeedle",
             filters: .init(projectCanonicalKey: f.project.canonicalKey), limit: 1000).results
         let beyond = try XCTUnwrap(results.last)
+        f.model.openSearchResult(beyond)
+        try await wait { !f.model.isLoadingSessions && f.model.selectedSession?.id == beyond.sessionID }
+        f.model.selectSession(try XCTUnwrap(f.model.sessions.first).id)
         f.model.loadMoreSessions()
         try await wait { !f.model.isLoadingSessions }
         let gate = ReviewReadGate(), held = Task { await gate.wait() }
@@ -512,7 +739,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let subscription = f.model.sessionPageChanges.sink { state in
             guard armed, !changed, state.sessions.count == 400 else { return }
             changed = true
-            f.model.selectedSessionID = beyond.sessionID
+            f.model.selectSession(beyond.sessionID)
         }
         defer { subscription.cancel() }
         // A full two-page read (rather than append) has a selected-row contract.
@@ -558,10 +785,8 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(f.model.sessions.contains { $0.id == beyond.sessionID })
     }
 
-    func testMissingLatestSelectionHasOnlyOneEnsuredAttempt() async throws {
+    func testMissingLatestSelectionInAllProjectsHasOnlyOneEnsuredAttempt() async throws {
         let f = try await fixture(count: 605)
-        f.model.selectProject(f.project.id)
-        try await wait { !f.model.isLoadingSessions }
         let gate = ReviewReadGate(), held = Task { await gate.wait() }
         defer { held.cancel(); Task { await gate.open() } }
         f.model.summarySidebarGateForTesting = held
@@ -575,7 +800,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let after = await f.database.sessionListReadCountForTesting()
         XCTAssertEqual(after, before + 2)
         XCTAssertEqual(f.model.sessions.count, 200)
-        XCTAssertEqual(f.model.totalSessionCount, 605)
+        XCTAssertEqual(f.model.totalSessionCount, 609)
     }
 
     func testAutomaticReadOnlyUsageNeedsNoRepairQuietPeriod() async throws {
@@ -597,10 +822,10 @@ final class AppReviewFollowupTests: XCTestCase {
         let costs = ReviewPublisher(publisher: f.model.costsChanges)
         let observedPages = OSAllocatedUnfairLock(initialState: [(Int, Int, Bool)]())
         let observedCosts = OSAllocatedUnfairLock(initialState: [(UInt64, Bool)]())
-        let pageSubscription = backgroundSubscription(pages) { state in
+        let pageSubscription = try backgroundSubscription(pages) { state in
                 observedPages.withLock { $0.append((state.sessions.count, state.totalCount, Thread.isMainThread)) }
         }
-        let costSubscription = backgroundSubscription(costs) { state in
+        let costSubscription = try backgroundSubscription(costs) { state in
                 observedCosts.withLock { $0.append((state.usagePublicationRevision, Thread.isMainThread)) }
         }
         defer { pageSubscription.cancel(); costSubscription.cancel() }
@@ -611,12 +836,14 @@ final class AppReviewFollowupTests: XCTestCase {
         let reentry = f.model.objectWillChange.sink {
             guard !subscribedDuringCommit, f.model.sessions.count == 400 else { return }
             subscribedDuringCommit = true
-            let current = self.backgroundSubscription(ReviewPublisher(publisher: pages.publisher.prefix(1).eraseToAnyPublisher())) { state in
+            do {
+            let current = try self.backgroundSubscription(ReviewPublisher(publisher: pages.publisher.prefix(1).eraseToAnyPublisher())) { state in
                     XCTAssertEqual(state.sessions.count, 400)
                     XCTAssertEqual(state.totalCount, 605)
                     XCTAssertFalse(Thread.isMainThread)
             }
             withExtendedLifetime(current) {}
+            } catch { XCTFail("Subscription failed: \(error)") }
         }
         defer { reentry.cancel() }
         f.model.loadMoreSessions()
@@ -629,17 +856,47 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(observedCosts.withLock { $0.last?.0 }, observedCosts.withLock { ($0.first?.0 ?? 0) + 1 })
     }
 
+    private enum SubscriptionWaitError: Error { case timedOut }
+
     nonisolated private func backgroundSubscription<Value: Sendable>(_ transfer: ReviewPublisher<Value>,
-        receive: @escaping @Sendable (Value) -> Void) -> AnyCancellable {
+        timeout: DispatchTimeInterval = .seconds(3), beforeSubscribe: @escaping @Sendable () -> Void = {},
+        receive: @escaping @Sendable (Value) -> Void) throws -> AnyCancellable {
         let ready = DispatchSemaphore(value: 0)
-        let subscriptions = OSAllocatedUnfairLock(initialState: [ReviewSubscription]())
+        let slot = OSAllocatedUnfairLock(initialState: (subscription: Optional<ReviewSubscription>.none, abandoned: false))
         DispatchQueue.global().async {
+            beforeSubscribe()
             let subscription = ReviewSubscription(value: transfer.publisher.sink(receiveValue: receive))
-            subscriptions.withLock { $0.append(subscription) }
+            let abandoned = slot.withLock {
+                if $0.abandoned { return true }
+                $0.subscription = subscription
+                return false
+            }
+            if abandoned { subscription.value.cancel() }
             ready.signal()
         }
-        XCTAssertEqual(ready.wait(timeout: .now() + 3), .success)
-        return subscriptions.withLock { $0[0] }.value
+        guard ready.wait(timeout: .now() + timeout) == .success else {
+            let late = slot.withLock {
+                $0.abandoned = true
+                let subscription = $0.subscription
+                $0.subscription = nil
+                return subscription
+            }
+            late?.value.cancel()
+            throw SubscriptionWaitError.timedOut
+        }
+        return try XCTUnwrap(slot.withLock { $0.subscription }).value
+    }
+
+    func testBackgroundSubscriptionTimeoutThrowsAndCancelsLateSubscription() throws {
+        let released = DispatchSemaphore(value: 0), cancelled = DispatchSemaphore(value: 0)
+        let subject = PassthroughSubject<Int, Never>()
+        let publisher = ReviewPublisher(publisher: subject.handleEvents(receiveCancel: { @Sendable in cancelled.signal() }).eraseToAnyPublisher())
+        XCTAssertThrowsError(try backgroundSubscription(publisher, timeout: .milliseconds(10),
+            beforeSubscribe: { released.wait() }, receive: { _ in })) { error in
+            XCTAssertTrue(error is SubscriptionWaitError)
+        }
+        released.signal()
+        XCTAssertEqual(cancelled.wait(timeout: .now() + 3), .success)
     }
 
     func testPagePublicationReentryObservesCommittedCursorAndCannotOverwriteNavigation() async throws {

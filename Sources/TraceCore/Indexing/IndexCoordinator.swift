@@ -1,5 +1,7 @@
 import Clocks
 import Foundation
+import GRDB
+import os
 
 public enum IndexActivity: String, Equatable, Sendable {
     case initialBuild
@@ -123,6 +125,29 @@ private actor IndexRunGate {
 }
 
 public actor IndexCoordinator {
+    private struct RollupFailureIdentity: Hashable {
+        let primary: Int32?
+        let extended: Int32?
+        let message: String
+    }
+    private var rollupFailures: Set<RollupFailureIdentity> = []
+    private static let rollupLog = Logger(subsystem: "me.haroldmartin.Trace", category: "Rollup repair")
+    #if DEBUG
+    private(set) var rollupFailureLogCountForTesting = 0
+    #endif
+
+    private func recordRollupFailure(_ error: Error) {
+        let sqlite = error as? DatabaseError
+        let failure = RollupFailureIdentity(primary: sqlite?.resultCode.rawValue,
+            extended: sqlite?.extendedResultCode.rawValue,
+            message: sqlite.map { $0.message ?? "SQLite repair failed" } ?? error.localizedDescription)
+        guard rollupFailures.insert(failure).inserted else { return }
+        Self.rollupLog.error("Usage repair failed; SQLite primary=\(failure.primary.map(String.init) ?? "n/a", privacy: .public) extended=\(failure.extended.map(String.init) ?? "n/a", privacy: .public); \(failure.message, privacy: .private)")
+        #if DEBUG
+        rollupFailureLogCountForTesting += 1
+        #endif
+    }
+
     private struct SourceFileKey: Hashable {
         let agent: AgentKind
         let comparisonPath: String
@@ -933,9 +958,15 @@ public actor IndexCoordinator {
             status.phase = .aggregating
             status.mutationRevision = await mutations.version()
             await progress(status)
-            do { status.rollupsChanged = try await database.rebuildUsageRollupsIfDirty() }
+            do {
+                status.rollupsChanged = try await database.rebuildUsageRollupsIfDirty()
+                rollupFailures.removeAll()
+            }
             catch is CancellationError { throw CancellationError() }
-            catch { status.rollupError = error.localizedDescription }
+            catch {
+                recordRollupFailure(error)
+                status.rollupError = "Could not update token totals."
+            }
             try Task.checkCancellation()
             status.phase = .complete
             status.currentPath = nil

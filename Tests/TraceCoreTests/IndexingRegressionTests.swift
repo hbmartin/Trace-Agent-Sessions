@@ -799,7 +799,7 @@ final class IndexingRegressionTests: XCTestCase {
         let recorder = ProgressRecorder()
         await coordinator.refresh(paths: [file.path], scope: .proseOnly) { recorder.receive($0) }
         XCTAssertEqual(recorder.terminal?.phase, .complete)
-        XCTAssertNotNil(recorder.terminal?.rollupError)
+        XCTAssertEqual(recorder.terminal?.rollupError, "Could not update token totals.")
         let search = try await database.search(query: "searchable")
         XCTAssertEqual(search.results.count, 2)
         let dirty = try await raw.read { db in
@@ -811,6 +811,44 @@ final class IndexingRegressionTests: XCTestCase {
         let repaired = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
         XCTAssertEqual(repaired.first?.inputTokens, 14)
     }
+
+    #if DEBUG
+    func testCoordinatorRollupErrorsAreSafeAndPrivateDiagnosticsResetAfterSuccess() async throws {
+        let root = try directory(), file = root.appendingPathComponent("safe-rollup.jsonl")
+        let row = #"{"type":"assistant","uuid":"one","sessionId":"safe","cwd":"/tmp/safe","timestamp":1700000000000,"message":{"id":"response","model":"claude-sonnet-5","content":"safe costs","usage":{"input_tokens":10,"output_tokens":2}}}"# + "\n"
+        try Data(row.utf8).write(to: file)
+        let url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        let error = DatabaseError(resultCode: .SQLITE_BUSY, message: "private-rollup-message",
+            sql: "DELETE FROM private_rollup_sql WHERE secret=?", arguments: ["private-rollup-argument"],
+            publicStatementArguments: true)
+        for _ in 0..<2 {
+            try await raw.write { try $0.execute(sql: "UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty'") }
+            await database.failRollupRebuildOnceForTesting(error)
+            let recorder = ProgressRecorder()
+            await coordinator.indexAll(scope: .proseOnly) { recorder.receive($0) }
+            XCTAssertEqual(recorder.terminal?.rollupError, "Could not update token totals.")
+            XCTAssertEqual(recorder.terminal?.phase, .complete)
+        }
+        let repeated = await coordinator.rollupFailureLogCountForTesting
+        XCTAssertEqual(repeated, 1)
+        await coordinator.indexAll(scope: .proseOnly)
+        try await raw.write { try $0.execute(sql: "UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty'") }
+        await database.failRollupRebuildOnceForTesting(error)
+        await coordinator.indexAll(scope: .proseOnly)
+        let afterSuccess = await coordinator.rollupFailureLogCountForTesting
+        XCTAssertEqual(afterSuccess, 2)
+        let replacement = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await database.failRollupRebuildOnceForTesting(error)
+        await replacement.indexAll(scope: .proseOnly)
+        let replacementLogs = await replacement.rollupFailureLogCountForTesting
+        XCTAssertEqual(replacementLogs, 1)
+    }
+
+    #endif
 
     func testTimezoneMarkerForcesRollupRebuildWithoutDirtyFlag() async throws {
         let root = try directory()

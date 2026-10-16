@@ -1486,6 +1486,12 @@ public actor IndexDatabase {
             try Self.usageRollupsAreDirty(in: $0, timeZoneID: timeZoneID)
         }
         guard mightBeDirty else { return false }
+        #if DEBUG
+        if let error = nextRollupRebuildError {
+            nextRollupRebuildError = nil
+            throw error
+        }
+        #endif
         try await delayUsageRollupRebuildForTesting()
         try Task.checkCancellation()
         let rebuilt = try await pool.writeWithoutTransaction { db in
@@ -2176,6 +2182,8 @@ public actor IndexDatabase {
         nextSessionPageReadError = error
     }
     func failUsageReadOnceForTesting(_ error: DatabaseError) { nextUsageReadError = error }
+    private var nextRollupRebuildError: DatabaseError?
+    func failRollupRebuildOnceForTesting(_ error: DatabaseError) { nextRollupRebuildError = error }
     func usageReadCountForTesting() -> Int { usageReadAttempts }
     func failFailureCountsOnceForTesting(_ error: DatabaseError) { nextFailureCountsError = error }
     func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }

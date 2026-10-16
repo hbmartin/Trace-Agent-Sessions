@@ -121,6 +121,7 @@ struct IndexProgressLabel: View {
                     ProgressView(value: Double(progress.completedFiles), total: Double(progress.totalFiles))
                 }
                 Text(details).font(.callout).textSelection(.enabled)
+                    .accessibilityIdentifier("indexProgressDetails")
                 if progress.currentFileTotalBytes > 0 && busy {
                     ProgressView(value: Double(min(progress.currentFileBytes, progress.currentFileTotalBytes)), total: Double(progress.currentFileTotalBytes))
                 }
@@ -128,7 +129,7 @@ struct IndexProgressLabel: View {
         }
     }
 
-    private var details: String {
+    var details: String {
         var lines = [activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
@@ -148,7 +149,7 @@ struct IndexProgressLabel: View {
         if let error = progress.error { lines.append(error) }
         if let warning = progress.metadataWarning { lines.append(warning) }
         lines.append(contentsOf: monitoringWarnings)
-        if let rollupError = progress.rollupError { lines.append("Token totals: \(rollupError)") }
+        if progress.rollupError != nil { lines.append("Token totals: Could not update token totals.") }
         return lines.joined(separator: "\n")
     }
 
