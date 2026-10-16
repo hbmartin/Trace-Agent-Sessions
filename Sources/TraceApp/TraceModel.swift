@@ -71,10 +71,18 @@ private final class CommittedModelState<Value: Sendable> {
         storage = .init(initialState: value)
     }
 
-    func commit(_ value: Value, notify: () -> Void) {
+    func stage(_ value: Value) {
         storage.withLock { $0 = value }
         revision &+= 1
         pending = true
+    }
+
+    func commit(_ value: Value, notify: () -> Void) {
+        stage(value)
+        publish(notify: notify)
+    }
+
+    func publish(notify: () -> Void) {
         guard !delivering else { return }
         delivering = true
         defer { delivering = false }
@@ -194,7 +202,19 @@ final class TraceModel: ObservableObject {
     private let clock: AnyClock<Duration>
     let diagnostics: DiagnosticsStore
 
-    @Published private(set) var progress = IndexProgress(phase: .waiting)
+    private let progressState = CommittedModelState(IndexProgress(phase: .waiting))
+    private(set) var progress: IndexProgress {
+        get { progressState.value }
+        set {
+            if newValue.rollupError == nil { rollupFailure = nil }
+            else if let database,
+                    rollupFailure?.database !== database || rollupFailure?.passID != newValue.passID {
+                rollupFailure = .init(database: database, workflow: indexWorkflow.generation, passID: newValue.passID)
+            }
+            progressState.commit(newValue) { objectWillChange.send() }
+        }
+    }
+    var progressChanges: AnyPublisher<IndexProgress, Never> { progressState.publisher }
     @Published private(set) var sourceReloadRecovery: SourceReloadRecoveryState = .normal
     @Published private(set) var projects: [ProjectSummary] = []
     struct SessionPageState: Sendable {
@@ -265,20 +285,57 @@ final class TraceModel: ObservableObject {
     private enum PendingSidebarAction { case loadMore, retry(SessionListRetry) }
     private var pendingSidebarAction: (project: String?, action: PendingSidebarAction)?
     @Published private(set) var recentSessions: [SessionSummary] = []
-    @Published private(set) var messages: [MessageSummary] = [] {
-        didSet {
-            transcriptMessageRevision &+= 1
-            messageIdentities = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, MessageIdentity($0)) })
+    struct TranscriptState: Sendable {
+        var sessionID: Int64?
+        var session: SessionSummary?
+        var messages: [MessageSummary] = []
+        var hydrated: [Int64: HydratedMessage] = [:]
+        var failures: [Int64: String] = [:]
+        var expanded: Set<Int64> = []
+        fileprivate var readError: String?
+        fileprivate var absence: TranscriptAbsence?
+        var messageRevision = 0
+        var contentRevision = 0
+    }
+    private let transcriptState = CommittedModelState(TranscriptState())
+    var transcriptChanges: AnyPublisher<TranscriptState, Never> { transcriptState.publisher }
+    var messages: [MessageSummary] { transcriptState.value.messages }
+    private(set) var hydratedMessages: [Int64: HydratedMessage] {
+        get { transcriptState.value.hydrated }
+        set { updateTranscript { $0.hydrated = newValue; $0.contentRevision &+= 1 } }
+    }
+    private(set) var hydrationFailures: [Int64: String] {
+        get { transcriptState.value.failures }
+        set { updateTranscript { $0.failures = newValue; $0.contentRevision &+= 1 } }
+    }
+    private func updateTranscript(replacingRows: Bool = false, _ update: (inout TranscriptState) -> Void) {
+        var next = transcriptState.value
+        update(&next)
+        if knownSelectionProject?.sessionID != next.sessionID { knownSelectionProject = nil }
+        if replacingRows {
+            messageIdentities = Dictionary(uniqueKeysWithValues: next.messages.map { ($0.id, MessageIdentity($0)) })
+        }
+        transcriptState.commit(next) { objectWillChange.send() }
+    }
+    private func resetTranscriptValues(sessionID: Int64? = nil, session: SessionSummary? = nil) {
+        hydrationOrder.removeAll(keepingCapacity: true)
+        hydrationEpoch = UUID()
+        hydratingMessageIDs.removeAll(keepingCapacity: true)
+        updateTranscript(replacingRows: true) {
+            $0.sessionID = sessionID
+            $0.session = session
+            $0.messages = []
+            $0.hydrated = [:]
+            $0.failures = [:]
+            $0.expanded = []
+            $0.readError = nil
+            $0.absence = nil
+            $0.messageRevision &+= 1
+            $0.contentRevision &+= 3
         }
     }
-    @Published private(set) var hydratedMessages: [Int64: HydratedMessage] = [:] {
-        didSet { transcriptContentRevision &+= 1 }
-    }
-    @Published private(set) var hydrationFailures: [Int64: String] = [:] {
-        didSet { transcriptContentRevision &+= 1 }
-    }
     @Published var projectFilter = ""
-    @Published private(set) var selectedSession: SessionSummary?
+    var selectedSession: SessionSummary? { transcriptState.value.session }
     @Published private(set) var sourceHealth: [SourceHealth] = []
     struct CostsState: Sendable {
         fileprivate var completed: [UsageRollup] = []
@@ -293,11 +350,22 @@ final class TraceModel: ObservableObject {
     var usage: [UsageRollup] { costsState.value.usage }
     var costsTotalsUpdating: Bool { costsState.value.updating }
     var canRetryCosts: Bool { costsState.value.canRetry }
-    private func updateCosts(_ update: (inout CostsState) -> Void) {
+    private func costsPresentation(_ value: CostsState) -> CostsState {
+        var next = value
+        let currentWork = database.map { database in
+            usageWork.worker?.database === database
+                || (usageWork.pending?.database === database && !indexingPassActive && pendingAttachment == nil)
+        } ?? false
+        next.updating = !terminating && (indexingPassActive || currentWork)
+        next.canRetry = next.error != nil && usageRetryEligible
+        return next
+    }
+    private func updateCosts(_ update: (inout CostsState) -> Void, onCommit: () -> Void = {}) {
         var next = costsState.value
         update(&next)
-        next.canRetry = next.error != nil && usageRetryEligible
-        costsState.commit(next) { objectWillChange.send() }
+        costsState.stage(costsPresentation(next))
+        onCommit()
+        costsState.publish { objectWillChange.send() }
     }
     @Published private(set) var statistics: IndexStatistics?
     @Published private(set) var diagnosticsSnapshot = DiagnosticsSnapshot()
@@ -311,15 +379,15 @@ final class TraceModel: ObservableObject {
     @Published private(set) var selectedProjectCanonicalKey: String?
     @Published private(set) var selectedProjectDisplayName: String?
     @Published private(set) var sidebarRevealRequest: SidebarRevealRequest?
-    @Published var selectedSessionID: Int64? {
-        didSet {
-            if knownSelectionProject?.sessionID != selectedSessionID { knownSelectionProject = nil }
-        }
+    var selectedSessionID: Int64? {
+        get { transcriptState.value.sessionID }
+        set { updateTranscript { $0.sessionID = newValue } }
     }
     @Published var customCostStart = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @Published var customCostEnd = Date()
-    @Published var expandedReasoningIDs: Set<Int64> = [] {
-        didSet { transcriptContentRevision &+= 1 }
+    var expandedReasoningIDs: Set<Int64> {
+        get { transcriptState.value.expanded }
+        set { updateTranscript { $0.expanded = newValue; $0.contentRevision &+= 1 } }
     }
     @Published var startupError: String? {
         didSet { sourceReloadAlertError = nil }
@@ -328,8 +396,8 @@ final class TraceModel: ObservableObject {
     @Published private(set) var monitoringWarnings: [String] = []
     private var metadataMonitoringWarnings: [String] = []
     private var sourceMonitoringWarnings: [String] = []
-    private(set) var transcriptMessageRevision = 0
-    private(set) var transcriptContentRevision = 0
+    var transcriptMessageRevision: Int { transcriptState.value.messageRevision }
+    var transcriptContentRevision: Int { transcriptState.value.contentRevision }
 
     private var database: IndexDatabase?
     private var coordinator: IndexCoordinator?
@@ -495,6 +563,13 @@ final class TraceModel: ObservableObject {
         var task: Task<Void, Never>?
     }
     private var usageWork = UsageWorkState()
+    private struct RollupFailureReceipt {
+        let id = UUID()
+        let database: IndexDatabase
+        let workflow: UUID
+        let passID: UUID
+    }
+    private var rollupFailure: RollupFailureReceipt?
     // Enrollment survives same-database resets and includes failed repair attempts.
     private var startupUsageRepairEnrolled = false
     private var usageRecoverySequence: UInt64 = 0
@@ -576,16 +651,22 @@ final class TraceModel: ObservableObject {
         var phase: Phase = .running
     }
     private var transcriptRecoveryEpisode: TranscriptRecoveryEpisode?
-    private struct TranscriptAbsence {
+    fileprivate struct TranscriptAbsence: Sendable {
         let database: IndexDatabase
         let sessionID: Int64
         let requestID: UUID
         var paused = false
     }
-    @Published private var transientTranscriptAbsence: TranscriptAbsence?
+    private var transientTranscriptAbsence: TranscriptAbsence? {
+        get { transcriptState.value.absence }
+        set { updateTranscript { $0.absence = newValue } }
+    }
     // Selection preservation outlives the visible absence banner when recovery fails.
     private var pausedTranscriptPreservation: TranscriptAbsence?
-    @Published private var transcriptReadError: String?
+    private var transcriptReadError: String? {
+        get { transcriptState.value.readError }
+        set { updateTranscript { $0.readError = newValue } }
+    }
     enum TranscriptFeedback: Equatable {
         case updating, paused, readError
 
@@ -675,7 +756,7 @@ final class TraceModel: ObservableObject {
     @Published private(set) var scrollRequest = UUID()
     private(set) var requestedMessageID: Int64?
     private var mayRestoreSession = true
-    enum SummaryReadOperation: String, Hashable { case sidebar, restoration, sourceHealth, statistics, sessionList, sessionPage }
+    enum SummaryReadOperation: String, Hashable { case sidebar, restoration, sourceHealth, statistics, sessionList, sessionPage, indexStatus, sourceReload }
     private struct DatabaseFailureDiagnostic: Hashable {
         let primary: Int32?
         let extended: Int32?
@@ -690,17 +771,13 @@ final class TraceModel: ObservableObject {
             message = sqlite.map { $0.message ?? "SQLite operation failed" } ?? error.localizedDescription
         }
 
-        init(message: String, primary: Int32? = nil, extended: Int32? = nil) {
-            self.message = message; self.primary = primary; self.extended = extended
-        }
-
         func log(to logger: Logger, operation: String) {
             logger.error("\(operation, privacy: .public) failed; SQLite primary=\(primary.map(String.init) ?? "n/a", privacy: .public) extended=\(extended.map(String.init) ?? "n/a", privacy: .public); \(message, privacy: .private)")
         }
     }
     private var summaryReadFailures: [SummaryReadOperation: Set<DatabaseFailureDiagnostic>] = [:]
     private static let summaryReadLog = Logger(subsystem: "me.haroldmartin.Trace", category: "Summary reads")
-    enum CostsFailureOperation: String, Hashable { case cachedUsage, usageRefresh, rollupRepair }
+    enum CostsFailureOperation: String, Hashable { case cachedUsage, usageRefresh }
     private var costsFailures: [CostsFailureOperation: Set<DatabaseFailureDiagnostic>] = [:]
     private static let costsLog = Logger(subsystem: "me.haroldmartin.Trace", category: "Costs")
     private var started = false
@@ -765,6 +842,8 @@ final class TraceModel: ObservableObject {
         let extendedCode: Int32?
     }
     var summaryReadFailureForTesting: ((SummaryReadFailure) -> Void)?
+    private(set) var sidebarTestControlFailuresForTesting: [UUID] = []
+    var sidebarMarkerPathForTesting: String?
     var summaryMetadataGateForTesting: Task<Void, Never>?
     private(set) var summaryMetadataWaitingForTesting = false
     struct FullSummaryCompletion: Codable {
@@ -790,6 +869,9 @@ final class TraceModel: ObservableObject {
     var usageRefreshRunningForTesting: Bool { usageWork.worker?.runningRequest != nil }
     var usageDemandOwedForTesting: Bool { usageWork.owed }
     var startupUsageRepairEnrolledForTesting: Bool { database != nil && startupUsageRepairEnrolled }
+    var usagePendingForTesting: Bool { usageWork.pending != nil }
+    var usageDemandRevisionForTesting: UInt64 { usageWork.revision }
+    func publishProgressForTesting(_ update: IndexProgress) { progress = update }
     func loadCachedUsageForTesting() async { await loadCachedUsageAtStartup() }
     func finalizeStartupUsageForTesting() async { await refreshStartupUsage() }
     struct CostsFailure: Equatable {
@@ -1088,9 +1170,10 @@ final class TraceModel: ObservableObject {
                 }
             } catch {
                 guard !terminating, coordinator == nil else { return }
-                initialAttachmentFailure = error.localizedDescription
-                startupError = error.localizedDescription
-                progress = .init(phase: .failed, error: error.localizedDescription)
+                let message = indexErrorMessage(error)
+                initialAttachmentFailure = message
+                startupError = message
+                progress = .init(phase: .failed, error: message)
             }
         }
     }
@@ -1275,7 +1358,8 @@ final class TraceModel: ObservableObject {
         if !sameDatabase {
             do { counts = try await database.unresolvedSourceFailureCounts() }
             catch {
-                failAttachment(pending, error: "Could not load source failures: \(error.localizedDescription)")
+                failAttachment(pending, error: indexErrorMessage(error, sourceReload: pending.intent == .sourceReload,
+                                                                prefix: "Could not load source failures: "))
                 return false
             }
         }
@@ -1285,7 +1369,10 @@ final class TraceModel: ObservableObject {
         }
         // No suspension during the commit: all readers switch databases together.
         let rootRefresh = pendingAttachment?.rootRefresh
-        installDatabase(database)
+        guard installDatabase(database) else {
+            failAttachment(pending, phase: .cancelled)
+            return false
+        }
         if let rootRefresh {
             pendingRootSummaryRefresh = rootRefresh
             if rootRefresh.usage { registerUsageDemand(repair: true, urgency: .immediate) }
@@ -1310,6 +1397,7 @@ final class TraceModel: ObservableObject {
             startupError = nil
         }
         installedUsageEvent = pending.usageEvent
+        if pending.intent == .sourceReload { summaryReadFailures[.sourceReload] = nil }
         if !sameDatabase, costsError != nil {
             costsError = nil
             guard !terminating, self.database === database, attachmentGeneration == pending.token,
@@ -1323,11 +1411,14 @@ final class TraceModel: ObservableObject {
         return true
     }
 
-    private func installDatabase(_ database: IndexDatabase) {
-        guard self.database !== database else { return }
+    private func installDatabase(_ database: IndexDatabase) -> Bool {
+        guard self.database !== database else { return true }
         // A first installation must retain the saved session for startup restoration.
-        if self.database != nil { prepareForIndexReset(clearSidebarFailure: true) }
-        else { resetSidebarSummaryRecovery(clearFailure: true) }
+        if self.database != nil {
+            guard prepareForIndexReset(clearSidebarFailure: true) else { return false }
+        } else { resetSidebarSummaryRecovery(clearFailure: true) }
+        resetUsageRefreshWork()
+        rollupFailure = nil
         if pendingRootSummaryRefresh?.database !== database { pendingRootSummaryRefresh = nil }
         startupUsageRepairEnrolled = false
         #if DEBUG
@@ -1339,6 +1430,7 @@ final class TraceModel: ObservableObject {
         lastAppliedTranscriptReadRevision = 0
         knownSelectionProject = nil
         self.database = database
+        return true
     }
 
     func receiveProgress(_ update: IndexProgress) async {
@@ -1416,6 +1508,7 @@ final class TraceModel: ObservableObject {
     private func publishProgress(_ update: IndexProgress) {
         let generation = attachmentGeneration
         let activation = sourceReloadActivation
+        if update.phase == .complete, update.error == nil { summaryReadFailures[.indexStatus] = nil }
         progress = update
         guard !terminating, generation == attachmentGeneration else { return }
         guard let activation, activation == sourceReloadActivation,
@@ -1436,13 +1529,9 @@ final class TraceModel: ObservableObject {
                 || (update.phase != .complete && (update.indexChanged || update.rollupsChanged))
             registerUsageDemand(repair: repair, urgency: .automatic)
         }
-        if let rollupError = update.rollupError {
-            recordCostsFailure(message: rollupError, operation: .rollupRepair)
-            guard isCurrent() else { return }
+        if update.rollupError != nil {
             costsError = "Could not update token totals."
             guard isCurrent() else { return }
-        } else {
-            costsFailures[.rollupRepair] = nil
         }
         reconcileUsageWork(event: event, urgency: .automatic)
     }
@@ -1674,7 +1763,12 @@ final class TraceModel: ObservableObject {
         guard !terminating, pendingAttachment == nil, pendingRebuild,
               generation == attachmentGeneration, revision == sourceConfigurationRevision else { return false }
         pendingRebuild = false
-        prepareForIndexReset()
+        let workflow = indexWorkflow.generation
+        _ = prepareForIndexReset()
+        // Navigation during reset owns its newer transcript. The global rebuild
+        // still runs unless its attachment/configuration/workflow was replaced.
+        guard !terminating, generation == attachmentGeneration, revision == sourceConfigurationRevision,
+              workflow == indexWorkflow.generation else { return false }
         #if DEBUG
         rebuildSubmissionCountForTesting += 1
         #endif
@@ -1815,7 +1909,8 @@ final class TraceModel: ObservableObject {
                     )
                 }
             } catch {
-                failAttachment(pending, error: "Could not update source folders: \(error.localizedDescription)")
+                failAttachment(pending, error: indexErrorMessage(error, sourceReload: true,
+                                                                prefix: "Could not update source folders: "))
                 return
             }
             guard !Task.isCancelled, pendingAttachmentIsCurrent(pending) else { return }
@@ -1934,7 +2029,7 @@ final class TraceModel: ObservableObject {
     func returnFromSession() {
         let context = mainSearchReturnContext
         let anchor = mainSearchReturnAnchor
-        clearSession()
+        guard clearSession() else { return }
         if let context {
             mainSearchReturnAnchor = anchor
             let project = projects.first { $0.canonicalKey == context.canonicalKey }
@@ -1953,57 +2048,53 @@ final class TraceModel: ObservableObject {
         }
     }
 
-    func clearSession() {
+    @discardableResult
+    func clearSession() -> Bool {
+        let request = UUID(), ownerDatabase = database
+        sessionRequestID = request
+        func isCurrent() -> Bool { !terminating && database === ownerDatabase && sessionRequestID == request }
         knownSelectionProject = nil
         invalidateTranscriptSettlement()
         pausedTranscriptPreservation = nil
         pendingSelectionCompletion = nil
         mainSearchReturnContext = nil
-        hasSearchReturnContext = false
         mainSearchReturnAnchor = nil
         mayRestoreSession = false
-        invalidateSidebarRevealRequest()
-        transientTranscriptAbsence = nil
-        cancelTranscriptRecovery()
+        cancelTranscriptRecovery(clearPresentation: false)
         cancelPendingSelectionTranscriptRead()
-        sessionRequestID = UUID()
-        selectedSessionID = nil
-        selectedSession = nil
         settings.lastSessionID = nil
-        messages = []
-        hydratedMessages.removeAll()
-        hydrationFailures.removeAll()
-        hydrationOrder.removeAll()
-        hydrationEpoch = UUID()
-        hydratingMessageIDs.removeAll()
-        expandedReasoningIDs.removeAll()
         requestedMessageID = nil
+        resetTranscriptValues()
+        guard isCurrent() else { return false }
+        hasSearchReturnContext = false
+        guard isCurrent() else { return false }
+        invalidateSidebarRevealRequest()
+        return isCurrent()
     }
 
     func consumeRequestedMessageID(_ messageID: Int64) {
         if requestedMessageID == messageID { requestedMessageID = nil }
     }
 
-    private func prepareForIndexReset(clearSidebarFailure: Bool = false) {
+    @discardableResult
+    private func prepareForIndexReset(clearSidebarFailure: Bool = false) -> Bool {
+        let request = UUID(), ownerDatabase = database
+        sessionRequestID = request
+        projectRequestID = UUID()
+        summaryRequestID = UUID()
+        func isCurrent() -> Bool { !terminating && database === ownerDatabase && sessionRequestID == request }
+        let context = mainSearchReturnContext
         knownSelectionProject = nil
         invalidateTranscriptSettlement()
         invalidateTerminalSummaryRefresh()
         pausedTranscriptPreservation = nil
         pendingSelectionCompletion = nil
-        if let context = mainSearchReturnContext {
-            selectedProjectCanonicalKey = context.canonicalKey
-            selectedProjectDisplayName = context.displayName
-        }
         mainSearchReturnContext = nil
-        hasSearchReturnContext = false
         mainSearchReturnAnchor = nil
-        resetSessionPagination()
-        resetSidebarSummaryRecovery(clearFailure: clearSidebarFailure)
         cancelAutomaticSearch()
-        resetUsageRefreshWork()
+        retireUsageRefreshWorker()
         completedUsageRevision += 1
         invalidateUsageSnapshot()
-        updateCostsTotalsUpdating()
         globalSearchNeedsRefresh = false
         mainSearchNeedsRefresh = false
         lastObservedPassID = nil
@@ -2011,32 +2102,43 @@ final class TraceModel: ObservableObject {
         lastObservedMutationRevision = 0
         lastSearchedMutationRevision = 0
         mayRestoreSession = false
-        transientTranscriptAbsence = nil
-        cancelTranscriptRecovery()
+        cancelTranscriptRecovery(clearPresentation: false)
         cancelPendingSelectionTranscriptRead()
-        sessionRequestID = UUID()
-        projectRequestID = UUID()
-        summaryRequestID = UUID()
-        self.selectedProjectID = nil
-        selectedSessionID = nil
-        selectedSession = nil
-        invalidateSidebarRevealRequest()
         settings.lastSessionID = nil
-        projects = []
-        recentSessions = []
-        messages = []
-        hydratedMessages = [:]
-        hydrationFailures = [:]
-        hydrationOrder = []
-        hydrationEpoch = UUID()
-        hydratingMessageIDs = [:]
-        expandedReasoningIDs = []
         scrollPositions = [:]
         requestedMessageID = nil
+        resetTranscriptValues()
+        guard isCurrent() else { return false }
+        if let context {
+            selectedProjectCanonicalKey = context.canonicalKey
+            guard isCurrent() else { return false }
+            selectedProjectDisplayName = context.displayName
+            guard isCurrent() else { return false }
+        }
+        hasSearchReturnContext = false
+        guard isCurrent() else { return false }
+        resetSessionPagination()
+        guard isCurrent() else { return false }
+        resetSidebarSummaryRecovery(clearFailure: clearSidebarFailure)
+        guard isCurrent() else { return false }
+        updateCostsTotalsUpdating()
+        guard isCurrent() else { return false }
+        selectedProjectID = nil
+        guard isCurrent() else { return false }
+        invalidateSidebarRevealRequest()
+        guard isCurrent() else { return false }
+        projects = []
+        guard isCurrent() else { return false }
+        recentSessions = []
+        guard isCurrent() else { return false }
         sourceHealth = []
+        guard isCurrent() else { return false }
         statistics = nil
+        guard isCurrent() else { return false }
         globalSearch.resetForIndexReset(awaitsProjectResolution: true)
+        guard isCurrent() else { return false }
         mainSearch.resetForIndexReset(awaitsProjectResolution: true)
+        return isCurrent()
     }
 
     private func beginIndexReplacement() {
@@ -2053,7 +2155,7 @@ final class TraceModel: ObservableObject {
             guard let project = projects.first(where: { $0.id == projectID }) else { return }
             guard selectedProjectID != project.id
                     || selectedProjectCanonicalKey != project.canonicalKey else { return }
-            clearSession()
+            guard clearSession() else { return }
             selectedProjectID = project.id
             selectedProjectCanonicalKey = project.canonicalKey
             selectedProjectDisplayName = project.displayName
@@ -2068,7 +2170,7 @@ final class TraceModel: ObservableObject {
                   $0.id == selectedProjectID
                       && $0.canonicalKey == selectedCanonicalKey
               }) else { return }
-        clearSession()
+        guard clearSession() else { return }
         self.selectedProjectID = nil
         selectedProjectCanonicalKey = nil
         selectedProjectDisplayName = nil
@@ -2375,6 +2477,11 @@ final class TraceModel: ObservableObject {
                     $0.error = nil
                     $0.retry = nil
                 }
+                guard isCurrent() else { return }
+                if let selectedSessionID, !sessions.contains(where: { $0.id == selectedSessionID }),
+                   key == nil || knownProject(for: selectedSessionID) == key {
+                    loadProjectSessions(ensuring: selectedSessionID, requestedPageCount: pageCount)
+                }
             } catch is CancellationError {
                 TraceTestHooks.touch(pathKey: "TRACE_TEST_SESSION_PAGE_CANCELLED_PATH")
             }
@@ -2406,41 +2513,46 @@ final class TraceModel: ObservableObject {
             }
             return
         }
+        let request = UUID(), ownerDatabase = database
+        sessionRequestID = request
+        func isCurrent() -> Bool {
+            !terminating && database === ownerDatabase && sessionRequestID == request
+        }
+        let cachedSession = sessions.first { $0.id == sessionID } ?? recentSessions.first { $0.id == sessionID }
         rememberSelectionProject(knownProject(for: sessionID), sessionID: sessionID)
         invalidateTranscriptSettlement()
         pausedTranscriptPreservation = nil
-        transientTranscriptAbsence = nil
-        cancelTranscriptRecovery()
+        cancelTranscriptRecovery(clearPresentation: false)
         cancelPendingSelectionTranscriptRead()
-        if !preservingMainSearch { mainSearchReturnContext = nil; hasSearchReturnContext = false; mainSearchReturnAnchor = nil }
+        if !preservingMainSearch { mainSearchReturnContext = nil; mainSearchReturnAnchor = nil }
         pendingSelectionCompletion = nil
         mayRestoreSession = false
-        if sidebarRevealRequest?.sessionID != sessionID {
-            invalidateSidebarRevealRequest()
-        }
-        selectedSessionID = sessionID
         settings.lastSessionID = sessionID
-        selectedSession = (sessions + recentSessions).first { $0.id == sessionID }
-        if let selectedSession,
-           adoptProjectIdentity(from: selectedSession) {
-            loadProjectSessions(ensuring: sessionID)
-        }
-        let request = UUID()
-        sessionRequestID = request
         lastAppliedTranscriptReadRevision = 0
         requestedMessageID = messageID
-        messages = []
-        hydratedMessages.removeAll(keepingCapacity: true)
-        hydrationFailures.removeAll(keepingCapacity: true)
-        hydrationOrder.removeAll(keepingCapacity: true)
-        hydrationEpoch = UUID()
-        hydratingMessageIDs.removeAll(keepingCapacity: true)
-        expandedReasoningIDs.removeAll()
+        if let database {
+            pendingSelectionCompletion = .init(database: database, sessionID: sessionID, requestID: request,
+                                               showWindow: showWindow, preservingMainSearch: preservingMainSearch)
+        }
+        resetTranscriptValues(sessionID: sessionID, session: cachedSession)
+        guard isCurrent() else { return }
+        if !preservingMainSearch {
+            hasSearchReturnContext = false
+            guard isCurrent() else { return }
+        }
+        if sidebarRevealRequest?.sessionID != sessionID {
+            invalidateSidebarRevealRequest()
+            guard isCurrent() else { return }
+        }
+        if let cachedSession {
+            let changedProject = adoptProjectIdentity(from: cachedSession)
+            guard isCurrent() else { return }
+            if changedProject { loadProjectSessions(ensuring: sessionID) }
+            guard isCurrent() else { return }
+        }
         if !preservingMainSearch { deferMainSearchForSessionNavigation() }
-        guard let database else { return }
+        guard isCurrent(), let database else { return }
         // Summaries can await the database result independently of the UI callback.
-        pendingSelectionCompletion = .init(database: database, sessionID: sessionID, requestID: request,
-                                           showWindow: showWindow, preservingMainSearch: preservingMainSearch)
         let readTask = Task { () -> TranscriptReadOutcome in
             guard !Task.isCancelled,
                   transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request) else { return .superseded }
@@ -2710,6 +2822,7 @@ final class TraceModel: ObservableObject {
                     cache.removeValue(forKey: evicted)
                 }
                 hydratedMessages = cache
+                guard hydrationIsCurrent(active) else { return }
                 let elapsed = start.duration(to: .now)
                 let milliseconds = Double(elapsed.components.seconds) * 1_000
                     + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
@@ -2785,11 +2898,11 @@ final class TraceModel: ObservableObject {
         return outcome
     }
 
-    private func cancelTranscriptRecovery() {
+    private func cancelTranscriptRecovery(clearPresentation: Bool = true) {
         transcriptRecoveryEpisode = nil
         transcriptRecoveryTask?.cancel()
         transcriptRecoveryTask = nil
-        transcriptReadError = nil
+        if clearPresentation { transcriptReadError = nil }
     }
 
     func retrySelectedTranscript() {
@@ -3063,48 +3176,54 @@ final class TraceModel: ObservableObject {
            let database, let sessionID = selectedSessionID {
             // All publishers share this policy. Accept the revision, preserve the
             // cached view, and end an older read-error episode without applying absence.
-            cancelTranscriptRecovery()
-            transientTranscriptAbsence = .init(database: database, sessionID: sessionID, requestID: sessionRequestID,
-                                               paused: !indexWorkflow.isActive)
+            cancelTranscriptRecovery(clearPresentation: false)
+            let absence = TranscriptAbsence(database: database, sessionID: sessionID, requestID: sessionRequestID,
+                                            paused: !indexWorkflow.isActive)
+            updateTranscript { $0.readError = nil; $0.absence = absence }
+            guard isCurrent() else { return }
             if !indexWorkflow.isActive { TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_PAUSED_PATH") }
             showPendingSelectionWindow()
             return
         }
-        cancelTranscriptRecovery()
-        transientTranscriptAbsence = nil
+        cancelTranscriptRecovery(clearPresentation: false)
         pausedTranscriptPreservation = nil
         if snapshot.session == nil, deletionIsConfirmed || pendingSelectionCompletion != nil {
-            // Deletion is a terminal navigation outcome, even when no transcript
-            // was available to complete the original selection.
             let showWindow = pendingSelectionCompletion?.showWindow == true
             returnFromSession()
-            if showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
+            if showWindow, selectedSessionID == nil { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
             return
         }
         lastAppliedTranscriptReadRevision = snapshot.readRevision
         let changed = selectedSession?.transcriptIdentity != snapshot.session?.transcriptIdentity
+        let identities = changed ? nil : snapshot.messages.map { Dictionary(uniqueKeysWithValues: $0.map { ($0.id, MessageIdentity($0)) }) }
+        let stale = identities.map { next in Set(messageIdentities.keys.filter { messageIdentities[$0] != next[$0] }) } ?? []
         if changed {
             hydrationEpoch = UUID()
             hydratingMessageIDs.removeAll(keepingCapacity: true)
-            hydratedMessages.removeAll(keepingCapacity: true)
-            hydrationFailures.removeAll(keepingCapacity: true)
             hydrationOrder.removeAll(keepingCapacity: true)
-        }
-        if let rows = snapshot.messages, !changed {
-            let identities = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, MessageIdentity($0)) })
-            let stale = Set(messageIdentities.keys.filter { messageIdentities[$0] != identities[$0] })
-            for id in stale {
-                hydratedMessages.removeValue(forKey: id)
-                hydrationFailures.removeValue(forKey: id)
-                hydratingMessageIDs.removeValue(forKey: id)
-            }
+        } else {
+            for id in stale { hydratingMessageIDs.removeValue(forKey: id) }
             hydrationOrder.removeAll { stale.contains($0) }
         }
         let resolvedUnknownProject = snapshot.session.map { knownProject(for: $0.id) == nil } ?? false
         if let session = snapshot.session { rememberSelectionProject(session.projectCanonicalKey, sessionID: session.id) }
-        selectedSession = snapshot.session
-        guard isCurrent() else { return }
-        if let rows = snapshot.messages { messages = rows }
+        updateTranscript(replacingRows: snapshot.messages != nil) {
+            $0.session = snapshot.session
+            $0.readError = nil
+            $0.absence = nil
+            if changed {
+                $0.hydrated.removeAll(keepingCapacity: true)
+                $0.failures.removeAll(keepingCapacity: true)
+                $0.contentRevision &+= 2
+            } else {
+                for id in stale {
+                    $0.hydrated.removeValue(forKey: id)
+                    $0.failures.removeValue(forKey: id)
+                    $0.contentRevision &+= 2
+                }
+            }
+            if let rows = snapshot.messages { $0.messages = rows; $0.messageRevision &+= 1 }
+        }
         guard isCurrent() else { return }
         // Evaluate background navigation at publication, after any read/retry
         // suspension. Explicit selections reconcile regardless of a running pass.
@@ -3119,12 +3238,13 @@ final class TraceModel: ObservableObject {
             let needsSelectedRow = completingSelection && resolvedUnknownProject && sessionListError == nil
                 && !isLoadingSessions && backgroundSidebarRequest == nil
                 && !sessions.contains(where: { $0.id == session.id })
-            if changedProject || needsSelectedRow {
+            if changedProject {
                 let preservingSearch = pendingSelectionCompletion?.preservingMainSearch ?? hasSearchReturnContext
                 if !preservingSearch { deferMainSearchForSessionNavigation() }
                 guard isCurrent() else { return }
-                loadProjectSessions(ensuring: session.id)
             }
+            if changedProject || needsSelectedRow { loadProjectSessions(ensuring: session.id) }
+            guard isCurrent() else { return }
         }
         completeSelectionIfPending(snapshot)
     }
@@ -3147,6 +3267,8 @@ final class TraceModel: ObservableObject {
         // Consume before publishing actions, including notifications that can reenter the model.
         pendingSelectionCompletion = nil
         scrollRequest = UUID()
+        guard transcriptRequestIsCurrent(database: completion.database, sessionID: completion.sessionID,
+                                         request: completion.requestID) else { return }
         if completion.showWindow { NotificationCenter.default.post(name: .traceShowMainWindow, object: nil) }
         Task { [diagnostics] in try? await diagnostics.recordOpen() }
     }
@@ -3214,7 +3336,8 @@ final class TraceModel: ObservableObject {
         case acceptedRefresh([UsageRollup])
     }
 
-    private func publishCosts(_ publication: CostsPublication) {
+    private func publishCosts(_ publication: CostsPublication, recovering receipt: RollupFailureReceipt? = nil,
+                              onCommit: () -> Void = {}) {
         let completed: [UsageRollup]
         let clearsError: Bool
         switch publication {
@@ -3223,12 +3346,24 @@ final class TraceModel: ObservableObject {
         case .acceptedRefresh(let snapshot): completed = snapshot; clearsError = true
         }
         let filtered = filteredUsage(completed)
-        updateCosts {
+        var stagedProgress = false
+        updateCosts({
             $0.completed = completed
             $0.usage = filtered
             $0.usagePublicationRevision &+= 1
             if clearsError { $0.error = nil }
-        }
+        }, onCommit: {
+            if let receipt, receipt.id == rollupFailure?.id, receipt.database === database,
+               receipt.passID == progress.passID {
+                rollupFailure = nil
+                var recovered = progress
+                recovered.rollupError = nil
+                progressState.stage(recovered)
+                stagedProgress = true
+            }
+            onCommit()
+        })
+        if stagedProgress { progressState.publish { objectWillChange.send() } }
     }
 
     private func loadCachedUsageAtStartup() async {
@@ -3333,6 +3468,18 @@ final class TraceModel: ObservableObject {
         usageWork = .init()
     }
 
+    private func retireUsageRefreshWorker() {
+        // Preserve intent already covering unfinished work, but never rearm
+        // dormant failure debt without a new recovery event.
+        if usageWork.owed, usageWork.pending == nil, let request = usageWork.worker?.runningRequest {
+            queueCurrentUsageDemand(urgency: request.urgency)
+        }
+        usageWork.task?.cancel()
+        usageWork.task = nil
+        usageWork.worker = nil
+        usageWork.epoch = UUID()
+    }
+
     private func startUsageRefreshWorker() {
         guard !terminating, !indexingPassActive, pendingAttachment == nil,
               usageWork.worker == nil, let request = usageWork.pending,
@@ -3414,6 +3561,8 @@ final class TraceModel: ObservableObject {
         let databaseGeneration = usageDatabaseGeneration
         #endif
         let rootReceipt = rootReceipt(for: database)
+        let repairedFailure = request.repair ? rollupFailure : nil
+        var readingSnapshot = false
         func isCurrent() -> Bool {
             !Task.isCancelled && !terminating && self.database === database
                 && usageWork.worker?.id == worker && usageWork.epoch == epoch
@@ -3426,8 +3575,15 @@ final class TraceModel: ObservableObject {
                 marker: .line("started", pathKey: "TRACE_TEST_USAGE_SNAPSHOT_STARTED_PATH")) {
                 try await Task.sleep(for: .milliseconds(delay))
             }
+            #if DEBUG
+            if let delay = TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_USAGE_ATTEMPT_HOLD_MS", cappedAt: 30_000) {
+                try await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_USAGE_ATTEMPT_RELEASE_PATH",
+                                                       timeoutMilliseconds: delay)
+            }
+            #endif
             guard isCurrent() else { return }
             if request.repair { try await database.rebuildUsageRollupsIfDirty() }
+            readingSnapshot = true
             let snapshot = try await database.usage(fromDay: nil, throughDay: nil, includeSidechains: true)
             #if DEBUG
             if let gate = usageSnapshotGateForTesting {
@@ -3442,12 +3598,12 @@ final class TraceModel: ObservableObject {
             usageWork.repair = false
             usageWork.owed = false
             costsFailures = [:]
-            publishCosts(.acceptedRefresh(snapshot))
-            guard isCurrent() else { return }
-            #if DEBUG
-            recordUsageAttempt(.init(databaseGeneration: databaseGeneration, workerID: worker,
-                requestID: request.id, outcome: .success))
-            #endif
+            publishCosts(.acceptedRefresh(snapshot), recovering: repairedFailure, onCommit: {
+                #if DEBUG
+                recordUsageAttempt(.init(databaseGeneration: databaseGeneration, workerID: worker,
+                    requestID: request.id, outcome: .success))
+                #endif
+            })
         } catch is CancellationError {
             // Unaccepted debt remains; only pending demand or a new event resumes it.
         } catch {
@@ -3459,14 +3615,15 @@ final class TraceModel: ObservableObject {
             }
             #endif
             guard isCurrent() else { return }
-            recordCostsFailure(error, operation: .usageRefresh)
+            // The database owns repair diagnostics; this layer owns snapshot reads.
+            if readingSnapshot { recordCostsFailure(error, operation: .usageRefresh) }
             guard isCurrent() else { return }
-            costsError = "Could not update token totals."
-            guard isCurrent() else { return }
-            #if DEBUG
-            recordUsageAttempt(.init(databaseGeneration: databaseGeneration, workerID: worker,
-                requestID: request.id, outcome: .failure))
-            #endif
+            updateCosts({ $0.error = "Could not update token totals." }, onCommit: {
+                #if DEBUG
+                recordUsageAttempt(.init(databaseGeneration: databaseGeneration, workerID: worker,
+                    requestID: request.id, outcome: .failure))
+                #endif
+            })
         }
     }
 
@@ -3481,13 +3638,9 @@ final class TraceModel: ObservableObject {
     #endif
 
     private func updateCostsTotalsUpdating() {
-        let currentWork = database.map { database in
-            usageWork.worker?.database === database
-                || (usageWork.pending?.database === database && !indexingPassActive && pendingAttachment == nil)
-        } ?? false
-        let updating = !terminating && (indexingPassActive || currentWork)
-        if costsTotalsUpdating != updating || canRetryCosts != (costsError != nil && usageRetryEligible) {
-            updateCosts { $0.updating = updating }
+        let next = costsPresentation(costsState.value)
+        if costsTotalsUpdating != next.updating || canRetryCosts != next.canRetry {
+            updateCosts { _ in }
         }
     }
 
@@ -3510,6 +3663,7 @@ final class TraceModel: ObservableObject {
         terminating = true
         updateCostsTotalsUpdating()
         knownSelectionProject = nil
+        rollupFailure = nil
         invalidateTranscriptSettlement()
         invalidateTerminalSummaryRefresh()
         pendingRootSummaryRefresh = nil
@@ -4140,13 +4294,13 @@ final class TraceModel: ObservableObject {
             if owner.holdsSidebarForUITesting {
                 if let delay = TraceTestHooks.delayMilliseconds(
                     for: "TRACE_TEST_SUMMARY_PAGE_HOLD_MS", cappedAt: 30_000) {
-                    if let path = TraceTestHooks.environment["TRACE_TEST_SUMMARY_PAGE_STARTED_PATH"] {
-                        try Data(owner.id.uuidString.utf8).write(to: URL(fileURLWithPath: path), options: .atomic)
+                    if writeSidebarMarker(owner.id, path: TraceTestHooks.environment["TRACE_TEST_SUMMARY_PAGE_STARTED_PATH"]) {
+                        try await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_SUMMARY_PAGE_RELEASE_PATH",
+                                                               timeoutMilliseconds: delay)
                     }
-                    try await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_SUMMARY_PAGE_RELEASE_PATH",
-                                                           timeoutMilliseconds: delay)
                 }
             }
+            if let path = sidebarMarkerPathForTesting { _ = writeSidebarMarker(owner.id, path: path) }
             #endif
             sidebar = snapshot
             sidebarError = nil
@@ -4433,13 +4587,30 @@ final class TraceModel: ObservableObject {
         #endif
     }
 
+    private func indexErrorMessage(_ error: Error, sourceReload: Bool = false, prefix: String = "") -> String {
+        guard error is DatabaseError else { return prefix + error.localizedDescription }
+        recordSummaryReadFailure(error, operation: sourceReload ? .sourceReload : .indexStatus)
+        return sourceReload ? "Could not apply source settings. Try again." : "Could not update the index. Try again."
+    }
+
+    #if DEBUG
+    @discardableResult
+    private func writeSidebarMarker(_ summary: UUID, path: String?) -> Bool {
+        guard let path else { return true }
+        do {
+            try Data(summary.uuidString.utf8).write(to: URL(fileURLWithPath: path), options: .atomic)
+            return true
+        } catch {
+            sidebarTestControlFailuresForTesting.append(summary)
+            TraceTestHooks.appendLine(summary.uuidString + "|marker-write-failed", pathKey: "TRACE_TEST_SUMMARY_CONTROL_FAILURE_PATH")
+            return false
+        }
+    }
+    #endif
+
     private func recordCostsFailure(_ error: Error, operation: CostsFailureOperation) {
         guard !(error is CancellationError) else { return }
         recordCostsFailure(DatabaseFailureDiagnostic(error), operation: operation)
-    }
-
-    private func recordCostsFailure(message: String, operation: CostsFailureOperation) {
-        recordCostsFailure(.init(message: message), operation: operation)
     }
 
     private func recordCostsFailure(_ failure: DatabaseFailureDiagnostic, operation: CostsFailureOperation) {

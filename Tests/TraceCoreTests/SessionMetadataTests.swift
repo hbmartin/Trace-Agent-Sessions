@@ -427,12 +427,23 @@ final class SessionMetadataTests: XCTestCase {
                 """)
         }
         let failed = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
-        XCTAssertTrue(failed.metadataWarning?.contains("root title write failed") == true)
+        XCTAssertTrue(failed.metadataWarning?.contains("Could not refresh session metadata.") == true)
+        XCTAssertFalse(failed.metadataWarning?.contains("root title write failed") == true)
+        #if DEBUG
+        let rootFailure = await coordinator.codexWriteWarningsForTesting()
+        XCTAssertEqual(rootFailure.root, 1)
+        XCTAssertEqual(rootFailure.file, 0)
+        #endif
         try await raw.write { db in try db.execute(sql: "DROP TRIGGER reject_root_title") }
 
         try appendCodexPlan(to: second)
         let fileSuccess = await coordinator.refreshResult(paths: [second.path], scope: .proseOnly)
-        XCTAssertTrue(fileSuccess.metadataWarning?.contains("root title write failed") == true)
+        XCTAssertEqual(fileSuccess.metadataWarning, failed.metadataWarning)
+        #if DEBUG
+        let retainedRootFailure = await coordinator.codexWriteWarningsForTesting()
+        XCTAssertEqual(retainedRootFailure.root, 1)
+        XCTAssertEqual(retainedRootFailure.file, 0)
+        #endif
         let recovered = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
         XCTAssertNil(recovered.metadataWarning)
     }
@@ -460,7 +471,11 @@ final class SessionMetadataTests: XCTestCase {
                 """)
         }
         let rootFailed = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
-        XCTAssertTrue(rootFailed.metadataWarning?.contains("root title write failed") == true)
+        XCTAssertTrue(rootFailed.metadataWarning?.contains("Could not refresh session metadata.") == true)
+        #if DEBUG
+        let rootWrite = await coordinator.codexWriteWarningsForTesting()
+        XCTAssertEqual(rootWrite.root, 1)
+        #endif
         try await raw.write { db in
             try db.execute(sql: "DROP TRIGGER reject_root_title")
             try db.execute(sql: """
@@ -471,14 +486,23 @@ final class SessionMetadataTests: XCTestCase {
         }
         try appendCodexPlan(to: file)
         let fileFailed = await coordinator.refreshResult(paths: [file.path], scope: .proseOnly)
-        XCTAssertTrue(fileFailed.metadataWarning?.contains("file title write failed") == true)
+        XCTAssertTrue(fileFailed.metadataWarning?.contains("Could not refresh session metadata.") == true)
+        #if DEBUG
+        let fileWrite = await coordinator.codexWriteWarningsForTesting()
+        XCTAssertEqual(fileWrite.file, 1)
+        #endif
         try await raw.write { try $0.execute(sql: "DROP TRIGGER reject_file_title") }
 
         let recovered = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
         let storedSessions = try await database.sessions()
         XCTAssertEqual(storedSessions.first?.title, "Recovered name")
-        XCTAssertFalse(recovered.metadataWarning?.contains("file title write failed") == true,
-            "the successful partial root write must retire the resolved per-file error")
+        #if DEBUG
+        let recoveredWarnings = await coordinator.codexWriteWarningsForTesting()
+        XCTAssertEqual(recoveredWarnings.file, 0, "successful partial root write retires the per-file warning")
+        XCTAssertEqual(recoveredWarnings.root, 0)
+        #endif
+        XCTAssertTrue(recovered.metadataWarning?.contains("Could not refresh session metadata.") == true,
+            "the independent unreadable-sidecar warning remains")
     }
 
     func testSymlinkedCodexHomeLoadsNames() throws {
@@ -1876,6 +1900,21 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(title, "Recovered name")
     }
 
+    func testMetadataDatabaseWarningDoesNotExposePrivateSQLDetails() throws {
+        let root = try directory()
+        let raw = try DatabaseQueue(path: root.appendingPathComponent("state_99.sqlite").path)
+        try raw.write {
+            try $0.execute(sql: "CREATE VIEW threads AS SELECT 'session' AS id, private_sql_function('private-argument') AS name")
+        }
+        let loaded = try CodexSessionNames.load(directory: root)
+        guard case .unavailable(let warning) = loaded else { return XCTFail("expected database warning") }
+        XCTAssertTrue(warning.contains("Could not refresh session metadata."))
+        XCTAssertFalse(warning.contains("private_"))
+        XCTAssertFalse(warning.contains("private-"))
+        XCTAssertFalse(warning.contains("SELECT"))
+        XCTAssertFalse(warning.contains("PRAGMA"))
+    }
+
     func testOptionalCodexTitleDatabaseFailureIsMetadataWarning() async throws {
         let root = try directory()
         let rollouts = root.appendingPathComponent("sessions")
@@ -1908,7 +1947,8 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(terminal.phase, .complete)
         XCTAssertEqual(terminal.failedFiles, 0)
         XCTAssertEqual(terminal.unresolvedFailedFiles, 0)
-        XCTAssertTrue(terminal.metadataWarning?.contains("optional title unavailable") == true)
+        XCTAssertTrue(terminal.metadataWarning?.contains("Could not refresh session metadata.") == true)
+        XCTAssertFalse(terminal.metadataWarning?.contains("optional title unavailable") == true)
         let indexed = try await database.search(query: "Indexed")
         XCTAssertEqual(indexed.results.count, 1)
         let sessions = try await database.sessions()

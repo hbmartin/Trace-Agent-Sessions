@@ -2702,6 +2702,14 @@ final class TraceUITests: XCTestCase {
 
     func testStartupRollupRepairFailureKeepsSearchAvailable() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let acceptedAttempts = directory.appendingPathComponent("accepted-production-costs-attempts.jsonl")
+        let attemptStarts = directory.appendingPathComponent("production-costs-attempt-starts.jsonl")
+        app.launchEnvironment["TRACE_TEST_ACCEPTED_USAGE_ATTEMPTS_PATH"] = acceptedAttempts.path
+        app.launchEnvironment["TRACE_TEST_USAGE_ATTEMPT_STARTED_PATH"] = attemptStarts.path
+        let attemptRelease = directory.appendingPathComponent("production-costs-attempt-release")
+        try Data().write(to: attemptRelease)
+        app.launchEnvironment["TRACE_TEST_USAGE_ATTEMPT_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_USAGE_ATTEMPT_RELEASE_PATH"] = attemptRelease.path
         let file = directory.appendingPathComponent("Sources/Claude/session.jsonl")
         let usage: [String: Any] = [
             "type": "assistant", "uuid": "cost-record", "sessionId": "test-session",
@@ -2747,8 +2755,25 @@ final class TraceUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         let retry = app.buttons["retryCosts"]
         XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 15))
+        let earlierStarts = Set(usageAttemptRecords(in: attemptStarts).map(\.requestID))
+        try FileManager.default.removeItem(at: attemptRelease)
         retry.click()
-        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 15))
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: false, timeout: 5))
+        XCTAssertTrue(app.progressIndicators["costsRetryProgress"].exists)
+        let started = try XCTUnwrap(poll(timeout: 5) {
+            self.usageAttemptRecords(in: attemptStarts).first { !earlierStarts.contains($0.requestID) }
+        })
+        XCTAssertFalse(usageAttemptRecords(in: acceptedAttempts).contains { $0.requestID == started.requestID },
+                       "a started held attempt must not satisfy accepted failure")
+        try Data().write(to: attemptRelease)
+        XCTAssertNotNil(poll(timeout: 15) {
+            self.usageAttemptRecords(in: acceptedAttempts).first {
+                $0.outcome == "failure" && $0.requestID == started.requestID
+                    && $0.workerID == started.workerID && $0.databaseGeneration == started.databaseGeneration
+            }
+        }, "the clicked Retry must commit its failure before recovery is allowed")
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+        XCTAssertFalse(app.progressIndicators["costsRetryProgress"].exists)
         XCTAssertTrue(app.staticTexts["Could not update token totals."].exists)
         let repair = Process()
         repair.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
@@ -2757,6 +2782,12 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(repair.terminationStatus, 0)
         retry.click()
         XCTAssertTrue(app.staticTexts["Could not update token totals."].waitForNonExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["indexProgress"].label.contains("Token totals need retry"))
+        app.buttons["indexProgress"].click()
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertFalse((details.value as? String ?? details.label).contains("Token totals:"),
+                       "accepted production recovery must clear the status popover as well as Costs")
+        app.typeKey(.escape, modifierFlags: [])
     }
 
     func testStartupShowsCachedCostsAndWatchesDuringRollupRepair() throws {

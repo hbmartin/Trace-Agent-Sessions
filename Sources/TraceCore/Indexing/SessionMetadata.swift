@@ -369,7 +369,7 @@ enum CodexSessionNames {
             throw CancellationError()
         } catch {
             try Task.checkCancellation()
-            warnings.append("\(newestDatabase.lastPathComponent): \(error.localizedDescription)")
+            warnings.append("\(newestDatabase.lastPathComponent): \(IndexFailureDiagnostic.safeDescription(error, operation: "Metadata sidecar", fallback: "Could not refresh session metadata."))")
             if !names.isEmpty {
                 return .loaded(.init(names: names, complete: false,
                                      fillOnlyOrigins: indexReadFailed ? [databaseTitleOrigin] : [],
