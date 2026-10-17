@@ -125,29 +125,6 @@ private actor IndexRunGate {
 }
 
 public actor IndexCoordinator {
-    private struct RollupFailureIdentity: Hashable {
-        let primary: Int32?
-        let extended: Int32?
-        let message: String
-    }
-    private var rollupFailures: Set<RollupFailureIdentity> = []
-    private static let rollupLog = Logger(subsystem: "me.haroldmartin.Trace", category: "Rollup repair")
-    #if DEBUG
-    private(set) var rollupFailureLogCountForTesting = 0
-    #endif
-
-    private func recordRollupFailure(_ error: Error) {
-        let sqlite = error as? DatabaseError
-        let failure = RollupFailureIdentity(primary: sqlite?.resultCode.rawValue,
-            extended: sqlite?.extendedResultCode.rawValue,
-            message: sqlite.map { $0.message ?? "SQLite repair failed" } ?? error.localizedDescription)
-        guard rollupFailures.insert(failure).inserted else { return }
-        Self.rollupLog.error("Usage repair failed; SQLite primary=\(failure.primary.map(String.init) ?? "n/a", privacy: .public) extended=\(failure.extended.map(String.init) ?? "n/a", privacy: .public); \(failure.message, privacy: .private)")
-        #if DEBUG
-        rollupFailureLogCountForTesting += 1
-        #endif
-    }
-
     private struct SourceFileKey: Hashable {
         let agent: AgentKind
         let comparisonPath: String
@@ -199,6 +176,12 @@ public actor IndexCoordinator {
     private var codexNameLoadCounts: [String: Int] = [:]
     private var codexWarnings: [CodexWarningKey: Set<String>] = [:]
     private var deferredCodexSessionIDs: [String: Set<IndexDatabase.CodexSessionIdentity>] = [:]
+    #if DEBUG
+    func codexWriteWarningsForTesting() -> (file: Int, root: Int) {
+        (codexWarnings.keys.filter { $0.kind == .fileWrite }.count,
+         codexWarnings.keys.filter { $0.kind == .rootWrite }.count)
+    }
+    #endif
 
     private func codexWarningMessage() -> String? {
         let warnings = Set(codexWarnings.values.flatMap { $0 })
@@ -460,6 +443,9 @@ public actor IndexCoordinator {
             status.unresolvedFailedFiles = counts.fileFailures
             status.unresolvedDiscoveryFailures = counts.discoveryFailures
         }
+        // Announce the pass before its first fatal read/cancellation, retaining
+        // stored failure counts rather than briefly publishing zero failures.
+        await progress(status)
         do {
             try Task.checkCancellation()
             let oldScope = try await database.storedIndexScope()
@@ -570,7 +556,7 @@ public actor IndexCoordinator {
                 _ error: Error, source: any SessionSource, root: SourceRoot,
                 mappingContext: SourceRootPathContext, scopes: [SourceRootScope]
             ) {
-                let message = error.localizedDescription
+                let message = IndexFailureDiagnostic.safeDescription(error, operation: "Discovery", fallback: "Could not update the index. Try again.")
                 let failures = scopes.map { scope in
                     NormalizedDiscoveryFailure(
                         failure: DiscoveryFailure(
@@ -776,11 +762,12 @@ public actor IndexCoordinator {
                 catch {
                     status.failedFiles += 1
                     needsFailureRecount = true
-                    if firstFileError == nil { firstFileError = error.localizedDescription }
+                    let message = IndexFailureDiagnostic.safeDescription(error, operation: "Index source", fallback: "Could not update the index. Try again.")
+                    if firstFileError == nil { firstFileError = message }
                     status.error = firstFileError ?? firstDiscoveryError
                     status.failedPaths.insert(file.url.path)
                     try await database.recordSourceError(
-                        file: file, rootID: rootID, error: error.localizedDescription
+                        file: file, rootID: rootID, error: message
                     )
                 }
                 if shouldRefreshMissingCodexTitle {
@@ -823,7 +810,7 @@ public actor IndexCoordinator {
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         replaceCodexWarnings(
-                            [error.localizedDescription], kind: warningKind,
+                            [IndexFailureDiagnostic.safeDescription(error, operation: "Session metadata", fallback: "Could not refresh session metadata.")], kind: warningKind,
                             for: rootKey,
                             sourcePath: warningKind == .lookup || warningKind == .fileWrite
                                 ? file.url.path : nil,
@@ -949,7 +936,7 @@ public actor IndexCoordinator {
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         replaceCodexWarnings(
-                            [error.localizedDescription], kind: warningKind,
+                            [IndexFailureDiagnostic.safeDescription(error, operation: "Session metadata", fallback: "Could not refresh session metadata.")], kind: warningKind,
                             for: root.id, in: &status
                         )
                     }
@@ -960,11 +947,9 @@ public actor IndexCoordinator {
             await progress(status)
             do {
                 status.rollupsChanged = try await database.rebuildUsageRollupsIfDirty()
-                rollupFailures.removeAll()
             }
             catch is CancellationError { throw CancellationError() }
             catch {
-                recordRollupFailure(error)
                 status.rollupError = "Could not update token totals."
             }
             try Task.checkCancellation()
@@ -975,7 +960,7 @@ public actor IndexCoordinator {
             status.phase = .cancelled
         } catch {
             status.phase = .failed
-            status.error = error.localizedDescription
+            status.error = IndexFailureDiagnostic.safeDescription(error, operation: "Index pass", fallback: "Could not update the index. Try again.")
         }
         status.indexChanged = await mutations.hasChanges()
         status.mutationRevision = await mutations.version()
