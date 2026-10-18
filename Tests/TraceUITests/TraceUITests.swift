@@ -2705,6 +2705,8 @@ final class TraceUITests: XCTestCase {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let acceptedAttempts = directory.appendingPathComponent("accepted-production-costs-attempts.jsonl")
         let attemptStarts = directory.appendingPathComponent("production-costs-attempt-starts.jsonl")
+        let controlFailures = directory.appendingPathComponent("production-costs-control-failures.jsonl")
+        app.launchEnvironment["TRACE_TEST_USAGE_CONTROL_FAILURE_PATH"] = controlFailures.path
         app.launchEnvironment["TRACE_TEST_ACCEPTED_USAGE_ATTEMPTS_PATH"] = acceptedAttempts.path
         app.launchEnvironment["TRACE_TEST_USAGE_ATTEMPT_STARTED_PATH"] = attemptStarts.path
         let attemptRelease = directory.appendingPathComponent("production-costs-attempt-release")
@@ -2775,6 +2777,11 @@ final class TraceUITests: XCTestCase {
                     && $0.workerID == started.workerID && $0.databaseGeneration == started.databaseGeneration
             }
         }, "the clicked Retry must commit its failure before recovery is allowed")
+        XCTAssertEqual(usageAttemptRecords(in: acceptedAttempts).filter {
+            $0.requestID == started.requestID && $0.workerID == started.workerID
+                && $0.databaseGeneration == started.databaseGeneration
+        }.count, 1)
+        XCTAssertTrue(fileLines(in: controlFailures).isEmpty, "a test-control failure cannot stand in for repair failure")
         XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
         XCTAssertTrue(retryProgress.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Could not update token totals."].exists)
@@ -4326,6 +4333,45 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "summary-page-latest-selection-retained")
     }
 
+    func testAppendPreservesSameProjectSelectionResolvedWhileLoading() throws {
+        let (app, directory, _) = try launchWithFailedPendingRestoration(
+            extraSessions: 430, exerciseSidebarRecovery: true, holdNextPage: true)
+        app.staticTexts["PagingIntent"].firstMatch.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("project-page-started"), timeout: 5))
+        try Data().write(to: directory.appendingPathComponent("project-page-release"))
+        let spinner = app.descendants(matching: .any)["sessionPageLoadingProgress"].firstMatch
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        let list = app.descendants(matching: .any)["sessionSidebarList"].firstMatch
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        let more = app.buttons["loadMoreSessions"]
+        XCTAssertTrue(more.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        more.click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("next-page-started"), timeout: 5))
+        let audit = directory.appendingPathComponent("session-loading-audit")
+        let loading = fileLines(in: audit)
+        XCTAssertEqual(loading.last, "loading")
+        let query = app.textFields["mainSearch"]
+        query.click(); query.typeText("Paging intent session 0")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Paging intent session 0")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        result.click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        XCTAssertTrue(spinner.exists)
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("project-page-started"))
+        try Data().write(to: directory.appendingPathComponent("next-page-release"))
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("project-page-started"), timeout: 5),
+                      "append must ensure the newly resolved selection before ending loading")
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(fileLines(in: audit), loading + ["idle"])
+        let selected = try sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+            sql: "SELECT id FROM session WHERE external_id='paging-0';")
+        list.scroll(byDeltaX: 0, deltaY: -60_000)
+        XCTAssertTrue(app.descendants(matching: .any)["sessionSidebarRow-\(selected)"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "430")
+        XCTAssertFalse(app.buttons["retrySessionPage"].exists)
+        attach(app, name: "append-resolved-selection-loading-continuity")
+    }
+
     func testPaginationFailureShowsSafeTextAndRetryRecovers() throws {
         let (app, _, _) = try launchWithFailedPendingRestoration(extraSessions: 230, exerciseSidebarRecovery: true)
         app.buttons["testFailNextSessionPage"].click()
@@ -4364,6 +4410,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertFalse(retry.isEnabled)
         app.buttons["testRebuildSidebarIndex"].click()
         XCTAssertTrue(waitForFile(directory.appendingPathComponent("rebuild-reset-started"), timeout: 10))
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "0",
+                       "a rebuild waiting on its first safe progress must keep the reset sidebar empty")
         XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
         XCTAssertTrue(error.exists)
         retry.click()

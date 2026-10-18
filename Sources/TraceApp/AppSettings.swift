@@ -44,10 +44,13 @@ final class AppSettings: ObservableObject {
     @Published var additionalClaudeRoots: [String] { didSet { defaults.set(additionalClaudeRoots, forKey: Key.additionalClaudeRoots) } }
     @Published var hotkeyKeyCode: UInt32 { didSet { defaults.set(Int(hotkeyKeyCode), forKey: Key.hotkeyKeyCode) } }
     @Published var hotkeyModifiers: UInt32 { didSet { defaults.set(Int(hotkeyModifiers), forKey: Key.hotkeyModifiers) } }
-    @Published var lastSessionID: Int64? {
-        didSet {
-            if let lastSessionID { defaults.set(lastSessionID, forKey: Key.lastSessionID) }
+    private let savedSelection = CommittedModelState<Int64?>(nil)
+    var lastSessionID: Int64? {
+        get { savedSelection.value }
+        set {
+            if let newValue { defaults.set(newValue, forKey: Key.lastSessionID) }
             else { defaults.removeObject(forKey: Key.lastSessionID) }
+            savedSelection.commit(newValue) { ModelPublicationBatch.notify(self) }
         }
     }
     @Published var projectPaneFraction: Double {
@@ -78,11 +81,11 @@ final class AppSettings: ObservableObject {
         additionalClaudeRoots = storedClaudeRoots
         hotkeyKeyCode = UInt32(defaults.object(forKey: Key.hotkeyKeyCode) as? Int ?? kVK_Space)
         hotkeyModifiers = UInt32(defaults.object(forKey: Key.hotkeyModifiers) as? Int ?? (cmdKey | shiftKey))
-        lastSessionID = defaults.object(forKey: Key.lastSessionID) as? Int64
         projectPaneFraction = defaults.object(forKey: "projectPaneFraction") as? Double ?? 0.4
         defaults.removeObject(forKey: Key.lastScrollMessageID)
         includeSidechains = defaults.bool(forKey: Key.includeSidechains)
         costRange = CostRange(rawValue: defaults.string(forKey: Key.costRange) ?? "") ?? .thirtyDays
+        savedSelection.stage(defaults.object(forKey: Key.lastSessionID) as? Int64)
     }
 
     var hotkeyDisplayName: String {

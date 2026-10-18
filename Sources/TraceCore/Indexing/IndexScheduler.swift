@@ -42,6 +42,9 @@ public actor IndexScheduler {
     private var retryTask: Task<Void, Never>?
     private var configurationGeneration: UInt64 = 0
     private var stopping = false
+    #if DEBUG
+    var generationForTesting: UInt64 { configurationGeneration }
+    #endif
 
     public init(coordinator: IndexCoordinator, scope: IndexScope,
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
@@ -151,27 +154,30 @@ public actor IndexScheduler {
                 pendingActivity = nil
                 pendingSatisfiesSafetyReconciliation = false
             }
+            let forward: @Sendable (IndexProgress) async -> Void = { [weak self] update in
+                await self?.forwardProgress(update, generation: batch.generation)
+            }
             let operation = Task {
                 if batch.fullScan {
                     await coordinator.indexAllResult(
                         scope: batch.scope, rebuild: batch.rebuild,
                         activity: batch.activity,
                         satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
-                        progress: progress
+                        progress: forward
                     )
                 } else if !batch.reconciliationPaths.isEmpty {
                     await coordinator.reconcile(
                         paths: batch.reconciliationPaths, changedPaths: batch.paths,
                         scope: batch.scope, activity: batch.activity,
                         satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
-                        progress: progress
+                        progress: forward
                     )
                 } else {
                     await coordinator.refreshResult(
                         paths: batch.paths, scope: batch.scope,
                         activity: batch.activity,
                         satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
-                        progress: progress
+                        progress: forward
                     )
                 }
             }
@@ -234,6 +240,13 @@ public actor IndexScheduler {
                 retainForRetry(batch)
             }
         }
+    }
+
+    private func forwardProgress(_ update: IndexProgress, generation: UInt64) async {
+        // A cancelled operation may still finish database awaits and its final
+        // callback. The app also checks cancellation after the main-actor hop.
+        guard !Task.isCancelled, !stopping, generation == configurationGeneration else { return }
+        await progress(update)
     }
 
     private var hasPendingWork: Bool {
