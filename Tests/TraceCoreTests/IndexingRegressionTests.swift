@@ -734,6 +734,22 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertFalse(clearedAgain)
     }
 
+    func testInitialPassIdentityPublicationRetainsStoredFailureCounts() async throws {
+        let root = try directory()
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = MultiScopeFailureSource(root: root, isDefault: false,
+            explicitFailures: [.init(path: root.appendingPathComponent("unreadable").path,
+                                     message: "synthetic discovery failure")])
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        let failed = await coordinator.indexAllResult(scope: .proseOnly)
+        XCTAssertEqual(failed.unresolvedDiscoveryFailures, 1)
+        let recorder = ProgressRecorder()
+        await coordinator.indexAll(scope: .proseOnly) { recorder.receive($0) }
+        XCTAssertEqual(recorder.initial?.phase, .discovering)
+        XCTAssertEqual(recorder.initial?.unresolvedDiscoveryFailures, 1,
+                       "announcing a replacement cannot briefly erase existing failure presentation")
+    }
+
     func testQuietPassReportsDirtyRollupRepairWithoutIndexMutation() async throws {
         let root = try directory()
         let file = root.appendingPathComponent("session.jsonl")
@@ -833,21 +849,39 @@ final class IndexingRegressionTests: XCTestCase {
             XCTAssertEqual(recorder.terminal?.rollupError, "Could not update token totals.")
             XCTAssertEqual(recorder.terminal?.phase, .complete)
         }
-        let repeated = await coordinator.rollupFailureLogCountForTesting
+        let repeated = await database.rollupFailureLogCountForTesting
         XCTAssertEqual(repeated, 1)
-        await coordinator.indexAll(scope: .proseOnly)
+        try await database.rebuildUsageRollupsIfDirty()
         try await raw.write { try $0.execute(sql: "UPDATE trace_meta SET value='1' WHERE key='usage_rollups_dirty'") }
         await database.failRollupRebuildOnceForTesting(error)
         await coordinator.indexAll(scope: .proseOnly)
-        let afterSuccess = await coordinator.rollupFailureLogCountForTesting
+        let afterSuccess = await database.rollupFailureLogCountForTesting
         XCTAssertEqual(afterSuccess, 2)
+        let diagnostics = await database.rollupFailureDiagnosticsForTesting
+        XCTAssertEqual(diagnostics.map(\.primary), [ResultCode.SQLITE_BUSY.rawValue, ResultCode.SQLITE_BUSY.rawValue])
         let replacement = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
         await database.failRollupRebuildOnceForTesting(error)
         await replacement.indexAll(scope: .proseOnly)
-        let replacementLogs = await replacement.rollupFailureLogCountForTesting
-        XCTAssertEqual(replacementLogs, 1)
+        let replacementLogs = await database.rollupFailureLogCountForTesting
+        XCTAssertEqual(replacementLogs, 2, "same-database handoff retains the active diagnostic episode")
     }
 
+    #endif
+
+    #if DEBUG
+    func testGeneralIndexDatabaseFailureHasSafeProgressText() async throws {
+        let root = try directory()
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await database.failScopeReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY,
+            message: "private-status-message", sql: "SELECT 'private-status-sql'",
+            arguments: ["private-status-argument"], publicStatementArguments: true))
+        let result = await coordinator.indexAllResult(scope: .proseOnly, rebuild: true)
+        XCTAssertEqual(result.phase, .failed)
+        XCTAssertEqual(result.error, "Could not update the index. Try again.")
+        XCTAssertFalse(result.indexChanged)
+        XCTAssertFalse(result.error?.contains("private-") == true)
+    }
     #endif
 
     func testTimezoneMarkerForcesRollupRebuildWithoutDirtyFlag() async throws {
@@ -4616,10 +4650,14 @@ private final class IndexErrorRecorder: @unchecked Sendable {
 private final class ProgressRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var lastTerminal: IndexProgress?
+    private var firstUpdate: IndexProgress?
     func receive(_ update: IndexProgress) {
-        guard [.complete, .cancelled, .failed].contains(update.phase) else { return }
-        lock.withLock { lastTerminal = update }
+        lock.withLock {
+            if firstUpdate == nil { firstUpdate = update }
+            if [.complete, .cancelled, .failed].contains(update.phase) { lastTerminal = update }
+        }
     }
+    var initial: IndexProgress? { lock.withLock { firstUpdate } }
     var terminal: IndexProgress? { lock.withLock { lastTerminal } }
 }
 

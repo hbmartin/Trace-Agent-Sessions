@@ -1,5 +1,31 @@
 import Foundation
 import GRDB
+import os
+
+/// Internal diagnostics never become presentation text or public Core API.
+struct IndexFailureDiagnostic: Hashable, Sendable {
+    let primary: Int32?
+    let extended: Int32?
+    let message: String
+
+    init(_ error: Error) {
+        let sqlite = error as? DatabaseError
+        primary = sqlite?.resultCode.rawValue
+        extended = sqlite?.extendedResultCode.rawValue
+        message = sqlite.map { $0.message ?? "SQLite operation failed" } ?? error.localizedDescription
+    }
+
+    func log(operation: String, logger: Logger) {
+        logger.error("\(operation, privacy: .public) failed; SQLite primary=\(primary.map(String.init) ?? "n/a", privacy: .public) extended=\(extended.map(String.init) ?? "n/a", privacy: .public); \(message, privacy: .private)")
+    }
+
+    static func safeDescription(_ error: Error, operation: String, fallback: String) -> String {
+        guard error is DatabaseError else { return error.localizedDescription }
+        IndexFailureDiagnostic(error).log(operation: operation,
+            logger: Logger(subsystem: "me.haroldmartin.Trace", category: "Index database"))
+        return fallback
+    }
+}
 
 public enum IndexDatabaseError: LocalizedError {
     case timestampCollisionLimit
@@ -513,7 +539,13 @@ public actor IndexDatabase {
     }
 
     public func storedIndexScope() throws -> IndexScope {
-        try pool.read { db in
+        #if DEBUG
+        if let error = nextScopeReadError {
+            nextScopeReadError = nil
+            throw error
+        }
+        #endif
+        return try pool.read { db in
             let raw = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='index_scope'")
             return IndexScope(rawValue: Int(raw ?? "0") ?? 0) ?? .proseOnly
         }
@@ -1453,17 +1485,17 @@ public actor IndexDatabase {
         }
     }
 
+    private var rollupFailures: Set<IndexFailureDiagnostic> = []
+    private static let rollupLog = Logger(subsystem: "me.haroldmartin.Trace", category: "Rollup repair")
+    #if DEBUG
+    private(set) var rollupFailureDiagnosticsForTesting: [IndexFailureDiagnostic] = []
+    var rollupFailureLogCountForTesting: Int { rollupFailureDiagnosticsForTesting.count }
+    #endif
+
     public func rebuildUsageRollups(
         timeZoneID: String = TimeZone.autoupdatingCurrent.identifier
     ) async throws {
-        try await delayUsageRollupRebuildForTesting()
-        try Task.checkCancellation()
-        try await pool.writeWithoutTransaction { db in
-            _ = try Self.rebuildUsageRollups(
-                in: db, timeZoneID: timeZoneID, onlyIfDirty: false
-            )
-        }
-        TraceTestHooks.appendLine("rebuilt", pathKey: "TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH")
+        _ = try await repairUsageRollups(timeZoneID: timeZoneID, onlyIfDirty: false)
     }
 
     private func delayUsageRollupRebuildForTesting() async throws {
@@ -1482,27 +1514,40 @@ public actor IndexDatabase {
     public func rebuildUsageRollupsIfDirty(
         timeZoneID: String = TimeZone.autoupdatingCurrent.identifier
     ) async throws -> Bool {
-        let mightBeDirty = try await pool.read {
-            try Self.usageRollupsAreDirty(in: $0, timeZoneID: timeZoneID)
-        }
-        guard mightBeDirty else { return false }
-        #if DEBUG
-        if let error = nextRollupRebuildError {
-            nextRollupRebuildError = nil
+        try await repairUsageRollups(timeZoneID: timeZoneID, onlyIfDirty: true)
+    }
+
+    private func repairUsageRollups(timeZoneID: String, onlyIfDirty: Bool) async throws -> Bool {
+        do {
+            if onlyIfDirty {
+                let dirty = try await pool.read { try Self.usageRollupsAreDirty(in: $0, timeZoneID: timeZoneID) }
+                if !dirty { rollupFailures.removeAll(); return false }
+            }
+            #if DEBUG
+            if let error = nextRollupRebuildError {
+                nextRollupRebuildError = nil
+                throw error
+            }
+            #endif
+            try await delayUsageRollupRebuildForTesting()
+            try Task.checkCancellation()
+            let rebuilt = try await pool.writeWithoutTransaction { db in
+                try Self.rebuildUsageRollups(in: db, timeZoneID: timeZoneID, onlyIfDirty: onlyIfDirty)
+            }
+            rollupFailures.removeAll()
+            if rebuilt { TraceTestHooks.appendLine("rebuilt", pathKey: "TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH") }
+            return rebuilt
+        } catch is CancellationError { throw CancellationError() }
+        catch {
+            let diagnostic = IndexFailureDiagnostic(error)
+            if rollupFailures.insert(diagnostic).inserted {
+                diagnostic.log(operation: "Usage repair", logger: Self.rollupLog)
+                #if DEBUG
+                rollupFailureDiagnosticsForTesting.append(diagnostic)
+                #endif
+            }
             throw error
         }
-        #endif
-        try await delayUsageRollupRebuildForTesting()
-        try Task.checkCancellation()
-        let rebuilt = try await pool.writeWithoutTransaction { db in
-            try Self.rebuildUsageRollups(
-                in: db, timeZoneID: timeZoneID, onlyIfDirty: true
-            )
-        }
-        if rebuilt {
-            TraceTestHooks.appendLine("rebuilt", pathKey: "TRACE_TEST_ROLLUP_REBUILD_AUDIT_PATH")
-        }
-        return rebuilt
     }
 
     private static func usageRollupsAreDirty(
@@ -2157,6 +2202,8 @@ public actor IndexDatabase {
     private var failsNextSessionPageRead = false
     private var nextSessionPageReadError: DatabaseError?
     private var nextUsageReadError: DatabaseError?
+    private var nextScopeReadError: Error?
+    func failScopeReadOnceForTesting(_ error: Error) { nextScopeReadError = error }
     private var usageReadAttempts = 0
     private var nextSessionReadError: DatabaseError?
     private var nextFailureCountsError: DatabaseError?
