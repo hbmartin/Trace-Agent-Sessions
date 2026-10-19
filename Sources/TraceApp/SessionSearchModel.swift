@@ -27,20 +27,73 @@ final class SessionSearchModel: ObservableObject {
         case retain
         case clear
     }
+    struct State: Sendable {
+        var projectFilterDisplayName: String? = nil
+        var isResolvingProjectFilter: Bool = false
+        var results: [SearchResult] = []
+        var snippets: [Int64: String] = [:]
+        var isSearching: Bool = false
+        var error: String? = nil
+        var hasLoadedAdditionalPages: Bool = false
+        var resultsMayBeStale: Bool = false
+        var resultSetID: UUID = UUID()
+        var automaticRefreshToken: UUID? = nil
+        var automaticResultRevision: Int = 0
+    }
+    private let state = CommittedModelState(State())
+    var changes: AnyPublisher<State, Never> { state.publisher }
+    private func updateState(_ update: (inout State) -> Void) {
+        var next = state.value
+        update(&next)
+        state.commit(next) { ModelPublicationBatch.notify(self) }
+    }
     @Published var query = ""
     @Published var filters = SearchFilters()
     @Published var datePreset = SearchDatePreset.anyTime
-    @Published private(set) var projectFilterDisplayName: String?
-    @Published private(set) var isResolvingProjectFilter = false
-    @Published private(set) var results: [SearchResult] = []
-    @Published private(set) var snippets: [Int64: String] = [:]
-    @Published private(set) var isSearching = false
-    @Published private(set) var error: String?
-    @Published private(set) var hasLoadedAdditionalPages = false
-    @Published private(set) var resultsMayBeStale = false
-    @Published private(set) var resultSetID = UUID()
-    @Published private(set) var automaticRefreshToken: UUID?
-    @Published private(set) var automaticResultRevision = 0
+    private(set) var projectFilterDisplayName: String? {
+        get { state.read(\.projectFilterDisplayName) }
+        set { updateState { $0.projectFilterDisplayName = newValue } }
+    }
+    private(set) var isResolvingProjectFilter: Bool {
+        get { state.read(\.isResolvingProjectFilter) }
+        set { updateState { $0.isResolvingProjectFilter = newValue } }
+    }
+    private(set) var results: [SearchResult] {
+        get { state.read(\.results) }
+        set { updateState { $0.results = newValue } }
+    }
+    private(set) var snippets: [Int64: String] {
+        get { state.read(\.snippets) }
+        set { updateState { $0.snippets = newValue } }
+    }
+    private(set) var isSearching: Bool {
+        get { state.read(\.isSearching) }
+        set { updateState { $0.isSearching = newValue } }
+    }
+    private(set) var error: String? {
+        get { state.read(\.error) }
+        set { updateState { $0.error = newValue } }
+    }
+    private(set) var hasLoadedAdditionalPages: Bool {
+        get { state.read(\.hasLoadedAdditionalPages) }
+        set { updateState { $0.hasLoadedAdditionalPages = newValue } }
+    }
+    private(set) var resultsMayBeStale: Bool {
+        get { state.read(\.resultsMayBeStale) }
+        set { updateState { $0.resultsMayBeStale = newValue } }
+    }
+    private(set) var resultSetID: UUID {
+        get { state.read(\.resultSetID) }
+        set { updateState { $0.resultSetID = newValue } }
+    }
+    private(set) var automaticRefreshToken: UUID? {
+        get { state.read(\.automaticRefreshToken) }
+        set { updateState { $0.automaticRefreshToken = newValue } }
+    }
+    private(set) var automaticResultRevision: Int {
+        get { state.read(\.automaticResultRevision) }
+        set { updateState { $0.automaticResultRevision = newValue } }
+    }
     private var database: IndexDatabase?
     private let clock: any Clock<Duration>
     private var coordinator: IndexCoordinator?
@@ -494,27 +547,23 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func resetForIndexReset(awaitsProjectResolution: Bool = false) {
+        // Retire all read ownership before committing or notifying reset state.
         task?.cancel()
         task = nil
         requestID = UUID()
-        resultSetID = UUID()
-        isResolvingProjectFilter = awaitsProjectResolution
-            && filters.projectCanonicalKey != nil
         nextCursor = nil
-        results = []
-        snippets = [:]
-        isSearching = false
-        error = nil
         loadingAdditionalPage = false
         activeTaskIsReset = false
         pendingLoadMore = false
-        hasLoadedAdditionalPages = false
-        resultsMayBeStale = false
-        automaticRefreshToken = nil
         refreshBackup = nil
         activeTaskIsAutomatic = false
         activeRequestCriteria = nil
         hasCommittedSearch = false
+        updateState {
+            $0 = .init()
+            $0.isResolvingProjectFilter = awaitsProjectResolution && filters.projectCanonicalKey != nil
+            $0.projectFilterDisplayName = projectFilterDisplayName
+        }
     }
 
     private func invalidateActiveRequest(markStale: Bool) {

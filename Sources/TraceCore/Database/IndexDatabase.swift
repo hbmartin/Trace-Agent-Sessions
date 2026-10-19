@@ -21,10 +21,43 @@ struct IndexFailureDiagnostic: Hashable, Sendable {
 
     static func safeDescription(_ error: Error, operation: String, fallback: String) -> String {
         guard error is DatabaseError else { return error.localizedDescription }
-        IndexFailureDiagnostic(error).log(operation: operation,
-            logger: Logger(subsystem: "me.haroldmartin.Trace", category: "Index database"))
         return fallback
     }
+}
+
+/// One owner retains episodes across passes; optional metadata reads share it
+/// across their detached workers. Never hold the lock while logging.
+final class IndexFailureEpisodes: Sendable {
+    private struct Operation: Hashable { let name: String; let scope: String }
+    private struct State {
+        var failures: [Operation: Set<IndexFailureDiagnostic>] = [:]
+        #if DEBUG
+        var recorded: [(String, IndexFailureDiagnostic)] = []
+        #endif
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let logger = Logger(subsystem: "me.haroldmartin.Trace", category: "Index database")
+
+    func record(_ error: Error, operation: String, scope: String = "") {
+        guard error is DatabaseError else { return }
+        let diagnostic = IndexFailureDiagnostic(error)
+        let inserted = state.withLock { state in
+            let inserted = state.failures[.init(name: operation, scope: scope), default: []].insert(diagnostic).inserted
+            #if DEBUG
+            if inserted { state.recorded.append((operation, diagnostic)) }
+            #endif
+            return inserted
+        }
+        if inserted { diagnostic.log(operation: operation, logger: logger) }
+    }
+
+    func succeeded(_ operation: String, scope: String = "") {
+        state.withLock { $0.failures[.init(name: operation, scope: scope)] = nil }
+    }
+
+    #if DEBUG
+    var recordedForTesting: [(String, IndexFailureDiagnostic)] { state.withLock { $0.recorded } }
+    #endif
 }
 
 public enum IndexDatabaseError: LocalizedError {

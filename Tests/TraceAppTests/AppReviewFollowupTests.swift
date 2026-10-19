@@ -11,6 +11,256 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testResetCommitsAllBackingStateBeforeReentrantNavigation() async throws {
+        for surface in 0..<5 {
+            let f = try await fixture(count: 430)
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            try await search(f)
+            f.model.globalSearch.query = "NavigationNeedle"
+            f.model.search()
+            await f.clock.advance(by: .milliseconds(100))
+            try await wait { !f.model.globalSearch.isSearching }
+            let current = try XCTUnwrap(f.model.sessions.first)
+            let target = try XCTUnwrap(f.model.sessions.dropFirst().first)
+            f.model.selectSession(current.id, preservingMainSearch: true)
+            try await wait { !f.model.messages.isEmpty }
+            var observed = false
+            let observe = {
+                guard !observed, f.model.selectedSessionID == nil, f.model.projects.isEmpty else { return }
+                observed = true
+                XCTAssertTrue(f.model.sessions.isEmpty)
+                XCTAssertEqual(f.model.totalSessionCount, 0)
+                XCTAssertNil(f.model.sessionCursorIDForTesting)
+                XCTAssertEqual(f.model.sessionPageDepthForTesting, 1)
+                XCTAssertFalse(f.model.isLoadingSessions)
+                XCTAssertTrue(f.model.mainSearch.results.isEmpty)
+                XCTAssertTrue(f.model.globalSearch.results.isEmpty)
+                XCTAssertFalse(f.model.mainSearch.isSearching)
+                XCTAssertTrue(f.model.sourceHealth.isEmpty)
+                XCTAssertNil(f.model.statistics)
+                XCTAssertNil(f.model.settings.lastSessionID)
+                f.model.selectSession(target.id)
+            }
+            let subscription: AnyCancellable
+            switch surface {
+            case 0: subscription = f.model.objectWillChange.sink { observe() }
+            case 1: subscription = f.model.transcriptChanges.dropFirst().sink { _ in observe() }
+            case 2: subscription = f.model.sessionPageChanges.dropFirst().sink { _ in observe() }
+            case 3: subscription = f.model.mainSearch.changes.dropFirst().sink { _ in observe() }
+            default: subscription = f.model.settings.objectWillChange.sink { observe() }
+            }
+            defer { subscription.cancel() }
+            XCTAssertTrue(f.model.resetIndexForTesting(), "selection changes do not supersede a database reset")
+            XCTAssertTrue(observed)
+            XCTAssertEqual(f.model.selectedSessionID, target.id)
+            XCTAssertEqual(f.model.settings.lastSessionID, target.id)
+            try await wait { f.model.selectedSession?.id == target.id && !f.model.messages.isEmpty }
+        }
+    }
+
+    func testAttachmentResetNavigationUsesInstalledDatabaseAndScheduler() async throws {
+        for objectNotification in [false, true] {
+            let f = try await fixture(count: 430), replacement = try await fixture(count: 2)
+            let target = try XCTUnwrap(replacement.model.sessions.first)
+            var observed = false
+            let observe = {
+                guard !observed, f.model.databaseForTesting === replacement.database,
+                      f.model.sessions.isEmpty else { return }
+                observed = true
+                XCTAssertNotNil(f.model.schedulerForTesting)
+                XCTAssertTrue(f.model.coordinatorForTesting === replacement.coordinator)
+                XCTAssertTrue(f.model.mainSearch.results.isEmpty)
+                f.model.selectSession(target.id)
+            }
+            let subscription = objectNotification
+                ? f.model.objectWillChange.sink { observe() }
+                : f.model.transcriptChanges.dropFirst().sink { _ in observe() }
+            defer { subscription.cancel() }
+            let installed = await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+            XCTAssertTrue(installed)
+            XCTAssertTrue(observed)
+            XCTAssertTrue(f.model.databaseForTesting === replacement.database)
+            XCTAssertNotNil(f.model.schedulerForTesting)
+            try await wait { f.model.selectedSession?.id == target.id && !f.model.messages.isEmpty }
+            XCTAssertEqual(f.model.selectedSession?.sourcePath, target.sourcePath)
+            XCTAssertEqual(f.model.settings.lastSessionID, target.id)
+        }
+    }
+
+    func testRebuildCannotReloadOldSidebarDuringPreparation() async throws {
+        let f = try await fixture(count: 430)
+        let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        await coordinator.gatePreparationForTesting(held)
+        let before = await f.database.sessionListReadCountForTesting()
+        await f.clock.advance(by: .seconds(1))
+        f.model.settings.onboardingComplete = true
+        f.model.rebuildIndex()
+        try await wait { await coordinator.preparationWaitingForTesting }
+        XCTAssertTrue(f.model.projects.isEmpty)
+        XCTAssertTrue(f.model.sessions.isEmpty)
+        XCTAssertEqual(f.model.totalSessionCount, 0)
+        await f.clock.advance(by: .seconds(1))
+        let heldReads = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(heldReads, before, "pass admission must not read the pre-clear database")
+        let generation = f.model.workflowGenerationForTesting
+        let event = f.model.usageRecoveryEventForTesting
+        // A second replacement cancels the held, not-yet-admitted operation.
+        f.model.rebuildIndex()
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        try await wait { await scheduler.generationForTesting == 2 }
+        await gate.open()
+        try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
+        XCTAssertNotEqual(f.model.workflowGenerationForTesting, generation)
+        XCTAssertEqual(f.model.usageRecoveryEventForTesting, event + 1,
+                       "only the current replacement may produce terminal recovery")
+        XCTAssertEqual(f.model.progress.activity, .rebuild)
+        XCTAssertFalse(f.model.projects.isEmpty)
+    }
+
+    func testUsageControlTimeoutCannotBecomeAcceptedCostsFailure() async throws {
+        let f = try await fixture(count: 2)
+        await f.database.failUsageReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.loadCachedUsageForTesting()
+        let before = f.model.usageAttemptReceiptsForTesting.count
+        let cached = f.model.usage.map(\.inputTokens)
+        f.model.usageControlErrorForTesting = NSError(domain: "TraceTestHooks", code: 1)
+        f.model.retryCosts()
+        try await wait { !f.model.usageControlFailuresForTesting.isEmpty && !f.model.costsTotalsUpdating }
+        XCTAssertEqual(f.model.usageAttemptReceiptsForTesting.count, before)
+        XCTAssertEqual(f.model.costsError, "Could not load cached token totals.")
+        XCTAssertEqual(f.model.usage.map(\.inputTokens), cached)
+        XCTAssertTrue(f.model.canRetryCosts)
+        f.model.retryCosts()
+        try await wait { f.model.costsError == nil && !f.model.costsTotalsUpdating }
+        XCTAssertEqual(f.model.usageAttemptReceiptsForTesting.dropFirst(before).map(\.outcome), [.success])
+    }
+
+    func testAppendDoesNotRepeatAnUnchangedMissingSelectionEnsure() async throws {
+        let f = try await fixture(count: 1_405)
+        f.model.setUnresolvedSelectionForTesting(Int64.max)
+        let before = await f.database.sessionListReadCountForTesting()
+        for depth in 2...4 {
+            f.model.loadMoreSessions()
+            try await wait { !f.model.isLoadingSessions && f.model.sessionPageDepthForTesting == depth }
+            XCTAssertEqual(f.model.sessions.count, depth * 200)
+            XCTAssertEqual(f.model.totalSessionCount, 1_409)
+            XCTAssertNil(f.model.sessionListError)
+        }
+        let attempts = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(attempts, before + 1, "only the first append needs a full missing-row ensure")
+        var mutation = IndexProgress(phase: .indexing)
+        mutation.incremental = true
+        mutation.mutationRevision = 1
+        await f.model.receiveProgress(mutation)
+        f.model.loadMoreSessions()
+        try await wait { !f.model.isLoadingSessions && f.model.sessionPageDepthForTesting == 5 }
+        let afterMutation = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(afterMutation, attempts + 1, "a new data generation permits another ensure")
+        let expected = try await f.database.sessionListSnapshot(projectCanonicalKey: nil, pageCount: 5)
+        XCTAssertEqual(f.model.sessions.map(\.id), expected.sessions.map(\.id))
+        XCTAssertEqual(f.model.sessionCursorIDForTesting, expected.nextCursor?.sessionID)
+    }
+
+    func testStartupRecoveryLoadFailureUsesSafeTextAndPrivateDiagnostic() async throws {
+        let f = try await fixture(count: 2)
+        let model = try uninstalledModel(clock: f.clock, diagnosticsURL: f.root.appendingPathComponent("startup-safe.json"))
+        model.initialDatabaseForTesting = f.database
+        model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
+        model.recoveryLoadErrorForTesting = DatabaseError(resultCode: .SQLITE_BUSY,
+            message: "private-recovery-message", sql: "SELECT 'private-recovery-sql'",
+            arguments: ["private-recovery-argument"], publicStatementArguments: true)
+        var diagnostics: [TraceModel.SummaryReadFailure] = []
+        model.summaryReadFailureForTesting = { diagnostics.append($0) }
+        model.start()
+        try await wait { model.coordinatorForTesting != nil && model.startupError != nil }
+        XCTAssertEqual(model.startupError,
+            "Could not load pending index recovery; a safe root scan was queued. Could not update the index. Try again.")
+        XCTAssertFalse(model.startupError?.contains("private-") == true)
+        XCTAssertEqual(diagnostics.filter { $0.operation == .indexStatus }.map(\.primaryCode), [ResultCode.SQLITE_BUSY.rawValue])
+    }
+
+    func testDeletedSelectionDoesNotForceAFullReadAfterEveryAppend() async throws {
+        let f = try await fixture(count: 1_005)
+        f.model.selectProject(f.project.id)
+        try await wait { !f.model.isLoadingSessions }
+        let selected = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(selected.id)
+        try await wait { f.model.selectedSession?.id == selected.id && !f.model.messages.isEmpty }
+        let raw = try DatabaseQueue(path: f.root.appendingPathComponent("index.sqlite").path)
+        try await raw.write { try $0.execute(sql: "DELETE FROM session WHERE id=?", arguments: [selected.id]) }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.summaryTranscriptGateForTesting = held
+        let refresh = Task { await f.model.refreshSummariesForTesting() }
+        try await wait { f.model.summaryTranscriptWaitingForTesting }
+        XCTAssertEqual(f.model.selectedSessionID, selected.id, "hold deletion confirmation after page acceptance")
+        XCTAssertFalse(f.model.sessions.contains { $0.id == selected.id })
+        let before = await f.database.sessionListReadCountForTesting()
+        for depth in 2...4 {
+            f.model.loadMoreSessions()
+            try await wait { !f.model.isLoadingSessions && f.model.sessionPageDepthForTesting == depth }
+            XCTAssertFalse(f.model.sessions.contains { $0.id == selected.id })
+            XCTAssertEqual(f.model.totalSessionCount, 1_004)
+            XCTAssertNil(f.model.sessionListError)
+        }
+        let after = await f.database.sessionListReadCountForTesting()
+        XCTAssertEqual(after, before, "the accepted missing ensure covers later appends until data or selection changes")
+        f.model.summaryTranscriptGateForTesting = nil
+        await gate.open(); await refresh.value
+        XCTAssertNil(f.model.selectedSessionID)
+    }
+
+    func testTerminalFirstReplacementFailureRetiresItsDisplacedActivePass() async throws {
+        let f = try await fixture(count: 2)
+        await f.model.receiveProgress(.init(phase: .indexing))
+        XCTAssertNotNil(f.model.activeIndexPassIDForTesting)
+        let event = f.model.usageRecoveryEventForTesting
+        await f.database.failScopeReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        f.model.settings.onboardingComplete = true
+        f.model.rebuildIndex()
+        try await wait { f.model.progress.phase == .failed && !f.model.indexingPassActiveForTesting }
+        XCTAssertNil(f.model.activeIndexPassIDForTesting)
+        XCTAssertEqual(f.model.usageRecoveryEventForTesting, event + 1)
+        XCTAssertEqual(f.model.progress.error, "Could not update the index. Try again.")
+    }
+
+    func testResetCannotContinueAfterReentrantWorkflowAttachmentOrTermination() async throws {
+        for action in 0..<3 {
+            let f = try await fixture(count: 2)
+            f.model.settings.onboardingComplete = true
+            var observed = false
+            let subscription = f.model.objectWillChange.sink {
+                guard !observed, f.model.projects.isEmpty, f.model.sessions.isEmpty else { return }
+                observed = true
+                XCTAssertNil(f.model.sessionCursorIDForTesting)
+                XCTAssertEqual(f.model.totalSessionCount, 0)
+                XCTAssertTrue(f.model.mainSearch.results.isEmpty)
+                switch action {
+                case 0: f.model.rebuildIndex()
+                case 1: f.model.reloadSourcesAndRebuild()
+                default: f.model.beginTerminationForTesting()
+                }
+            }
+            defer { subscription.cancel() }
+            f.model.rebuildIndex()
+            try await wait { observed }
+            if action == 2 {
+                XCTAssertTrue(f.model.isTerminatingForTesting)
+                XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 0)
+                XCTAssertTrue(f.model.sessions.isEmpty)
+                XCTAssertNil(f.model.sessionCursorIDForTesting)
+            } else {
+                try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
+                XCTAssertNotNil(f.model.schedulerForTesting)
+                XCTAssertNil(f.model.pendingAttachmentTokenForTesting)
+                XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, action == 0 ? 1 : 0,
+                               "only the newer workflow may submit its rebuild")
+            }
+        }
+    }
+
     private struct Fixture {
         let root: URL
         let clock: TestClock<Duration>
@@ -392,7 +642,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.summaryReadFailureForTesting = { failures.append($0) }
         f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
         var failedPublications = 0
-        let subscription = f.model.$sourceReloadRecovery.sink { if case .failed = $0 { failedPublications += 1 } }
+        let subscription = f.model.sidebarChanges.map(\.sourceReloadRecovery).removeDuplicates().sink { if case .failed = $0 { failedPublications += 1 } }
         defer { subscription.cancel() }
         for _ in 0..<2 {
             let before = failedPublications
@@ -1137,7 +1387,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let before = await f.database.sessionListReadCountForTesting()
         let refresh = Task { await f.model.refreshSummariesForTesting(lightweight: false) }
         try await wait { f.model.summarySidebarWaitingForTesting }
-        f.model.selectedSessionID = Int64.max
+        f.model.setUnresolvedSelectionForTesting(Int64.max)
         f.model.summarySidebarGateForTesting = nil
         await gate.open(); await refresh.value
         try await wait { !f.model.isLoadingSessions }
@@ -1843,7 +2093,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.database.failSessionListReadOnceForTesting()
         let before = await f.database.summaryMetadataReadCountsForTesting()
         var reentered = false
-        let subscription = f.model.$sidebarSummaryError.dropFirst().sink { error in
+        let subscription = f.model.sidebarChanges.map(\.sidebarSummaryError).removeDuplicates().dropFirst().sink { error in
             if error != nil, !reentered {
                 reentered = true
                 f.model.failSourceConfigurationForTesting = true
@@ -2173,7 +2423,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.refreshSummariesForTesting(lightweight: false)
         let error = f.model.sidebarSummaryError
         var states: [Bool] = []
-        let subscription = f.model.$isRetryingSidebarSummary.dropFirst().sink { states.append($0) }
+        let subscription = f.model.sidebarChanges.map(\.isRetryingSidebarSummary).removeDuplicates().dropFirst().sink { states.append($0) }
         defer { subscription.cancel() }
         let gate = ReviewReadGate(), held = Task { await gate.wait() }
         defer { held.cancel(); Task { await gate.open() } }
@@ -2779,7 +3029,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { !f.model.costsTotalsUpdating }
         XCTAssertTrue(f.model.rootSessionRefreshPendingForTesting)
         var reentered = false
-        let subscription = f.model.$sidebarSummaryError.dropFirst().sink { error in
+        let subscription = f.model.sidebarChanges.map(\.sidebarSummaryError).removeDuplicates().dropFirst().sink { error in
             if error == nil, !reentered {
                 reentered = true
                 f.model.failSourceConfigurationForTesting = true
@@ -3028,7 +3278,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root])]
         let before = await f.database.summaryMetadataReadCountsForTesting()
         var reentered = false
-        let subscription = f.model.$sourceHealth.dropFirst().sink { health in
+        let subscription = f.model.sidebarChanges.map(\.sourceHealth).dropFirst().sink { health in
             if !reentered && !health.contains(where: { $0.rootPath == removed.path }) {
                 reentered = true
                 f.model.sourceReloadSourcesForTesting = [ClaudeCodeSource(roots: [f.root, removed])]
@@ -3246,7 +3496,7 @@ final class AppReviewFollowupTests: XCTestCase {
             let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
                 MainActor.assumeIsolated { events.windows += 1 }
             }
-            let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+            let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
             defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
             await f.database.failTranscriptReadsForTesting(count: publisher == 1 ? 4 : 1)
             f.model.selectSession(session.id, showWindow: true, messageID: messageID)
@@ -3290,7 +3540,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { events.windows += 1 }
         }
-        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         await f.database.failTranscriptReadOnceForTesting()
         f.model.selectSession(first.id, showWindow: true, messageID: 123)
@@ -3311,7 +3561,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { events.windows += 1 }
         }
-        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         await f.database.failTranscriptReadOnceForTesting()
         f.model.selectSession(session.id)
@@ -3335,7 +3585,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { events.windows += 1 }
         }
-        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         await f.database.failTranscriptReadsForTesting(count: 4)
         f.model.selectSession(session.id)
@@ -3369,7 +3619,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { events.windows += 1 }
         }
-        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         f.model.selectionTranscriptReadGateForTesting = task
         f.model.openSession(session)
@@ -4005,7 +4255,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.schedulerProgressGateForTesting = progressTask
         f.model.failSourceConfigurationForTesting = false
         var retries = 0
-        let subscription = f.model.$sourceReloadRecovery.dropFirst().sink { state in
+        let subscription = f.model.sidebarChanges.map(\.sourceReloadRecovery).removeDuplicates().dropFirst().sink { state in
             if state.isRetrying { retries += 1 }
         }
         defer { subscription.cancel() }
@@ -4150,7 +4400,7 @@ final class AppReviewFollowupTests: XCTestCase {
             let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
                 MainActor.assumeIsolated { events.windows += 1 }
             }
-            let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+            let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
             defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
             await f.model.receiveProgress(.init(phase: .indexing))
             _ = try await f.database.synchronizeConfiguredRoots([])
@@ -4328,7 +4578,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { events.windows += 1 }
         }
-        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         var pass = IndexProgress(phase: .indexing)
         await f.model.receiveProgress(pass)
@@ -4606,7 +4856,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { events.windows += 1 }
         }
-        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         f.model.selectSession(sessionID, showWindow: true)
         try await wait { (f.model.transcriptBanner?.feedback == .updating) && events.windows == 1 }
@@ -4756,7 +5006,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: .traceShowMainWindow, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { events.windows += 1 }
         }
-        let subscription = f.model.$scrollRequest.dropFirst().sink { _ in events.scrolls += 1 }
+        let subscription = f.model.sidebarChanges.map(\.scrollRequest).removeDuplicates().dropFirst().sink { _ in events.scrolls += 1 }
         defer { NotificationCenter.default.removeObserver(observer); subscription.cancel() }
         f.model.selectSession(sessionID, showWindow: true)
         try await wait { (f.model.transcriptBanner?.feedback == .updating) && events.windows == 1 }
@@ -5419,7 +5669,7 @@ final class AppReviewFollowupTests: XCTestCase {
             f.model.settings.onboardingComplete = true
             f.model.failsWatcherStartForTesting = true
             var handled = false
-            let subscription = f.model.$monitoringWarnings.sink { warnings in
+            let subscription = f.model.sidebarChanges.map(\.monitoringWarnings).removeDuplicates().sink { warnings in
                 guard !warnings.isEmpty, !handled else { return }
                 handled = true
                 if replacesConfiguration {

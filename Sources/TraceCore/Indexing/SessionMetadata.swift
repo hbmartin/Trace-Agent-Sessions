@@ -258,7 +258,7 @@ enum CodexSessionNamesLoadResult: Sendable {
 
 /// Source-specific sidecars are optional. Never open the agent's database for writing.
 enum CodexSessionNames {
-    static func load(directory: URL) throws -> CodexSessionNamesLoadResult {
+    static func load(directory: URL, failures: IndexFailureEpisodes? = nil) throws -> CodexSessionNamesLoadResult {
         try Task.checkCancellation()
         let contents: [URL]
         do {
@@ -369,6 +369,7 @@ enum CodexSessionNames {
             throw CancellationError()
         } catch {
             try Task.checkCancellation()
+            failures?.record(error, operation: "Metadata sidecar", scope: directory.standardizedFileURL.path)
             warnings.append("\(newestDatabase.lastPathComponent): \(IndexFailureDiagnostic.safeDescription(error, operation: "Metadata sidecar", fallback: "Could not refresh session metadata."))")
             if !names.isEmpty {
                 return .loaded(.init(names: names, complete: false,
@@ -378,6 +379,7 @@ enum CodexSessionNames {
             return .unavailable(warnings.joined(separator: "; "))
         }
         try Task.checkCancellation()
+        failures?.succeeded("Metadata sidecar", scope: directory.standardizedFileURL.path)
         return .loaded(.init(names: names, complete: warnings.isEmpty,
                              fillOnlyOrigins: indexReadFailed ? [databaseTitleOrigin] : [],
                              warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")))

@@ -144,6 +144,12 @@ public actor IndexCoordinator {
     }
 
     private let database: IndexDatabase
+    private let failures = IndexFailureEpisodes()
+    #if DEBUG
+    private var preparationGateForTesting: Task<Void, Never>?
+    private(set) var preparationWaitingForTesting = false
+    func gatePreparationForTesting(_ gate: Task<Void, Never>?) { preparationGateForTesting = gate }
+    #endif
     private let sources: [any SessionSource]
     private let clock: AnyClock<Duration>
     private let gate = IndexRunGate()
@@ -266,7 +272,7 @@ public actor IndexCoordinator {
            !(retryIncomplete && cached.result.needsRetry) {
             return cached.result
         }
-        let result = try await Self.loadCodexNames(directory: directory)
+        let result = try await Self.loadCodexNames(directory: directory, failures: failures)
         codexNameLoadCounts[key, default: 0] += 1
         codexNameCache[key] = .init(result: result, loadedAt: clock.now)
         return result
@@ -443,12 +449,18 @@ public actor IndexCoordinator {
             status.unresolvedFailedFiles = counts.fileFailures
             status.unresolvedDiscoveryFailures = counts.discoveryFailures
         }
-        // Announce the pass before its first fatal read/cancellation, retaining
-        // stored failure counts rather than briefly publishing zero failures.
-        await progress(status)
         do {
+            #if DEBUG
+            if let gate = preparationGateForTesting {
+                preparationGateForTesting = nil
+                preparationWaitingForTesting = true
+                await gate.value
+                preparationWaitingForTesting = false
+            }
+            #endif
             try Task.checkCancellation()
             let oldScope = try await database.storedIndexScope()
+            try Task.checkCancellation()
             if rebuild || oldScope != scope {
                 try await database.clearIndex()
                 deferredCodexSessionIDs = [:]
@@ -462,6 +474,7 @@ public actor IndexCoordinator {
                 for: "TRACE_TEST_SCOPE_RESET_HOLD_MS", cappedAt: 30_000,
                 marker: .touch(pathKey: "TRACE_TEST_SCOPE_RESET_ENTERED_PATH")
             ) : nil
+            try Task.checkCancellation()
             await progress(status)
             if let delay = scopeResetDelay {
                 try await TraceTestHooks.waitForRelease(
@@ -556,7 +569,7 @@ public actor IndexCoordinator {
                 _ error: Error, source: any SessionSource, root: SourceRoot,
                 mappingContext: SourceRootPathContext, scopes: [SourceRootScope]
             ) {
-                let message = IndexFailureDiagnostic.safeDescription(error, operation: "Discovery", fallback: "Could not update the index. Try again.")
+                let message = safeIndexDescription(error, operation: "Discovery", fallback: "Could not update the index. Try again.")
                 let failures = scopes.map { scope in
                     NormalizedDiscoveryFailure(
                         failure: DiscoveryFailure(
@@ -762,7 +775,7 @@ public actor IndexCoordinator {
                 catch {
                     status.failedFiles += 1
                     needsFailureRecount = true
-                    let message = IndexFailureDiagnostic.safeDescription(error, operation: "Index source", fallback: "Could not update the index. Try again.")
+                    let message = safeIndexDescription(error, operation: "Index source", fallback: "Could not update the index. Try again.")
                     if firstFileError == nil { firstFileError = message }
                     status.error = firstFileError ?? firstDiscoveryError
                     status.failedPaths.insert(file.url.path)
@@ -810,7 +823,7 @@ public actor IndexCoordinator {
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         replaceCodexWarnings(
-                            [IndexFailureDiagnostic.safeDescription(error, operation: "Session metadata", fallback: "Could not refresh session metadata.")], kind: warningKind,
+                            [safeIndexDescription(error, operation: "Session metadata", fallback: "Could not refresh session metadata.")], kind: warningKind,
                             for: rootKey,
                             sourcePath: warningKind == .lookup || warningKind == .fileWrite
                                 ? file.url.path : nil,
@@ -936,7 +949,7 @@ public actor IndexCoordinator {
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         replaceCodexWarnings(
-                            [IndexFailureDiagnostic.safeDescription(error, operation: "Session metadata", fallback: "Could not refresh session metadata.")], kind: warningKind,
+                            [safeIndexDescription(error, operation: "Session metadata", fallback: "Could not refresh session metadata.")], kind: warningKind,
                             for: root.id, in: &status
                         )
                     }
@@ -960,14 +973,34 @@ public actor IndexCoordinator {
             status.phase = .cancelled
         } catch {
             status.phase = .failed
-            status.error = IndexFailureDiagnostic.safeDescription(error, operation: "Index pass", fallback: "Could not update the index. Try again.")
+            status.error = safeIndexDescription(error, operation: "Index pass", fallback: "Could not update the index. Try again.")
         }
         status.indexChanged = await mutations.hasChanges()
         status.mutationRevision = await mutations.version()
-        updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
+        let counts = try? await database.unresolvedSourceFailureCounts()
+        updateFailureCounts(&status, counts)
+        if status.phase == .complete {
+            failures.succeeded("Index pass")
+            if let counts {
+                if counts.fileFailures == 0 { failures.succeeded("Index source") }
+                if counts.discoveryFailures == 0 { failures.succeeded("Discovery") }
+            }
+            if !codexWarnings.keys.contains(where: { [.lookup, .fileWrite, .rootWrite].contains($0.kind) }) {
+                failures.succeeded("Session metadata")
+            }
+        }
         await progress(status)
         return status
     }
+
+    private func safeIndexDescription(_ error: Error, operation: String, fallback: String) -> String {
+        failures.record(error, operation: operation)
+        return IndexFailureDiagnostic.safeDescription(error, operation: operation, fallback: fallback)
+    }
+
+    #if DEBUG
+    var failureDiagnosticsForTesting: [(String, IndexFailureDiagnostic)] { failures.recordedForTesting }
+    #endif
 
     private func updateFailureCounts(
         _ status: inout IndexProgress, _ counts: SourceFailureCounts?
@@ -1137,10 +1170,10 @@ public actor IndexCoordinator {
     }
 
     private nonisolated static func loadCodexNames(
-        directory: URL
+        directory: URL, failures: IndexFailureEpisodes
     ) async throws -> CodexSessionNamesLoadResult {
         let task = Task.detached(priority: .utility) {
-            try CodexSessionNames.load(directory: directory)
+            try CodexSessionNames.load(directory: directory, failures: failures)
         }
         return try await withTaskCancellationHandler(
             operation: { try await task.value },

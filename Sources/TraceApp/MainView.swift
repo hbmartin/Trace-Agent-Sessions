@@ -1172,6 +1172,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         ) {
             let performanceInterval = TracePerformance.begin("Transcript Update")
             defer { TracePerformance.end(performanceInterval) }
+            let transcript = model.transcriptSnapshot
             self.model = model
             if self.sessionID != sessionID || self.visibility != visibility || self.density != density
                 || self.messageRevision != messageRevision || self.contentRevision != contentRevision {
@@ -1213,8 +1214,8 @@ struct TranscriptRenderer: NSViewRepresentable {
             if self.messageRevision != messageRevision || self.visibility != visibility {
                 visibilityChanged = self.visibility != visibility
                 self.visibility = visibility
-                let replacement = model.messages.enumerated().compactMap { index, summary in
-                    visibility.includes(summary) ? Item(summary: summary, sourceIndex: index, sourceGeneration: model.selectedSession?.sourceGeneration) : nil
+                let replacement = transcript.messages.enumerated().compactMap { index, summary in
+                    visibility.includes(summary) ? Item(summary: summary, sourceIndex: index, sourceGeneration: transcript.session?.sourceGeneration) : nil
                 }
                 if !sessionChanged, self.messageRevision >= 0 {
                     let oldIDs = items.map { $0.summary.id }
@@ -1262,15 +1263,15 @@ struct TranscriptRenderer: NSViewRepresentable {
                         PositionSnapshot(bookmark: $0, followsBottom: false)
                     }
                     ?? capturePosition()
-                let newHydrated = Set(model.hydratedMessages.keys)
-                let changedFailures = Set(failedMessages.keys).union(model.hydrationFailures.keys)
-                    .filter { failedMessages[$0] != model.hydrationFailures[$0] }
+                let newHydrated = Set(transcript.hydrated.keys)
+                let changedFailures = Set(failedMessages.keys).union(transcript.failures.keys)
+                    .filter { failedMessages[$0] != transcript.failures[$0] }
                 let changed = hydratedIDs.symmetricDifference(newHydrated)
                     .union(changedFailures)
-                    .union(expandedIDs.symmetricDifference(model.expandedReasoningIDs))
+                    .union(expandedIDs.symmetricDifference(transcript.expanded))
                 hydratedIDs = newHydrated
-                failedMessages = model.hydrationFailures
-                expandedIDs = model.expandedReasoningIDs
+                failedMessages = transcript.failures
+                expandedIDs = transcript.expanded
                 self.contentRevision = contentRevision
                 let rows = IndexSet(changed.compactMap { rowByMessageID[$0] })
                 if !rows.isEmpty {
@@ -1419,6 +1420,7 @@ struct TranscriptRenderer: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard items.indices.contains(row), let model else { return nil }
+            let transcript = model.transcriptSnapshot
             let item = items[row]
             if TraceTestHooks.isUITesting { materializedMessageIDs.insert(item.summary.id) }
             let identifier = NSUserInterfaceItemIdentifier("messageCell")
@@ -1426,11 +1428,11 @@ struct TranscriptRenderer: NSViewRepresentable {
                 ?? TranscriptHostingCell(identifier: identifier)
             let message = item.summary
             let expansion = expansionState(for: message.id)
-            let hydrated = model.hydratedMessages[message.id]
-            let hydrationError = model.hydrationFailures[message.id]
+            let hydrated = transcript.hydrated[message.id]
+            let hydrationError = transcript.failures[message.id]
             let rowView = MessageRow(
                 summary: message,
-                sourceGeneration: model.selectedSession?.sourceGeneration,
+                sourceGeneration: transcript.session?.sourceGeneration,
                 hydrated: hydrated,
                 hydrationError: hydrationError,
                 reasoningExpanded: Binding(
@@ -1468,8 +1470,8 @@ struct TranscriptRenderer: NSViewRepresentable {
                     hydrated: hydrated,
                     hydrationError: hydrationError,
                     visibility: visibility,
-                    reasoningExpanded: model.expandedReasoningIDs.contains(message.id),
-                    sourceGeneration: model.selectedSession?.sourceGeneration
+                    reasoningExpanded: transcript.expanded.contains(message.id),
+                    sourceGeneration: transcript.session?.sourceGeneration
                 ),
                 copyMessage: { [weak model] in model?.copyMessage(id: message.id) }
             )

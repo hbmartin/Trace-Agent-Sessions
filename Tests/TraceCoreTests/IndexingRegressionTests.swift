@@ -6,6 +6,106 @@ import XCTest
 @testable import TraceCore
 
 final class IndexingRegressionTests: XCTestCase {
+    #if DEBUG
+    private func waitForPreparation(_ coordinator: IndexCoordinator) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !(await coordinator.preparationWaitingForTesting) {
+            guard ContinuousClock.now < deadline else { throw BatchLatchError.timedOut }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func testCancelledBeforePreparationCannotAnnounceOrClearIndex() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let latch = BatchLatch(), held = Task { await latch.pauseOnce() }
+        await coordinator.gatePreparationForTesting(held)
+        let recorder = ProgressRecorder()
+        let run = Task { await coordinator.indexAllResult(scope: .everything, rebuild: true) { recorder.receive($0) } }
+        try await waitForPreparation(coordinator)
+        XCTAssertNil(recorder.initial, "there must be no data-bearing notification before index preparation")
+        run.cancel()
+        await latch.release()
+        let terminal = await run.value
+        XCTAssertEqual(terminal.phase, .cancelled)
+        XCTAssertEqual(recorder.initial?.phase, .cancelled)
+        XCTAssertFalse(terminal.indexChanged)
+        let statistics = try await database.statistics()
+        let scope = try await database.storedIndexScope()
+        XCTAssertEqual(statistics.messageCount, 1)
+        XCTAssertEqual(scope, .proseOnly)
+    }
+
+    func testSchedulerDropsSupersededPassBeforeItsFirstProgress() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let latch = BatchLatch(), held = Task { await latch.pauseOnce() }
+        await coordinator.gatePreparationForTesting(held)
+        let runs = RunRecorder()
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+            progress: { await runs.receive($0) })
+        await scheduler.request(reconcile: true)
+        try await waitForPreparation(coordinator)
+        await scheduler.request(rebuild: true)
+        await latch.release()
+        await scheduler.waitUntilIdle()
+        let phases = await runs.terminalPhases
+        let activities = await runs.terminalActivities
+        XCTAssertEqual(phases, [.complete])
+        XCTAssertEqual(activities, [.rebuild])
+        let count = try await database.statistics().messageCount
+        XCTAssertEqual(count, 1)
+        await scheduler.stop()
+    }
+
+    func testGeneralDiagnosticEpisodesDeduplicateAndResetByOperation() throws {
+        let episodes = IndexFailureEpisodes()
+        let error = DatabaseError(resultCode: .SQLITE_FULL, message: "private-full-message",
+            sql: "INSERT INTO private_full_sql VALUES (?)", arguments: ["private-full-argument"],
+            publicStatementArguments: true)
+        for _ in 0..<500 { episodes.record(error, operation: "Index source") }
+        XCTAssertEqual(episodes.recordedForTesting.count, 1)
+        XCTAssertEqual(episodes.recordedForTesting.first?.1.primary, ResultCode.SQLITE_FULL.rawValue)
+        episodes.record(error, operation: "Discovery")
+        XCTAssertEqual(episodes.recordedForTesting.count, 2)
+        XCTAssertEqual(IndexFailureDiagnostic.safeDescription(error, operation: "Index source", fallback: "safe"), "safe")
+        XCTAssertEqual(episodes.recordedForTesting.count, 2, "presentation conversion must not log")
+        episodes.succeeded("Index source")
+        episodes.record(error, operation: "Index source")
+        episodes.record(error, operation: "Discovery")
+        XCTAssertEqual(episodes.recordedForTesting.count, 3)
+        let replacement = IndexFailureEpisodes()
+        replacement.record(error, operation: "Index source")
+        XCTAssertEqual(replacement.recordedForTesting.count, 1)
+    }
+
+    func testCoordinatorGeneralFailureEpisodeResetsAfterSuccessfulPass() async throws {
+        let root = try directory()
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let error = DatabaseError(resultCode: .SQLITE_BUSY, message: "private-scope-message",
+            sql: "SELECT 'private-scope-sql'", arguments: ["private-scope-argument"], publicStatementArguments: true)
+        for _ in 0..<2 {
+            await database.failScopeReadOnceForTesting(error)
+            let result = await coordinator.indexAllResult(scope: .proseOnly)
+            XCTAssertEqual(result.error, "Could not update the index. Try again.")
+        }
+        let repeated = await coordinator.failureDiagnosticsForTesting
+        XCTAssertEqual(repeated.count, 1)
+        await coordinator.indexAll(scope: .proseOnly)
+        await database.failScopeReadOnceForTesting(error)
+        await coordinator.indexAll(scope: .proseOnly)
+        let recovered = await coordinator.failureDiagnosticsForTesting
+        XCTAssertEqual(recovered.count, 2)
+        XCTAssertEqual(recovered.map { $0.1.primary }, [ResultCode.SQLITE_BUSY.rawValue, ResultCode.SQLITE_BUSY.rawValue])
+    }
+    #endif
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRegression-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -330,12 +430,12 @@ final class IndexingRegressionTests: XCTestCase {
         await latch.release()
         await scheduler.waitUntilIdle()
         let phases = await recorder.terminalPhases
-        XCTAssertEqual(phases, [.cancelled, .complete])
+        XCTAssertEqual(phases, [.complete], "superseded cancellation must not escape the scheduler")
         let completed = await completions.values
         XCTAssertEqual(completed.count, 1, "the replacement full scan must absorb cancelled work")
         XCTAssertEqual(completed.first?.watermarks["volume"], 31)
         let terminalActivities = await recorder.terminalActivities
-        XCTAssertEqual(terminalActivities, [.safetyVerification, .rebuild])
+        XCTAssertEqual(terminalActivities, [.rebuild])
         let cancelledSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()
         XCTAssertNil(cancelledSafetyTimestamp,
                      "a cancelled safety pass must not advance its timestamp")

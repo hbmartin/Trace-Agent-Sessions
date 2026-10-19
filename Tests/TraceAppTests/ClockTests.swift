@@ -67,7 +67,7 @@ final class ClockTests: XCTestCase {
     /// Clock advancement releases delays; database IO still needs a completion signal.
     private func awaitSearch(_ model: SessionSearchModel) async {
         let finished = expectation(description: "Database search finished")
-        let subscription = model.$isSearching.filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
+        let subscription = model.changes.map(\.isSearching).filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
         await fulfillment(of: [finished], timeout: 5)
         withExtendedLifetime(subscription) {}
         XCTAssertNil(model.error)
