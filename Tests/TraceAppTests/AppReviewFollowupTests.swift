@@ -54,7 +54,9 @@ final class AppReviewFollowupTests: XCTestCase {
         let duringPreparation = await f.database.sessionListReadCountForTesting()
         XCTAssertEqual(duringPreparation, reads)
         await preparation.open()
-        try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
+        try await wait {
+            f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting && !f.model.projects.isEmpty
+        }
         XCTAssertFalse(f.model.isPreparingRebuild)
         XCTAssertEqual(f.model.usageRecoveryEventForTesting, event + 1)
         XCTAssertFalse(f.model.projects.isEmpty)
