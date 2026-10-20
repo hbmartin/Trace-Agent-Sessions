@@ -73,7 +73,7 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertEqual(episodes.recordedForTesting.first?.1.primary, ResultCode.SQLITE_FULL.rawValue)
         episodes.record(error, operation: "Discovery")
         XCTAssertEqual(episodes.recordedForTesting.count, 2)
-        XCTAssertEqual(IndexFailureDiagnostic.safeDescription(error, operation: "Index source", fallback: "safe"), "safe")
+        XCTAssertEqual(IndexFailureDiagnostic.safeDescription(error, fallback: "safe"), "safe")
         XCTAssertEqual(episodes.recordedForTesting.count, 2, "presentation conversion must not log")
         episodes.succeeded("Index source")
         episodes.record(error, operation: "Index source")

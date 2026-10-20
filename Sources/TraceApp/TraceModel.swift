@@ -75,7 +75,7 @@ enum ModelPublicationBatch {
 
     static func notify<Object: ObservableObject>(_ object: Object)
         where Object.ObjectWillChangePublisher == ObservableObjectPublisher {
-        if !flushing || notified.insert(ObjectIdentifier(object)).inserted { object.objectWillChange.send() }
+        if notified.insert(ObjectIdentifier(object)).inserted { object.objectWillChange.send() }
     }
 
     private static func flush() {
@@ -194,20 +194,18 @@ final class TraceModel: ObservableObject {
 
         mutating func retireActivePass() { activePassID = nil }
 
-        mutating func receive(_ update: IndexProgress, currentSchedulerPass: Bool = false) -> IndexProgressDisposition {
+        mutating func receive(_ update: IndexProgress) -> IndexProgressDisposition {
             let previousPassID = activePassID
             let passTerminal = [.complete, .failed, .cancelled].contains(update.phase)
             let supersededTerminal: Bool
             if passTerminal, let replacement {
                 supersededTerminal = replacement.displacedPassIDs.contains(update.passID)
-                    || (update.phase == .cancelled
-                        && activePassID == nil && !currentSchedulerPass)
             } else {
                 supersededTerminal = false
             }
 
             if passTerminal {
-                if activePassID == update.passID || (currentSchedulerPass && !supersededTerminal) {
+                if !supersededTerminal {
                     activePassID = nil
                 }
                 if supersededTerminal {
@@ -279,6 +277,7 @@ final class TraceModel: ObservableObject {
         var hasSearchReturnContext: Bool = false
         var sidebarSummaryError: String? = nil
         var isRetryingSidebarSummary: Bool = false
+        var preparingRebuild = false
     }
     private let sidebarState = CommittedModelState(SidebarState())
     var sidebarChanges: AnyPublisher<SidebarState, Never> { sidebarState.publisher }
@@ -309,20 +308,20 @@ final class TraceModel: ObservableObject {
     }
     private let pageState = CommittedModelState(SessionPageState())
     var sessionPageChanges: AnyPublisher<SessionPageState, Never> { pageState.publisher }
-    var sessions: [SessionSummary] { pageState.value.sessions }
-    var totalSessionCount: Int { pageState.value.totalCount }
-    var hasMoreSessions: Bool { pageState.value.hasMore }
+    var sessions: [SessionSummary] { pageState.read(\.sessions) }
+    var totalSessionCount: Int { pageState.read(\.totalCount) }
+    var hasMoreSessions: Bool { pageState.read(\.hasMore) }
     private(set) var isLoadingSessions: Bool {
-        get { pageState.value.isLoading }
+        get { pageState.read(\.isLoading) }
         set { updateSessionPage { $0.isLoading = newValue } }
     }
-    var sessionListError: String? { pageState.value.error }
+    var sessionListError: String? { pageState.read(\.error) }
 
     private func updateSessionPage(_ update: (inout SessionPageState) -> Void) {
         var next = pageState.value
         update(&next)
         #if DEBUG
-        if next.isLoading != pageState.value.isLoading {
+        if next.isLoading != pageState.read(\.isLoading) {
             TraceTestHooks.appendLine(next.isLoading ? "loading" : "idle", pathKey: "TRACE_TEST_SESSION_LOADING_AUDIT_PATH")
         }
         #endif
@@ -347,9 +346,9 @@ final class TraceModel: ObservableObject {
         let displayName: String?
     }
     private var mainSearchReturnContext: MainSearchReturnContext?
-    private var sessionListProjectKey: String? { pageState.value.projectKey }
-    private var loadedSessionPageCount: Int { pageState.value.pageCount }
-    private var nextSessionCursor: SessionCursor? { pageState.value.cursor }
+    private var sessionListProjectKey: String? { pageState.read(\.projectKey) }
+    private var loadedSessionPageCount: Int { pageState.read(\.pageCount) }
+    private var nextSessionCursor: SessionCursor? { pageState.read(\.cursor) }
     private typealias LoadedSessionPages = SessionListSnapshot
     private var sessionListTask: Task<Void, Never>?
     fileprivate enum SessionListRetry: Sendable {
@@ -367,7 +366,7 @@ final class TraceModel: ObservableObject {
     private var sidebarSummaryRetryTask: Task<Void, Never>?
     private var sidebarSummaryRetryOwner: SummaryRefreshOwner?
     private var pendingSidebarSummaryRetry = false
-    private var sessionListRetry: SessionListRetry? { pageState.value.retry }
+    private var sessionListRetry: SessionListRetry? { pageState.read(\.retry) }
     private var backgroundSidebarRequest: UUID?
     private enum PendingSidebarAction { case loadMore, retry(SessionListRetry) }
     private var pendingSidebarAction: (project: String?, action: PendingSidebarAction)?
@@ -442,9 +441,9 @@ final class TraceModel: ObservableObject {
     }
     private let costsState = CommittedModelState(CostsState())
     var costsChanges: AnyPublisher<CostsState, Never> { costsState.publisher }
-    var usage: [UsageRollup] { costsState.value.usage }
-    var costsTotalsUpdating: Bool { costsState.value.updating }
-    var canRetryCosts: Bool { costsState.value.canRetry }
+    var usage: [UsageRollup] { costsState.read(\.usage) }
+    var costsTotalsUpdating: Bool { costsState.read(\.updating) }
+    var canRetryCosts: Bool { costsState.read(\.canRetry) }
     private func costsPresentation(_ value: CostsState) -> CostsState {
         var next = value
         let currentWork = database.map { database in
@@ -470,7 +469,7 @@ final class TraceModel: ObservableObject {
     @Published private(set) var pricing: PricingCatalog?
     @Published private(set) var pricingError: String?
     private(set) var costsError: String? {
-        get { costsState.value.error }
+        get { costsState.read(\.error) }
         set { updateCosts { $0.error = newValue } }
     }
     private(set) var selectedProjectID: Int64? {
@@ -591,6 +590,77 @@ final class TraceModel: ObservableObject {
     }
     private var pendingAttachment: PendingAttachment?
     private var pendingRebuild = false
+
+    /// Closed before reset notification, opened only after scheduler cancellation
+    /// has been admitted. Waiters never hold up the scheduler's request method.
+    @MainActor
+    private final class RebuildAdmission {
+        let id = UUID()
+        let database: IndexDatabase
+        let attachment: UUID
+        let configuration: UInt64
+        let workflow: UUID
+        var open = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        #if DEBUG
+        var submissionGate: Task<Void, Never>?
+        var waitingForSubmission = false
+        #endif
+
+        init(database: IndexDatabase, attachment: UUID, configuration: UInt64, workflow: UUID) {
+            self.database = database; self.attachment = attachment
+            self.configuration = configuration; self.workflow = workflow
+        }
+        func wait() async {
+            if open { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        func release() {
+            open = true
+            let pending = waiters; waiters.removeAll()
+            for waiter in pending { waiter.resume() }
+        }
+    }
+    private var rebuildAdmission: RebuildAdmission?
+    var isPreparingRebuild: Bool { sidebarState.read(\.preparingRebuild) }
+    private func retireRebuildAdmission(_ expected: RebuildAdmission? = nil) {
+        if let expected, rebuildAdmission !== expected { return }
+        let previous = rebuildAdmission
+        rebuildAdmission = nil
+        previous?.release()
+        if isPreparingRebuild { updateSidebar { $0.preparingRebuild = false } }
+    }
+    private func admitRebuild() -> RebuildAdmission? {
+        guard let database, !terminating, pendingAttachment == nil else { return nil }
+        if let rebuildAdmission { return rebuildAdmission }
+        let receipt = RebuildAdmission(database: database, attachment: attachmentGeneration,
+            configuration: sourceConfigurationRevision, workflow: indexWorkflow.generation)
+        #if DEBUG
+        receipt.submissionGate = rebuildSubmissionGateForTesting
+        rebuildSubmissionGateForTesting = nil
+        #endif
+        rebuildAdmission = receipt
+        updateSidebar { $0.preparingRebuild = true }
+        return receipt
+    }
+    private func rebuildAdmissionIsCurrent(_ receipt: RebuildAdmission) -> Bool {
+        !terminating && rebuildAdmission === receipt && database === receipt.database
+            && attachmentGeneration == receipt.attachment && sourceConfigurationRevision == receipt.configuration
+            && indexWorkflow.generation == receipt.workflow && pendingAttachment == nil
+    }
+    private func submitRebuild(_ receipt: RebuildAdmission, scheduler: IndexScheduler) async {
+        #if DEBUG
+        defer { completedRebuildSubmissionsForTesting.insert(receipt.id) }
+        if let gate = receipt.submissionGate {
+            receipt.waitingForSubmission = true
+            await gate.value
+            receipt.waitingForSubmission = false
+        }
+        #endif
+        guard rebuildAdmissionIsCurrent(receipt) else { return }
+        await scheduler.request(rebuild: true, scope: settings.indexScope)
+        if rebuildAdmissionIsCurrent(receipt) { receipt.release() }
+    }
     private var terminating = false
     private var bufferedSourceChanges = SourceChanges()
     private var watcherStartupPending = true
@@ -641,7 +711,7 @@ final class TraceModel: ObservableObject {
     private var globalSearchSurfaces: Set<GlobalSearchSurface> = []
     private var mainWindowVisible = false
     private var mainSearchPanelVisible = false
-    private var completedUsage: [UsageRollup] { costsState.value.completed }
+    private var completedUsage: [UsageRollup] { costsState.read(\.completed) }
     private var completedUsageRevision = 0
     private enum UsageUrgency { case automatic, immediate }
     private struct UsageRefreshRequest {
@@ -1008,9 +1078,9 @@ final class TraceModel: ObservableObject {
     var rootSessionRefreshPendingForTesting: Bool { pendingRootSummaryRefresh?.sessions == true }
     var rootMetadataRefreshPendingForTesting: Bool { pendingRootSummaryRefresh?.metadataPending == true }
     var pendingAttachmentRootRefreshForTesting: Bool { pendingAttachment?.rootRefresh != nil }
-    var sessionPageDepthForTesting: Int { pageState.value.pageCount }
-    var requestedPageDepthForTesting: Int { pageState.value.requestedDepth }
-    var sessionCursorIDForTesting: Int64? { pageState.value.cursor?.sessionID }
+    var sessionPageDepthForTesting: Int { pageState.read(\.pageCount) }
+    var requestedPageDepthForTesting: Int { pageState.read(\.requestedDepth) }
+    var sessionCursorIDForTesting: Int64? { pageState.read(\.cursor)?.sessionID }
     var usageRefreshWaitingForTesting: Bool { usageWork.worker?.isWaiting == true }
     var usageRefreshRunningForTesting: Bool { usageWork.worker?.runningRequest != nil }
     var usageDemandOwedForTesting: Bool { usageWork.owed }
@@ -1117,7 +1187,24 @@ final class TraceModel: ObservableObject {
     var recoveryLoadErrorForTesting: Error?
     @discardableResult
     func resetIndexForTesting() -> Bool { prepareForIndexReset() }
-    func beginTerminationForTesting() { terminating = true }
+    func beginTerminationForTesting() { terminating = true; retireRebuildAdmission() }
+    var rebuildSubmissionGateForTesting: Task<Void, Never>?
+    var rebuildAdmissionIDForTesting: UUID? { rebuildAdmission?.id }
+    private(set) var completedRebuildSubmissionsForTesting: Set<UUID> = []
+    var rebuildSubmissionWaitingForTesting: Bool { rebuildAdmission?.waitingForSubmission == true }
+    private(set) var admissionWaitingPassesForTesting: Set<UUID> = []
+    private var ownedSchedulerProgressGateForTesting: (pass: UUID, gate: Task<Void, Never>)?
+    private(set) var ownedSchedulerProgressWaitingForTesting = false
+    private(set) var schedulerProgressPassForTesting: UUID?
+    func gateSchedulerProgressForTesting(pass: UUID, gate: Task<Void, Never>?) {
+        ownedSchedulerProgressGateForTesting = gate.map { (pass, $0) }
+    }
+    func receiveProgress(_ update: IndexProgress) async {
+        guard let database else { return }
+        await acceptSchedulerProgress(update, database: database, generation: attachmentGeneration)
+    }
+    var sidebarDataGenerationForTesting: UUID { sidebarDataGeneration }
+
     var workflowGenerationForTesting: UUID { indexWorkflow.generation }
     var usageRecoveryEventForTesting: UInt64 { usageRecoverySequence }
     var activeWatcherCountForTesting: Int { watchers.count }
@@ -1391,6 +1478,12 @@ final class TraceModel: ObservableObject {
                                           generation: UUID) async {
         guard !Task.isCancelled, attachmentIsCurrent(database: database, generation: generation) else { return }
         #if DEBUG
+        schedulerProgressPassForTesting = update.passID
+        if let owned = ownedSchedulerProgressGateForTesting, owned.pass == update.passID {
+            ownedSchedulerProgressWaitingForTesting = true
+            await owned.gate.value
+            ownedSchedulerProgressWaitingForTesting = false
+        }
         if let gate = schedulerProgressGateForTesting {
             schedulerProgressWaitingForTesting = true
             await gate.value
@@ -1405,7 +1498,22 @@ final class TraceModel: ObservableObject {
         }
         #endif
         guard !Task.isCancelled, attachmentIsCurrent(database: database, generation: generation) else { return }
-        await receiveProgress(update, currentSchedulerPass: true)
+        await acceptSchedulerProgress(update, database: database, generation: generation)
+    }
+
+    private func acceptSchedulerProgress(_ update: IndexProgress, database: IndexDatabase, generation: UUID) async {
+        while let receipt = rebuildAdmission, !receipt.open {
+            guard !Task.isCancelled, attachmentIsCurrent(database: database, generation: generation) else { return }
+            #if DEBUG
+            admissionWaitingPassesForTesting.insert(update.passID)
+            #endif
+            await receipt.wait()
+            #if DEBUG
+            admissionWaitingPassesForTesting.remove(update.passID)
+            #endif
+        }
+        guard !Task.isCancelled, attachmentIsCurrent(database: database, generation: generation) else { return }
+        await receiveAdmittedProgress(update)
     }
 
     private func completeSchedulerCheckpoint(_ watermarks: [String: UInt64], database: IndexDatabase,
@@ -1442,6 +1550,7 @@ final class TraceModel: ObservableObject {
         ModelPublicationBatch.perform {
             invalidateTranscriptSettlement()
             invalidateTerminalSummaryRefresh()
+            retireRebuildAdmission()
             let alreadyRetiring = pendingAttachment != nil
             let inheritedRootRefresh = pendingAttachment.flatMap { $0.database === database ? $0.rootRefresh : nil }
             let pending = PendingAttachment(database: database, configurationRevision: sourceConfigurationRevision,
@@ -1497,24 +1606,27 @@ final class TraceModel: ObservableObject {
                 ? message + "\nThe queued index rebuild was cancelled. Retry resumes updates without rebuilding. Choose Rebuild Index again to rebuild."
                 : message
         }
-        sourceReloadActivation = nil
-        if coordinator == nil, phase == .failed, let error { initialAttachmentFailure = error }
-        if pending.intent == .sourceReload, let error {
-            sourceReloadRecovery = .failed(error)
-        } else if let previousError = sourceReloadRecovery.error {
-            sourceReloadRecovery = .failed(previousError)
+        ModelPublicationBatch.perform {
+            retireRebuildAdmission()
+            sourceReloadActivation = nil
+            if coordinator == nil, phase == .failed, let error { initialAttachmentFailure = error }
+            if pending.intent == .sourceReload, let error {
+                sourceReloadRecovery = .failed(error)
+            } else if let previousError = sourceReloadRecovery.error {
+                sourceReloadRecovery = .failed(previousError)
+            }
+            pendingAttachment = nil
+            pendingRebuild = false
+            indexWorkflow = .init()
+            progress.phase = phase
+            progress.error = error
+            if let error {
+                startupError = error
+                if pending.intent == .sourceReload { sourceReloadAlertError = error }
+            }
+            reconcileUsageWork(event: pending.usageEvent)
+            settleTranscriptFeedback()
         }
-        pendingAttachment = nil
-        pendingRebuild = false
-        indexWorkflow = .init()
-        progress.phase = phase
-        progress.error = error
-        if let error {
-            startupError = error
-            if pending.intent == .sourceReload { sourceReloadAlertError = error }
-        }
-        reconcileUsageWork(event: pending.usageEvent)
-        settleTranscriptFeedback()
     }
 
     private func finishAttachment(_ pending: PendingAttachment, coordinator: IndexCoordinator) async -> Bool {
@@ -1567,11 +1679,7 @@ final class TraceModel: ObservableObject {
             }
             installedUsageEvent = pending.usageEvent
             if pending.intent == .sourceReload { summaryReadFailures[.sourceReload] = nil }
-            if !sameDatabase, costsError != nil {
-                costsError = nil
-                guard !terminating, self.database === database, attachmentGeneration == pending.token,
-                      pendingAttachment == nil else { return false }
-            }
+            if !sameDatabase, costsError != nil { costsError = nil }
             reconcileUsageWork(event: pending.usageEvent)
             initialAttachmentFailure = nil
             if !rebuildAttachmentReady { rebuildAttachmentReady = true }
@@ -1610,53 +1718,59 @@ final class TraceModel: ObservableObject {
         return !terminating && self.database === database
     }
 
-    func receiveProgress(_ update: IndexProgress, currentSchedulerPass: Bool = false) async {
+    private func receiveAdmittedProgress(_ update: IndexProgress) async {
         let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
         let workflow = indexWorkflow.generation
-        let disposition = indexWorkflow.receive(update, currentSchedulerPass: currentSchedulerPass)
+        let disposition = indexWorkflow.receive(update)
         let receivedWorkflow = indexWorkflow.generation
         func isCurrent() -> Bool {
             !terminating && attachment == attachmentGeneration && configuration == sourceConfigurationRevision
                 && receivedWorkflow == indexWorkflow.generation
         }
-        if workflow != indexWorkflow.generation { invalidateTranscriptSettlement() }
-        if !disposition.passTerminal { resumePausedTranscriptFeedback() }
-        if !disposition.passTerminal { invalidateUsageSnapshot() }
-        if disposition.passTerminal {
-            TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
-            TraceTestHooks.appendLine(
-                update.activity.rawValue,
-                pathKey: "TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"
-            )
-        }
-        if update.incremental {
+        var mutationAdvanced = false
+        ModelPublicationBatch.perform {
+            mutationAdvanced = recordSearchMutation(update)
+            retireRebuildAdmission()
+            if workflow != indexWorkflow.generation { invalidateTranscriptSettlement() }
+            if !disposition.passTerminal { resumePausedTranscriptFeedback() }
+            if !disposition.passTerminal { invalidateUsageSnapshot() }
             if disposition.passTerminal {
-                incrementalProgressTask?.cancel()
-                incrementalProgressTask = nil
-                pendingIncrementalProgress = nil
-                if !disposition.supersededTerminal,
-                   IndexProgress.shouldPublishIncrementalTerminal(
-                    update, after: progress, wasVisible: incrementalProgressVisible
-                   ) {
-                    publishProgress(update)
-                }
-                incrementalProgressVisible = false
-            } else {
-                pendingIncrementalProgress = update
-                if incrementalProgressTask == nil {
-                    let clock = clock
-                    incrementalProgressTask = Task { [weak self] in
-                        do { try await clock.sleep(for: .milliseconds(300)) }
-                        catch { return }
-                        guard let self, let pending = self.pendingIncrementalProgress else { return }
-                        self.publishProgress(pending)
-                        self.incrementalProgressVisible = true
-                        self.incrementalProgressTask = nil
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_INDEX_PASS_COMPLETED_PATH")
+                TraceTestHooks.appendLine(
+                    update.activity.rawValue,
+                    pathKey: "TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"
+                )
+            }
+            if update.incremental {
+                if disposition.passTerminal {
+                    incrementalProgressTask?.cancel()
+                    incrementalProgressTask = nil
+                    pendingIncrementalProgress = nil
+                    if !disposition.supersededTerminal,
+                       IndexProgress.shouldPublishIncrementalTerminal(
+                        update, after: progress, wasVisible: incrementalProgressVisible
+                       ) {
+                        publishProgress(update)
+                    }
+                    incrementalProgressVisible = false
+                } else {
+                    pendingIncrementalProgress = update
+                    if incrementalProgressTask == nil {
+                        let clock = clock
+                        incrementalProgressTask = Task { [weak self] in
+                            do { try await clock.sleep(for: .milliseconds(300)) }
+                            catch { return }
+                            guard let self, !Task.isCancelled, let pending = self.pendingIncrementalProgress else { return }
+                            self.publishProgress(pending)
+                            guard !Task.isCancelled else { return }
+                            self.incrementalProgressVisible = true
+                            self.incrementalProgressTask = nil
+                        }
                     }
                 }
+            } else if !disposition.supersededTerminal {
+                publishProgress(update)
             }
-        } else if !disposition.supersededTerminal {
-            publishProgress(update)
         }
 
         guard isCurrent() else { return }
@@ -1666,7 +1780,7 @@ final class TraceModel: ObservableObject {
         }
         else { reconcileUsageWork() }
         guard isCurrent() else { return }
-        observeSearchMutation(update, terminal: disposition.workflowTerminal)
+        observeSearchMutation(update, terminal: disposition.workflowTerminal, mutationAdvanced: mutationAdvanced)
 
         let shouldRefresh = disposition.passTerminal
             || ((!update.incremental || incrementalProgressVisible)
@@ -1713,7 +1827,7 @@ final class TraceModel: ObservableObject {
         reconcileUsageWork(event: event, urgency: .automatic)
     }
 
-    private func observeSearchMutation(_ update: IndexProgress, terminal: Bool) {
+    private func recordSearchMutation(_ update: IndexProgress) -> Bool {
         if lastObservedPassID != update.passID {
             lastObservedPassID = update.passID
             lastObservedMutationRevision = 0
@@ -1730,8 +1844,13 @@ final class TraceModel: ObservableObject {
                 else if mainSearch.protectsPagination { mainSearch.markResultsStale() }
                 else { mainSearchNeedsRefresh = true }
             }
-            scheduleAutomaticSearch()
+            return true
         }
+        return false
+    }
+
+    private func observeSearchMutation(_ update: IndexProgress, terminal: Bool, mutationAdvanced: Bool) {
+        if mutationAdvanced { scheduleAutomaticSearch() }
         if terminal && update.indexChanged
             && (lastSearchedPassID != update.passID
                 || lastSearchedMutationRevision < update.mutationRevision) {
@@ -1880,23 +1999,32 @@ final class TraceModel: ObservableObject {
             let satisfiesSafetyReconciliation = baseActivity.satisfiesSafetyReconciliation
                 || (recoveryActivity?.satisfiesSafetyReconciliation ?? false)
             let rebuild = self.takePendingRebuild(generation: attachment, revision: revision)
-            let requestedActivity: IndexActivity = rebuild ? .rebuild : activity
+            let requestedActivity: IndexActivity = rebuild != nil ? .rebuild : activity
             #if DEBUG
             self.startupSubmissionCountForTesting += 1
             #endif
             self.startupActivityObserver(requestedActivity)
+            #if DEBUG
+            if let rebuild, let gate = rebuild.submissionGate {
+                rebuild.waitingForSubmission = true
+                await gate.value
+                rebuild.waitingForSubmission = false
+                guard self.rebuildAdmissionIsCurrent(rebuild) else { return }
+            }
+            #endif
             await scheduler.request(
                 paths: buffered.paths.union(recovery.filePaths),
                 reconciliationPaths: self.startupReconciliationPaths
                     .union(buffered.reconciliationPaths)
                     .union(recovery.reconciliationPaths),
-                rebuild: rebuild,
+                rebuild: rebuild != nil,
                 scope: self.settings.indexScope,
                 activity: requestedActivity,
                 satisfiesSafetyReconciliation: satisfiesSafetyReconciliation,
                 watermarks: buffered.watermarks,
                 streamRoots: buffered.streamRoots
             )
+            if let rebuild, self.rebuildAdmissionIsCurrent(rebuild) { rebuild.release() }
             guard !Task.isCancelled, revision == self.sourceConfigurationRevision,
                   generation == self.watcherGeneration else { return }
             self.watcherStartupPending = false
@@ -1927,30 +2055,38 @@ final class TraceModel: ObservableObject {
             reloadSourcesAndRebuild()
             return
         }
-        beginIndexReplacement()
-        let generation = attachmentGeneration, revision = sourceConfigurationRevision
+        guard let receipt = beginIndexReplacement(preparingRebuild: true) else { return }
         Task {
-            guard takePendingRebuild(generation: generation, revision: revision) else { return }
-            await scheduler.request(rebuild: true, scope: settings.indexScope)
+            guard rebuildAdmissionIsCurrent(receipt),
+                  takePendingRebuild(generation: receipt.attachment, revision: receipt.configuration) === receipt else { return }
+            await submitRebuild(receipt, scheduler: scheduler)
         }
     }
 
     /// Consume at handoff, before reset or suspension. Progress cannot acknowledge
     /// an outstanding request because another submission may already be queued.
-    private func takePendingRebuild(generation: UUID, revision: UInt64) -> Bool {
+    private func takePendingRebuild(generation: UUID, revision: UInt64) -> RebuildAdmission? {
         guard !terminating, pendingAttachment == nil, pendingRebuild,
-              generation == attachmentGeneration, revision == sourceConfigurationRevision else { return false }
-        pendingRebuild = false
-        let workflow = indexWorkflow.generation
-        _ = prepareForIndexReset()
+              generation == attachmentGeneration, revision == sourceConfigurationRevision else { return nil }
+        var receipt: RebuildAdmission?
+        ModelPublicationBatch.perform {
+            receipt = admitRebuild()
+            pendingRebuild = false
+            _ = prepareForIndexReset()
+        }
+        guard let receipt else { return nil }
+        let workflow = receipt.workflow
         // Navigation during reset owns its newer transcript. The global rebuild
         // still runs unless its attachment/configuration/workflow was replaced.
         guard !terminating, generation == attachmentGeneration, revision == sourceConfigurationRevision,
-              workflow == indexWorkflow.generation else { return false }
+              workflow == indexWorkflow.generation, rebuildAdmission === receipt else {
+            retireRebuildAdmission(receipt)
+            return nil
+        }
         #if DEBUG
         rebuildSubmissionCountForTesting += 1
         #endif
-        return true
+        return receipt
     }
 
     private func settleDeferredSourceReload(receipt: WatcherReceipt) {
@@ -1964,6 +2100,7 @@ final class TraceModel: ObservableObject {
             progress.unresolvedDiscoveryFailures = counts.1
         }
         // Keep the root scan requirement until onboarding eventually submits it.
+        retireRebuildAdmission()
         sourceReloadRecovery = .normal
         reconcileUsageWork()
         settleTranscriptFeedback()
@@ -2313,14 +2450,22 @@ final class TraceModel: ObservableObject {
             && sourceConfigurationRevision == configuration && indexWorkflow.generation == workflow
     }
 
-    private func beginIndexReplacement() {
+    @discardableResult
+    private func beginIndexReplacement(preparingRebuild: Bool = false) -> RebuildAdmission? {
         ModelPublicationBatch.perform {
+            retireRebuildAdmission()
             invalidateTranscriptSettlement()
             indexWorkflow.beginReplacement()
+            incrementalProgressTask?.cancel()
+            incrementalProgressTask = nil
+            pendingIncrementalProgress = nil
+            incrementalProgressVisible = false
+            let receipt = preparingRebuild ? admitRebuild() : nil
             resetSidebarSummaryRecovery(clearFailure: false)
             resumePausedTranscriptFeedback()
             invalidateUsageSnapshot()
             reconcileUsageWork()
+            return receipt
         }
     }
 
@@ -2420,7 +2565,7 @@ final class TraceModel: ObservableObject {
         projectRequestID = request
         sessionListTask?.cancel()
         let key = selectedProjectCanonicalKey
-        let pageCount = max(requestedPageCount ?? loadedSessionPageCount, pageState.value.requestedDepth)
+        let pageCount = max(requestedPageCount ?? loadedSessionPageCount, pageState.read(\.requestedDepth))
         guard let database else { isLoadingSessions = false; sessionListTask = nil; return }
         let configuration = sourceConfigurationRevision
         let rootReceipt = rootReceipt(for: database)
@@ -2542,7 +2687,7 @@ final class TraceModel: ObservableObject {
         // existing transcript read establishes ownership without a speculative page.
         if let project = selectedProjectCanonicalKey, knownProject(for: selectedSessionID) != project { return false }
         loadProjectSessions(ensuring: selectedSessionID,
-                            requestedPageCount: max(depth, pageState.value.requestedDepth))
+                            requestedPageCount: max(depth, pageState.read(\.requestedDepth)))
         return true
     }
 
@@ -2566,7 +2711,7 @@ final class TraceModel: ObservableObject {
         let previous = publishingPageSelectionMetadata
         publishingPageSelectionMetadata = (database, sessions)
         defer { publishingPageSelectionMetadata = previous }
-        let fulfilled = page.pageCount >= pageState.value.requestedDepth || page.nextCursor == nil
+        let fulfilled = page.pageCount >= pageState.read(\.requestedDepth) || page.nextCursor == nil
         acknowledgeRootSummary(rootReceipt, sessions: true)
         summaryReadFailures[.sessionList] = nil
         if fulfilled { summaryReadFailures[.sessionPage] = nil }
@@ -3872,6 +4017,7 @@ final class TraceModel: ObservableObject {
 
     func prepareToTerminate() async {
         terminating = true
+        retireRebuildAdmission()
         updateCostsTotalsUpdating()
         knownSelectionProject = nil
         rollupFailure = nil
@@ -4477,7 +4623,7 @@ final class TraceModel: ObservableObject {
         let dataGeneration = sidebarDataGeneration
         let selectedSessionRequest = sessionRequestID
         let pageCount = sessionListProjectKey == projectCanonicalKey
-            ? max(loadedSessionPageCount, pageState.value.requestedDepth) : 1
+            ? max(loadedSessionPageCount, pageState.read(\.requestedDepth)) : 1
         let sidebar: SidebarSnapshot?
         let sidebarError: Error?
         do {

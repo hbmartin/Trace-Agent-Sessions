@@ -559,8 +559,10 @@ final class SessionSearchModel: ObservableObject {
         activeTaskIsAutomatic = false
         activeRequestCriteria = nil
         hasCommittedSearch = false
+        let automaticRevision = automaticResultRevision
         updateState {
             $0 = .init()
+            $0.automaticResultRevision = automaticRevision
             $0.isResolvingProjectFilter = awaitsProjectResolution && filters.projectCanonicalKey != nil
             $0.projectFilterDisplayName = projectFilterDisplayName
         }
