@@ -11,6 +11,219 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testDeferredSettlementCommitsBeforeReentrantOnboardingAndRebuild() async throws {
+        for grouped in [false, true] {
+            for action in 0..<4 {
+                let f = try await fixture(count: 2)
+                var old = IndexProgress(phase: .failed)
+                old.unresolvedFailedFiles = 7
+                f.model.setPublishedProgressForTesting(old)
+                var observed = false
+                let observe = {
+                    guard !observed, f.model.progress.phase == .waiting else { return }
+                    observed = true
+                    XCTAssertEqual(f.model.progress.unresolvedFailedFiles, 7)
+                    switch action {
+                    case 0:
+                        f.model.settings.onboardingComplete = true
+                        f.model.rebuildIndex()
+                    case 1: f.model.reloadSourcesAndRebuild()
+                    case 2: f.model.beginTerminationForTesting()
+                    default: f.model.rebuildIndex() // Still deferred: rejected.
+                    }
+                }
+                let token = grouped ? f.model.progressChanges.dropFirst().sink { _ in observe() }
+                    : f.model.objectWillChange.sink { observe() }
+                defer { token.cancel() }
+                _ = await f.model.startWatchingForTesting([ClaudeCodeSource(roots: [f.root])])
+                XCTAssertTrue(observed)
+                switch action {
+                case 0:
+                    try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
+                    XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
+                    XCTAssertFalse(f.model.pendingRebuildForTesting)
+                case 1:
+                    try await wait { f.model.pendingAttachmentTokenForTesting == nil && f.model.schedulerForTesting != nil }
+                    XCTAssertEqual(f.model.progress.phase, .waiting)
+                case 2: XCTAssertTrue(f.model.isTerminatingForTesting)
+                default:
+                    XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 0)
+                    XCTAssertFalse(f.model.pendingRebuildForTesting)
+                }
+                XCTAssertFalse(f.model.isPreparingRebuild)
+            }
+        }
+    }
+
+    func testStartupClaimCannotBeRetiredByExplicitSubmitter() async throws {
+        let f = try await fixture(count: 2)
+        let claim = ReviewReadGate(), claimed = Task { await claim.wait() }
+        let submission = ReviewReadGate(), held = Task { await submission.wait() }
+        defer { claimed.cancel(); held.cancel(); Task { await claim.open(); await submission.open() } }
+        f.model.settings.onboardingComplete = true
+        f.model.rebuildClaimGateForTesting = claimed
+        f.model.rebuildSubmissionGateForTesting = held
+        f.model.rebuildIndex()
+        try await wait { f.model.rebuildClaimWaitingForTesting }
+        let owner = try XCTUnwrap(f.model.rebuildAdmissionIDForTesting)
+        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        try await wait { f.model.rebuildSubmissionWaitingForTesting }
+        await claim.open()
+        try await wait { !f.model.rebuildClaimWaitingForTesting }
+        XCTAssertEqual(f.model.rebuildAdmissionIDForTesting, owner)
+        XCTAssertTrue(f.model.isPreparingRebuild)
+        XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
+        await submission.open()
+        try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
+        XCTAssertEqual(f.model.startupHandoffsForTesting.count, 1)
+        XCTAssertFalse(f.model.watcherStartupPendingForTesting)
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        await scheduler.waitUntilIdle()
+        XCTAssertFalse(f.model.isPreparingRebuild)
+    }
+
+    func testSupersededStartupRebuildPreservesItsBufferedHandoff() async throws {
+        let f = try await fixture(count: 2)
+        let claim = ReviewReadGate(), claimed = Task { await claim.wait() }
+        let first = ReviewReadGate(), firstHeld = Task { await first.wait() }
+        let second = ReviewReadGate(), secondHeld = Task { await second.wait() }
+        let third = ReviewReadGate(), thirdHeld = Task { await third.wait() }
+        defer {
+            claimed.cancel(); firstHeld.cancel(); secondHeld.cancel(); thirdHeld.cancel()
+            Task { await claim.open(); await first.open(); await second.open(); await third.open() }
+        }
+        let path = f.root.appendingPathComponent("sessions.jsonl").path
+        var changes = SourceChanges()
+        changes.paths = [path]; changes.reconciliationPaths = [f.root.path]
+        changes.watermarks = ["startup": 42]; changes.streamRoots = ["startup": [f.root.path]]
+        let recovery = IndexRecoveryWork(filePaths: [path], reconciliationPaths: [f.root.path])
+        f.model.queueStartupWorkForTesting(changes, recovery: recovery)
+        f.model.settings.onboardingComplete = true
+        f.model.rebuildClaimGateForTesting = claimed
+        f.model.rebuildSubmissionGateForTesting = firstHeld
+        f.model.rebuildIndex()
+        try await wait { f.model.rebuildClaimWaitingForTesting }
+        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        try await wait { f.model.rebuildSubmissionWaitingForTesting }
+        await claim.open()
+        try await wait { !f.model.rebuildClaimWaitingForTesting }
+        for gate in [secondHeld, thirdHeld] {
+            f.model.rebuildSubmissionGateForTesting = gate
+            let previous = f.model.rebuildAdmissionIDForTesting
+            f.model.rebuildIndex()
+            try await wait { f.model.rebuildAdmissionIDForTesting != previous && f.model.rebuildSubmissionWaitingForTesting }
+        }
+        let newest = f.model.rebuildAdmissionIDForTesting
+        changes.watermarks = ["startup": 99]
+        f.model.queueStartupWorkForTesting(changes)
+        await first.open()
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        XCTAssertEqual(f.model.rebuildAdmissionIDForTesting, newest)
+        XCTAssertTrue(f.model.isPreparingRebuild)
+        XCTAssertEqual(f.model.startupHandoffsForTesting.count, 1)
+        let handoff = try XCTUnwrap(f.model.startupHandoffsForTesting.first)
+        XCTAssertEqual(handoff.changes.paths, [path])
+        XCTAssertEqual(handoff.changes.reconciliationPaths, [f.root.path])
+        XCTAssertEqual(handoff.changes.watermarks, ["startup": 99])
+        XCTAssertEqual(handoff.changes.streamRoots, ["startup": [f.root.path]])
+        XCTAssertEqual(handoff.recovery.filePaths, recovery.filePaths)
+        XCTAssertEqual(handoff.recovery.reconciliationPaths, recovery.reconciliationPaths)
+        await second.open(); await third.open()
+        try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        await scheduler.waitUntilIdle()
+        let previousPass = f.model.progress.passID
+        let file = URL(fileURLWithPath: path)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd(); try handle.write(contentsOf: line(999)); try handle.close()
+        var later = SourceChanges(); later.paths = [path]
+        await f.model.bufferSourceChangesForTesting(later)
+        try await wait { f.model.activeIndexPassIDForTesting != nil || f.model.progress.passID != previousPass }
+        await scheduler.waitUntilIdle()
+        XCTAssertFalse(f.model.watcherStartupPendingForTesting)
+        let rows = try await f.database.sessions(limit: 100)
+        XCTAssertEqual(rows.count, 7)
+    }
+
+    func testSupersededTerminalRetiresItsOwnActivePass() async throws {
+        let f = try await fixture(count: 2)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        var old = IndexProgress(phase: .indexing)
+        await f.model.receiveProgress(old)
+        f.model.sourceChangeAttachmentGateForTesting = held
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.sourceChangeAttachmentWaitingForTesting }
+        let event = f.model.usageRecoveryEventForTesting
+        old.phase = .cancelled
+        await f.model.receiveProgress(old)
+        XCTAssertNil(f.model.activeIndexPassIDForTesting)
+        XCTAssertTrue(f.model.indexingPassActiveForTesting, "the pending replacement still owns the workflow")
+        XCTAssertEqual(f.model.usageRecoveryEventForTesting, event)
+        await gate.open()
+        try await wait { f.model.pendingAttachmentTokenForTesting == nil && !f.model.indexingPassActiveForTesting }
+    }
+
+    func testSearchDemandSurvivesReentrantSourceRecovery() async throws {
+        for main in [false, true] {
+            for failed in [false, true] {
+                let f = try await fixture(count: 2)
+                let search = main ? f.model.mainSearch : f.model.globalSearch
+                if main { f.model.setMainWindowVisible(true); f.model.setMainSearchPanelVisible(true) }
+                else { f.model.setGlobalSearchSurface(.popover, visible: true) }
+                search.query = "NavigationNeedle"
+                if main { f.model.searchMain() } else { f.model.search() }
+                await f.clock.advance(by: .milliseconds(100))
+                try await wait { !search.isSearching && !search.results.isEmpty }
+                let revision = search.automaticResultRevision
+                var mutation = IndexProgress(phase: .indexing); mutation.mutationRevision = 1
+                var observed = false
+                let token = f.model.objectWillChange.sink {
+                    guard !observed, f.model.progress.passID == mutation.passID else { return }
+                    observed = true
+                    f.model.failSourceConfigurationForTesting = failed
+                    f.model.reloadSourcesAndRebuild()
+                }
+                defer { token.cancel() }
+                await f.model.receiveProgress(mutation)
+                XCTAssertTrue(observed)
+                try await wait { search.isSearching }
+                await f.clock.advance(by: .milliseconds(100))
+                try await wait { search.automaticResultRevision == revision + 1 }
+                try await wait { f.model.pendingAttachmentTokenForTesting == nil }
+                XCTAssertEqual(f.model.sourceReloadRecovery.error != nil, failed)
+                XCTAssertFalse(search.results.isEmpty)
+                // Further mutations coalesce under the existing one-second throttle.
+                for index in 2...3 {
+                    mutation.mutationRevision = index
+                    mutation.incremental = true
+                    await f.model.receiveProgress(mutation)
+                }
+                await f.clock.advance(by: .milliseconds(899))
+                XCTAssertEqual(search.automaticResultRevision, revision + 1)
+                await f.clock.advance(by: .milliseconds(1))
+                await f.clock.advance(by: .milliseconds(100))
+                try await wait { search.automaticResultRevision == revision + 2 }
+            }
+        }
+    }
+
+    func testPreparationPresentationDoesNotUseDisplacedFailureProgress() {
+        var progress = IndexProgress(phase: .failed)
+        progress.error = "old pass failure"; progress.metadataWarning = "old metadata"
+        progress.currentPath = "/old/path"; progress.projectName = "Old project"; progress.agent = .codex
+        progress.totalFiles = 123; progress.currentFileBytes = 456; progress.currentFileTotalBytes = 789
+        progress.unresolvedFailedFiles = 3; progress.rollupError = "old rollup"
+        let label = IndexProgressLabel(progress: progress, monitoringWarnings: ["Current monitor warning"], preparingRebuild: true)
+        XCTAssertEqual(label.statusColor, .secondary)
+        XCTAssertEqual(label.details, "Preparing the index rebuild…\nCurrent monitor warning")
+        let paused = IndexProgressLabel(progress: progress, sourceReloadRecovery: .failed("Source settings failed"), preparingRebuild: true)
+        XCTAssertEqual(paused.statusColor, .red)
+        XCTAssertTrue(paused.details.contains("Source settings failed"))
+        XCTAssertFalse(paused.details.contains("old pass"))
+        XCTAssertTrue(IndexProgressLabel(progress: progress).details.contains("/old/path"))
+    }
+
     func testRunningPassCannotRefillSidebarBeforeRebuildSubmission() async throws {
         let f = try await fixture(count: 430)
         let scheduler = try XCTUnwrap(f.model.schedulerForTesting)

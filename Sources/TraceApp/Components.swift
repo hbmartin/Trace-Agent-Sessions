@@ -120,12 +120,12 @@ struct IndexProgressLabel: View {
             .popover(isPresented: $showingDetails) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(label).font(.headline)
-                    if progress.totalFiles > 0 {
+                    if !preparingRebuild && progress.totalFiles > 0 {
                         ProgressView(value: Double(progress.completedFiles), total: Double(progress.totalFiles))
                     }
                     Text(details).font(.callout).textSelection(.enabled)
                         .accessibilityIdentifier("indexProgressDetails")
-                    if progress.currentFileTotalBytes > 0 && busy {
+                    if !preparingRebuild && progress.currentFileTotalBytes > 0 && busy {
                         ProgressView(value: Double(min(progress.currentFileBytes, progress.currentFileTotalBytes)), total: Double(progress.currentFileTotalBytes))
                     }
                 }.padding(18).frame(width: 380)
@@ -134,16 +134,14 @@ struct IndexProgressLabel: View {
     }
 
     var details: String {
-        var lines = [preparingRebuild ? "Preparing the index rebuild…" : activityDescription,
+        if preparingRebuild {
+            return (["Preparing the index rebuild…"] + sourceRecoveryDetails + monitoringWarnings).joined(separator: "\n")
+        }
+        var lines = [activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
         lines.append(contentsOf: unresolvedFailureMessages)
-        if let error = sourceReloadRecovery.error {
-            lines.append(sourceReloadRecovery.isRetrying
-                ? "Applying your source settings and checking for changes. Indexed sessions remain available."
-                : "Live updates are paused. Indexed sessions remain available. Retry to apply your source settings and check for changes.")
-            if error != progress.error { lines.append(error) }
-        }
+        lines.append(contentsOf: sourceRecoveryDetails)
         if let agent = progress.agent { lines.append("Provider: \(agent.displayName)") }
         if let project = progress.projectName { lines.append("Project: \(project)") }
         if let path = progress.currentPath {
@@ -155,6 +153,15 @@ struct IndexProgressLabel: View {
         lines.append(contentsOf: monitoringWarnings)
         if progress.rollupError != nil { lines.append("Token totals: Could not update token totals.") }
         return lines.joined(separator: "\n")
+    }
+
+    private var sourceRecoveryDetails: [String] {
+        guard let error = sourceReloadRecovery.error else { return [] }
+        var lines = [sourceReloadRecovery.isRetrying
+            ? "Applying your source settings and checking for changes. Indexed sessions remain available."
+            : "Live updates are paused. Indexed sessions remain available. Retry to apply your source settings and check for changes."]
+        if preparingRebuild || error != progress.error { lines.append(error) }
+        return lines
     }
 
     private var label: String {
@@ -203,9 +210,10 @@ struct IndexProgressLabel: View {
         }
     }
 
-    private var statusColor: Color {
+    var statusColor: Color {
         if sourceReloadRecovery.isRetrying { return .secondary }
         if sourceReloadRecovery.error != nil { return .red }
+        if preparingRebuild { return .secondary }
         if progress.phase == .failed || hasUnresolvedFailures || progress.failedFiles > 0 { return .red }
         if progress.phase == .complete && !monitoringWarnings.isEmpty { return .orange }
         return .secondary
