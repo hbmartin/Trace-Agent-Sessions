@@ -259,9 +259,22 @@ enum CodexSessionNamesLoadResult: Sendable {
 /// Source-specific sidecars are optional. Never open the agent's database for writing.
 enum CodexSessionNames {
     static func load(directory: URL, failures: IndexFailureEpisodes? = nil) throws -> CodexSessionNamesLoadResult {
+        try load(directory: directory, failures: failures, beforeFinishingRead: {})
+    }
+
+    #if DEBUG
+    static func loadForTesting(directory: URL, failures: IndexFailureEpisodes,
+                               beforeFinishingRead: () -> Void) throws -> CodexSessionNamesLoadResult {
+        try load(directory: directory, failures: failures, beforeFinishingRead: beforeFinishingRead)
+    }
+    #endif
+
+    private static func load(directory: URL, failures: IndexFailureEpisodes?,
+                             beforeFinishingRead: () -> Void) throws -> CodexSessionNamesLoadResult {
         var recordedDatabaseFailure = false
         // Thrown cancellation is an abandoned attempt, not a successful recovery.
-        let result = try read(directory: directory, failures: failures, recordedDatabaseFailure: &recordedDatabaseFailure)
+        let result = try read(directory: directory, failures: failures, recordedDatabaseFailure: &recordedDatabaseFailure,
+                              beforeFinishingRead: beforeFinishingRead)
         if !recordedDatabaseFailure {
             failures?.succeeded("Metadata sidecar", scope: directory.standardizedFileURL.path)
         }
@@ -269,7 +282,8 @@ enum CodexSessionNames {
     }
 
     private static func read(directory: URL, failures: IndexFailureEpisodes?,
-                             recordedDatabaseFailure: inout Bool) throws -> CodexSessionNamesLoadResult {
+                             recordedDatabaseFailure: inout Bool,
+                             beforeFinishingRead: () -> Void) throws -> CodexSessionNamesLoadResult {
         try Task.checkCancellation()
         let contents: [URL]
         do {
@@ -390,6 +404,7 @@ enum CodexSessionNames {
             }
             return .unavailable(warnings.joined(separator: "; "))
         }
+        beforeFinishingRead()
         try Task.checkCancellation()
         return .loaded(.init(names: names, complete: warnings.isEmpty,
                              fillOnlyOrigins: indexReadFailed ? [databaseTitleOrigin] : [],

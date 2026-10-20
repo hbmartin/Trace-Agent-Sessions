@@ -4394,6 +4394,46 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "safe-pagination-error-and-retry")
     }
 
+    func testStartupClaimedRebuildSurvivesOnboardingDeferral() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let startup = directory.appendingPathComponent("startup-ready")
+        let startupRelease = directory.appendingPathComponent("startup-release")
+        let claimed = directory.appendingPathComponent("rebuild-claimed")
+        let handoffRelease = directory.appendingPathComponent("handoff-release")
+        let explicitRelease = directory.appendingPathComponent("explicit-release")
+        let activity = directory.appendingPathComponent("startup-activity")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = startup.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = startupRelease.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_HOLD_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_STARTED_PATH"] = claimed.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_RELEASE_PATH"] = handoffRelease.path
+        app.launchEnvironment["TRACE_TEST_EXPLICIT_REBUILD_RELEASE_PATH"] = explicitRelease.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activity.path
+        app.launch()
+        XCTAssertTrue(waitForFile(startup, timeout: 15))
+        app.buttons["testRebuildSidebarIndex"].click()
+        try Data().write(to: startupRelease)
+        XCTAssertTrue(waitForFile(claimed, timeout: 15))
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "0")
+        app.buttons["testToggleOnboardingOnly"].click()
+        try Data().write(to: handoffRelease)
+        let spinner = app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: activity.path))
+        try Data().write(to: explicitRelease)
+        app.buttons["testResumeStartup"].click()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForFile(activity, timeout: 10))
+        let activities = try String(contentsOf: activity, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(activities, ["rebuild"])
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+    }
+
     func testRebuildShowsPreparationBeforeClearingIndex() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let entered = directory.appendingPathComponent("rebuild-preparation-started")

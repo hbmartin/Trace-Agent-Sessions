@@ -47,6 +47,42 @@ final class SessionMetadataTests: XCTestCase {
         }
     }
 
+    func testMidReadCancellationDoesNotCloseSidecarDatabaseEpisode() async throws {
+        let root = try directory(), failures = IndexFailureEpisodes()
+        let state = root.appendingPathComponent("state_99.sqlite")
+        try Data("not a database".utf8).write(to: state)
+        _ = try CodexSessionNames.load(directory: root, failures: failures)
+        try FileManager.default.removeItem(at: state)
+        let queue = try DatabaseQueue(path: state.path)
+        try await queue.write { db in
+            try db.execute(sql: "CREATE TABLE threads (id TEXT, title TEXT)")
+            try db.execute(sql: "INSERT INTO threads VALUES ('s', 'Read before cancellation')")
+        }
+        let read = expectation(description: "metadata read completed before cancellation check")
+        let release = DispatchSemaphore(value: 0)
+        let task = Task.detached {
+            try CodexSessionNames.loadForTesting(directory: root, failures: failures) {
+                read.fulfill()
+                _ = release.wait(timeout: .now() + 5)
+            }
+        }
+        defer { task.cancel(); release.signal() }
+        await fulfillment(of: [read], timeout: 3)
+        task.cancel(); release.signal()
+        do { _ = try await task.value; XCTFail("Expected mid-read cancellation") }
+        catch is CancellationError { }
+        try queue.close()
+        try FileManager.default.removeItem(at: state)
+        try Data("not a database".utf8).write(to: state)
+        _ = try CodexSessionNames.load(directory: root, failures: failures)
+        XCTAssertEqual(failures.recordedForTesting.count, 1)
+        try FileManager.default.removeItem(at: state)
+        _ = try CodexSessionNames.load(directory: root, failures: failures)
+        try Data("not a database".utf8).write(to: state)
+        _ = try CodexSessionNames.load(directory: root, failures: failures)
+        XCTAssertEqual(failures.recordedForTesting.map { $0.1.primary }, [26, 26])
+    }
+
     func testCancelledSidecarReadKeepsTheDatabaseFailureEpisode() async throws {
         let root = try directory(), failures = IndexFailureEpisodes()
         let state = root.appendingPathComponent("state_99.sqlite")
