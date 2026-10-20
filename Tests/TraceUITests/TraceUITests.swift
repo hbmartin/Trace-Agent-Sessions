@@ -4415,6 +4415,11 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(spinner.waitForExistence(timeout: 5))
         let status = app.descendants(matching: .any)["indexProgress"].firstMatch
         XCTAssertEqual(status.label, "Preparing rebuild…")
+        status.click()
+        let details = app.staticTexts["indexProgressDetails"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertEqual(details.value as? String ?? details.label, "Preparing the index rebuild…")
+        app.typeKey(.escape, modifierFlags: [])
         try Data().write(to: release)
         XCTAssertTrue(spinner.waitForNonExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))

@@ -8,6 +8,61 @@ import XCTest
 
 final class SessionMetadataTests: XCTestCase {
     #if DEBUG
+    func testSidecarDatabaseEpisodeEndsAcrossNonDatabaseOutcomes() throws {
+        for outcome in 0..<3 {
+            let root = try directory(), failures = IndexFailureEpisodes()
+            let state = root.appendingPathComponent("state_99.sqlite")
+            try Data("not a database".utf8).write(to: state)
+            _ = try CodexSessionNames.load(directory: root, failures: failures)
+            XCTAssertEqual(failures.recordedForTesting.count, 1)
+            try FileManager.default.removeItem(at: state)
+            switch outcome {
+            case 0:
+                try FileManager.default.removeItem(at: root)
+                guard case .missingDirectory = try CodexSessionNames.load(directory: root, failures: failures) else {
+                    return XCTFail("Expected missing directory")
+                }
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            case 1:
+                try FileManager.default.removeItem(at: root)
+                try Data("file instead of directory".utf8).write(to: root)
+                guard case .unavailable = try CodexSessionNames.load(directory: root, failures: failures) else {
+                    return XCTFail("Expected listing failure")
+                }
+                try FileManager.default.removeItem(at: root)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            default:
+                let sidecar = root.appendingPathComponent("session_index.jsonl")
+                try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: root.appendingPathComponent("missing.jsonl"))
+                guard case .unavailable = try CodexSessionNames.load(directory: root, failures: failures) else {
+                    return XCTFail("Expected JSONL read failure")
+                }
+                try FileManager.default.removeItem(at: sidecar)
+            }
+            try Data("not a database".utf8).write(to: state)
+            _ = try CodexSessionNames.load(directory: root, failures: failures)
+            _ = try CodexSessionNames.load(directory: root, failures: failures)
+            XCTAssertEqual(failures.recordedForTesting.count, 2)
+            XCTAssertEqual(failures.recordedForTesting.map { $0.1.primary }, [26, 26])
+        }
+    }
+
+    func testCancelledSidecarReadKeepsTheDatabaseFailureEpisode() async throws {
+        let root = try directory(), failures = IndexFailureEpisodes()
+        let state = root.appendingPathComponent("state_99.sqlite")
+        try Data("not a database".utf8).write(to: state)
+        _ = try CodexSessionNames.load(directory: root, failures: failures)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try CodexSessionNames.load(directory: root, failures: failures)
+        }
+        do { _ = try await cancelled.value; XCTFail("Expected cancellation") }
+        catch is CancellationError { }
+        _ = try CodexSessionNames.load(directory: root, failures: failures)
+        XCTAssertEqual(failures.recordedForTesting.count, 1)
+        XCTAssertEqual(failures.recordedForTesting.first?.1.primary, 26)
+    }
+
     func testSidecarDiagnosticEpisodeResetsAfterSuccessfulEarlyReturn() throws {
         for jsonOnly in [false, true] {
             let root = try directory(), failures = IndexFailureEpisodes()
