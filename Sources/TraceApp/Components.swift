@@ -135,7 +135,10 @@ struct IndexProgressLabel: View {
 
     var details: String {
         if preparingRebuild {
-            return (["Preparing the index rebuild…"] + sourceRecoveryDetails + monitoringWarnings).joined(separator: "\n")
+            let preparation = sourceReloadRecovery.error == nil
+                ? ["Preparing the index rebuild…"]
+                : sourceRecoveryDetails + ["The index rebuild is waiting for source settings."]
+            return (preparation + unresolvedFailureMessages + monitoringWarnings).joined(separator: "\n")
         }
         var lines = [activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
