@@ -4394,6 +4394,32 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "safe-pagination-error-and-retry")
     }
 
+    func testRebuildShowsPreparationBeforeClearingIndex() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let entered = directory.appendingPathComponent("rebuild-preparation-started")
+        let release = directory.appendingPathComponent("rebuild-preparation-release")
+        let complete = directory.appendingPathComponent("index-pass-completed")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = complete.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_HOLD_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_STARTED_PATH"] = entered.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_RELEASE_PATH"] = release.path
+        app.launch()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForFile(complete, timeout: 15))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "0")
+        let spinner = app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch
+        XCTAssertTrue(spinner.waitForExistence(timeout: 5))
+        let status = app.descendants(matching: .any)["indexProgress"].firstMatch
+        XCTAssertEqual(status.label, "Preparing rebuild…")
+        try Data().write(to: release)
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
+    }
+
     func testQueuedSidebarRetryBecomesUsableAfterRebuildReset() throws {
         let (app, directory, _) = try launchWithFailedPendingRestoration(
             holdRetryTail: true, exerciseSidebarRecovery: true, holdRebuild: true)

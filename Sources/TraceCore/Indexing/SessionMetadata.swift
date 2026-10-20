@@ -290,6 +290,7 @@ enum CodexSessionNames {
             }
         guard hasSessionIndex || !databases.isEmpty else {
             try Task.checkCancellation()
+            failures?.succeeded("Metadata sidecar", scope: directory.standardizedFileURL.path)
             return .absent
         }
 
@@ -328,6 +329,7 @@ enum CodexSessionNames {
             if !warnings.isEmpty && names.isEmpty {
                 return .unavailable(warnings.joined(separator: "; "))
             }
+            if warnings.isEmpty { failures?.succeeded("Metadata sidecar", scope: directory.standardizedFileURL.path) }
             return .loaded(.init(names: names, complete: warnings.isEmpty,
                                  fillOnlyOrigins: [],
                                  warning: warnings.isEmpty ? nil : warnings.joined(separator: "; ")))
@@ -370,7 +372,7 @@ enum CodexSessionNames {
         } catch {
             try Task.checkCancellation()
             failures?.record(error, operation: "Metadata sidecar", scope: directory.standardizedFileURL.path)
-            warnings.append("\(newestDatabase.lastPathComponent): \(IndexFailureDiagnostic.safeDescription(error, operation: "Metadata sidecar", fallback: "Could not refresh session metadata."))")
+            warnings.append("\(newestDatabase.lastPathComponent): \(IndexFailureDiagnostic.safeDescription(error, fallback: "Could not refresh session metadata."))")
             if !names.isEmpty {
                 return .loaded(.init(names: names, complete: false,
                                      fillOnlyOrigins: indexReadFailed ? [databaseTitleOrigin] : [],

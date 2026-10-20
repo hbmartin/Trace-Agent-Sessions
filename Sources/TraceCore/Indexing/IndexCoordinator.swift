@@ -451,6 +451,12 @@ public actor IndexCoordinator {
         }
         do {
             #if DEBUG
+            if rebuild, let delay = TraceTestHooks.delayMilliseconds(
+                for: "TRACE_TEST_REBUILD_PREPARATION_HOLD_MS", cappedAt: 120_000,
+                marker: .line(status.passID.uuidString, pathKey: "TRACE_TEST_REBUILD_PREPARATION_STARTED_PATH")) {
+                try await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_REBUILD_PREPARATION_RELEASE_PATH",
+                                                       timeoutMilliseconds: delay)
+            }
             if let gate = preparationGateForTesting {
                 preparationGateForTesting = nil
                 preparationWaitingForTesting = true
@@ -995,7 +1001,7 @@ public actor IndexCoordinator {
 
     private func safeIndexDescription(_ error: Error, operation: String, fallback: String) -> String {
         failures.record(error, operation: operation)
-        return IndexFailureDiagnostic.safeDescription(error, operation: operation, fallback: fallback)
+        return IndexFailureDiagnostic.safeDescription(error, fallback: fallback)
     }
 
     #if DEBUG

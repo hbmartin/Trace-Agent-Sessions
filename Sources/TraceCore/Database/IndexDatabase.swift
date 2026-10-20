@@ -19,7 +19,7 @@ struct IndexFailureDiagnostic: Hashable, Sendable {
         logger.error("\(operation, privacy: .public) failed; SQLite primary=\(primary.map(String.init) ?? "n/a", privacy: .public) extended=\(extended.map(String.init) ?? "n/a", privacy: .public); \(message, privacy: .private)")
     }
 
-    static func safeDescription(_ error: Error, operation: String, fallback: String) -> String {
+    static func safeDescription(_ error: Error, fallback: String) -> String {
         guard error is DatabaseError else { return error.localizedDescription }
         return fallback
     }

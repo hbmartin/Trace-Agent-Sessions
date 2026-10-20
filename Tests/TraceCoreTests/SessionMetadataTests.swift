@@ -7,6 +7,34 @@ import XCTest
 @testable import TraceCore
 
 final class SessionMetadataTests: XCTestCase {
+    #if DEBUG
+    func testSidecarDiagnosticEpisodeResetsAfterSuccessfulEarlyReturn() throws {
+        for jsonOnly in [false, true] {
+            let root = try directory(), failures = IndexFailureEpisodes()
+            let state = root.appendingPathComponent("state_99.sqlite")
+            let sidecar = root.appendingPathComponent("session_index.jsonl")
+            try Data("not a database".utf8).write(to: state)
+            _ = try CodexSessionNames.load(directory: root, failures: failures)
+            _ = try CodexSessionNames.load(directory: root, failures: failures)
+            XCTAssertEqual(failures.recordedForTesting.count, 1)
+            try FileManager.default.removeItem(at: state)
+            if jsonOnly { try write([["id": "a", "thread_name": "Recovered"]], to: sidecar) }
+            let recovered = try CodexSessionNames.load(directory: root, failures: failures)
+            if jsonOnly {
+                guard case .loaded(let value) = recovered else { return XCTFail("Expected JSONL-only success") }
+                XCTAssertTrue(value.complete)
+            } else {
+                guard case .absent = recovered else { return XCTFail("Expected successful absence") }
+            }
+            try Data("not a database".utf8).write(to: state)
+            _ = try CodexSessionNames.load(directory: root, failures: failures)
+            XCTAssertEqual(failures.recordedForTesting.count, 2)
+            XCTAssertEqual(failures.recordedForTesting.map { $0.1.primary }, [26, 26])
+        }
+    }
+
+    #endif
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("TraceMetadata-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

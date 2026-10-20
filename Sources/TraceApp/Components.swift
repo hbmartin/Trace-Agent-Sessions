@@ -70,7 +70,7 @@ struct IndexStatusView: View {
     var body: some View {
         HStack(spacing: 8) {
             IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings,
-                               sourceReloadRecovery: model.sourceReloadRecovery)
+                               sourceReloadRecovery: model.sourceReloadRecovery, preparingRebuild: model.isPreparingRebuild)
             if model.sourceReloadRecovery.error != nil {
                 Button("Retry") { model.retrySourceConfiguration() }
                     .buttonStyle(.borderless)
@@ -95,42 +95,46 @@ struct IndexProgressLabel: View {
     let progress: IndexProgress
     var monitoringWarnings: [String] = []
     var sourceReloadRecovery: SourceReloadRecoveryState = .normal
+    var preparingRebuild = false
     @State private var showingDetails = false
     private var busy: Bool {
-        sourceReloadRecovery.isRetrying || ![.waiting, .complete, .cancelled, .failed].contains(progress.phase)
+        preparingRebuild || sourceReloadRecovery.isRetrying || ![.waiting, .complete, .cancelled, .failed].contains(progress.phase)
     }
 
     var body: some View {
-        Button { showingDetails.toggle() } label: {
-            HStack(spacing: 8) {
-                if busy { ProgressView().controlSize(.small) }
+        HStack(spacing: 8) {
+            if busy {
+                ProgressView().controlSize(.small)
+                    .accessibilityIdentifier(preparingRebuild ? "rebuildPreparationProgress" : "indexBusyProgress")
+            }
+            Button { showingDetails.toggle() } label: {
                 Text(label).font(.caption)
                     .foregroundStyle(statusColor)
                     .lineLimit(1).truncationMode(.middle)
                     .accessibilityIdentifier(sourceReloadRecovery.error == nil ? "indexProgressText" : "sourceReloadRecoveryStatus")
+                    .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("indexProgress")
-        .help(details)
-        .popover(isPresented: $showingDetails) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(label).font(.headline)
-                if progress.totalFiles > 0 {
-                    ProgressView(value: Double(progress.completedFiles), total: Double(progress.totalFiles))
-                }
-                Text(details).font(.callout).textSelection(.enabled)
-                    .accessibilityIdentifier("indexProgressDetails")
-                if progress.currentFileTotalBytes > 0 && busy {
-                    ProgressView(value: Double(min(progress.currentFileBytes, progress.currentFileTotalBytes)), total: Double(progress.currentFileTotalBytes))
-                }
-            }.padding(18).frame(width: 380)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("indexProgress")
+            .help(details)
+            .popover(isPresented: $showingDetails) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(label).font(.headline)
+                    if progress.totalFiles > 0 {
+                        ProgressView(value: Double(progress.completedFiles), total: Double(progress.totalFiles))
+                    }
+                    Text(details).font(.callout).textSelection(.enabled)
+                        .accessibilityIdentifier("indexProgressDetails")
+                    if progress.currentFileTotalBytes > 0 && busy {
+                        ProgressView(value: Double(min(progress.currentFileBytes, progress.currentFileTotalBytes)), total: Double(progress.currentFileTotalBytes))
+                    }
+                }.padding(18).frame(width: 380)
+            }
         }
     }
 
     var details: String {
-        var lines = [activityDescription,
+        var lines = [preparingRebuild ? "Preparing the index rebuild…" : activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
             "\(progress.indexedFiles.formatted()) indexed · \(progress.unchangedFiles.formatted()) unchanged · \(progress.failedFiles.formatted()) failed"]
         lines.append(contentsOf: unresolvedFailureMessages)
@@ -157,6 +161,7 @@ struct IndexProgressLabel: View {
         if sourceReloadRecovery.error != nil {
             return sourceReloadRecovery.isRetrying ? "Resuming updates…" : "Updates paused"
         }
+        if preparingRebuild { return "Preparing rebuild…" }
         return switch progress.phase {
         case .waiting: "Ready to build index"
         case .discovering:
