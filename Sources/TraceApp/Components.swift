@@ -138,7 +138,8 @@ struct IndexProgressLabel: View {
             let preparation = sourceReloadRecovery.error == nil
                 ? ["Preparing the index rebuild…"]
                 : sourceRecoveryDetails + ["The index rebuild is waiting for source settings."]
-            return (preparation + unresolvedFailureMessages + monitoringWarnings).joined(separator: "\n")
+            let costs = progress.rollupError == nil ? [] : ["Token totals: Could not update token totals."]
+            return (preparation + unresolvedFailureMessages + monitoringWarnings + costs).joined(separator: "\n")
         }
         var lines = [activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
