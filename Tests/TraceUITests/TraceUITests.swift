@@ -4419,7 +4419,9 @@ final class TraceUITests: XCTestCase {
         app.buttons["testRebuildSidebarIndex"].click()
         try Data().write(to: startupRelease)
         XCTAssertTrue(waitForFile(claimed, timeout: 15))
-        XCTAssertEqual(app.staticTexts["sessionTotalCount"].value as? String, "0")
+        let zeroCount = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "0"),
+            object: app.staticTexts["sessionTotalCount"])
+        XCTAssertEqual(XCTWaiter.wait(for: [zeroCount], timeout: 5), .completed)
         app.buttons["testToggleOnboardingOnly"].click()
         try Data().write(to: handoffRelease)
         let spinner = app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch
@@ -4431,6 +4433,45 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForFile(activity, timeout: 10))
         let activities = try String(contentsOf: activity, encoding: .utf8).split(separator: "\n")
         XCTAssertEqual(activities, ["rebuild"])
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+    }
+
+    func testPostStartupRebuildResumesAfterOnboardingDeferral() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let started = directory.appendingPathComponent("post-startup-rebuild-claimed")
+        let release = directory.appendingPathComponent("post-startup-rebuild-release")
+        let explicitRelease = directory.appendingPathComponent("post-startup-explicit-release")
+        let complete = directory.appendingPathComponent("post-startup-index-complete")
+        let activities = directory.appendingPathComponent("post-startup-index-activities")
+        try Data().write(to: explicitRelease)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = complete.path
+        app.launchEnvironment["TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"] = activities.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_HOLD_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_STARTED_PATH"] = started.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_EXPLICIT_REBUILD_RELEASE_PATH"] = explicitRelease.path
+        app.launch()
+        XCTAssertTrue(waitForFile(complete, timeout: 15))
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertTrue(waitForFile(started, timeout: 10))
+        let zero = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "0"),
+            object: app.staticTexts["sessionTotalCount"])
+        XCTAssertEqual(XCTWaiter.wait(for: [zero], timeout: 5), .completed)
+        app.buttons["testToggleOnboardingOnly"].click()
+        try Data().write(to: release)
+        let spinner = app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(fileLines(in: activities).contains("rebuild"))
+        try FileManager.default.removeItem(at: complete)
+        app.buttons["testResumeStartup"].click()
+        XCTAssertTrue(waitForFile(complete, timeout: 15))
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(fileLines(in: activities).filter { $0 == "rebuild" }.count, 1)
         XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
     }
 
