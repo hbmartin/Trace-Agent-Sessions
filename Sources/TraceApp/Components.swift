@@ -86,6 +86,12 @@ struct IndexStatusView: View {
                TraceTestHooks.environment["TRACE_TEST_STARTUP_RESUME_CONTROL"] == "1" {
                 Button("Resume startup (test)") { model.completeOnboarding(enableLoginItem: false) }
                     .accessibilityIdentifier("testResumeStartup")
+                #if DEBUG
+                if TraceTestHooks.environment["TRACE_TEST_STARTUP_SETTLEMENT_CONTROL"] == "1" {
+                    Button("Restart startup watchers (test)") { model.restartStartupWatchersForUITesting() }
+                        .accessibilityIdentifier("testRestartStartupWatchers")
+                }
+                #endif
             }
         }
     }
@@ -138,8 +144,7 @@ struct IndexProgressLabel: View {
             let preparation = sourceReloadRecovery.error == nil
                 ? ["Preparing the index rebuild…"]
                 : sourceRecoveryDetails + ["The index rebuild is waiting for source settings."]
-            let costs = progress.rollupError == nil ? [] : ["Token totals: Could not update token totals."]
-            return (preparation + unresolvedFailureMessages + monitoringWarnings + costs).joined(separator: "\n")
+            return (preparation + unresolvedFailureMessages + monitoringWarnings + tokenTotalsFailureDetails).joined(separator: "\n")
         }
         var lines = [activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
@@ -155,8 +160,12 @@ struct IndexProgressLabel: View {
         if let error = progress.error { lines.append(error) }
         if let warning = progress.metadataWarning { lines.append(warning) }
         lines.append(contentsOf: monitoringWarnings)
-        if progress.rollupError != nil { lines.append("Token totals: Could not update token totals.") }
+        lines.append(contentsOf: tokenTotalsFailureDetails)
         return lines.joined(separator: "\n")
+    }
+
+    private var tokenTotalsFailureDetails: [String] {
+        progress.rollupError == nil ? [] : ["Token totals: Could not update token totals."]
     }
 
     private var sourceRecoveryDetails: [String] {

@@ -4394,6 +4394,113 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "safe-pagination-error-and-retry")
     }
 
+    private struct StartupHandoffReceipt: Decodable {
+        let handoffID: UUID
+        let watcherGeneration: UInt64
+        let phase: String
+        let rebuild: Bool
+    }
+
+    private func startupHandoffReceipts(at path: URL) -> [StartupHandoffReceipt] {
+        fileLines(in: path).compactMap { line in
+            try? JSONDecoder().decode(StartupHandoffReceipt.self, from: Data(line.utf8))
+        }
+    }
+
+    @discardableResult
+    private func waitForStartupHandoff(at path: URL, phase: String, excluding oldID: UUID? = nil,
+                                       timeout: TimeInterval = 15) throws -> StartupHandoffReceipt {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.startupHandoffReceipts(at: path).contains { $0.phase == phase && $0.handoffID != oldID }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
+        return try XCTUnwrap(startupHandoffReceipts(at: path).first { $0.phase == phase && $0.handoffID != oldID })
+    }
+
+    func testWatcherReplacementDuringSubmittedStartupResumesLiveChanges() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let held = directory.appendingPathComponent("startup-settlement-held")
+        let release = directory.appendingPathComponent("startup-settlement-release")
+        let receipts = directory.appendingPathComponent("startup-handoff-receipts")
+        let activity = directory.appendingPathComponent("settled-startup-activity")
+        let requested = directory.appendingPathComponent("requested-startups")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_HOLD_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_STARTED_PATH"] = held.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_HANDOFF_RECEIPTS_PATH"] = receipts.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activity.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_HANDOFF_REQUESTED_PATH"] = requested.path
+        app.launch()
+        XCTAssertTrue(waitForFile(held, timeout: 15))
+        let first = try waitForStartupHandoff(at: receipts, phase: "submitted")
+        XCTAssertEqual(fileLines(in: held), [first.handoffID.uuidString])
+        XCTAssertTrue(fileLines(in: activity).isEmpty)
+        app.buttons["testRestartStartupWatchers"].click()
+        let queued = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.fileLines(in: requested).count == 2
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [queued], timeout: 10), .completed)
+        try Data().write(to: release)
+        let replacement = try waitForStartupHandoff(at: receipts, phase: "settled", excluding: first.handoffID)
+        XCTAssertGreaterThan(replacement.watcherGeneration, first.watcherGeneration)
+        XCTAssertFalse(startupHandoffReceipts(at: receipts).contains { $0.handoffID == first.handoffID && $0.phase == "settled" })
+        XCTAssertEqual(fileLines(in: activity).count, 1)
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
+        try addLongSession("After watcher replacement", project: "WatcherResumedProject", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertTrue(app.staticTexts["WatcherResumedProject"].firstMatch.waitForExistence(timeout: 15))
+        attach(app, name: "startup-watcher-replacement-live-delivery")
+    }
+
+    func testPendingRebuildResumesWhileStartupSettlementIsHeld() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let startupHeld = directory.appendingPathComponent("startup-held")
+        let startupRelease = directory.appendingPathComponent("startup-release")
+        let rebuildHeld = directory.appendingPathComponent("rebuild-held")
+        let rebuildRelease = directory.appendingPathComponent("rebuild-release")
+        let explicitRelease = directory.appendingPathComponent("explicit-release")
+        let receipts = directory.appendingPathComponent("startup-receipts")
+        let activities = directory.appendingPathComponent("index-activities")
+        try Data().write(to: explicitRelease)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_HOLD_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_STARTED_PATH"] = startupHeld.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_RELEASE_PATH"] = startupRelease.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_HANDOFF_RECEIPTS_PATH"] = receipts.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_HOLD_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_STARTED_PATH"] = rebuildHeld.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_HANDOFF_RELEASE_PATH"] = rebuildRelease.path
+        app.launchEnvironment["TRACE_TEST_EXPLICIT_REBUILD_RELEASE_PATH"] = explicitRelease.path
+        app.launchEnvironment["TRACE_TEST_INDEX_ACTIVITY_AUDIT_PATH"] = activities.path
+        app.launch()
+        XCTAssertTrue(waitForFile(startupHeld, timeout: 15))
+        let initial = try waitForStartupHandoff(at: receipts, phase: "submitted")
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertTrue(waitForFile(rebuildHeld, timeout: 10))
+        app.buttons["testToggleOnboardingOnly"].click()
+        try Data().write(to: rebuildRelease)
+        let spinner = app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(fileLines(in: activities).contains("rebuild"))
+        app.buttons["testResumeStartup"].click()
+        let rebuilt = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.fileLines(in: activities).filter { $0 == "rebuild" }.count == 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [rebuilt], timeout: 15), .completed)
+        try Data().write(to: startupRelease)
+        let settled = try waitForStartupHandoff(at: receipts, phase: "settled")
+        XCTAssertEqual(settled.handoffID, initial.handoffID)
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(fileLines(in: activities).filter { $0 == "rebuild" }.count, 1)
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        attach(app, name: "pending-rebuild-after-overlapping-startup-onboarding")
+    }
+
     func testStartupClaimedRebuildSurvivesOnboardingDeferral() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let startup = directory.appendingPathComponent("startup-ready")
