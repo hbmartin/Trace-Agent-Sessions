@@ -4454,6 +4454,10 @@ final class TraceUITests: XCTestCase {
         try Data().write(to: activityRelease)
         XCTAssertNotNil(poll(timeout: 10) { fileLines(in: activity).count == 1 ? true : nil })
         XCTAssertEqual(fileLines(in: activity).count, 1)
+        app.buttons["testRestartStartupWatchers"].click()
+        _ = try waitForStartupHandoff(at: receipts, phase: "settled", excluding: replacement.handoffID)
+        XCTAssertNotNil(poll(timeout: 10) { fileLines(in: activity).count == 2 ? true : nil })
+        XCTAssertEqual(fileLines(in: activityHeld), [replacement.handoffID.uuidString], "later startups must not inherit the activity hold")
         XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
         try addLongSession("After watcher replacement", project: "WatcherResumedProject", directory: directory, count: 1, contentRepeats: 0)
         XCTAssertTrue(app.staticTexts["WatcherResumedProject"].firstMatch.waitForExistence(timeout: 15))
@@ -4519,6 +4523,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "120000"
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = startup.path
         app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = startupRelease.path
@@ -4536,10 +4541,11 @@ final class TraceUITests: XCTestCase {
             object: app.staticTexts["sessionTotalCount"])
         XCTAssertEqual(XCTWaiter.wait(for: [zeroCount], timeout: 5), .completed)
         app.buttons["testToggleOnboardingOnly"].click()
-        try Data().write(to: handoffRelease)
+        app.buttons["testRestartStartupWatchers"].click()
         let spinner = app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch
         XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
         XCTAssertFalse(FileManager.default.fileExists(atPath: activity.path))
+        try Data().write(to: handoffRelease)
         try Data().write(to: explicitRelease)
         app.buttons["testResumeStartup"].click()
         XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
