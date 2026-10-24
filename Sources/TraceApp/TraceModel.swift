@@ -590,9 +590,13 @@ final class TraceModel: ObservableObject {
     }
     private var pendingAttachment: PendingAttachment?
     private struct RebuildRequest {
+        struct Claimant {
+            let id: UUID
+            let admissionID: UUID
+        }
         let id = UUID()
         let database: IndexDatabase
-        var claimant: UUID?
+        var claimant: Claimant?
     }
     private var rebuildRequest: RebuildRequest?
     private var pendingRebuild: Bool { rebuildRequest != nil }
@@ -612,7 +616,7 @@ final class TraceModel: ObservableObject {
         private var waiters: [CheckedContinuation<Void, Never>] = []
         #if DEBUG
         var submissionGate: Task<Void, Never>?
-        var explicitClaimGate: Task<Void, Never>?
+        var uiHandoffDelay: Int?
         var waitingForSubmission = false
         #endif
 
@@ -651,8 +655,15 @@ final class TraceModel: ObservableObject {
     /// Replacement retires producers without settling the workflow it immediately replaces.
     private func retireRebuildForReplacement() {
         guard let receipt = rebuildAdmission else { return }
-        if rebuildRequest?.id == receipt.requestID { rebuildRequest?.claimant = nil }
+        relinquishRebuildClaim(for: receipt)
         retireRebuildAdmission(receipt)
+    }
+
+    private func relinquishRebuildClaim(for receipt: RebuildAdmission) {
+        if rebuildRequest?.id == receipt.requestID,
+           rebuildRequest?.claimant?.admissionID == receipt.id {
+            rebuildRequest?.claimant = nil
+        }
     }
 
     private func settleIdleIndexWorkflow(resetProgress: Bool = false) {
@@ -676,19 +687,24 @@ final class TraceModel: ObservableObject {
 
     private struct SchedulerHandoffOwner: Equatable {
         let scheduler: IndexScheduler
-        let database: IndexDatabase
-        let attachment: UUID
-        let configuration: UInt64
+        let watcher: WatcherOwner
+
+        var database: IndexDatabase { watcher.database }
+        var attachment: UUID { watcher.attachment }
+        var configuration: UInt64 { watcher.revision }
+
+        init(scheduler: IndexScheduler, database: IndexDatabase, attachment: UUID, configuration: UInt64) {
+            self.scheduler = scheduler
+            watcher = .init(database: database, attachment: attachment, revision: configuration)
+        }
 
         static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.scheduler === rhs.scheduler && lhs.database === rhs.database
-                && lhs.attachment == rhs.attachment && lhs.configuration == rhs.configuration
+            lhs.scheduler === rhs.scheduler && lhs.watcher == rhs.watcher
         }
     }
 
     private func schedulerHandoffIsCurrent(_ owner: SchedulerHandoffOwner) -> Bool {
-        !terminating && scheduler === owner.scheduler && database === owner.database
-            && attachmentGeneration == owner.attachment && sourceConfigurationRevision == owner.configuration
+        scheduler === owner.scheduler && watcherOwnerIsCurrent(owner.watcher)
     }
 
     private func retireAbandonedRebuildAdmission(_ receipt: RebuildAdmission) {
@@ -703,7 +719,7 @@ final class TraceModel: ObservableObject {
             let owner = SchedulerHandoffOwner(scheduler: claim.scheduler, database: receipt.database,
                 attachment: receipt.attachment, configuration: receipt.configuration)
             let acknowledged = handedOff && schedulerHandoffIsCurrent(owner)
-            let ownsClaim = rebuildRequest?.id == receipt.requestID && rebuildRequest?.claimant == claim.id
+            let ownsClaim = rebuildRequest?.id == receipt.requestID && rebuildRequest?.claimant?.id == claim.id
             if ownsClaim {
                 if acknowledged { rebuildRequest = nil }
                 else { rebuildRequest?.claimant = nil }
@@ -712,7 +728,6 @@ final class TraceModel: ObservableObject {
             else if ownsClaim || rebuildAdmission !== receipt { retireAbandonedRebuildAdmission(receipt) }
             updateCostsTotalsUpdating()
         }
-        reconcileIndexHandoffs()
     }
 
     private func finishUnclaimedRebuildSubmission(_ receipt: RebuildAdmission) {
@@ -723,7 +738,6 @@ final class TraceModel: ObservableObject {
             retireAbandonedRebuildAdmission(receipt)
             updateCostsTotalsUpdating()
         }
-        reconcileIndexHandoffs()
     }
 
     private func admitRebuild() -> RebuildAdmission? {
@@ -738,18 +752,12 @@ final class TraceModel: ObservableObject {
         #if DEBUG
         receipt.submissionGate = rebuildSubmissionGateForTesting
         rebuildSubmissionGateForTesting = nil
-        receipt.explicitClaimGate = rebuildClaimGateForTesting
-        rebuildClaimGateForTesting = nil
         if !rebuildHandoffHeldForUITesting, TraceTestHooks.isUITesting,
            let delay = TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_REBUILD_HANDOFF_HOLD_MS", cappedAt: 120_000) {
             rebuildHandoffHeldForUITesting = true
+            receipt.uiHandoffDelay = delay
             receipt.submissionGate = Task {
                 try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_REBUILD_HANDOFF_RELEASE_PATH", timeoutMilliseconds: delay)
-            }
-            if receipt.explicitClaimGate == nil {
-                receipt.explicitClaimGate = Task {
-                    try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_EXPLICIT_REBUILD_RELEASE_PATH", timeoutMilliseconds: delay)
-                }
             }
         }
         #endif
@@ -783,20 +791,6 @@ final class TraceModel: ObservableObject {
         #endif
     }
 
-    private func submitRebuild(_ claim: RebuildClaim) async {
-        var handedOff = false
-        defer {
-            finishRebuildSubmission(claim, handedOff: handedOff)
-            #if DEBUG
-            completedRebuildSubmissionsForTesting.insert(claim.admission.id)
-            #endif
-        }
-        guard await waitForRebuildSubmission(claim.admission), settings.onboardingComplete,
-              rebuildRequest?.claimant == claim.id else { return }
-        await claim.scheduler.request(rebuild: true, scope: settings.indexScope)
-        handedOff = true
-        await waitForRebuildAcknowledgment(claim)
-    }
     private var terminating = false
     private var bufferedSourceChanges = SourceChanges()
     private var watcherStartupPending = true
@@ -1132,7 +1126,7 @@ final class TraceModel: ObservableObject {
     private var started = false
     private struct StartupOwner: Equatable {
         let scheduler: SchedulerHandoffOwner
-        let watcherGeneration: UInt64
+        let watcher: WatcherReceipt
     }
     private struct StartupDemand {
         let id = UUID()
@@ -1142,6 +1136,7 @@ final class TraceModel: ObservableObject {
         let databaseGeneration: UUID
         var settlementGate: Task<Void, Never>?
         var uiSettlementHold: Int?
+        var uiActivityHold: Int?
         #endif
     }
     private var pendingStartupHandoff: StartupDemand?
@@ -1149,7 +1144,6 @@ final class TraceModel: ObservableObject {
     private var settledStartupOwner: StartupOwner?
     private var reconcilingIndexHandoffs = false
     private var indexHandoffReconciliationPending = false
-    private var startupHandoffID: UUID? { startupHandoff?.id }
     private var sidebarProjectRevealAcknowledged = false
     private var sidebarProjectMaterializedToken: UUID?
     private var sidebarSessionRevealAcknowledged = false
@@ -1357,13 +1351,21 @@ final class TraceModel: ObservableObject {
         let attachmentGeneration: UUID
         let configurationRevision: UInt64
         let watcherGeneration: UInt64
+        let watcherAttempt: UUID
         let phase: Phase
         let rebuild: Bool
         let paths: Set<String>
         let reconciliationPaths: Set<String>
         let watermarks: [String: UInt64]
         let streamRoots: [String: Set<String>]
+        let bufferedPaths: Set<String>
+        let bufferedReconciliationPaths: Set<String>
+        let bufferedWatermarks: [String: UInt64]
+        let bufferedStreamRoots: [String: Set<String>]
+        let recoveryPaths: Set<String>
+        let recoveryReconciliationPaths: Set<String>
     }
+    var collectsStartupHandoffsForTesting = false
     private(set) var startupHandoffReceiptsForTesting: [StartupHandoffReceipt] = []
     var startupSettlementGateForTesting: Task<Void, Never>?
     private(set) var startupSettlementWaitingForTesting: Set<UUID> = []
@@ -1371,22 +1373,54 @@ final class TraceModel: ObservableObject {
     var pendingStartupHandoffIDForTesting: UUID? { pendingStartupHandoff?.id }
 
     private func recordStartupHandoff(_ demand: StartupDemand, payload: StartupHandoff,
+                                      buffered: SourceChanges, recovery: IndexRecoveryWork,
                                       phase: StartupHandoffReceipt.Phase) {
+        guard collectsStartupHandoffsForTesting || (TraceTestHooks.isUITesting
+            && TraceTestHooks.environment["TRACE_TEST_STARTUP_HANDOFF_RECEIPTS_PATH"] != nil) else { return }
         let receipt = StartupHandoffReceipt(handoffID: demand.id, databaseGeneration: demand.databaseGeneration,
             attachmentGeneration: demand.owner.scheduler.attachment,
             configurationRevision: demand.owner.scheduler.configuration,
-            watcherGeneration: demand.owner.watcherGeneration, phase: phase, rebuild: payload.rebuild,
+            watcherGeneration: demand.owner.watcher.generation, watcherAttempt: demand.owner.watcher.attempt,
+            phase: phase, rebuild: payload.rebuild,
             paths: payload.paths, reconciliationPaths: payload.reconciliationPaths,
-            watermarks: payload.watermarks, streamRoots: payload.streamRoots)
-        startupHandoffReceiptsForTesting.append(receipt)
-        if let data = try? JSONEncoder().encode(receipt), let line = String(data: data, encoding: .utf8) {
+            watermarks: payload.watermarks, streamRoots: payload.streamRoots,
+            bufferedPaths: buffered.paths, bufferedReconciliationPaths: buffered.reconciliationPaths,
+            bufferedWatermarks: buffered.watermarks, bufferedStreamRoots: buffered.streamRoots,
+            recoveryPaths: recovery.filePaths, recoveryReconciliationPaths: recovery.reconciliationPaths)
+        if collectsStartupHandoffsForTesting { startupHandoffReceiptsForTesting.append(receipt) }
+        if TraceTestHooks.isUITesting,
+           TraceTestHooks.environment["TRACE_TEST_STARTUP_HANDOFF_RECEIPTS_PATH"] != nil,
+           let data = try? JSONEncoder().encode(receipt), let line = String(data: data, encoding: .utf8) {
             TraceTestHooks.appendLine(line, pathKey: "TRACE_TEST_STARTUP_HANDOFF_RECEIPTS_PATH")
         }
     }
-    var startupHandoffIDForTesting: UUID? { startupHandoffID }
+    var startupHandoffIDForTesting: UUID? { startupHandoff?.id }
+    var currentStartupSubmissionsForTesting: [StartupHandoffReceipt] {
+        startupHandoffReceiptsForTesting.filter {
+            $0.phase == .submitted && $0.databaseGeneration == usageDatabaseGeneration
+                && $0.attachmentGeneration == attachmentGeneration
+                && $0.configurationRevision == sourceConfigurationRevision
+        }
+    }
+    func startReadyStartupForTesting(sources: [any SessionSource]) {
+        guard let receipt = watcherStartup?.receipt else { return }
+        startIndexing(sources: sources, receipt: receipt)
+    }
+    func captureReadyStartupForTesting(sources: [any SessionSource]) -> (() -> Void)? {
+        guard let receipt = watcherStartup?.receipt, watcherReadyIsCurrent(receipt) else { return nil }
+        return { [weak self] in self?.startIndexing(sources: sources, receipt: receipt) }
+    }
+    func queueRebuildForTesting() {
+        guard let database else { return }
+        rebuildRequest = RebuildRequest(database: database)
+    }
+    func obsoleteRebuildAdmissionForTesting() {
+        indexWorkflow.beginReplacement()
+        reconcileIndexHandoffs()
+    }
+    var hasExplicitRebuildGateForTesting: Bool { rebuildClaimGateForTesting != nil }
     private(set) var rebuildClaimWaitingForTesting = false
     var watcherStartupPendingForTesting: Bool { watcherStartupPending }
-    private(set) var startupHandoffsForTesting: [(changes: SourceChanges, recovery: IndexRecoveryWork)] = []
     func queueStartupWorkForTesting(_ changes: SourceChanges, recovery: IndexRecoveryWork = .init()) {
         bufferedSourceChanges.merge(changes)
         pendingStartupRecovery = .init(filePaths: pendingStartupRecovery.filePaths.union(recovery.filePaths),
@@ -1415,7 +1449,6 @@ final class TraceModel: ObservableObject {
     private(set) var watcherPreparationWaitingForTesting = false
     private(set) var watcherReadinessWaitingForTesting = false
     private(set) var watcherStartCountForTesting = 0
-    private(set) var startupSubmissionCountForTesting = 0
     var watcherReadyForTesting: Bool { watcherStartup?.ready == true }
     var watcherRequiresRootReconciliationForTesting: Bool { watcherStartup?.forceRootReconciliation == true }
     var watcherGenerationForTesting: UInt64 { watcherGeneration }
@@ -1426,9 +1459,9 @@ final class TraceModel: ObservableObject {
             let revision = sourceConfigurationRevision
             let sources = await makeSources()
             guard revision == sourceConfigurationRevision,
-                  await startWatchingForTesting(sources, force: true),
+                  case .started(let receipt) = await startWatching(sources, forceRootReconciliation: true),
                   revision == sourceConfigurationRevision else { return }
-            startIndexing(sources: sources, configurationRevision: revision)
+            startIndexing(sources: sources, receipt: receipt)
         }
     }
     func startWatchingForTesting(_ sources: [any SessionSource], force: Bool = false) async -> Bool {
@@ -1623,7 +1656,7 @@ final class TraceModel: ObservableObject {
                     } else {
                         Task { [weak self] in
                             guard let self else { return }
-                            self.startIndexing(sources: sources, configurationRevision: configuredRevision)
+                            self.startIndexing(sources: sources, receipt: owner)
                         }
                     }
                 } else {
@@ -1660,7 +1693,7 @@ final class TraceModel: ObservableObject {
                 guard case .started(let owner) = await self.startWatching(sources),
                       self.watcherReadyIsCurrent(owner) else { return }
                 guard revision == self.sourceConfigurationRevision else { return }
-                self.startIndexing(sources: sources, configurationRevision: revision)
+                self.startIndexing(sources: sources, receipt: owner)
             }
         }
     }
@@ -2202,15 +2235,13 @@ final class TraceModel: ObservableObject {
     }
 
     private func startupOwnerIsCurrent(_ owner: StartupOwner) -> Bool {
-        schedulerHandoffIsCurrent(owner.scheduler) && owner.watcherGeneration == watcherGeneration
+        schedulerHandoffIsCurrent(owner.scheduler) && watcherReadyIsCurrent(owner.watcher)
     }
 
-    func startIndexing(sources: [any SessionSource], configurationRevision: UInt64? = nil) {
-        let revision = configurationRevision ?? sourceConfigurationRevision
-        guard !terminating, revision == sourceConfigurationRevision, settings.onboardingComplete,
-              pendingAttachment == nil, let scheduler, let database else { return }
-        let owner = StartupOwner(scheduler: .init(scheduler: scheduler, database: database,
-            attachment: attachmentGeneration, configuration: revision), watcherGeneration: watcherGeneration)
+    private func startIndexing(sources: [any SessionSource], receipt: WatcherReceipt) {
+        guard settings.onboardingComplete, watcherReadyIsCurrent(receipt), let scheduler else { return }
+        let owner = StartupOwner(scheduler: .init(scheduler: scheduler, database: receipt.owner.database,
+            attachment: receipt.owner.attachment, configuration: receipt.owner.revision), watcher: receipt)
         if settledStartupOwner != owner, startupHandoff?.owner != owner, pendingStartupHandoff?.owner != owner {
             #if DEBUG
             var demand = StartupDemand(owner: owner, sources: sources, databaseGeneration: usageDatabaseGeneration)
@@ -2223,6 +2254,11 @@ final class TraceModel: ObservableObject {
             }
             #else
             let demand = StartupDemand(owner: owner, sources: sources)
+            #endif
+            #if DEBUG
+            if TraceTestHooks.isUITesting {
+                demand.uiActivityHold = TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_STARTUP_ACTIVITY_HOLD_MS", cappedAt: 120_000)
+            }
             #endif
             pendingStartupHandoff = demand
             #if DEBUG
@@ -2238,9 +2274,20 @@ final class TraceModel: ObservableObject {
         guard !reconcilingIndexHandoffs else { return }
         reconcilingIndexHandoffs = true
         defer { reconcilingIndexHandoffs = false }
+        // One transition per iteration; only reentry or stale-owner cleanup requests another.
         while indexHandoffReconciliationPending {
             indexHandoffReconciliationPending = false
             guard !terminating, settings.onboardingComplete, pendingAttachment == nil else { continue }
+            if let obsolete = rebuildAdmission,
+               !rebuildAdmissionIsCurrent(obsolete) {
+                ModelPublicationBatch.perform {
+                    relinquishRebuildClaim(for: obsolete)
+                    retireAbandonedRebuildAdmission(obsolete)
+                    updateCostsTotalsUpdating()
+                }
+                indexHandoffReconciliationPending = true
+                continue
+            }
             if let pending = pendingStartupHandoff, !startupOwnerIsCurrent(pending.owner) {
                 pendingStartupHandoff = nil
             }
@@ -2250,7 +2297,8 @@ final class TraceModel: ObservableObject {
                 launchStartupHandoff(pending)
                 continue
             }
-            guard rebuildRequest?.database === database, rebuildRequest?.claimant == nil,
+            guard pendingStartupHandoff == nil,
+                  rebuildRequest?.database === database, rebuildRequest?.claimant == nil,
                   let scheduler else { continue }
             let receipt = rebuildAdmission ?? beginIndexReplacement(preparingRebuild: true)
             guard let receipt, rebuildAdmissionIsCurrent(receipt) else { continue }
@@ -2282,6 +2330,7 @@ final class TraceModel: ObservableObject {
                     #if DEBUG
                     self.completedStartupHandoffsForTesting.insert(demand.id)
                     #endif
+                    self.updateCostsTotalsUpdating()
                 }
                 self.reconcileIndexHandoffs()
             }
@@ -2316,9 +2365,7 @@ final class TraceModel: ObservableObject {
                 satisfiesSafetyReconciliation: payload.satisfiesSafetyReconciliation,
                 watermarks: payload.watermarks, streamRoots: payload.streamRoots)
             #if DEBUG
-            self.recordStartupHandoff(demand, payload: payload, phase: .submitted)
-            self.startupSubmissionCountForTesting += 1
-            self.startupHandoffsForTesting.append((buffered, recovery))
+            self.recordStartupHandoff(demand, payload: payload, buffered: buffered, recovery: recovery, phase: .submitted)
             #endif
             if let rebuild, payload.rebuild {
                 await self.waitForRebuildAcknowledgment(rebuild)
@@ -2344,9 +2391,16 @@ final class TraceModel: ObservableObject {
                 arrivedDuringSubmission = self.bufferedSourceChanges
                 self.bufferedSourceChanges = SourceChanges()
                 #if DEBUG
-                self.recordStartupHandoff(demand, payload: payload, phase: .settled)
+                self.recordStartupHandoff(demand, payload: payload, buffered: buffered, recovery: recovery, phase: .settled)
                 #endif
             }
+            guard isCurrent() else { return }
+            #if DEBUG
+            if let delay = demand.uiActivityHold {
+                TraceTestHooks.appendLine(demand.id.uuidString, pathKey: "TRACE_TEST_STARTUP_ACTIVITY_HELD_PATH")
+                try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_STARTUP_ACTIVITY_RELEASE_PATH", timeoutMilliseconds: delay)
+            }
+            #endif
             guard isCurrent() else { return }
             self.startupActivityObserver(payload.activity)
             guard isCurrent() else { return }
@@ -2380,12 +2434,29 @@ final class TraceModel: ObservableObject {
         let submissionID = UUID()
         receipt.scheduledSubmissionID = submissionID
         #if DEBUG
-        let claimGate = receipt.explicitClaimGate
-        receipt.explicitClaimGate = nil
+        let claimGate: Task<Void, Never>?
+        if let injected = rebuildClaimGateForTesting {
+            claimGate = injected
+            rebuildClaimGateForTesting = nil
+        } else if let delay = receipt.uiHandoffDelay {
+            claimGate = Task {
+                try? await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_EXPLICIT_REBUILD_RELEASE_PATH", timeoutMilliseconds: delay)
+            }
+        } else { claimGate = nil }
         #endif
         Task {
+            var claim: RebuildClaim?
+            var handedOff = false
             defer {
-                if receipt.scheduledSubmissionID == submissionID { receipt.scheduledSubmissionID = nil }
+                ModelPublicationBatch.perform {
+                    if receipt.scheduledSubmissionID == submissionID { receipt.scheduledSubmissionID = nil }
+                    if let claim { finishRebuildSubmission(claim, handedOff: handedOff) }
+                    else { finishUnclaimedRebuildSubmission(receipt) }
+                    #if DEBUG
+                    if claim != nil { completedRebuildSubmissionsForTesting.insert(receipt.id) }
+                    #endif
+                    updateCostsTotalsUpdating()
+                }
                 reconcileIndexHandoffs()
             }
             #if DEBUG
@@ -2395,16 +2466,13 @@ final class TraceModel: ObservableObject {
                 rebuildClaimWaitingForTesting = false
             }
             #endif
-            guard !Task.isCancelled, settings.onboardingComplete, rebuildAdmissionIsCurrent(receipt) else {
-                finishUnclaimedRebuildSubmission(receipt)
-                return
-            }
-            guard let claim = takePendingRebuild(generation: receipt.attachment, revision: receipt.configuration,
-                                                scheduler: scheduler) else {
-                if !rebuildAdmissionIsCurrent(receipt) { finishUnclaimedRebuildSubmission(receipt) }
-                return
-            }
-            await submitRebuild(claim)
+            guard !Task.isCancelled, settings.onboardingComplete, rebuildAdmissionIsCurrent(receipt) else { return }
+            claim = takePendingRebuild(generation: receipt.attachment, revision: receipt.configuration, scheduler: scheduler)
+            guard let claim, await waitForRebuildSubmission(claim.admission), settings.onboardingComplete,
+                  rebuildRequest?.claimant?.id == claim.id else { return }
+            await claim.scheduler.request(rebuild: true, scope: settings.indexScope)
+            handedOff = true
+            await waitForRebuildAcknowledgment(claim)
         }
     }
 
@@ -2425,18 +2493,19 @@ final class TraceModel: ObservableObject {
             #else
             claim = RebuildClaim(admission: receipt, scheduler: scheduler)
             #endif
-            rebuildRequest?.claimant = claim?.id
+            if let claim {
+                rebuildRequest?.claimant = .init(id: claim.id, admissionID: receipt.id)
+            }
             _ = prepareForIndexReset()
         }
         guard let claim else { return nil }
-        guard rebuildAdmissionIsCurrent(claim.admission), settings.onboardingComplete,
-              rebuildRequest?.id == claim.admission.requestID, rebuildRequest?.claimant == claim.id else {
-            finishRebuildSubmission(claim, handedOff: false)
-            return nil
-        }
         #if DEBUG
-        rebuildSubmissionCountForTesting += 1
+        if rebuildAdmissionIsCurrent(claim.admission), settings.onboardingComplete,
+           rebuildRequest?.id == claim.admission.requestID, rebuildRequest?.claimant?.id == claim.id {
+            rebuildSubmissionCountForTesting += 1
+        }
         #endif
+        // Even an invalidated claim belongs to the caller's scoped finalizer.
         return claim
     }
 
@@ -2588,6 +2657,7 @@ final class TraceModel: ObservableObject {
             #endif
             guard await finishAttachment(pending, coordinator: coordinator) else { return }
             startupSetupComplete = true
+            let readyReceipt: WatcherReceipt
             switch await startWatching(sources, forceRootReconciliation: true) {
             case .deferredByOnboarding(let owner):
                 settleDeferredSourceReload(receipt: owner)
@@ -2600,10 +2670,11 @@ final class TraceModel: ObservableObject {
                 return
             case .started(let owner):
                 guard watcherReadyIsCurrent(owner) else { return }
+                readyReceipt = owner
             }
             guard !Task.isCancelled, revision == sourceConfigurationRevision else { return }
             // Root changes reconcile existing files; unchanged sources retain their index.
-            startIndexing(sources: sources, configurationRevision: revision)
+            startIndexing(sources: sources, receipt: readyReceipt)
         }
     }
 

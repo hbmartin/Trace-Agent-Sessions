@@ -13,6 +13,184 @@ import XCTest
 final class AppReviewFollowupTests: XCTestCase {
     private final class WeakModelReference { weak var value: TraceModel? }
 
+    func testStartupRejectsPreparingAndStaleWatcherReceipts() async throws {
+        for holdReadiness in [false, true] {
+            let f = try await fixture(count: 2)
+            let source = ClaudeCodeSource(roots: [f.root])
+            f.model.settings.onboardingComplete = true
+            try await prepareStartup(f.model, sources: [source])
+            let staleStartup = try XCTUnwrap(f.model.captureReadyStartupForTesting(sources: [source]))
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            if holdReadiness { f.model.watcherReadinessGateForTesting = held }
+            else { f.model.watcherPreparationGateForTesting = held }
+            let replacement = Task { await f.model.startWatchingForTesting([source], force: true) }
+            try await wait { holdReadiness ? f.model.watcherReadinessWaitingForTesting
+                : f.model.watcherPreparationWaitingForTesting }
+            staleStartup()
+            f.model.startReadyStartupForTesting(sources: [source])
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertNil(f.model.startupHandoffIDForTesting)
+            XCTAssertTrue(f.model.startupHandoffReceiptsForTesting.isEmpty)
+            XCTAssertFalse(f.model.safetyVerificationActiveForTesting)
+            await gate.open()
+            let ready = await replacement.value
+            XCTAssertTrue(ready)
+            var changes = SourceChanges()
+            changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+            changes.reconciliationPaths = [f.root.path]
+            changes.watermarks = ["ready-watcher": 92]
+            changes.streamRoots = ["ready-watcher": [f.root.path]]
+            await f.model.bufferSourceChangesForTesting(changes)
+            staleStartup()
+            XCTAssertTrue(f.model.watcherStartupPendingForTesting)
+            f.model.startReadyStartupForTesting(sources: [source])
+            try await wait { !f.model.watcherStartupPendingForTesting && f.model.safetyVerificationActiveForTesting }
+            await f.model.schedulerForTesting?.waitUntilIdle()
+            let receipt = try XCTUnwrap(f.model.currentStartupSubmissionsForTesting.first)
+            XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
+            XCTAssertEqual(receipt.watcherGeneration, f.model.watcherGenerationForTesting)
+            XCTAssertTrue(receipt.reconciliationPaths.contains(f.root.path))
+            XCTAssertEqual(receipt.watermarks["ready-watcher"], 92)
+            XCTAssertEqual(receipt.streamRoots["ready-watcher"], [f.root.path])
+            let later = f.root.appendingPathComponent("after-ready.jsonl")
+            try line(999).write(to: later)
+            var live = SourceChanges(); live.paths = [later.path]
+            await f.model.bufferSourceChangesForTesting(live)
+            await f.model.schedulerForTesting?.waitUntilIdle()
+            let rows = try await f.database.sessions(limit: 100)
+            XCTAssertTrue(rows.contains { $0.title == "NavigationNeedle 999" })
+        }
+    }
+
+    func testStaleStartupFinalizationGivesReplacementItsRetainedRebuild() async throws {
+        for grouped in [false, true] {
+            let f = try await fixture(count: 2)
+            let source = ClaudeCodeSource(roots: [f.root])
+            f.model.settings.onboardingComplete = true
+            try await prepareStartup(f.model, sources: [source])
+            let explicit = ReviewReadGate(), explicitHeld = Task { await explicit.wait() }
+            let submission = ReviewReadGate(), submissionHeld = Task { await submission.wait() }
+            defer { explicitHeld.cancel(); submissionHeld.cancel(); Task { await explicit.open(); await submission.open() } }
+            f.model.rebuildClaimGateForTesting = explicitHeld
+            f.model.rebuildSubmissionGateForTesting = submissionHeld
+            f.model.rebuildIndex()
+            try await wait { f.model.rebuildClaimWaitingForTesting }
+            f.model.startReadyStartupForTesting(sources: [source])
+            let obsolete = try XCTUnwrap(f.model.startupHandoffIDForTesting)
+            try await wait { f.model.rebuildSubmissionWaitingForTesting }
+            let ready = await f.model.startWatchingForTesting([source], force: true)
+            XCTAssertTrue(ready)
+            f.model.startReadyStartupForTesting(sources: [source])
+            let replacement = try XCTUnwrap(f.model.pendingStartupHandoffIDForTesting)
+            var reentered = false
+            let observe = {
+                guard !reentered, !f.model.isPreparingRebuild,
+                      f.model.pendingStartupHandoffIDForTesting == replacement else { return }
+                reentered = true
+                f.model.startReadyStartupForTesting(sources: [source])
+            }
+            let token = grouped ? f.model.sidebarChanges.dropFirst().sink { _ in observe() }
+                : f.model.objectWillChange.sink { observe() }
+            defer { token.cancel() }
+            await submission.open()
+            try await wait { f.model.completedStartupHandoffsForTesting.contains(obsolete)
+                && !f.model.pendingRebuildForTesting && !f.model.watcherStartupPendingForTesting }
+            await explicit.open()
+            try await wait { !f.model.rebuildClaimWaitingForTesting }
+            let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+            await scheduler.waitUntilIdle()
+            XCTAssertTrue(reentered)
+            let receipts = f.model.currentStartupSubmissionsForTesting
+            XCTAssertEqual(receipts.count, 1)
+            XCTAssertEqual(receipts.first?.handoffID, replacement)
+            XCTAssertEqual(receipts.first?.rebuild, true)
+            let generation = await scheduler.generationForTesting
+            XCTAssertEqual(generation, 1, "replacement startup must carry the only rebuild submission")
+            XCTAssertFalse(f.model.sessions.isEmpty)
+        }
+    }
+
+    func testObsoleteAdmissionReleasesWaitersAndPreservesSuccessorClaim() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        let first = ReviewReadGate(), firstHeld = Task { await first.wait() }
+        let second = ReviewReadGate(), secondHeld = Task { await second.wait() }
+        defer { firstHeld.cancel(); secondHeld.cancel(); Task { await first.open(); await second.open() } }
+        f.model.rebuildSubmissionGateForTesting = firstHeld
+        f.model.rebuildIndex()
+        try await wait { f.model.rebuildSubmissionWaitingForTesting }
+        let obsolete = try XCTUnwrap(f.model.rebuildAdmissionIDForTesting)
+        var progress = IndexProgress(phase: .indexing)
+        progress.activity = .rebuild
+        let delivery = Task { await f.model.receiveProgress(progress) }
+        try await wait { f.model.admissionWaitingPassesForTesting.contains(progress.passID) }
+        f.model.rebuildSubmissionGateForTesting = secondHeld
+        f.model.obsoleteRebuildAdmissionForTesting()
+        try await wait { f.model.rebuildAdmissionIDForTesting != obsolete && f.model.rebuildSubmissionWaitingForTesting }
+        let successor = try XCTUnwrap(f.model.rebuildAdmissionIDForTesting)
+        XCTAssertTrue(f.model.pendingRebuildForTesting)
+        XCTAssertTrue(f.model.rebuildClaimedForTesting)
+        await first.open()
+        try await wait { f.model.completedRebuildSubmissionsForTesting.contains(obsolete) }
+        XCTAssertEqual(f.model.rebuildAdmissionIDForTesting, successor)
+        XCTAssertTrue(f.model.rebuildClaimedForTesting)
+        await second.open()
+        await delivery.value
+        try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        await scheduler.waitUntilIdle()
+        await f.model.prepareToTerminate()
+        XCTAssertTrue(f.model.admissionWaitingPassesForTesting.isEmpty)
+    }
+
+    func testStartupAdmissionDoesNotConsumeExplicitOnlyGate() async throws {
+        let f = try await fixture(count: 2)
+        let source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        let explicit = ReviewReadGate(), explicitHeld = Task { await explicit.wait() }
+        let submission = ReviewReadGate(), submissionHeld = Task { await submission.wait() }
+        defer { explicitHeld.cancel(); submissionHeld.cancel(); Task { await explicit.open(); await submission.open() } }
+        f.model.rebuildClaimGateForTesting = explicitHeld
+        f.model.rebuildSubmissionGateForTesting = submissionHeld
+        f.model.queueRebuildForTesting()
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { f.model.rebuildSubmissionWaitingForTesting }
+        XCTAssertTrue(f.model.hasExplicitRebuildGateForTesting)
+        XCTAssertFalse(f.model.rebuildClaimWaitingForTesting)
+        await submission.open()
+        try await wait { !f.model.pendingRebuildForTesting && f.model.safetyVerificationActiveForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        f.model.rebuildIndex()
+        try await wait { f.model.rebuildClaimWaitingForTesting }
+        XCTAssertFalse(f.model.hasExplicitRebuildGateForTesting)
+        XCTAssertTrue(f.model.pendingRebuildForTesting)
+        await explicit.open()
+        try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+        let generation = await f.model.schedulerForTesting?.generationForTesting
+        XCTAssertEqual(generation, 2)
+    }
+
+    func testStartupReceiptHistoryRequiresExplicitCollection() async throws {
+        let f = try await fixture(count: 2)
+        let source = ClaudeCodeSource(roots: [f.root])
+        f.model.collectsStartupHandoffsForTesting = false
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { f.model.startupHandoffIDForTesting == nil && f.model.safetyVerificationActiveForTesting }
+        XCTAssertTrue(f.model.startupHandoffReceiptsForTesting.isEmpty)
+        f.model.collectsStartupHandoffsForTesting = true
+        let ready = await f.model.startWatchingForTesting([source], force: true)
+        XCTAssertTrue(ready)
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { f.model.startupHandoffIDForTesting == nil && f.model.safetyVerificationActiveForTesting }
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
+        XCTAssertEqual(f.model.startupHandoffReceiptsForTesting.filter { $0.phase == .settled }.count, 1)
+    }
+
+
     func testStartupAcknowledgesRebuildAcrossWatcherGenerationChange() async throws {
         let f = try await fixture(count: 2)
         let source = ClaudeCodeSource(roots: [f.root])
@@ -20,14 +198,15 @@ final class AppReviewFollowupTests: XCTestCase {
         let acknowledgment = ReviewReadGate(), ackHeld = Task { await acknowledgment.wait() }
         defer { explicitHeld.cancel(); ackHeld.cancel(); Task { await explicit.open(); await acknowledgment.open() } }
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
         f.model.rebuildClaimGateForTesting = explicitHeld
         f.model.rebuildAcknowledgmentGateForTesting = ackHeld
         f.model.rebuildIndex()
         try await wait { f.model.rebuildClaimWaitingForTesting }
-        f.model.startIndexing(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
         try await wait { f.model.rebuildAcknowledgmentWaitingForTesting }
         let generation = f.model.watcherGenerationForTesting
-        let started = await f.model.startWatchingForTesting([source])
+        let started = await f.model.startWatchingForTesting([source], force: true)
         XCTAssertTrue(started)
         XCTAssertGreaterThan(f.model.watcherGenerationForTesting, generation)
         var changes = SourceChanges()
@@ -36,22 +215,22 @@ final class AppReviewFollowupTests: XCTestCase {
         changes.watermarks = ["new-watcher": 42]
         changes.streamRoots = ["new-watcher": [f.root.path]]
         await f.model.bufferSourceChangesForTesting(changes)
-        f.model.startIndexing(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
         let replacement = try XCTUnwrap(f.model.pendingStartupHandoffIDForTesting)
-        f.model.startIndexing(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
         XCTAssertEqual(f.model.pendingStartupHandoffIDForTesting, replacement)
         XCTAssertTrue(f.model.watcherStartupPendingForTesting)
         await acknowledgment.open()
         try await wait { !f.model.pendingRebuildForTesting && !f.model.watcherStartupPendingForTesting
             && f.model.safetyVerificationActiveForTesting }
         await explicit.open()
-        f.model.startIndexing(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
         let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
         await scheduler.waitUntilIdle()
         let submittedGeneration = await scheduler.generationForTesting
         XCTAssertEqual(submittedGeneration, 1)
         XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
-        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 2)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 2)
         let receipts = f.model.startupHandoffReceiptsForTesting
         XCTAssertEqual(receipts.filter { $0.phase == .submitted && $0.rebuild }.count, 1)
         XCTAssertEqual(receipts.filter { $0.phase == .settled }.map(\.handoffID), [replacement])
@@ -78,11 +257,12 @@ final class AppReviewFollowupTests: XCTestCase {
         let submission = ReviewReadGate(), held = Task { await submission.wait() }
         defer { explicitHeld.cancel(); held.cancel(); Task { await explicit.open(); await submission.open() } }
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.rebuildClaimGateForTesting = explicitHeld
         f.model.rebuildSubmissionGateForTesting = held
         f.model.rebuildIndex()
         try await wait { f.model.rebuildClaimWaitingForTesting }
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         try await wait { f.model.rebuildSubmissionWaitingForTesting }
         let owner = f.model.rebuildAdmissionIDForTesting
         f.model.settings.onboardingComplete = false
@@ -106,8 +286,9 @@ final class AppReviewFollowupTests: XCTestCase {
             let f = try await fixture(count: 2)
             let source = ClaudeCodeSource(roots: [f.root])
             f.model.settings.onboardingComplete = true
-            f.model.startIndexing(sources: [source])
-            try await wait { f.model.startupSubmissionCountForTesting == 1 && f.model.progress.phase == .complete }
+            try await prepareStartup(f.model, sources: [source])
+            f.model.startReadyStartupForTesting(sources: [source])
+            try await wait { f.model.currentStartupSubmissionsForTesting.count == 1 && f.model.progress.phase == .complete }
             await f.model.schedulerForTesting?.waitUntilIdle()
             var deferred = false
             let observe = {
@@ -124,14 +305,14 @@ final class AppReviewFollowupTests: XCTestCase {
             XCTAssertFalse(f.model.rebuildClaimedForTesting)
             XCTAssertFalse(f.model.indexingPassActiveForTesting)
             f.model.settings.onboardingComplete = true
-            f.model.startIndexing(sources: [source]) // Same resume entry used after watcher readiness.
-            f.model.startIndexing(sources: [source])
+            f.model.startReadyStartupForTesting(sources: [source]) // Same resume entry used after watcher readiness.
+            f.model.startReadyStartupForTesting(sources: [source])
             try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
             let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
             await scheduler.waitUntilIdle()
             let generation = await scheduler.generationForTesting
             XCTAssertEqual(generation, 1)
-            XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+            XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
             XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
             XCTAssertFalse(f.model.sessions.isEmpty)
         }
@@ -197,11 +378,13 @@ final class AppReviewFollowupTests: XCTestCase {
                 XCTAssertFalse(reference.value?.watcherStartupPendingForTesting ?? true)
                 reference.value?.rebuildIndex()
             }, diagnosticsURL: f.root.appendingPathComponent("weak-audit.json"))
+        model?.collectsStartupHandoffsForTesting = true
         reference.value = model
         let source = ClaudeCodeSource(roots: [f.root])
         await model?.attachForTesting(database: f.database, sources: [source])
         model?.settings.onboardingComplete = true
-        model?.startIndexing(sources: [source])
+        try await prepareStartup(try XCTUnwrap(model), sources: [source])
+        model?.startReadyStartupForTesting(sources: [source])
         try await wait { callbacks == 1 && reference.value?.pendingRebuildForTesting == false
             && reference.value?.progress.phase == .complete }
         await model?.prepareToTerminate()
@@ -215,8 +398,9 @@ final class AppReviewFollowupTests: XCTestCase {
         let submission = ReviewReadGate(), submissionHeld = Task { await submission.wait() }
         defer { startupHeld.cancel(); submissionHeld.cancel(); Task { await startup.open(); await submission.open() } }
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.startupSettlementGateForTesting = startupHeld
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         let handoff = try XCTUnwrap(f.model.startupHandoffIDForTesting)
         try await wait { f.model.startupSettlementWaitingForTesting.contains(handoff) }
         f.model.rebuildSubmissionGateForTesting = submissionHeld
@@ -235,7 +419,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await scheduler.waitUntilIdle()
         let generation = await scheduler.generationForTesting
         XCTAssertEqual(generation, 1)
-        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
         XCTAssertEqual(f.model.startupHandoffReceiptsForTesting.filter { $0.phase == .settled }.count, 1)
     }
 
@@ -249,7 +433,7 @@ final class AppReviewFollowupTests: XCTestCase {
                 guard let current = reference.value else { return }
                 XCTAssertFalse(current.watcherStartupPendingForTesting)
                 activities.append(activity)
-                current.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+                current.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
             })
         reference.value = model
         let source = ClaudeCodeSource(roots: [f.root])
@@ -257,14 +441,15 @@ final class AppReviewFollowupTests: XCTestCase {
         let gate = ReviewReadGate(), held = Task { await gate.wait() }
         defer { held.cancel(); Task { await gate.open() } }
         model.settings.onboardingComplete = true
+        try await prepareStartup(model, sources: [source])
         model.startupSettlementGateForTesting = held
-        model.startIndexing(sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
         let first = try XCTUnwrap(model.startupHandoffIDForTesting)
         try await wait { model.startupSettlementWaitingForTesting.contains(first) }
         XCTAssertTrue(activities.isEmpty)
-        let started = await model.startWatchingForTesting([source])
+        let started = await model.startWatchingForTesting([source], force: true)
         XCTAssertTrue(started)
-        model.startIndexing(sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
         let newest = try XCTUnwrap(model.pendingStartupHandoffIDForTesting)
         await gate.open()
         try await wait { model.completedStartupHandoffsForTesting.contains(newest)
@@ -281,18 +466,21 @@ final class AppReviewFollowupTests: XCTestCase {
             let gate = ReviewReadGate(), held = Task { await gate.wait() }
             defer { held.cancel(); Task { await gate.open() } }
             f.model.settings.onboardingComplete = true
+            try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
             f.model.startupSettlementGateForTesting = held
-            f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+            f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
             let first = try XCTUnwrap(f.model.startupHandoffIDForTesting)
             try await wait { f.model.startupSettlementWaitingForTesting.contains(first) }
             if terminate { await f.model.prepareToTerminate() }
             else {
                 let replacement = try IndexDatabase(url: f.root.appendingPathComponent("replacement.sqlite"))
                 await f.model.attachForTesting(database: replacement, sources: [])
-                f.model.startIndexing(sources: [])
+                try await prepareStartup(f.model, sources: [])
+                f.model.startReadyStartupForTesting(sources: [])
             }
             await gate.open()
             try await wait { f.model.completedStartupHandoffsForTesting.contains(first) }
+            XCTAssertTrue(f.model.startupHandoffReceiptsForTesting.contains { $0.handoffID == first && $0.phase == .submitted })
             XCTAssertFalse(f.model.startupHandoffReceiptsForTesting.contains { $0.handoffID == first && $0.phase == .settled })
             if terminate {
                 XCTAssertNil(f.model.startupHandoffIDForTesting)
@@ -318,7 +506,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.progress.rollupError, failed.rollupError)
         let details = IndexProgressLabel(progress: f.model.progress).details
         XCTAssertTrue(details.contains("Token totals: Could not update token totals."))
-        XCTAssertTrue(details.contains("3"))
+        XCTAssertTrue(details.contains("3 files still failing"))
         f.model.requestUsageRefreshForTesting(repair: true, immediately: true)
         try await wait { !f.model.usagePendingForTesting && !f.model.costsTotalsUpdating }
         XCTAssertNil(f.model.progress.rollupError)
@@ -331,6 +519,7 @@ final class AppReviewFollowupTests: XCTestCase {
                 let claim = ReviewReadGate(), held = Task { await claim.wait() }
                 defer { held.cancel(); Task { await claim.open() } }
                 f.model.settings.onboardingComplete = true
+                try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
                 f.model.rebuildClaimGateForTesting = held
                 var observed = false
                 let observe = {
@@ -345,16 +534,16 @@ final class AppReviewFollowupTests: XCTestCase {
                 defer { token.cancel() }
                 f.model.rebuildIndex()
                 try await wait { f.model.rebuildClaimWaitingForTesting }
-                f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+                f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
                 try await wait { observed }
                 if !reload {
                     try await wait { !f.model.isPreparingRebuild }
                     XCTAssertTrue(f.model.pendingRebuildForTesting)
                     XCTAssertFalse(f.model.rebuildClaimedForTesting)
                     XCTAssertFalse(f.model.indexingPassActiveForTesting)
-                    XCTAssertEqual(f.model.startupSubmissionCountForTesting, 0)
+                    XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 0)
                     f.model.settings.onboardingComplete = true
-                    f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+                    f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
                 }
                 await claim.open()
                 try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
@@ -377,10 +566,11 @@ final class AppReviewFollowupTests: XCTestCase {
         let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
         await coordinator.gatePreparationForTesting(prepared)
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.rebuildClaimGateForTesting = claimed
         f.model.rebuildIndex()
         try await wait { f.model.rebuildClaimWaitingForTesting }
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         try await wait { await coordinator.preparationWaitingForTesting }
         try await wait { !f.model.pendingRebuildForTesting }
         XCTAssertTrue(f.model.isPreparingRebuild)
@@ -411,12 +601,13 @@ final class AppReviewFollowupTests: XCTestCase {
         await model.attachForTesting(database: f.database, sources: [source])
         await model.refreshSummariesForTesting()
         model.settings.onboardingComplete = true
+        try await prepareStartup(model, sources: [source])
         let claim = ReviewReadGate(), held = Task { await claim.wait() }
         defer { held.cancel(); Task { await claim.open() } }
         model.rebuildClaimGateForTesting = held
         model.rebuildIndex()
         try await wait { model.rebuildClaimWaitingForTesting }
-        model.startIndexing(sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
         try await wait { activities.count == 1 }
         await claim.open()
         try await wait { model.progress.phase == .complete && !model.indexingPassActiveForTesting }
@@ -434,19 +625,20 @@ final class AppReviewFollowupTests: XCTestCase {
         let claim = ReviewReadGate(), held = Task { await claim.wait() }
         defer { held.cancel(); Task { await claim.open() } }
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.rebuildClaimGateForTesting = held
         f.model.rebuildIndex()
         try await wait { f.model.rebuildClaimWaitingForTesting }
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.settings.onboardingComplete = false
         await claim.open()
         try await wait { !f.model.isPreparingRebuild }
         XCTAssertFalse(f.model.indexingPassActiveForTesting)
         XCTAssertTrue(f.model.pendingRebuildForTesting)
         XCTAssertEqual(f.model.sessions.map(\.id), rows)
-        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 0)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 0)
         f.model.settings.onboardingComplete = true
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
         XCTAssertFalse(f.model.pendingRebuildForTesting)
         let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
@@ -466,17 +658,18 @@ final class AppReviewFollowupTests: XCTestCase {
         await model.refreshSummariesForTesting()
         let rows = model.sessions
         model.settings.onboardingComplete = true
-        model.startIndexing(sources: [source])
+        try await prepareStartup(model, sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
         let handoff = try XCTUnwrap(model.startupHandoffIDForTesting)
         model.settings.onboardingComplete = false
         try await wait { model.completedStartupHandoffsForTesting.contains(handoff) }
         XCTAssertEqual(model.sessions.map(\.id), rows.map(\.id))
         XCTAssertTrue(activities.isEmpty)
-        XCTAssertEqual(model.startupSubmissionCountForTesting, 0)
+        XCTAssertEqual(model.currentStartupSubmissionsForTesting.count, 0)
         model.settings.onboardingComplete = true
-        model.startIndexing(sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
         try await wait { activities.count == 1 && model.progress.phase == .complete }
-        XCTAssertEqual(activities, [.cachedLaunch])
+        XCTAssertEqual(activities, [.launchReconciliation])
     }
 
     func testPreparationCommitsFreshProgressAndRetainsRollupOwnership() async throws {
@@ -562,12 +755,13 @@ final class AppReviewFollowupTests: XCTestCase {
         let submission = ReviewReadGate(), held = Task { await submission.wait() }
         defer { claimed.cancel(); held.cancel(); Task { await claim.open(); await submission.open() } }
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.rebuildClaimGateForTesting = claimed
         f.model.rebuildSubmissionGateForTesting = held
         f.model.rebuildIndex()
         try await wait { f.model.rebuildClaimWaitingForTesting }
         let owner = try XCTUnwrap(f.model.rebuildAdmissionIDForTesting)
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         try await wait { f.model.rebuildSubmissionWaitingForTesting }
         await claim.open()
         try await wait { !f.model.rebuildClaimWaitingForTesting }
@@ -576,7 +770,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
         await submission.open()
         try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
-        XCTAssertEqual(f.model.startupHandoffsForTesting.count, 1)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
         XCTAssertFalse(f.model.watcherStartupPendingForTesting)
         let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
         await scheduler.waitUntilIdle()
@@ -598,13 +792,14 @@ final class AppReviewFollowupTests: XCTestCase {
         changes.paths = [path]; changes.reconciliationPaths = [f.root.path]
         changes.watermarks = ["startup": 42]; changes.streamRoots = ["startup": [f.root.path]]
         let recovery = IndexRecoveryWork(filePaths: [path], reconciliationPaths: [f.root.path])
-        f.model.queueStartupWorkForTesting(changes, recovery: recovery)
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.queueStartupWorkForTesting(changes, recovery: recovery)
         f.model.rebuildClaimGateForTesting = claimed
         f.model.rebuildSubmissionGateForTesting = firstHeld
         f.model.rebuildIndex()
         try await wait { f.model.rebuildClaimWaitingForTesting }
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         try await wait { f.model.rebuildSubmissionWaitingForTesting }
         await claim.open()
         try await wait { !f.model.rebuildClaimWaitingForTesting }
@@ -621,14 +816,16 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { !f.model.watcherStartupPendingForTesting }
         XCTAssertEqual(f.model.rebuildAdmissionIDForTesting, newest)
         XCTAssertTrue(f.model.isPreparingRebuild)
-        XCTAssertEqual(f.model.startupHandoffsForTesting.count, 1)
-        let handoff = try XCTUnwrap(f.model.startupHandoffsForTesting.first)
-        XCTAssertEqual(handoff.changes.paths, [path])
-        XCTAssertEqual(handoff.changes.reconciliationPaths, [f.root.path])
-        XCTAssertEqual(handoff.changes.watermarks, ["startup": 99])
-        XCTAssertEqual(handoff.changes.streamRoots, ["startup": [f.root.path]])
-        XCTAssertEqual(handoff.recovery.filePaths, recovery.filePaths)
-        XCTAssertEqual(handoff.recovery.reconciliationPaths, recovery.reconciliationPaths)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
+        let handoff = try XCTUnwrap(f.model.currentStartupSubmissionsForTesting.first)
+        XCTAssertEqual(handoff.bufferedPaths, [path])
+        XCTAssertEqual(handoff.bufferedReconciliationPaths, [f.root.path])
+        XCTAssertEqual(handoff.bufferedWatermarks["startup"], 99)
+        XCTAssertEqual(handoff.bufferedStreamRoots["startup"], [f.root.path])
+        XCTAssertTrue(handoff.watermarks.allSatisfy { handoff.bufferedWatermarks[$0.key] == $0.value })
+        XCTAssertEqual(handoff.streamRoots, handoff.bufferedStreamRoots)
+        XCTAssertEqual(handoff.recoveryPaths, recovery.filePaths)
+        XCTAssertEqual(handoff.recoveryReconciliationPaths, recovery.reconciliationPaths)
         await second.open(); await third.open()
         try await wait { f.model.progress.phase == .complete && !f.model.indexingPassActiveForTesting }
         let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
@@ -1181,6 +1378,13 @@ final class AppReviewFollowupTests: XCTestCase {
         }
     }
 
+    private func prepareStartup(_ model: TraceModel, sources: [any SessionSource],
+                                file: StaticString = #filePath, line: UInt = #line) async throws {
+        let ready = await model.startWatchingForTesting(sources)
+        XCTAssertTrue(ready, "startup fixtures require a real ready watcher", file: file, line: line)
+        guard ready else { throw CancellationError() }
+    }
+
     private struct Fixture {
         let root: URL
         let clock: TestClock<Duration>
@@ -1207,6 +1411,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let suite = "TraceAppReview.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let model = TraceModel(settings: AppSettings(defaults: defaults), clock: clock, diagnosticsURL: root.appendingPathComponent("diagnostics.json"))
+        model.collectsStartupHandoffsForTesting = true
         await model.attachForTesting(database: database, sources: [source])
         model.sourceReloadSourcesForTesting = [source]
         await model.refreshSummariesForTesting()
@@ -1257,6 +1462,7 @@ final class AppReviewFollowupTests: XCTestCase {
             await model.prepareToTerminate()
             defaults.removePersistentDomain(forName: suite)
         }
+        model.collectsStartupHandoffsForTesting = true
         return model
     }
 
@@ -4989,6 +5195,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let gate = ReviewReadGate(), task = Task { await gate.wait() }
         defer { task.cancel(); Task { await gate.open() } }
         f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.schedulerProgressGateForTesting = task
         f.model.selectionTranscriptReadGateForTesting = task
         f.model.rebuildIndex()
@@ -4996,7 +5203,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertFalse(f.model.pendingRebuildForTesting)
         // A second reset would erase this navigation while the rebuild is held.
         f.model.selectSession(-123)
-        f.model.startIndexing(sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         for _ in 0..<10 { await Task.yield() }
         XCTAssertEqual(f.model.selectedSessionID, -123)
         XCTAssertEqual(f.model.rebuildSubmissionCountForTesting, 1)
@@ -5139,7 +5346,8 @@ final class AppReviewFollowupTests: XCTestCase {
         // Real startup can spend long enough opening the index for its first
         // discovering publication to refresh summaries during the scope reset.
         await f.clock.advance(by: .milliseconds(300))
-        model.startIndexing(sources: [source])
+        try await prepareStartup(model, sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
         try await wait { model.progress.phase == .complete }
         let indexed = try await f.database.search(query: "StartupScopeNeedle", filters: .init(), sort: .relevance)
         XCTAssertEqual(indexed.results.count, 1)
@@ -5697,7 +5905,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.watcherReadinessWaitingForTesting }
         XCTAssertTrue(f.model.indexingPassActiveForTesting)
         XCTAssertNil(f.model.activeIndexPassIDForTesting, "the replacement owns activity before its pass starts")
-        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 0)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 0)
         return (f, session.id, other.id, gate, held)
     }
 
@@ -5765,7 +5973,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertNil(f.model.transcriptBanner?.details)
         XCTAssertEqual(f.model.selectedSessionID, sessionID)
         XCTAssertFalse(f.model.messages.isEmpty)
-        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
     }
 
     func testExplicitMissingSelectionInReplacementGapCompletesOnce() async throws {
@@ -6478,7 +6686,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(first)
         XCTAssertEqual(f.model.activeWatcherCountForTesting, 0)
         XCTAssertFalse(f.model.monitoringWarnings.isEmpty)
-        f.model.startIndexing(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
         try await wait { f.model.progress.phase == .complete && f.model.safetyVerificationActiveForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
         try line(98).write(to: f.root.appendingPathComponent("watcher-gap.jsonl"))
@@ -6496,9 +6704,9 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.watcherStartCountForTesting, 2)
         XCTAssertEqual(f.model.activeWatcherCountForTesting, 1)
         XCTAssertTrue(f.model.watcherRequiresRootReconciliationForTesting)
-        f.model.startIndexing(sources: [source])
-        f.model.startIndexing(sources: [source])
-        try await wait { f.model.startupSubmissionCountForTesting == 2 && f.model.progress.phase == .complete
+        f.model.startReadyStartupForTesting(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { f.model.currentStartupSubmissionsForTesting.count == 2 && f.model.progress.phase == .complete
             && f.model.safetyVerificationActiveForTesting }
         XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
         let reconciled = try await f.database.sessions(limit: 100)
@@ -6540,10 +6748,10 @@ final class AppReviewFollowupTests: XCTestCase {
         let source = ClaudeCodeSource(roots: [f.root])
         let resumed = await f.model.startWatchingForTesting([source])
         XCTAssertTrue(resumed)
-        f.model.startIndexing(sources: [source])
-        f.model.startIndexing(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
         try await wait { f.model.progress.phase == .complete }
-        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
         XCTAssertEqual(f.model.progress.activity, .rootRecovery)
         XCTAssertEqual(f.model.activeWatcherCountForTesting, 1)
     }
@@ -6603,7 +6811,7 @@ final class AppReviewFollowupTests: XCTestCase {
             if replacesConfiguration {
                 try await wait { f.model.watcherReadyForTesting && f.model.progress.phase == .complete }
                 XCTAssertEqual(f.model.activeWatcherCountForTesting, 1)
-                XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+                XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
                 XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
             } else {
                 XCTAssertFalse(f.model.watcherReadyForTesting)
@@ -6665,10 +6873,10 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(model.watcherGenerationForTesting, generation)
         XCTAssertTrue(model.watcherReadyForTesting)
         XCTAssertTrue(model.startupReconciliationPathsForTesting.contains(TraceFileIO.canonicalPath(f.root.path).path))
-        model.startIndexing(sources: [source])
-        model.startIndexing(sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
+        model.startReadyStartupForTesting(sources: [source])
         try await wait { model.progress.phase == .complete }
-        XCTAssertEqual(model.startupSubmissionCountForTesting, 1)
+        XCTAssertEqual(model.currentStartupSubmissionsForTesting.count, 1)
         XCTAssertEqual(activities, [.rootRecovery])
     }
 
@@ -6743,7 +6951,7 @@ final class AppReviewFollowupTests: XCTestCase {
             f.model.schedulerProgressGateForTesting = nil
             await progressGate.open()
             try await wait { f.model.sourceReloadRecovery == .normal && f.model.progress.phase == .complete }
-            XCTAssertEqual(f.model.startupSubmissionCountForTesting, 1)
+            XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 1)
         }
     }
 
@@ -6762,7 +6970,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let started = await f.model.startWatchingForTesting([source])
         XCTAssertTrue(started)
         XCTAssertTrue(f.model.watcherRequiresRootReconciliationForTesting)
-        f.model.startIndexing(sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
         try await wait { f.model.progress.phase == .complete }
         let current = try await f.database.sessions(limit: 100)
         XCTAssertTrue(current.contains { $0.sourcePath.hasPrefix(added.root.path) })
@@ -6787,7 +6995,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.sourceReloadRecovery, .normal)
         XCTAssertFalse(f.model.watcherReadyForTesting)
         XCTAssertFalse(f.model.canRebuildIndex)
-        XCTAssertEqual(f.model.startupSubmissionCountForTesting, 0)
+        XCTAssertEqual(f.model.currentStartupSubmissionsForTesting.count, 0)
     }
 
     func testRebuildAvailabilityTracksInstallationSettingsRetirementAndFailure() async throws {
