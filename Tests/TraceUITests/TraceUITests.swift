@@ -4410,11 +4410,10 @@ final class TraceUITests: XCTestCase {
     @discardableResult
     private func waitForStartupHandoff(at path: URL, phase: String, excluding oldID: UUID? = nil,
                                        timeout: TimeInterval = 15) throws -> StartupHandoffReceipt {
-        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            self.startupHandoffReceipts(at: path).contains { $0.phase == phase && $0.handoffID != oldID }
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
-        return try XCTUnwrap(startupHandoffReceipts(at: path).first { $0.phase == phase && $0.handoffID != oldID })
+        let receipt = poll(timeout: timeout) {
+            startupHandoffReceipts(at: path).first { $0.phase == phase && $0.handoffID != oldID }
+        }
+        return try XCTUnwrap(receipt, "No matching startup receipt before the deadline")
     }
 
     func testWatcherReplacementDuringSubmittedStartupResumesLiveChanges() throws {
@@ -4423,6 +4422,8 @@ final class TraceUITests: XCTestCase {
         let release = directory.appendingPathComponent("startup-settlement-release")
         let receipts = directory.appendingPathComponent("startup-handoff-receipts")
         let activity = directory.appendingPathComponent("settled-startup-activity")
+        let activityHeld = directory.appendingPathComponent("activity-held")
+        let activityRelease = directory.appendingPathComponent("activity-release")
         let requested = directory.appendingPathComponent("requested-startups")
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
         app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
@@ -4432,6 +4433,9 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_RELEASE_PATH"] = release.path
         app.launchEnvironment["TRACE_TEST_STARTUP_HANDOFF_RECEIPTS_PATH"] = receipts.path
         app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activity.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_HOLD_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_HELD_PATH"] = activityHeld.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_RELEASE_PATH"] = activityRelease.path
         app.launchEnvironment["TRACE_TEST_STARTUP_HANDOFF_REQUESTED_PATH"] = requested.path
         app.launch()
         XCTAssertTrue(waitForFile(held, timeout: 15))
@@ -4439,14 +4443,16 @@ final class TraceUITests: XCTestCase {
         XCTAssertEqual(fileLines(in: held), [first.handoffID.uuidString])
         XCTAssertTrue(fileLines(in: activity).isEmpty)
         app.buttons["testRestartStartupWatchers"].click()
-        let queued = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            self.fileLines(in: requested).count == 2
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [queued], timeout: 10), .completed)
+        XCTAssertNotNil(poll(timeout: 10) { fileLines(in: requested).count == 2 ? true : nil })
         try Data().write(to: release)
         let replacement = try waitForStartupHandoff(at: receipts, phase: "settled", excluding: first.handoffID)
         XCTAssertGreaterThan(replacement.watcherGeneration, first.watcherGeneration)
         XCTAssertFalse(startupHandoffReceipts(at: receipts).contains { $0.handoffID == first.handoffID && $0.phase == "settled" })
+        XCTAssertTrue(waitForFile(activityHeld, timeout: 10))
+        XCTAssertEqual(fileLines(in: activityHeld), [replacement.handoffID.uuidString])
+        XCTAssertTrue(fileLines(in: activity).isEmpty)
+        try Data().write(to: activityRelease)
+        XCTAssertNotNil(poll(timeout: 10) { fileLines(in: activity).count == 1 ? true : nil })
         XCTAssertEqual(fileLines(in: activity).count, 1)
         XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
         try addLongSession("After watcher replacement", project: "WatcherResumedProject", directory: directory, count: 1, contentRepeats: 0)
