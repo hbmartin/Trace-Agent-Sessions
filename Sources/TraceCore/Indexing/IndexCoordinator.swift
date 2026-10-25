@@ -479,7 +479,7 @@ public actor IndexCoordinator {
             let oldScope = try await database.storedIndexScope()
             try Task.checkCancellation()
             if rebuild || oldScope != scope {
-                try await database.clearIndex(onCommitted: rebuild ? onRebuildReset : {})
+                try await database.clearIndex(scope: scope, onCommitted: rebuild ? onRebuildReset : {})
                 #if DEBUG
                 if rebuild, let delay = TraceTestHooks.delayMilliseconds(
                     for: "TRACE_TEST_REBUILD_POST_COMMIT_HOLD_MS", cappedAt: 120_000,

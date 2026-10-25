@@ -585,12 +585,14 @@ public actor IndexDatabase {
     }
 
     public func setIndexScope(_ scope: IndexScope) throws {
-        try pool.write { db in
-            try db.execute(
-                sql: "INSERT INTO trace_meta(key, value) VALUES ('index_scope', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                arguments: [String(scope.rawValue)]
-            )
-        }
+        try pool.write { db in try Self.storeIndexScope(scope, in: db) }
+    }
+
+    private static func storeIndexScope(_ scope: IndexScope, in db: Database) throws {
+        try db.execute(
+            sql: "INSERT INTO trace_meta(key, value) VALUES ('index_scope', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            arguments: [String(scope.rawValue)]
+        )
     }
 
     public func eventCheckpoint(volumeID: String) throws -> UInt64? {
@@ -651,7 +653,8 @@ public actor IndexDatabase {
 
     /// The callback runs synchronously at the transaction boundary, even if
     /// checkpointing later fails. It must not wait for another actor.
-    func clearIndex(keepingRoots: Bool = true, onCommitted: @Sendable () -> Void) throws {
+    func clearIndex(keepingRoots: Bool = true, scope: IndexScope? = nil,
+                    onCommitted: @Sendable () -> Void) throws {
         #if DEBUG
         let fault = resetFaultForTesting
         resetFaultForTesting = nil
@@ -668,6 +671,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM fsevents_checkpoint")
                 try Self.markRollupsDirty(db)
                 if !keepingRoots { try db.execute(sql: "DELETE FROM source_root") }
+                if let scope { try Self.storeIndexScope(scope, in: db) }
                 #if DEBUG
                 if fault == .rollback { throw DatabaseError(resultCode: .SQLITE_BUSY) }
                 #endif

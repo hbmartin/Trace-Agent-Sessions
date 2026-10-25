@@ -17,20 +17,24 @@ final class IndexingRegressionTests: XCTestCase {
         let callbacks = OSAllocatedUnfairLock(initialState: 0)
         await database.setResetFaultForTesting(.rollback)
         do {
-            try await database.clearIndex(onCommitted: { callbacks.withLock { $0 += 1 } })
+            try await database.clearIndex(scope: .everything, onCommitted: { callbacks.withLock { $0 += 1 } })
             XCTFail("rollback fault must throw")
         } catch {}
         XCTAssertEqual(callbacks.withLock { $0 }, 0)
         let retained = try await database.statistics()
         XCTAssertEqual(retained.messageCount, 1)
+        let rolledBackScope = try await database.storedIndexScope()
+        XCTAssertEqual(rolledBackScope, .proseOnly)
         await database.setResetFaultForTesting(.checkpoint)
         do {
-            try await database.clearIndex(onCommitted: { callbacks.withLock { $0 += 1 } })
+            try await database.clearIndex(scope: .everything, onCommitted: { callbacks.withLock { $0 += 1 } })
             XCTFail("checkpoint fault must throw")
         } catch {}
         XCTAssertEqual(callbacks.withLock { $0 }, 1)
         let empty = try await database.statistics()
         XCTAssertEqual(empty.messageCount, 0)
+        let committedScope = try await database.storedIndexScope()
+        XCTAssertEqual(committedScope, .everything, "scope and reset must commit together before checkpointing")
         let resets = await database.committedResetCountForTesting
         XCTAssertEqual(resets, 1)
     }
@@ -68,7 +72,7 @@ final class IndexingRegressionTests: XCTestCase {
             await database.setResetFaultForTesting(fault)
             let callbacks = OSAllocatedUnfairLock(initialState: 0)
             let completed = expectation(description: "bounded retry completes")
-            let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+            let scheduler = IndexScheduler(coordinator: coordinator, scope: .everything,
                 progress: { update in if update.phase == .complete { completed.fulfill() } }, clock: clock)
             await scheduler.request(rebuild: true, onRebuildReset: { callbacks.withLock { $0 += 1 } })
             await scheduler.waitUntilIdle()
@@ -80,7 +84,9 @@ final class IndexingRegressionTests: XCTestCase {
             await scheduler.waitUntilIdle()
             XCTAssertEqual(callbacks.withLock { $0 }, 1)
             let resets = await database.committedResetCountForTesting
-            XCTAssertEqual(resets, 1)
+            XCTAssertEqual(resets, 1, "retry cannot reset again because the requested scope was stored after commitment")
+            let storedScope = try await database.storedIndexScope()
+            XCTAssertEqual(storedScope, .everything)
             await scheduler.stop()
             try await clock.checkSuspension()
         }
