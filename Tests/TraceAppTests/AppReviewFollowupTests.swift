@@ -13,6 +13,29 @@ import XCTest
 final class AppReviewFollowupTests: XCTestCase {
     private final class WeakModelReference { weak var value: TraceModel? }
 
+    func testFailedAttachmentDoesNotReportCommittedRebuildAsCancelled() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        let delivery = ReviewReadGate(), held = Task { await delivery.wait() }
+        defer { held.cancel(); Task { await delivery.open() } }
+        f.model.rebuildResetDeliveryGateForTesting = held
+        f.model.rebuildAcknowledgmentGateForTesting = held
+        f.model.rebuildIndex()
+        try await wait { f.model.rebuildResetDeliveryWaitingForTesting && f.model.rebuildAcknowledgmentWaitingForTesting }
+        f.model.failSourceConfigurationForTesting = true
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.pendingDatabaseForTesting == nil && f.model.sourceReloadRecovery.error != nil }
+        let error = try XCTUnwrap(f.model.sourceReloadRecovery.error)
+        XCTAssertFalse(error.contains("queued index rebuild was cancelled"),
+            "a reset committed before replacement cannot be reported as unfulfilled intent cancelled by failure")
+        XCTAssertFalse(f.model.pendingRebuildForTesting)
+        let resets = await f.database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+        await delivery.open()
+        try await wait { !f.model.rebuildResetDeliveryWaitingForTesting && !f.model.rebuildAcknowledgmentWaitingForTesting }
+        XCTAssertEqual(f.model.sourceReloadRecovery.error, error)
+    }
+
     func testDelayedResetCallbackCannotConsumeNewerManualRequest() async throws {
         let f = try await fixture(count: 2)
         f.model.settings.onboardingComplete = true

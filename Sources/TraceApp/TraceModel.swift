@@ -2055,7 +2055,7 @@ final class TraceModel: ObservableObject {
                                 error: String? = nil) {
         guard pendingAttachmentIsCurrent(pending) else { return }
         let error = error.map { message in
-            pending.intent == .sourceReload && pendingRebuild
+            pending.intent == .sourceReload && pendingRebuild && rebuildRequest?.reset.isCommitted != true
                 ? message + "\nThe queued index rebuild was cancelled. Retry resumes updates without rebuilding. Choose Rebuild Index again to rebuild."
                 : message
         }
