@@ -3750,7 +3750,8 @@ final class TraceUITests: XCTestCase {
     }
 
     private func launchWithFailedSourceReload(settingsOnlyControl: Bool = false,
-                                             holdMetadataOnRetry: Bool = false) throws -> (XCUIApplication, URL) {
+                                             holdMetadataOnRetry: Bool = false,
+                                             restartControl: Bool = false) throws -> (XCUIApplication, URL) {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let additional = directory.appendingPathComponent("AdditionalClaude")
         try FileManager.default.createDirectory(at: additional, withIntermediateDirectories: true)
@@ -3762,6 +3763,11 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = completed.path
         if settingsOnlyControl {
             app.launchEnvironment["TRACE_TEST_SETTINGS_ONLY_ONBOARDING_CONTROL"] = "1"
+        }
+        if restartControl {
+            app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+            app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_CONTROL"] = "1"
+            app.launchEnvironment["TRACE_TEST_WATCHER_RESTART_COMPLETED_PATH"] = directory.appendingPathComponent("watcher-restart-complete").path
         }
         if holdMetadataOnRetry {
             let release = directory.appendingPathComponent("release-retry-metadata")
@@ -4512,6 +4518,14 @@ final class TraceUITests: XCTestCase {
     }
 
     func testStartupClaimedRebuildSurvivesOnboardingDeferral() throws {
+        try assertStartupClaimedRebuildOnboardingDeferral(restartWatchers: false)
+    }
+
+    func testStartupClaimedRebuildSurvivesWatcherRestartDuringOnboardingDeferral() throws {
+        try assertStartupClaimedRebuildOnboardingDeferral(restartWatchers: true)
+    }
+
+    private func assertStartupClaimedRebuildOnboardingDeferral(restartWatchers: Bool) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let startup = directory.appendingPathComponent("startup-ready")
         let startupRelease = directory.appendingPathComponent("startup-release")
@@ -4541,11 +4555,14 @@ final class TraceUITests: XCTestCase {
             object: app.staticTexts["sessionTotalCount"])
         XCTAssertEqual(XCTWaiter.wait(for: [zeroCount], timeout: 5), .completed)
         app.buttons["testToggleOnboardingOnly"].click()
-        app.buttons["testRestartStartupWatchers"].click()
         let spinner = app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch
-        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        if restartWatchers {
+            app.buttons["testRestartStartupWatchers"].click()
+            XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: activity.path))
         try Data().write(to: handoffRelease)
+        XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
         try Data().write(to: explicitRelease)
         app.buttons["testResumeStartup"].click()
         XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 15))
@@ -4878,6 +4895,26 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
         XCTAssertEqual(main.buttons["indexProgress"].label, "Updates paused")
         attach(app, name: "retry-settings-only-observation")
+    }
+
+    func testWatcherOnlyOnboardingDeferralKeepsFailedSourceRetryVisible() throws {
+        let (app, directory) = try launchWithFailedSourceReload(settingsOnlyControl: true, restartControl: true)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Trace Settings"].waitForNonExistence(timeout: 5))
+        let main = app.windows["Trace"]
+        let retry = main.buttons["retrySourceConfiguration"]
+        let toggle = main.buttons["testToggleOnboardingOnly"]
+        toggle.click()
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: false, timeout: 5))
+        main.buttons["testRestartStartupWatchers"].click()
+        XCTAssertTrue(waitForFile(directory.appendingPathComponent("watcher-restart-complete"), timeout: 10))
+        XCTAssertTrue(retry.exists)
+        XCTAssertEqual(main.buttons["indexProgress"].label, "Updates paused")
+        toggle.click()
+        XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+        retry.click()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 15))
+        attach(app, name: "watcher-deferral-preserves-source-retry")
     }
 
     func testSourceReloadRetryDetailsDescribeResumingAndPreserveDiagnostics() throws {
