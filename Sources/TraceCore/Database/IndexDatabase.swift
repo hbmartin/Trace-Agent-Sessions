@@ -639,6 +639,25 @@ public actor IndexDatabase {
     }
 
     public func clearIndex(keepingRoots: Bool = true) throws {
+        try clearIndex(keepingRoots: keepingRoots, onCommitted: {})
+    }
+
+    #if DEBUG
+    var resetFaultForTesting: ResetFaultForTesting?
+    enum ResetFaultForTesting { case rollback, checkpoint }
+    private(set) var committedResetCountForTesting = 0
+    func setResetFaultForTesting(_ fault: ResetFaultForTesting?) { resetFaultForTesting = fault }
+    #endif
+
+    /// The callback runs synchronously at the transaction boundary, even if
+    /// checkpointing later fails. It must not wait for another actor.
+    func clearIndex(keepingRoots: Bool = true, onCommitted: @Sendable () -> Void) throws {
+        #if DEBUG
+        let fault = resetFaultForTesting
+        resetFaultForTesting = nil
+        let committed = OSAllocatedUnfairLock(initialState: false)
+        defer { if committed.withLock({ $0 }) { committedResetCountForTesting += 1 } }
+        #endif
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
                 try db.execute(sql: "DELETE FROM message_fts")
@@ -649,8 +668,18 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM fsevents_checkpoint")
                 try Self.markRollupsDirty(db)
                 if !keepingRoots { try db.execute(sql: "DELETE FROM source_root") }
+                #if DEBUG
+                if fault == .rollback { throw DatabaseError(resultCode: .SQLITE_BUSY) }
+                #endif
                 return .commit
             }
+            #if DEBUG
+            committed.withLock { $0 = true }
+            #endif
+            onCommitted()
+            #if DEBUG
+            if fault == .checkpoint { throw DatabaseError(resultCode: .SQLITE_BUSY) }
+            #endif
             try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
         }
     }

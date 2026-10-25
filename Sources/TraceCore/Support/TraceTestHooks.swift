@@ -44,13 +44,18 @@ public enum TraceTestHooks {
             try await Task.sleep(for: .milliseconds(timeoutMilliseconds))
             return
         }
+        try await waitForRelease(path: path, timeoutMilliseconds: timeoutMilliseconds)
+    }
+
+    /// Resolved paths also support invocation-owned controls in unit processes.
+    public static func waitForRelease(path: String, timeoutMilliseconds: Int) async throws {
         let deadline = ContinuousClock.now.advanced(by: .milliseconds(timeoutMilliseconds))
         while !FileManager.default.fileExists(atPath: path) {
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else {
                 throw NSError(
                     domain: "TraceTestHooks", code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for \(pathKey)"]
+                    userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for release file"]
                 )
             }
             try await Task.sleep(for: .milliseconds(25))

@@ -4611,6 +4611,56 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(spinner.waitForNonExistence(timeout: 10))
     }
 
+    func testAcknowledgedRebuildResetsAfterSourceReplacement() throws {
+        try assertRebuildResetAcrossSourceReplacement(afterCommit: false)
+    }
+
+    func testCommittedRebuildIsNotRepeatedAfterSourceReplacement() throws {
+        try assertRebuildResetAcrossSourceReplacement(afterCommit: true)
+    }
+
+    private func assertRebuildResetAcrossSourceReplacement(afterCommit: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let entered = directory.appendingPathComponent("reset-held")
+        let release = directory.appendingPathComponent("reset-release")
+        let accepted = directory.appendingPathComponent("reset-accepted")
+        let committed = directory.appendingPathComponent("reset-commits")
+        let complete = directory.appendingPathComponent("reset-complete")
+        let retired = directory.appendingPathComponent("replacement-retired-old-scheduler")
+        let resumeReload = directory.appendingPathComponent("replacement-resume")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_ACCEPTED_PATH"] = accepted.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_INDEX_PASS_COMPLETED_PATH"] = complete.path
+        app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_PREPARATION_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_PREPARATION_ENTERED_PATH"] = retired.path
+        app.launchEnvironment["TRACE_TEST_SOURCE_RELOAD_PREPARATION_RELEASE_PATH"] = resumeReload.path
+        let prefix = afterCommit ? "TRACE_TEST_REBUILD_POST_COMMIT" : "TRACE_TEST_REBUILD_PREPARATION"
+        app.launchEnvironment[prefix + "_HOLD_MS"] = "120000"
+        app.launchEnvironment[prefix + "_STARTED_PATH"] = entered.path
+        app.launchEnvironment[prefix + "_RELEASE_PATH"] = release.path
+        app.launch()
+        XCTAssertTrue(waitForFile(complete, timeout: 15))
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
+        try FileManager.default.removeItem(at: complete)
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertTrue(waitForFile(accepted, timeout: 10))
+        XCTAssertTrue(waitForFile(entered, timeout: 10))
+        XCTAssertEqual(fileLines(in: committed).count, afterCommit ? 1 : 0)
+        app.buttons["testReloadSidebarSources"].click()
+        XCTAssertTrue(waitForFile(retired, timeout: 10))
+        // The old invocation is cancelled by replacement. The release applies
+        // only if the replacement still owes a reset and reaches preparation.
+        try Data().write(to: release)
+        try Data().write(to: resumeReload)
+        XCTAssertTrue(waitForFile(complete, timeout: 15))
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(fileLines(in: committed).count, 1)
+        XCTAssertTrue(app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch.waitForNonExistence(timeout: 5))
+        attach(app, name: afterCommit ? "committed-reset-not-repeated" : "acknowledged-reset-preserved")
+    }
+
     func testRebuildShowsPreparationBeforeClearingIndex() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let entered = directory.appendingPathComponent("rebuild-preparation-started")
@@ -4907,7 +4957,17 @@ final class TraceUITests: XCTestCase {
         toggle.click()
         XCTAssertTrue(retry.wait(for: \.isEnabled, toEqual: false, timeout: 5))
         main.buttons["testRestartStartupWatchers"].click()
-        XCTAssertTrue(waitForFile(directory.appendingPathComponent("watcher-restart-complete"), timeout: 10))
+        let outcomes = directory.appendingPathComponent("watcher-restart-complete")
+        let deferred = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.fileLines(in: outcomes).contains { line in
+                guard let data = line.data(using: .utf8),
+                      let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+                return value["phase"] as? String == "deferred" && value["invocation"] != nil
+                    && value["watcherAttempt"] != nil
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [deferred], timeout: 10), .completed,
+            "restart must commit onboarding deferral; a superseded/aborted outcome cannot satisfy this wait")
         XCTAssertTrue(retry.exists)
         XCTAssertEqual(main.buttons["indexProgress"].label, "Updates paused")
         toggle.click()

@@ -2,11 +2,90 @@ import Clocks
 import CustomDump
 import CoreServices
 import GRDB
+import os
 import XCTest
 @testable import TraceCore
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testResetReceiptDistinguishesRollbackFromCheckpointFailure() async throws {
+        let root = try directory()
+        try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let callbacks = OSAllocatedUnfairLock(initialState: 0)
+        await database.setResetFaultForTesting(.rollback)
+        do {
+            try await database.clearIndex(onCommitted: { callbacks.withLock { $0 += 1 } })
+            XCTFail("rollback fault must throw")
+        } catch {}
+        XCTAssertEqual(callbacks.withLock { $0 }, 0)
+        let retained = try await database.statistics()
+        XCTAssertEqual(retained.messageCount, 1)
+        await database.setResetFaultForTesting(.checkpoint)
+        do {
+            try await database.clearIndex(onCommitted: { callbacks.withLock { $0 += 1 } })
+            XCTFail("checkpoint fault must throw")
+        } catch {}
+        XCTAssertEqual(callbacks.withLock { $0 }, 1)
+        let empty = try await database.statistics()
+        XCTAssertEqual(empty.messageCount, 0)
+        let resets = await database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+    }
+
+    func testSchedulerCoalescedRebuildsNotifyEachReceiptOnce() async throws {
+        let root = try directory()
+        try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let latch = BatchLatch(), held = Task { await latch.pauseOnce() }
+        await coordinator.gatePreparationForTesting(held)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in })
+        await scheduler.request(reconcile: true)
+        try await waitForPreparation(coordinator)
+        let first = OSAllocatedUnfairLock(initialState: 0), second = OSAllocatedUnfairLock(initialState: 0)
+        await scheduler.request(rebuild: true, onRebuildReset: { first.withLock { $0 += 1 } })
+        await scheduler.request(rebuild: true, onRebuildReset: { second.withLock { $0 += 1 } })
+        await latch.release()
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(first.withLock { $0 }, 1)
+        XCTAssertEqual(second.withLock { $0 }, 1)
+        let resets = await database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+        await scheduler.stop()
+    }
+
+    func testBoundedRetryRetainsOnlyUncommittedReset() async throws {
+        for fault in [IndexDatabase.ResetFaultForTesting.rollback, .checkpoint] {
+            let root = try directory()
+            try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
+            let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let clock = TestClock<Duration>()
+            let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])], clock: clock)
+            await coordinator.indexAll(scope: .proseOnly)
+            await database.setResetFaultForTesting(fault)
+            let callbacks = OSAllocatedUnfairLock(initialState: 0)
+            let completed = expectation(description: "bounded retry completes")
+            let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+                progress: { update in if update.phase == .complete { completed.fulfill() } }, clock: clock)
+            await scheduler.request(rebuild: true, onRebuildReset: { callbacks.withLock { $0 += 1 } })
+            await scheduler.waitUntilIdle()
+            XCTAssertEqual(callbacks.withLock { $0 }, fault == .rollback ? 0 : 1)
+            await clock.advance(by: .milliseconds(4_999))
+            XCTAssertEqual(callbacks.withLock { $0 }, fault == .rollback ? 0 : 1)
+            await clock.advance(by: .milliseconds(1))
+            await fulfillment(of: [completed], timeout: 5)
+            await scheduler.waitUntilIdle()
+            XCTAssertEqual(callbacks.withLock { $0 }, 1)
+            let resets = await database.committedResetCountForTesting
+            XCTAssertEqual(resets, 1)
+            await scheduler.stop()
+            try await clock.checkSuspension()
+        }
+    }
+
     private func waitForPreparation(_ coordinator: IndexCoordinator) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !(await coordinator.preparationWaitingForTesting) {
