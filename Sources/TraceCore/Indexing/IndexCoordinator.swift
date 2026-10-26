@@ -148,6 +148,9 @@ public actor IndexCoordinator {
     #if DEBUG
     private var preparationGateForTesting: Task<Void, Never>?
     private(set) var preparationWaitingForTesting = false
+    private var postResetGateForTesting: Task<Void, Never>?
+    private(set) var postResetWaitingForTesting = false
+    func gatePostResetForTesting(_ gate: Task<Void, Never>?) { postResetGateForTesting = gate }
     func gatePreparationForTesting(_ gate: Task<Void, Never>?) { preparationGateForTesting = gate }
     #endif
     private let sources: [any SessionSource]
@@ -377,11 +380,19 @@ public actor IndexCoordinator {
                                activity: IndexActivity? = nil,
                                satisfiesSafetyReconciliation: Bool? = nil,
                                progress: @escaping @Sendable (IndexProgress) async -> Void = { _ in }) async -> IndexProgress {
+        await indexAllResult(scope: scope, rebuild: rebuild, activity: activity,
+            satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, onRebuildReset: {}, progress: progress)
+    }
+
+    func indexAllResult(scope: IndexScope, rebuild: Bool, activity: IndexActivity?,
+                        satisfiesSafetyReconciliation: Bool?,
+                        onRebuildReset: @escaping @Sendable () -> Void,
+                        progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         await gate.acquire()
         let activity = activity ?? (rebuild ? .rebuild : .initialBuild)
         let result = await run(
             scope: scope, paths: nil, reconciliationPaths: [], rebuild: rebuild,
-            activity: activity,
+            onRebuildReset: onRebuildReset, activity: activity,
             satisfiesSafetyReconciliation: satisfiesSafetyReconciliation
                 ?? activity.satisfiesSafetyReconciliation,
             progress: progress
@@ -435,7 +446,7 @@ public actor IndexCoordinator {
     }
 
     private func run(scope: IndexScope, paths: Set<String>?, reconciliationPaths: Set<String>,
-                     rebuild: Bool, activity: IndexActivity,
+                     rebuild: Bool, onRebuildReset: @escaping @Sendable () -> Void = {}, activity: IndexActivity,
                      satisfiesSafetyReconciliation: Bool,
                      progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         var status = IndexProgress(phase: .discovering)
@@ -468,7 +479,20 @@ public actor IndexCoordinator {
             let oldScope = try await database.storedIndexScope()
             try Task.checkCancellation()
             if rebuild || oldScope != scope {
-                try await database.clearIndex()
+                try await database.clearIndex(scope: scope, onCommitted: rebuild ? onRebuildReset : {})
+                #if DEBUG
+                if rebuild, let delay = TraceTestHooks.delayMilliseconds(
+                    for: "TRACE_TEST_REBUILD_POST_COMMIT_HOLD_MS", cappedAt: 120_000,
+                    marker: .touch(pathKey: "TRACE_TEST_REBUILD_POST_COMMIT_STARTED_PATH")) {
+                    try await TraceTestHooks.waitForRelease(pathKey: "TRACE_TEST_REBUILD_POST_COMMIT_RELEASE_PATH", timeoutMilliseconds: delay)
+                }
+                if let gate = postResetGateForTesting {
+                    postResetGateForTesting = nil
+                    postResetWaitingForTesting = true
+                    await gate.value
+                    postResetWaitingForTesting = false
+                }
+                #endif
                 deferredCodexSessionIDs = [:]
                 codexWarnings = codexWarnings.filter { $0.key.kind != .deferredLegacy }
                 status.metadataWarning = codexWarningMessage()

@@ -36,3 +36,9 @@ struct ExternalDiscoverySource: SessionSource {
         throw NSError(domain: "ExternalDiscoverySource", code: 1)
     }
 }
+
+// Keep both scheduler entry points available without @testable imports.
+func compileRebuildResetCallbackClient(_ scheduler: IndexScheduler) async {
+    await scheduler.request(rebuild: true)
+    await scheduler.request(rebuild: true, onRebuildReset: {})
+}
