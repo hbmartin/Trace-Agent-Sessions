@@ -648,6 +648,7 @@ public actor IndexDatabase {
     var resetFaultForTesting: ResetFaultForTesting?
     enum ResetFaultForTesting { case rollback, checkpoint }
     private(set) var committedResetCountForTesting = 0
+    private(set) var resetAttemptCountForTesting = 0
     func setResetFaultForTesting(_ fault: ResetFaultForTesting?) { resetFaultForTesting = fault }
     #endif
 
@@ -656,6 +657,7 @@ public actor IndexDatabase {
     func clearIndex(keepingRoots: Bool = true, scope: IndexScope? = nil,
                     onCommitted: @Sendable () -> Void) throws {
         #if DEBUG
+        resetAttemptCountForTesting += 1
         let fault = resetFaultForTesting
         resetFaultForTesting = nil
         let committed = OSAllocatedUnfairLock(initialState: false)

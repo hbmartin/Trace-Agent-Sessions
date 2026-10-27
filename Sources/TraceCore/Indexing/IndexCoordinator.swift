@@ -184,6 +184,10 @@ public actor IndexCoordinator {
     private var cachedSidecarMapping: (directories: [String], mapping: CodexMetadataSidecarMapping)?
     private var codexNameLoadCounts: [String: Int] = [:]
     private var codexWarnings: [CodexWarningKey: Set<String>] = [:]
+    #if DEBUG
+    private var resetFailuresForUITesting = TraceTestHooks.isUITesting
+        ? max(0, Int(TraceTestHooks.environment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] ?? "0") ?? 0) : 0
+    #endif
     private var deferredCodexSessionIDs: [String: Set<IndexDatabase.CodexSessionIdentity>] = [:]
     #if DEBUG
     func codexWriteWarningsForTesting() -> (file: Int, root: Int) {
@@ -479,7 +483,28 @@ public actor IndexCoordinator {
             let oldScope = try await database.storedIndexScope()
             try Task.checkCancellation()
             if rebuild || oldScope != scope {
-                try await database.clearIndex(scope: scope, onCommitted: rebuild ? onRebuildReset : {})
+                #if DEBUG
+                if rebuild, resetFailuresForUITesting > 0 {
+                    resetFailuresForUITesting -= 1
+                    await database.setResetFaultForTesting(.rollback)
+                    TraceTestHooks.appendLine(status.passID.uuidString, pathKey: "TRACE_TEST_REBUILD_RESET_FAILURE_ATTEMPT_PATH")
+                }
+                #endif
+                let committed = OSAllocatedUnfairLock(initialState: false)
+                var resetError: (any Error)?
+                do {
+                    try await database.clearIndex(scope: scope, onCommitted: {
+                        committed.withLock { $0 = true }
+                        if rebuild { onRebuildReset() }
+                    })
+                } catch { resetError = error }
+                if committed.withLock({ $0 }) {
+                    deferredCodexSessionIDs = [:]
+                    codexWarnings = codexWarnings.filter { $0.key.kind != .deferredLegacy }
+                    status.metadataWarning = codexWarningMessage()
+                    await mutations.markChanged()
+                }
+                if let resetError { throw resetError }
                 #if DEBUG
                 if rebuild, let delay = TraceTestHooks.delayMilliseconds(
                     for: "TRACE_TEST_REBUILD_POST_COMMIT_HOLD_MS", cappedAt: 120_000,
@@ -493,12 +518,9 @@ public actor IndexCoordinator {
                     postResetWaitingForTesting = false
                 }
                 #endif
-                deferredCodexSessionIDs = [:]
-                codexWarnings = codexWarnings.filter { $0.key.kind != .deferredLegacy }
-                status.metadataWarning = codexWarningMessage()
-                await mutations.markChanged()
+            } else {
+                try await database.setIndexScope(scope)
             }
-            try await database.setIndexScope(scope)
             status.mutationRevision = await mutations.version()
             let scopeResetDelay = (oldScope != scope || rebuild) ? TraceTestHooks.delayMilliseconds(
                 for: "TRACE_TEST_SCOPE_RESET_HOLD_MS", cappedAt: 30_000,

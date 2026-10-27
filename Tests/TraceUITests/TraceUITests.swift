@@ -4517,6 +4517,51 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "pending-rebuild-after-overlapping-startup-onboarding")
     }
 
+    func testExhaustedResetResumesStartupAndRecoversOnLiveChange() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let startup = directory.appendingPathComponent("exhausted-startup-ready")
+        let release = directory.appendingPathComponent("exhausted-startup-release")
+        let failures = directory.appendingPathComponent("exhausted-reset-failures")
+        let deferred = directory.appendingPathComponent("exhausted-reset-deferred")
+        let committed = directory.appendingPathComponent("exhausted-reset-committed")
+        let activity = directory.appendingPathComponent("exhausted-startup-activity")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_DELAY_MS"] = "120000"
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_PATH"] = startup.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_FINALIZATION_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "2"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_ATTEMPT_PATH"] = failures.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_STARTUP_ACTIVITY_AUDIT_PATH"] = activity.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(waitForFile(startup, timeout: 15))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 10) { self.fileLines(in: failures).count == 1 ? true : nil })
+        try Data().write(to: release)
+        XCTAssertTrue(waitForFile(deferred, timeout: 15))
+        XCTAssertNotNil(poll(timeout: 15) { self.fileLines(in: activity).count == 1 ? true : nil })
+        XCTAssertEqual(fileLines(in: failures).count, 2)
+        XCTAssertEqual(fileLines(in: deferred).count, 1)
+        XCTAssertTrue(fileLines(in: committed).isEmpty)
+        let pending = app.staticTexts["indexProgressText"]
+        XCTAssertNotNil(poll(timeout: 10) { (pending.value as? String ?? pending.label) == "Rebuild pending" ? true : nil })
+        XCTAssertFalse(app.progressIndicators["rebuildPreparationProgress"].exists)
+        XCTAssertFalse(app.progressIndicators["indexBusyProgress"].exists)
+        app.buttons["indexProgress"].click()
+        let details = app.staticTexts["indexProgressDetails"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertTrue((details.value as? String ?? details.label).contains("The rebuild has not completed. Live updates continue."))
+        app.typeKey(.escape, modifierFlags: [])
+        try addLongSession("After exhausted reset", project: "ExhaustedResetRecovered", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 15) { self.fileLines(in: committed).count == 1 ? true : nil })
+        XCTAssertTrue(app.staticTexts["ExhaustedResetRecovered"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertEqual(fileLines(in: deferred).count, 1)
+        attach(app, name: "exhausted-rebuild-live-recovery")
+    }
+
     func testStartupClaimedRebuildSurvivesOnboardingDeferral() throws {
         try assertStartupClaimedRebuildOnboardingDeferral(restartWatchers: false)
     }

@@ -41,4 +41,10 @@ struct ExternalDiscoverySource: SessionSource {
 func compileRebuildResetCallbackClient(_ scheduler: IndexScheduler) async {
     await scheduler.request(rebuild: true)
     await scheduler.request(rebuild: true, onRebuildReset: {})
+    await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: {}, automaticallyRetryReset: false)
+}
+
+func compileResolvedReleaseFunctionReference() {
+    let wait: @Sendable (String, Int) async throws -> Void = TraceTestHooks.waitForRelease(path:timeoutMilliseconds:)
+    _ = wait
 }

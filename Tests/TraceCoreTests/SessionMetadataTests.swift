@@ -982,6 +982,39 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertTrue(update.deferredSessionIDs.intersection(after.existingSessionIDs).isEmpty)
     }
 
+    #if DEBUG
+    func testCommittedResetClearsDeferredMetadataEvenWhenCheckpointFails() async throws {
+        let root = try directory(), sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let rollout = sessions.appendingPathComponent("rollout-reset.jsonl")
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try write(codexRollout(id: "old-session"), to: rollout)
+        try write([["id": "old-session", "thread_name": "Old title"]], to: sidecar)
+        let url = root.appendingPathComponent("trace.sqlite")
+        let database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [CodexSource(root: sessions)])
+        await coordinator.indexAll(scope: .proseOnly)
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in try db.execute(sql: "UPDATE session SET codex_name_origin=NULL, codex_applied_name=NULL") }
+        try write([["id": "old-session", "thread_name": "Changed title"]], to: sidecar)
+        try Data("broken".utf8).write(to: root.appendingPathComponent("state_99.sqlite"))
+        let deferred = await coordinator.refreshResult(paths: [sidecar.path], scope: .proseOnly)
+        XCTAssertTrue(deferred.metadataWarning?.contains("1 legacy Codex title rename(s) deferred") == true)
+        await database.setResetFaultForTesting(.checkpoint)
+        let failed = await coordinator.indexAllResult(scope: .proseOnly, rebuild: true)
+        XCTAssertEqual(failed.phase, .failed)
+        XCTAssertTrue(failed.indexChanged)
+        XCTAssertGreaterThan(failed.mutationRevision, 0)
+        XCTAssertFalse(failed.metadataWarning?.contains("legacy Codex title rename(s) deferred") == true)
+        let empty = try await database.statistics()
+        XCTAssertEqual(empty.sessionCount, 0)
+        let retried = await coordinator.indexAllResult(scope: .proseOnly)
+        XCTAssertEqual(retried.phase, .complete)
+        let resets = await database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+    }
+    #endif
+
     func testDirectoryCreationDoesNotReloadCodexNameCache() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")
