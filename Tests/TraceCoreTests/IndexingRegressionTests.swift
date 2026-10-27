@@ -92,6 +92,157 @@ final class IndexingRegressionTests: XCTestCase {
         }
     }
 
+    func testLifecycleResetReturnsDebtOnceAndLaterEnrollmentHasNoTimerRetry() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>()
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])], clock: clock)
+        let deferred = OSAllocatedUnfairLock(initialState: 0), committed = OSAllocatedUnfairLock(initialState: 0)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock)
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true, onRebuildReset: { committed.withLock { $0 += 1 } },
+            onRebuildDeferred: { deferred.withLock { $0 += 1 } })
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(deferred.withLock { $0 }, 0)
+        await database.setResetFaultForTesting(.rollback)
+        await clock.advance(by: .seconds(5))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while deferred.withLock({ $0 }) == 0 {
+            guard ContinuousClock.now < deadline else { throw BatchLatchError.timedOut }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(deferred.withLock { $0 }, 1)
+        await scheduler.request(reconcile: true)
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(committed.withLock { $0 }, 0, "returned debt cannot be reactivated by ordinary scan work")
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true, onRebuildReset: { committed.withLock { $0 += 1 } },
+            onRebuildDeferred: { deferred.withLock { $0 += 1 } }, automaticallyRetryReset: false)
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(deferred.withLock { $0 }, 2)
+        await clock.advance(by: .seconds(10))
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(committed.withLock { $0 }, 0)
+        await scheduler.request(rebuild: true, onRebuildReset: { committed.withLock { $0 += 1 } },
+            onRebuildDeferred: { deferred.withLock { $0 += 1 } }, automaticallyRetryReset: false)
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(committed.withLock { $0 }, 1)
+        XCTAssertEqual(deferred.withLock { $0 }, 2)
+        await scheduler.stop()
+        try await clock.checkSuspension()
+    }
+
+    func testMixedLegacyAndLifecycleResetOwnershipSurvivesExhaustion() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>()
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])], clock: clock)
+        let deferred = OSAllocatedUnfairLock(initialState: 0), lifecycle = OSAllocatedUnfairLock(initialState: 0)
+        let legacy = OSAllocatedUnfairLock(initialState: 0)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock)
+        let gate = BatchLatch(), held = Task { await gate.pauseOnce() }
+        await coordinator.gatePreparationForTesting(held)
+        await scheduler.request(reconcile: true)
+        try await waitForPreparation(coordinator)
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true, onRebuildReset: { lifecycle.withLock { $0 += 1 } },
+            onRebuildDeferred: { deferred.withLock { $0 += 1 } }, automaticallyRetryReset: false)
+        await scheduler.request(rebuild: true, onRebuildReset: { legacy.withLock { $0 += 1 } })
+        await gate.release()
+        await scheduler.waitUntilIdle()
+        await database.setResetFaultForTesting(.rollback)
+        await clock.advance(by: .seconds(5))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while deferred.withLock({ $0 }) == 0 {
+            guard ContinuousClock.now < deadline else { throw BatchLatchError.timedOut }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(deferred.withLock { $0 }, 1)
+        await scheduler.request(reconcile: true)
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(lifecycle.withLock { $0 }, 0)
+        XCTAssertEqual(legacy.withLock { $0 }, 1)
+        let resets = await database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+        held.cancel()
+        await scheduler.stop()
+        try await clock.checkSuspension()
+    }
+
+    func testFullScanCoalescesWithDelayedResetWithoutEarlyDiscovery() async throws {
+        let root = try directory(), counter = ReadCounter()
+        try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>()
+        let coordinator = IndexCoordinator(database: database,
+            sources: [DiscoveryCountingSource(base: ClaudeCodeSource(roots: [root]), counter: counter)], clock: clock)
+        await coordinator.indexAll(scope: .proseOnly)
+        let before = counter.value
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock)
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true)
+        await scheduler.waitUntilIdle()
+        await scheduler.request(reconcile: true, watermarks: ["source": 44], streamRoots: ["source": [root.path]])
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(counter.value, before, "a fresh full scan must wait for the retained reset deadline")
+        await clock.advance(by: .seconds(5))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while counter.value == before {
+            guard ContinuousClock.now < deadline else { throw BatchLatchError.timedOut }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(counter.value, before + 1)
+        let resets = await database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+        await scheduler.stop()
+        try await clock.checkSuspension()
+    }
+
+    func testUncommittedResetKeepsRebuildActivityAcrossScopeReplacement() async throws {
+        for inFlight in [false, true] {
+            let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+            let activities = OSAllocatedUnfairLock(initialState: [IndexActivity]())
+            let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+                progress: { update in if update.phase == .complete { activities.withLock { $0.append(update.activity) } } })
+            let gate = BatchLatch(), held = Task { await gate.pauseOnce() }
+            if inFlight { await coordinator.gatePreparationForTesting(held) }
+            else { await database.setResetFaultForTesting(.rollback) }
+            await scheduler.request(rebuild: true)
+            if inFlight { try await waitForPreparation(coordinator) }
+            else { await scheduler.waitUntilIdle() }
+            await scheduler.request(reconcile: true, scope: .everything)
+            await gate.release()
+            await scheduler.waitUntilIdle()
+            XCTAssertEqual(activities.withLock { $0.last }, .rebuild)
+            let resets = await database.committedResetCountForTesting
+            XCTAssertEqual(resets, 1)
+            held.cancel()
+            await scheduler.stop()
+        }
+    }
+
+    func testRecoveryFilenameClassificationMatchesDiscoveryWithoutDiskReads() {
+        XCTAssertTrue(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/deleted/session.jsonl"), agent: .claudeCode))
+        XCTAssertTrue(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/deleted/rollout-example.jsonl"), agent: .codex))
+        XCTAssertTrue(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/deleted/chats/session-example.json"), agent: .gemini))
+        XCTAssertFalse(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/watched/diagnostics.json"), agent: .claudeCode))
+        XCTAssertFalse(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/watched/index.sqlite-wal"), agent: .codex))
+        XCTAssertFalse(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/watched/session_index.jsonl"), agent: .codex))
+    }
+
+    func testResolvedReleaseTimeoutNamesItsPathAndLabel() async throws {
+        let path = "/tmp/trace-never-released-\(UUID())"
+        do {
+            try await TraceTestHooks.waitForRelease(path: path, timeoutMilliseconds: 1, label: "owned-test-gate")
+            XCTFail("missing release must time out")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains(path))
+            XCTAssertTrue(error.localizedDescription.contains("owned-test-gate"))
+        }
+    }
+
     private func waitForPreparation(_ coordinator: IndexCoordinator) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !(await coordinator.preparationWaitingForTesting) {
@@ -4877,4 +5028,21 @@ private actor CompletionRecorder {
 private actor SafetyRecorder {
     private(set) var count = 0
     func receive() { count += 1 }
+}
+
+private struct DiscoveryCountingSource: SessionSource {
+    let base: ClaudeCodeSource
+    let counter: ReadCounter
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    func discover() throws -> [DiscoveredSourceFile] { counter.increment(); return try base.discover() }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
+        try base.hydrate(fileURL: fileURL, format: format, locator: locator)
+    }
 }

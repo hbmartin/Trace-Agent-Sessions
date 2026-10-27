@@ -7,24 +7,48 @@ public actor IndexScheduler {
     private typealias CanonicalStreamRoots = [String: Set<TraceFileIO.CanonicalPath>]
 
     private final class ResetReceipt: Sendable {
-        private let committed = OSAllocatedUnfairLock(initialState: false)
-        let callbacks: [@Sendable () -> Void]
-        init(_ callbacks: [@Sendable () -> Void]) { self.callbacks = callbacks }
-        var isCommitted: Bool { committed.withLock { $0 } }
+        private enum Outcome { case pending, committed, deferred }
+        private let outcome = OSAllocatedUnfairLock(initialState: Outcome.pending)
+        let onCommit: @Sendable () -> Void
+        let onDeferred: (@Sendable () -> Void)?
+        let automaticallyRetry: Bool
+        init(onCommit: @escaping @Sendable () -> Void,
+             onDeferred: (@Sendable () -> Void)?, automaticallyRetry: Bool) {
+            self.onCommit = onCommit; self.onDeferred = onDeferred
+            self.automaticallyRetry = automaticallyRetry
+        }
+        var isPending: Bool { outcome.withLock { $0 == .pending } }
+        var isCommitted: Bool { outcome.withLock { $0 == .committed } }
         func commit() {
-            let first = committed.withLock { value in
-                guard !value else { return false }
-                value = true
+            let first = outcome.withLock { value in
+                guard value == .pending else { return false }
+                value = .committed
                 return true
             }
-            if first { for callback in callbacks { callback() } }
+            if first { onCommit() }
+        }
+        func deferToCaller() {
+            guard let onDeferred else { return }
+            let first = outcome.withLock { value in
+                guard value == .pending else { return false }
+                value = .deferred
+                return true
+            }
+            if first { onDeferred() }
         }
     }
 
     private struct Batch: Sendable {
-        let fullScan: Bool
-        let rebuild: Bool
-        let reset: ResetReceipt?
+        // A reset forces a full scan; preserve independently requested scans if
+        // lifecycle-aware reset ownership is returned to the caller.
+        let independentFullScan: Bool
+        let resets: [ResetReceipt]
+        var fullScan: Bool { independentFullScan || !resets.isEmpty }
+        var rebuild: Bool { resets.contains { $0.isPending } }
+        var permitsResetRetry: Bool {
+            let pending = resets.filter { $0.isPending }
+            return pending.isEmpty || pending.contains { $0.automaticallyRetry }
+        }
         let paths: Set<String>
         let reconciliationPaths: Set<String>
         let watermarks: [String: UInt64]
@@ -50,8 +74,7 @@ public actor IndexScheduler {
     private var pendingActivity: IndexActivity?
     private var pendingSatisfiesSafetyReconciliation = false
     private var fullScan = false
-    private var pendingResetCallbacks: [@Sendable () -> Void] = []
-    private var rebuild = false
+    private var pendingResets: [ResetReceipt] = []
     private var worker: Task<Void, Never>?
     private var operation: Task<IndexProgress, Never>?
     private var retryBatch: Batch?
@@ -89,7 +112,8 @@ public actor IndexScheduler {
         enqueue(paths: paths, reconcile: reconcile, reconciliationPaths: reconciliationPaths,
             rebuild: rebuild, scope: scope, activity: activity,
             satisfiesSafetyReconciliation: satisfiesSafetyReconciliation,
-            watermarks: watermarks, streamRoots: streamRoots, onRebuildReset: nil)
+            watermarks: watermarks, streamRoots: streamRoots, onRebuildReset: nil,
+            onRebuildDeferred: nil, automaticallyRetryReset: true)
     }
 
     /// Called once when this request's reset commits, on the database execution
@@ -105,15 +129,42 @@ public actor IndexScheduler {
         enqueue(paths: paths, reconcile: reconcile, reconciliationPaths: reconciliationPaths,
             rebuild: rebuild, scope: scope, activity: activity,
             satisfiesSafetyReconciliation: satisfiesSafetyReconciliation,
-            watermarks: watermarks, streamRoots: streamRoots, onRebuildReset: onRebuildReset)
+            watermarks: watermarks, streamRoots: streamRoots, onRebuildReset: onRebuildReset,
+            onRebuildDeferred: nil, automaticallyRetryReset: true)
+    }
+
+    /// Lifecycle-aware reset ownership returns to the caller when its bounded
+    /// attempts are exhausted. Ordinary scan/path recovery remains scheduled.
+    /// The deferred callback runs on scheduler execution, only after the failed
+    /// operation ends. Stopping/replacing the scheduler does not defer intent.
+    /// Disable automatic reset retry for a later event's single recovery attempt.
+    public func request(paths: Set<String> = [], reconcile: Bool = false,
+                        reconciliationPaths: Set<String> = [],
+                        rebuild: Bool = false, scope: IndexScope? = nil,
+                        activity: IndexActivity? = nil,
+                        satisfiesSafetyReconciliation: Bool? = nil,
+                        watermarks: [String: UInt64] = [:],
+                        streamRoots: [String: Set<String>] = [:],
+                        onRebuildReset: @escaping @Sendable () -> Void,
+                        onRebuildDeferred: @escaping @Sendable () -> Void,
+                        automaticallyRetryReset: Bool = true) {
+        enqueue(paths: paths, reconcile: reconcile, reconciliationPaths: reconciliationPaths,
+            rebuild: rebuild, scope: scope, activity: activity,
+            satisfiesSafetyReconciliation: satisfiesSafetyReconciliation,
+            watermarks: watermarks, streamRoots: streamRoots, onRebuildReset: onRebuildReset,
+            onRebuildDeferred: onRebuildDeferred, automaticallyRetryReset: automaticallyRetryReset)
     }
 
     private func enqueue(paths: Set<String>, reconcile: Bool, reconciliationPaths: Set<String>,
                          rebuild: Bool, scope: IndexScope?, activity: IndexActivity?,
                          satisfiesSafetyReconciliation: Bool?, watermarks: [String: UInt64],
-                         streamRoots: [String: Set<String>], onRebuildReset: (@Sendable () -> Void)?) {
+                         streamRoots: [String: Set<String>], onRebuildReset: (@Sendable () -> Void)?,
+                         onRebuildDeferred: (@Sendable () -> Void)?, automaticallyRetryReset: Bool) {
         guard !stopping else { return }
-        if rebuild, let onRebuildReset { pendingResetCallbacks.append(onRebuildReset) }
+        if rebuild {
+            pendingResets.append(ResetReceipt(onCommit: onRebuildReset ?? {},
+                onDeferred: onRebuildDeferred, automaticallyRetry: automaticallyRetryReset))
+        }
         let scopeChanged = scope.map { $0 != self.scope } ?? false
         if scopeChanged || rebuild {
             if let retryBatch {
@@ -125,10 +176,7 @@ public actor IndexScheduler {
                 mergeCanonicalStreamRoots(dormantBatch.streamRoots)
             }
             for batch in [retryBatch, dormantBatch].compactMap({ $0 }) {
-                if batch.rebuild, let reset = batch.reset, !reset.isCommitted {
-                    pendingResetCallbacks.append { reset.commit() }
-                    self.rebuild = true
-                }
+                carryPendingResets(batch)
             }
             retryBatch = nil
             retryReady = false
@@ -148,14 +196,14 @@ public actor IndexScheduler {
             : (!reconciliationPaths.isEmpty ? .subtreeRecovery : .fileChanges))))
         let requestsPass = reconcile || rebuild || !paths.isEmpty
             || !reconciliationPaths.isEmpty || inferred != .fileChanges || scopeChanged
-        fullScan = fullScan || reconcile || rebuild || scopeChanged
-        self.rebuild = self.rebuild || rebuild
+        fullScan = fullScan || reconcile || scopeChanged
         if requestsPass {
             pendingActivity = IndexActivity.moreSignificant(pendingActivity, inferred)
             pendingSatisfiesSafetyReconciliation = pendingSatisfiesSafetyReconciliation
                 || (satisfiesSafetyReconciliation ?? inferred.satisfiesSafetyReconciliation)
         }
         reactivateDormantIfCovered()
+        coalesceFullScanWithResetRetry()
         if worker == nil { worker = Task { await drain() } }
     }
 
@@ -165,7 +213,7 @@ public actor IndexScheduler {
             // Fresh work always wins over a delayed retry, so a bad source cannot
             // starve later filesystem events.
             let retrying = !hasPendingIndexWork && retryReady && retryBatch != nil
-            if !retrying, !fullScan, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
+            if !retrying, !fullScan, pendingResets.isEmpty, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
                pendingActivity == nil {
                 let watermarks = pendingWatermarks
                 let streamRoots = pendingStreamRoots
@@ -184,9 +232,8 @@ public actor IndexScheduler {
                 batch = retryBatch
             } else {
                 batch = Batch(
-                    fullScan: fullScan,
-                    rebuild: rebuild,
-                    reset: rebuild ? ResetReceipt(pendingResetCallbacks) : nil,
+                    independentFullScan: fullScan,
+                    resets: pendingResets,
                     paths: pendingPaths,
                     reconciliationPaths: pendingReconciliationPaths,
                     watermarks: pendingWatermarks,
@@ -198,8 +245,7 @@ public actor IndexScheduler {
                     generation: configurationGeneration
                 )
                 fullScan = false
-                rebuild = false
-                pendingResetCallbacks.removeAll()
+                pendingResets.removeAll()
                 pendingPaths.removeAll()
                 pendingReconciliationPaths.removeAll()
                 pendingWatermarks.removeAll()
@@ -213,10 +259,10 @@ public actor IndexScheduler {
             let operation = Task {
                 if batch.fullScan {
                     await coordinator.indexAllResult(
-                        scope: batch.scope, rebuild: batch.rebuild && batch.reset?.isCommitted != true,
+                        scope: batch.scope, rebuild: batch.rebuild,
                         activity: batch.activity,
                         satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
-                        onRebuildReset: { batch.reset?.commit() }, progress: forward
+                        onRebuildReset: { for reset in batch.resets { reset.commit() } }, progress: forward
                     )
                 } else if !batch.reconciliationPaths.isEmpty {
                     await coordinator.reconcile(
@@ -238,11 +284,7 @@ public actor IndexScheduler {
             let result = await operation.value
             self.operation = nil
             if batch.generation != configurationGeneration {
-                if !stopping, let reset = batch.reset, !reset.isCommitted {
-                    rebuild = true
-                    fullScan = true
-                    pendingResetCallbacks.append { reset.commit() }
-                }
+                if !stopping { carryPendingResets(batch) }
                 mergeWatermarks(batch.watermarks)
                 mergeCanonicalStreamRoots(batch.streamRoots)
                 continue
@@ -253,7 +295,7 @@ public actor IndexScheduler {
                 if hasFailures {
                     let failedPaths = result.failedPaths.union(result.failedReconciliationPaths)
                     let recovery = Batch(
-                        fullScan: false, rebuild: false, reset: nil,
+                        independentFullScan: false, resets: [],
                         paths: result.failedPaths,
                         reconciliationPaths: result.failedReconciliationPaths,
                         watermarks: affectedWatermarks(
@@ -287,7 +329,7 @@ public actor IndexScheduler {
                     await didSatisfySafetyReconciliation()
                 }
             } else if result.phase == .failed {
-                if batch.retryAttempt == 0 {
+                if batch.retryAttempt == 0 && batch.permitsResetRetry {
                     retainForRetry(batch)
                 } else {
                     if retrying { clearRetry() }
@@ -295,7 +337,8 @@ public actor IndexScheduler {
                 }
             } else if result.phase == .cancelled, !stopping {
                 if retrying { clearRetry() }
-                retainForRetry(batch)
+                if batch.permitsResetRetry { retainForRetry(batch) }
+                else { parkDormant(batch) }
             }
         }
     }
@@ -308,12 +351,12 @@ public actor IndexScheduler {
     }
 
     private var hasPendingWork: Bool {
-        fullScan || !pendingPaths.isEmpty || !pendingReconciliationPaths.isEmpty
+        fullScan || !pendingResets.isEmpty || !pendingPaths.isEmpty || !pendingReconciliationPaths.isEmpty
             || pendingActivity != nil || !pendingWatermarks.isEmpty
     }
 
     private var hasPendingIndexWork: Bool {
-        fullScan || !pendingPaths.isEmpty || !pendingReconciliationPaths.isEmpty
+        fullScan || !pendingResets.isEmpty || !pendingPaths.isEmpty || !pendingReconciliationPaths.isEmpty
             || pendingActivity != nil
     }
 
@@ -338,9 +381,7 @@ public actor IndexScheduler {
 
     private func retainForRetry(_ batch: Batch) {
         let candidate = Batch(
-            fullScan: batch.fullScan,
-            // Retry an uncommitted reset, but never repeat one that committed.
-            rebuild: batch.rebuild && batch.reset?.isCommitted != true, reset: batch.reset,
+            independentFullScan: batch.independentFullScan, resets: batch.resets,
             paths: batch.paths,
             reconciliationPaths: batch.reconciliationPaths,
             watermarks: batch.watermarks,
@@ -357,16 +398,54 @@ public actor IndexScheduler {
     }
 
     private func parkDormant(_ batch: Batch) {
+        // Notify only after execution has ended. Legacy enrollments retain their
+        // pending reset; lifecycle-aware enrollments return it exactly once.
+        for reset in batch.resets { reset.deferToCaller() }
+        let retained = batch.resets.filter { $0.isPending || $0.isCommitted }
+        let hasWork = batch.independentFullScan || !retained.isEmpty
+            || !batch.paths.isEmpty || !batch.reconciliationPaths.isEmpty || !batch.watermarks.isEmpty
+        guard hasWork else { return }
+        let activity: IndexActivity = retained.isEmpty && batch.activity == .rebuild
+            ? (batch.independentFullScan ? .initialBuild
+                : (batch.reconciliationPaths.isEmpty ? .fileChanges : .subtreeRecovery)) : batch.activity
         let candidate = Batch(
-            fullScan: batch.fullScan, rebuild: batch.rebuild && batch.reset?.isCommitted != true,
-            reset: batch.reset, paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
+            independentFullScan: batch.independentFullScan, resets: retained,
+            paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
             watermarks: batch.watermarks, streamRoots: batch.streamRoots, scope: scope,
-            activity: batch.activity,
+            activity: activity,
             satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
             retryAttempt: batch.retryAttempt,
             generation: configurationGeneration
         )
         dormantBatch = merged(dormantBatch, candidate, retryAttempt: candidate.retryAttempt)
+    }
+
+    private func carryPendingResets(_ batch: Batch) {
+        let pending = batch.resets.filter { $0.isPending }
+        guard !pending.isEmpty else { return }
+        pendingResets = uniqueResets(pendingResets + pending)
+        pendingActivity = IndexActivity.moreSignificant(pendingActivity, .rebuild)
+    }
+
+    private func uniqueResets(_ resets: [ResetReceipt]) -> [ResetReceipt] {
+        var seen = Set<ObjectIdentifier>()
+        return resets.filter { seen.insert(ObjectIdentifier($0)).inserted }
+    }
+
+    private func coalesceFullScanWithResetRetry() {
+        guard fullScan, pendingResets.isEmpty, let retry = retryBatch,
+              retry.rebuild else { return }
+        let incoming = Batch(independentFullScan: true, resets: [], paths: pendingPaths,
+            reconciliationPaths: pendingReconciliationPaths, watermarks: pendingWatermarks,
+            streamRoots: pendingStreamRoots, scope: scope, activity: pendingActivity ?? .initialBuild,
+            satisfiesSafetyReconciliation: pendingSatisfiesSafetyReconciliation,
+            retryAttempt: retry.retryAttempt, generation: configurationGeneration)
+        retryBatch = merged(retry, incoming, retryAttempt: retry.retryAttempt)
+        fullScan = false
+        pendingPaths.removeAll(); pendingReconciliationPaths.removeAll()
+        pendingWatermarks.removeAll(); pendingStreamRoots.removeAll()
+        pendingActivity = nil; pendingSatisfiesSafetyReconciliation = false
+        // Keep the original scheduled deadline and retry readiness.
     }
 
     private func merged(_ existing: Batch?, _ incoming: Batch, retryAttempt: Int) -> Batch {
@@ -379,11 +458,10 @@ public actor IndexScheduler {
         for (volume, roots) in incoming.streamRoots {
             streamRoots[volume, default: []].formUnion(roots)
         }
-        let resets = [existing, incoming].filter { $0.rebuild && $0.reset?.isCommitted == false }.compactMap(\.reset)
+        let resets = uniqueResets(existing.resets + incoming.resets)
         return Batch(
-            fullScan: existing.fullScan || incoming.fullScan,
-            rebuild: !resets.isEmpty,
-            reset: resets.isEmpty ? nil : ResetReceipt(resets.map { reset in { reset.commit() } }),
+            independentFullScan: existing.independentFullScan || incoming.independentFullScan,
+            resets: resets,
             paths: existing.paths.union(incoming.paths),
             reconciliationPaths: existing.reconciliationPaths.union(incoming.reconciliationPaths),
             watermarks: watermarks, streamRoots: streamRoots,
@@ -441,7 +519,7 @@ public actor IndexScheduler {
         var streamRoots = batch.streamRoots
         streamRoots[volume, default: []].formUnion(incomingRoots)
         return Batch(
-            fullScan: batch.fullScan, rebuild: batch.rebuild, reset: batch.reset,
+            independentFullScan: batch.independentFullScan, resets: batch.resets,
             paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
             watermarks: watermarks, streamRoots: streamRoots, scope: batch.scope,
             activity: batch.activity,
@@ -454,7 +532,7 @@ public actor IndexScheduler {
     private func reactivateDormantIfCovered() {
         guard let dormantBatch else { return }
         let covered: Bool
-        if fullScan {
+        if fullScan || !pendingResets.isEmpty {
             covered = true
         } else {
             let pending = (pendingPaths.union(pendingReconciliationPaths)).map(
@@ -472,11 +550,9 @@ public actor IndexScheduler {
         pendingReconciliationPaths.formUnion(dormantBatch.reconciliationPaths)
         mergeWatermarks(dormantBatch.watermarks)
         mergeCanonicalStreamRoots(dormantBatch.streamRoots)
-        fullScan = fullScan || dormantBatch.fullScan
-        if let reset = dormantBatch.reset, !reset.isCommitted, dormantBatch.rebuild {
-            rebuild = true
-            pendingResetCallbacks.append { reset.commit() }
-        }
+        fullScan = fullScan || dormantBatch.independentFullScan
+        // A committed reset still owes its scan; an uncommitted one must reset.
+        pendingResets = uniqueResets(pendingResets + dormantBatch.resets)
         pendingActivity = IndexActivity.moreSignificant(
             pendingActivity, dormantBatch.activity
         )
@@ -520,9 +596,8 @@ public actor IndexScheduler {
 
     public func stop() async {
         stopping = true
-        pendingResetCallbacks.removeAll()
+        pendingResets.removeAll()
         fullScan = false
-        rebuild = false
         pendingPaths.removeAll()
         pendingReconciliationPaths.removeAll()
         pendingWatermarks.removeAll()

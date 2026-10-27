@@ -12,6 +12,7 @@ import XCTest
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
     private final class WeakModelReference { weak var value: TraceModel? }
+    private final class WeakSchedulerReference { weak var value: IndexScheduler? }
 
     func testFailedAttachmentDoesNotReportCommittedRebuildAsCancelled() async throws {
         let f = try await fixture(count: 2)
@@ -92,7 +93,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertFalse(f.model.pendingRebuildForTesting)
     }
 
-    func testFailedResetRetainsDebtWithoutDuplicateReadinessReplay() async throws {
+    func testFailedResetResumesStartupAndRecoversOnOneLaterEvent() async throws {
         let f = try await fixture(count: 2)
         let source = ClaudeCodeSource(roots: [f.root])
         f.model.settings.onboardingComplete = true
@@ -107,20 +108,222 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(try f.model.startupSubmissionsForTesting(in: f.model.startupReceiptScopeForTesting()).isEmpty)
         await f.database.setResetFaultForTesting(.rollback)
         await f.clock.advance(by: .seconds(5))
-        try await wait { f.model.progress.phase == .failed && f.model.progress.passID != firstPass }
+        try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting
+            && f.model.safetyVerificationActiveForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertNotEqual(f.model.progress.passID, firstPass)
         XCTAssertFalse(f.model.isPreparingRebuild)
         XCTAssertEqual(f.model.rebuildRequestIDForTesting, request)
-        let resets = await f.database.committedResetCountForTesting
-        XCTAssertEqual(resets, 0)
-        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
-        let generation = await scheduler.generationForTesting
-        XCTAssertEqual(generation, 1)
-        f.model.rebuildIndex()
-        try await wait { !f.model.pendingRebuildForTesting && !f.model.watcherStartupPendingForTesting
-            && f.model.progress.phase == .complete }
-        await scheduler.waitUntilIdle()
+        let raw = try f.model.startupSubmissionsForTesting(in: f.model.startupReceiptScopeForTesting())
+        XCTAssertEqual(raw.count, 1)
+        XCTAssertFalse(try XCTUnwrap(raw.first).rebuild)
+        var watermarks = SourceChanges(); watermarks.watermarks = ["watermark-only": 5]
+        XCTAssertFalse(f.model.recoverDeferredRebuildForTesting(watermarks))
+        await f.model.bufferSourceChangesForTesting(watermarks)
+        var irrelevant = SourceChanges()
+        irrelevant.paths = [f.root.appendingPathComponent("index.sqlite-wal").path, f.root.appendingPathComponent("diagnostics.json").path]
+        XCTAssertFalse(f.model.recoverDeferredRebuildForTesting(irrelevant), "Trace's own writes cannot admit a reset")
+        var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        await f.model.bufferSourceChangesForTesting(changes)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertTrue(f.model.isRebuildPendingRecovery, "buffered/replayed input cannot admit reset recovery")
+        let before = await f.database.committedResetCountForTesting
+        XCTAssertEqual(before, 0)
+        let beforeRecoveryPass = f.model.progress.passID
+        await f.database.setResetFaultForTesting(.rollback)
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        try await wait { f.model.progress.passID != beforeRecoveryPass
+            && f.model.isRebuildPendingRecovery && !f.model.rebuildClaimedForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let failedAttempts = await f.database.resetAttemptCountForTesting
+        await f.clock.advance(by: .seconds(5))
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let afterDelay = await f.database.resetAttemptCountForTesting
+        XCTAssertEqual(afterDelay, failedAttempts, "ordinary live passes may run, but reset recovery cannot get a timer retry")
+        XCTAssertEqual(f.model.rebuildRequestIDForTesting, request)
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes, safety: true))
+        try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertFalse(f.model.isRebuildPendingRecovery)
         let after = await f.database.committedResetCountForTesting
         XCTAssertEqual(after, 1)
+    }
+
+    func testPendingRebuildPresentationIsIdleAndSourceFailureTakesPrecedence() {
+        let progress = IndexProgress(phase: .complete)
+        let label = IndexProgressLabel(progress: progress, rebuildPendingRecovery: true)
+        XCTAssertTrue(label.details.contains("The rebuild has not completed. Live updates continue."))
+        let paused = IndexProgressLabel(progress: progress, sourceReloadRecovery: .failed("Source settings failed"),
+            rebuildPendingRecovery: true)
+        XCTAssertTrue(paused.details.contains("Live updates are paused."))
+        XCTAssertTrue(paused.details.contains("The rebuild has not completed."))
+    }
+
+    func testDeferredEventsCoalesceBeforeAdmissionAndActiveEventsDoNotReplayReset() async throws {
+        let f = try await fixture(count: 2)
+        let source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        await f.database.setResetFaultForTesting(.rollback)
+        f.model.rebuildIndex()
+        try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
+        f.model.startReadyStartupForTesting(sources: [source])
+        await f.database.setResetFaultForTesting(.rollback)
+        await f.clock.advance(by: .seconds(5))
+        try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        await coordinator.gatePreparationForTesting(held)
+        var first = SourceChanges()
+        first.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        first.watermarks = ["coalesced-first": 41]; first.streamRoots = ["coalesced-first": [f.root.path]]
+        var second = first
+        second.watermarks = ["coalesced-second": 52]; second.streamRoots = ["coalesced-second": [f.root.path]]
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(first))
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(second))
+        try await wait { await coordinator.preparationWaitingForTesting }
+        XCTAssertFalse(f.model.recoverDeferredRebuildForTesting(first), "an active attempt cannot enroll its successor")
+        await gate.open()
+        try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let firstCheckpoint = try await f.database.eventCheckpoint(volumeID: "coalesced-first")
+        let secondCheckpoint = try await f.database.eventCheckpoint(volumeID: "coalesced-second")
+        XCTAssertEqual(firstCheckpoint, 41); XCTAssertEqual(secondCheckpoint, 52)
+        let attempts = await f.database.resetAttemptCountForTesting
+        XCTAssertEqual(attempts, 3, "two initial failures and one coalesced recovery")
+        await f.clock.advance(by: .seconds(5))
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let after = await f.database.resetAttemptCountForTesting
+        XCTAssertEqual(after, attempts)
+    }
+
+    func testEventRecoveryInputsSurviveAcknowledgedSchedulerReplacement() async throws {
+        let f = try await fixture(count: 2)
+        let source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        await f.database.setResetFaultForTesting(.rollback)
+        f.model.rebuildIndex()
+        let request = try XCTUnwrap(f.model.rebuildRequestIDForTesting)
+        try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
+        f.model.startReadyStartupForTesting(sources: [source])
+        await f.database.setResetFaultForTesting(.rollback)
+        await f.clock.advance(by: .seconds(5))
+        try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        await coordinator.gatePreparationForTesting(held)
+        var changes = SourceChanges()
+        changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        changes.watermarks = ["retained-reset-volume": 42]
+        changes.streamRoots = ["retained-reset-volume": [f.root.path]]
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        try await wait { await coordinator.preparationWaitingForTesting }
+        try await wait { f.model.rebuildAcceptedForTesting && !f.model.rebuildClaimedForTesting }
+        f.model.reloadSourcesAndRebuild()
+        await gate.open()
+        try await wait { !f.model.pendingRebuildForTesting && !f.model.watcherStartupPendingForTesting
+            && f.model.progress.phase == .complete }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let receipts = try f.model.startupSubmissionsForTesting(in: f.model.startupReceiptScopeForTesting())
+        let payload = try XCTUnwrap(receipts.first)
+        XCTAssertEqual(receipts.count, 1)
+        XCTAssertTrue(payload.rebuild)
+        XCTAssertEqual(payload.rebuildRequestID, request)
+        XCTAssertTrue(payload.paths.contains(f.root.appendingPathComponent("sessions.jsonl").path))
+        XCTAssertEqual(payload.watermarks["retained-reset-volume"], 42)
+        XCTAssertEqual(payload.streamRoots["retained-reset-volume"], [f.root.path])
+        let resets = await f.database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+    }
+
+    func testDeferredRebuildDoesNotRetainReplacedScheduler() async throws {
+        let f = try await fixture(count: 2)
+        let source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        await f.database.setResetFaultForTesting(.rollback)
+        f.model.rebuildIndex()
+        try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
+        await f.database.setResetFaultForTesting(.rollback)
+        await f.clock.advance(by: .seconds(5))
+        try await wait { f.model.isRebuildPendingRecovery }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let retired = WeakSchedulerReference()
+        retired.value = f.model.schedulerForTesting
+        f.model.settings.onboardingComplete = false
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.pendingDatabaseForTesting == nil && f.model.schedulerForTesting != nil }
+        try await wait { retired.value == nil }
+        XCTAssertTrue(f.model.pendingRebuildForTesting)
+    }
+
+    func testDeferredPublicationReentryCannotDiscardNewManualRebuild() async throws {
+        for grouped in [false, true] {
+            let f = try await fixture(count: 2)
+            f.model.settings.onboardingComplete = true
+            await f.database.setResetFaultForTesting(.rollback)
+            f.model.rebuildIndex()
+            try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
+            let old = try XCTUnwrap(f.model.rebuildRequestIDForTesting)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            var replaced = false
+            let observe = {
+                guard f.model.isRebuildPendingRecovery, !replaced else { return }
+                replaced = true
+                f.model.rebuildSubmissionGateForTesting = held
+                f.model.rebuildIndex()
+            }
+            let subscription = grouped ? f.model.sidebarChanges.dropFirst().sink { _ in observe() }
+                : f.model.objectWillChange.sink { observe() }
+            defer { subscription.cancel() }
+            await f.database.setResetFaultForTesting(.rollback)
+            await f.clock.advance(by: .seconds(5))
+            try await wait { replaced && f.model.rebuildRequestIDForTesting != old }
+            let newer = try XCTUnwrap(f.model.rebuildRequestIDForTesting)
+            XCTAssertTrue(f.model.pendingRebuildForTesting)
+            await gate.open()
+            try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+            XCTAssertNotEqual(old, newer)
+            let resets = await f.database.committedResetCountForTesting
+            XCTAssertEqual(resets, 1)
+        }
+    }
+
+    func testNonRebuildStartupCannotConsumeNextResetDeliveryGate() async throws {
+        let f = try await fixture(count: 2)
+        let source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        let payload = ReviewReadGate(), payloadTask = Task { await payload.wait() }
+        let explicit = ReviewReadGate(), explicitTask = Task { await explicit.wait() }
+        let delivery = ReviewReadGate(), deliveryTask = Task { await delivery.wait() }
+        defer { payloadTask.cancel(); explicitTask.cancel(); deliveryTask.cancel()
+            Task { await payload.open(); await explicit.open(); await delivery.open() } }
+        f.model.startupPayloadGateForTesting = payloadTask
+        f.model.queueRebuildForTesting()
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { f.model.rebuildClaimedForTesting }
+        f.model.rebuildClaimGateForTesting = explicitTask
+        f.model.rebuildResetDeliveryGateForTesting = deliveryTask
+        f.model.rebuildIndex()
+        try await wait { f.model.rebuildClaimWaitingForTesting }
+        await payload.open()
+        try await wait { !f.model.watcherStartupPendingForTesting && f.model.startupHandoffIDForTesting == nil }
+        XCTAssertNotNil(f.model.rebuildResetDeliveryGateForTesting,
+            "an invalid startup claim's ordinary payload must not consume the successor's delivery gate")
+        let raw = try f.model.startupSubmissionsForTesting(in: f.model.startupReceiptScopeForTesting())
+        XCTAssertEqual(raw.count, 1)
+        XCTAssertFalse(try XCTUnwrap(raw.first).rebuild)
+        await explicit.open()
+        try await wait { f.model.rebuildResetDeliveryWaitingForTesting }
+        await delivery.open()
+        try await wait { !f.model.rebuildResetDeliveryWaitingForTesting && f.model.progress.phase == .complete }
     }
 
     func testAcknowledgedRebuildSurvivesReplacementBeforeReset() async throws {
@@ -277,6 +480,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await gate.open()
         try await wait { f.model.watcherRestartOutcomesForTesting.contains { $0.invocation == superseded } }
         XCTAssertEqual(f.model.watcherRestartOutcomesForTesting.first { $0.invocation == superseded }?.phase, .superseded)
+        XCTAssertEqual(f.model.watcherRestartOutcomesForTesting.first { $0.invocation == superseded }?.reason, "Owner replaced")
         await f.model.prepareToTerminate()
         let aborted = f.model.restartStartupWatchersForUITesting()
         try await wait { f.model.watcherRestartOutcomesForTesting.contains { $0.invocation == aborted } }

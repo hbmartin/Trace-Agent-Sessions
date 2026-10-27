@@ -4,6 +4,12 @@ import Foundation
 import os
 
 public enum TraceFileIO {
+    /// Uses the same filename classification as source discovery, including for
+    /// deleted files that cannot be looked up on disk.
+    public static func isSessionTranscript(_ url: URL, agent: AgentKind) -> Bool {
+        sourceFormat(for: url, agent: agent) != nil
+    }
+
     private struct VolumeCaseSensitivityCache {
         var values: [String: Bool] = [:]
         var probeCounts: [String: Int] = [:]

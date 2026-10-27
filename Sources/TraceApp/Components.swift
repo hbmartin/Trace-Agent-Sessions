@@ -70,7 +70,7 @@ struct IndexStatusView: View {
     var body: some View {
         HStack(spacing: 8) {
             IndexProgressLabel(progress: model.progress, monitoringWarnings: model.monitoringWarnings,
-                               sourceReloadRecovery: model.sourceReloadRecovery, preparingRebuild: model.isPreparingRebuild)
+                               sourceReloadRecovery: model.sourceReloadRecovery, preparingRebuild: model.isPreparingRebuild, rebuildPendingRecovery: model.isRebuildPendingRecovery)
             if model.sourceReloadRecovery.error != nil {
                 Button("Retry") { model.retrySourceConfiguration() }
                     .buttonStyle(.borderless)
@@ -102,6 +102,7 @@ struct IndexProgressLabel: View {
     var monitoringWarnings: [String] = []
     var sourceReloadRecovery: SourceReloadRecoveryState = .normal
     var preparingRebuild = false
+    var rebuildPendingRecovery = false
     @State private var showingDetails = false
     private var busy: Bool {
         preparingRebuild || sourceReloadRecovery.isRetrying || ![.waiting, .complete, .cancelled, .failed].contains(progress.phase)
@@ -144,7 +145,7 @@ struct IndexProgressLabel: View {
             let preparation = sourceReloadRecovery.error == nil
                 ? ["Preparing the index rebuild…"]
                 : sourceRecoveryDetails + ["The index rebuild is waiting for source settings."]
-            return (preparation + unresolvedFailureMessages + monitoringWarnings + tokenTotalsFailureDetails).joined(separator: "\n")
+            return (preparation + unresolvedFailureMessages + monitoringWarnings + tokenTotalsFailureDetails + rebuildRecoveryDetails).joined(separator: "\n")
         }
         var lines = [activityDescription,
             "\(progress.completedFiles.formatted()) of \(progress.totalFiles.formatted()) files checked",
@@ -161,7 +162,14 @@ struct IndexProgressLabel: View {
         if let warning = progress.metadataWarning { lines.append(warning) }
         lines.append(contentsOf: monitoringWarnings)
         lines.append(contentsOf: tokenTotalsFailureDetails)
+        lines.append(contentsOf: rebuildRecoveryDetails)
         return lines.joined(separator: "\n")
+    }
+
+    private var rebuildRecoveryDetails: [String] {
+        guard rebuildPendingRecovery else { return [] }
+        if sourceReloadRecovery.error != nil { return ["The rebuild has not completed. It is waiting for source settings."] }
+        return ["The rebuild has not completed. Live updates continue. It will retry after a later change or safety check. Choose Rebuild Index to retry now."]
     }
 
     private var tokenTotalsFailureDetails: [String] {
@@ -182,6 +190,9 @@ struct IndexProgressLabel: View {
             return sourceReloadRecovery.isRetrying ? "Resuming updates…" : "Updates paused"
         }
         if preparingRebuild { return "Preparing rebuild…" }
+        if rebuildPendingRecovery, [.waiting, .complete, .failed, .cancelled].contains(progress.phase) {
+            return "Rebuild pending"
+        }
         return switch progress.phase {
         case .waiting: "Ready to build index"
         case .discovering:
