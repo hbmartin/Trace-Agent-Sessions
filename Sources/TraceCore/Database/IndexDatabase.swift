@@ -2301,6 +2301,10 @@ public actor IndexDatabase {
     func failRollupRebuildOnceForTesting(_ error: DatabaseError) { nextRollupRebuildError = error }
     func usageReadCountForTesting() -> Int { usageReadAttempts }
     func failFailureCountsOnceForTesting(_ error: DatabaseError) { nextFailureCountsError = error }
+    private var navigationCaptureErrorForTesting: DatabaseError?
+    private var navigationResolutionErrorForTesting: DatabaseError?
+    func failNavigationCaptureOnceForTesting(_ error: DatabaseError) { navigationCaptureErrorForTesting = error }
+    func failNavigationResolutionOnceForTesting(_ error: DatabaseError) { navigationResolutionErrorForTesting = error }
     func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }
     func sessionReadCountForTesting() -> Int { sessionReadAttempts }
     func sessionReadFailurePendingForTesting() -> Bool { nextSessionReadError != nil }
@@ -2328,6 +2332,71 @@ public actor IndexDatabase {
         }
         #endif
         try Task.checkCancellation()
+    }
+
+    /// Capture before reset delivery: numeric session and message IDs alone are
+    /// not durable across clearIndex. The read is one consistent transaction.
+    public func captureNavigationReference(sessionID: Int64, anchorMessageID: Int64? = nil) throws -> SessionNavigationReference? {
+        #if DEBUG
+        if let error = navigationCaptureErrorForTesting { navigationCaptureErrorForTesting = nil; throw error }
+        #endif
+        return try pool.read { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT s.agent, s.external_id, sf.path, r.path AS root
+                FROM session s JOIN source_file sf ON sf.id=s.source_file_id
+                JOIN source_root r ON r.id=sf.root_id WHERE s.id=?
+                """, arguments: [sessionID]) else { return nil }
+            let anchor = try anchorMessageID.flatMap { id in
+                try Row.fetchOne(db, sql: "SELECT source_key, external_uuid FROM message WHERE id=? AND session_id=?",
+                                 arguments: [id, sessionID])
+            }
+            let agent: String = row["agent"]
+            let root: String = row["root"]
+            let path: String = row["path"]
+            let session: String = row["external_id"]
+            let key: String? = anchor?["source_key"]
+            let external: String? = anchor?["external_uuid"]
+            return SessionNavigationReference(agent: agent, root: root, path: path,
+                externalSessionID: session, anchorSourceKey: key, anchorExternalID: external)
+        }
+    }
+
+    /// Resolve source identity, never an old row ID. Absence is provisional
+    /// until the caller has observed a successful source reconciliation.
+    public func resolveNavigationReference(_ reference: SessionNavigationReference, fallbackMessageIndex: Int? = nil) throws
+        -> (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)? {
+        #if DEBUG
+        if let error = navigationResolutionErrorForTesting { navigationResolutionErrorForTesting = nil; throw error }
+        #endif
+        return try pool.read { db in
+            guard let id = try Int64.fetchOne(db, sql: """
+                SELECT s.id FROM session s JOIN source_file sf ON sf.id=s.source_file_id
+                JOIN source_root r ON r.id=sf.root_id
+                WHERE s.agent=? AND r.path=? AND sf.path=? AND s.external_id=?
+                """, arguments: [reference.agent, reference.root, reference.path, reference.externalSessionID]),
+                  let session = try transcriptSession(id: id, in: db) else { return nil }
+            var anchor: Int64?
+            if let external = reference.anchorExternalID {
+                anchor = try Int64.fetchOne(db, sql: "SELECT id FROM message WHERE session_id=? AND external_uuid=? ORDER BY seq LIMIT 1",
+                                           arguments: [id, external])
+            } else if let key = reference.anchorSourceKey {
+                anchor = try Int64.fetchOne(db, sql: "SELECT id FROM message WHERE session_id=? AND source_key=?",
+                                           arguments: [id, key])
+            } else { anchor = nil }
+            var index: Int?
+            if let anchor {
+                index = try Int.fetchOne(db, sql: """
+                    SELECT count(*) FROM message WHERE session_id=? AND seq <
+                        (SELECT seq FROM message WHERE id=? AND session_id=?)
+                    """, arguments: [id, anchor, id])
+            } else if let fallbackMessageIndex, session.messageCount > 0 {
+                let fallback = max(0, min(fallbackMessageIndex, session.messageCount - 1))
+                anchor = try Int64.fetchOne(db, sql: "SELECT id FROM message WHERE session_id=? ORDER BY seq LIMIT 1 OFFSET ?",
+                                           arguments: [id, fallback])
+                if anchor != nil { index = fallback }
+            }
+            return (session, anchor, index)
+        }
     }
 
     public func session(id: Int64) throws -> SessionSummary? {

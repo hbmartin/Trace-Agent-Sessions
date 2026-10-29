@@ -449,8 +449,21 @@ public actor IndexCoordinator {
         return result
     }
 
-    private func run(scope: IndexScope, paths: Set<String>?, reconciliationPaths: Set<String>,
-                     rebuild: Bool, onRebuildReset: @escaping @Sendable () -> Void = {}, activity: IndexActivity,
+    /// Ordinary work accompanying an unfulfilled reset updates the committed
+    /// scope. It must not infer a second destructive reset from requested scope.
+    func recoverOrdinaryResult(paths: Set<String>?, reconciliationPaths: Set<String>, scope: IndexScope,
+                               activity: IndexActivity, satisfiesSafetyReconciliation: Bool,
+                               progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
+        await gate.acquire()
+        let result = await run(scope: scope, paths: paths, reconciliationPaths: reconciliationPaths,
+            rebuild: false, preservingCommittedScope: true, activity: activity,
+            satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, progress: progress)
+        await gate.release()
+        return result
+    }
+
+    private func run(scope requestedScope: IndexScope, paths: Set<String>?, reconciliationPaths: Set<String>,
+                     rebuild: Bool, preservingCommittedScope: Bool = false, onRebuildReset: @escaping @Sendable () -> Void = {}, activity: IndexActivity,
                      satisfiesSafetyReconciliation: Bool,
                      progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         var status = IndexProgress(phase: .discovering)
@@ -481,8 +494,9 @@ public actor IndexCoordinator {
             #endif
             try Task.checkCancellation()
             let oldScope = try await database.storedIndexScope()
+            let scope = preservingCommittedScope ? (oldScope ?? requestedScope) : requestedScope
             try Task.checkCancellation()
-            if rebuild || oldScope != scope {
+            if rebuild || (!preservingCommittedScope && oldScope != scope) {
                 #if DEBUG
                 if rebuild, resetFailuresForUITesting > 0 {
                     resetFailuresForUITesting -= 1

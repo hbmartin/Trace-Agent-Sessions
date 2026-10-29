@@ -185,11 +185,18 @@ struct IndexProgressLabel: View {
         return lines
     }
 
+    #if DEBUG
+    var textForTesting: String { label }
+    #endif
+
     private var label: String {
         if sourceReloadRecovery.error != nil {
             return sourceReloadRecovery.isRetrying ? "Resuming updates…" : "Updates paused"
         }
         if preparingRebuild { return "Preparing rebuild…" }
+        if progress.phase == .failed, !rebuildPendingRecovery || progress.activity != .rebuild {
+            return progress.error ?? "Indexing failed"
+        }
         if rebuildPendingRecovery, [.waiting, .complete, .failed, .cancelled].contains(progress.phase) {
             return "Rebuild pending"
         }
