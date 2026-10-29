@@ -586,6 +586,17 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        f.model.selectProject(f.project.id); try await wait { !f.model.isLoadingSessions }
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id); try await wait { !f.model.messages.isEmpty }
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.scrollPositions[session.id] = .init(messageID: message.id, offset: 27, index: 0)
+        var lostSelection = false
+        let selectionAudit = f.model.transcriptChanges.dropFirst().sink { _ in
+            if f.model.selectedSessionID == nil { lostSelection = true }
+        }
+        defer { selectionAudit.cancel() }
         let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
         let gate = ReviewReadGate(), held = Task { await gate.wait() }
         defer { held.cancel(); Task { await gate.open() } }
@@ -610,6 +621,11 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(payload.paths.contains(f.root.appendingPathComponent("sessions.jsonl").path))
         XCTAssertEqual(payload.watermarks["retained-reset-volume"], 42)
         XCTAssertEqual(payload.streamRoots["retained-reset-volume"], [f.root.path])
+        try await wait { f.model.selectedSession?.title == session.title && f.model.settings.pendingNavigationReference == nil }
+        XCTAssertFalse(lostSelection, "replacement must retain the automatic attempt's non-destructive presentation")
+        let restoredID = try XCTUnwrap(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.scrollPositions[restoredID]?.offset, 27)
+        XCTAssertEqual(f.model.settings.lastSessionID, restoredID)
         let resets = await f.database.committedResetCountForTesting
         XCTAssertEqual(resets, 1)
     }

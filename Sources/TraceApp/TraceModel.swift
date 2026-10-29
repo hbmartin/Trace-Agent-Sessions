@@ -3294,13 +3294,13 @@ final class TraceModel: ObservableObject {
             guard let receipt = admitRebuild() else { return }
             #if DEBUG
             claim = RebuildClaim(admission: receipt, scheduler: scheduler, reset: request.reset,
-                recovery: hasInputs ? inputs : nil, automaticallyRetryReset: !request.recoveryTriggered,
+                recovery: hasInputs ? inputs : nil, automaticallyRetryReset: request.recoveryRevision == 0,
                 enrollment: request.recoveryEnrollment, inputRevision: request.recoveryRevision)
             claim?.acknowledgmentGate = rebuildAcknowledgmentGateForTesting
             rebuildAcknowledgmentGateForTesting = nil
             #else
             claim = RebuildClaim(admission: receipt, scheduler: scheduler, reset: request.reset,
-                recovery: hasInputs ? inputs : nil, automaticallyRetryReset: !request.recoveryTriggered,
+                recovery: hasInputs ? inputs : nil, automaticallyRetryReset: request.recoveryRevision == 0,
                 enrollment: request.recoveryEnrollment, inputRevision: request.recoveryRevision)
             #endif
             if let claim {
