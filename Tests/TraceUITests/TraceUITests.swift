@@ -4517,6 +4517,68 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "pending-rebuild-after-overlapping-startup-onboarding")
     }
 
+    func testAutomaticResetFailureKeepsReaderAndIndexesLiveChange() throws {
+        try assertAutomaticResetPreservesReader(failRecoveryFirst: true)
+    }
+
+    func testAutomaticResetCommitRestoresReaderAndBookmark() throws {
+        try assertAutomaticResetPreservesReader(failRecoveryFirst: false)
+    }
+
+    private func assertAutomaticResetPreservesReader(failRecoveryFirst: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let name = "Recovery reader"
+        try addLongSession(name, project: "RecoveryReaderProject", directory: directory)
+        let deferred = directory.appendingPathComponent("reader-deferred")
+        let committed = directory.appendingPathComponent("reader-committed")
+        let bookmark = directory.appendingPathComponent("reader-bookmark")
+        let idle = directory.appendingPathComponent("reader-idle")
+        let database = directory.appendingPathComponent("index.sqlite")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = failRecoveryFirst ? "3" : "2"
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmark.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idle.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["RecoveryReaderProject"].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 1 ? true : nil })
+        app.staticTexts["RecoveryReaderProject"].firstMatch.click()
+        openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -950)
+        XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
+        let index = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
+        let y = try XCTUnwrap(savedAnchorY(index: index, in: scroll, timeout: 10))
+        try addLongSession("Live recovery input", project: "LiveAfterResetFailure", directory: directory,
+                           count: 1, contentRepeats: 0)
+        if failRecoveryFirst {
+            XCTAssertNotNil(poll(timeout: 15) { self.fileLines(in: deferred).count == 2 ? true : nil })
+            XCTAssertNotNil(poll(timeout: 15) {
+                (try? self.sqliteInteger(database, sql: "SELECT count(*) FROM project WHERE display_name='LiveAfterResetFailure';")) == 1 ? true : nil
+            })
+            XCTAssertTrue(app.windows[name].exists)
+            XCTAssertTrue(scroll.exists)
+            assertSavedAnchorOnScreen(index: index, in: scroll, expectedY: y, stage: "failed automatic reset")
+            XCTAssertTrue(fileLines(in: committed).isEmpty)
+            try addLongSession("Later recovery input", project: "LaterRecoveryProject", directory: directory,
+                               count: 1, contentRepeats: 0)
+        }
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
+        XCTAssertTrue(app.windows[name].exists)
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        assertSavedAnchorOnScreen(index: index, in: scroll, expectedY: y, stage: "committed automatic reset")
+        XCTAssertTrue(app.descendants(matching: .any)["transcriptMetadataHeader"].firstMatch.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch.waitForNonExistence(timeout: 10))
+        attach(app, name: failRecoveryFirst ? "live-work-after-reset-failure" : "automatic-reset-navigation-restored")
+    }
+
     func testExhaustedResetResumesStartupAndRecoversOnLiveChange() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let startup = directory.appendingPathComponent("exhausted-startup-ready")
@@ -4548,8 +4610,8 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(fileLines(in: committed).isEmpty)
         let pending = app.staticTexts["indexProgressText"]
         XCTAssertNotNil(poll(timeout: 10) { (pending.value as? String ?? pending.label) == "Rebuild pending" ? true : nil })
-        XCTAssertFalse(app.progressIndicators["rebuildPreparationProgress"].exists)
-        XCTAssertFalse(app.progressIndicators["indexBusyProgress"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["indexBusyProgress"].firstMatch.exists)
         app.buttons["indexProgress"].click()
         let details = app.staticTexts["indexProgressDetails"]
         XCTAssertTrue(details.waitForExistence(timeout: 5))

@@ -48,3 +48,14 @@ func compileResolvedReleaseFunctionReference() {
     let wait: @Sendable (String, Int) async throws -> Void = TraceTestHooks.waitForRelease(path:timeoutMilliseconds:)
     _ = wait
 }
+
+// Additive navigation references remain usable without @testable or row-ID assumptions.
+func compileNavigationReferenceClient(_ database: IndexDatabase, sessionID: Int64) async throws {
+    let reference: SessionNavigationReference? = try await database.captureNavigationReference(sessionID: sessionID)
+    if let reference { _ = try await database.resolveNavigationReference(reference) }
+}
+
+func compileOrdinaryCoverageClient(_ scheduler: IndexScheduler) async {
+    await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: {},
+        automaticallyRetryReset: false, onOrdinaryWorkCompleted: {})
+}

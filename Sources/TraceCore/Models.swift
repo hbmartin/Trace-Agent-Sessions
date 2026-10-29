@@ -844,6 +844,17 @@ public struct SidebarSnapshot: Sendable {
     public let sessionList: SessionListSnapshot
 }
 
+/// An opaque source identity used to restore navigation after row IDs change.
+/// It is captured by IndexDatabase, never constructed from presentation text.
+public struct SessionNavigationReference: Hashable, Codable, Sendable {
+    let agent: String
+    let root: String
+    let path: String
+    let externalSessionID: String
+    let anchorSourceKey: String?
+    let anchorExternalID: String?
+}
+
 public struct SessionSummary: Identifiable, Sendable {
     public let id: Int64
     public let projectID: Int64

@@ -16,6 +16,7 @@ final class AppSettings: ObservableObject {
         static let hotkeyKeyCode = "hotkeyKeyCode"
         static let hotkeyModifiers = "hotkeyModifiers"
         static let lastSessionID = "lastSessionID"
+        static let pendingNavigationReference = "pendingNavigationReference"
         static let lastScrollMessageID = "lastScrollMessageID"
         static let includeSidechains = "includeSidechains"
         static let costRange = "costRange"
@@ -53,6 +54,16 @@ final class AppSettings: ObservableObject {
             savedSelection.commit(newValue) { ModelPublicationBatch.notify(self) }
         }
     }
+    // An interrupted automatic reset must not restore a reused numeric ID on
+    // the next launch. This opaque source reference takes precedence until resolved.
+    var pendingNavigationReference: SessionNavigationReference? {
+        get { defaults.data(forKey: Key.pendingNavigationReference).flatMap { try? JSONDecoder().decode(SessionNavigationReference.self, from: $0) } }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: Key.pendingNavigationReference) }
+            else { defaults.removeObject(forKey: Key.pendingNavigationReference) }
+        }
+    }
+
     @Published var projectPaneFraction: Double {
         didSet { defaults.set(projectPaneFraction, forKey: "projectPaneFraction") }
     }

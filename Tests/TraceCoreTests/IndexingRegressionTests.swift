@@ -223,6 +223,202 @@ final class IndexingRegressionTests: XCTestCase {
         }
     }
 
+    func testSingleAttemptResetKeepsOrdinaryUpdatesAndCommittedScope() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>()
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])], clock: clock)
+        await coordinator.indexAll(scope: .proseOnly)
+        try Data((line(1) + line(2)).utf8).write(to: file)
+        let deferred = OSAllocatedUnfairLock(initialState: 0), covered = OSAllocatedUnfairLock(initialState: 0)
+        let completions = CompletionRecorder()
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .everything, progress: { _ in }, clock: clock,
+            didComplete: { activity, marks in await completions.receive(activity: activity, watermarks: marks) })
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(paths: [file.path], rebuild: true, scope: .everything,
+            watermarks: ["ordinary": 9], streamRoots: ["ordinary": [root.path]], onRebuildReset: {},
+            onRebuildDeferred: { deferred.withLock { $0 += 1 } }, automaticallyRetryReset: false,
+            onOrdinaryWorkCompleted: { covered.withLock { $0 += 1 } })
+        await scheduler.waitUntilIdle()
+        let statistics = try await database.statistics(), scope = try await database.storedIndexScope()
+        XCTAssertEqual(statistics.messageCount, 2)
+        XCTAssertEqual(scope, .proseOnly, "ordinary fallback cannot infer another reset")
+        XCTAssertEqual(deferred.withLock { $0 }, 1); XCTAssertEqual(covered.withLock { $0 }, 1)
+        let entries = await completions.values
+        XCTAssertEqual(entries.flatMap { $0.watermarks.values }, [9])
+        let attempts = await database.resetAttemptCountForTesting
+        XCTAssertEqual(attempts, 1)
+        await clock.advance(by: .seconds(10)); await scheduler.waitUntilIdle()
+        let after = await database.resetAttemptCountForTesting
+        XCTAssertEqual(after, 1)
+        await scheduler.stop(); try await clock.checkSuspension()
+    }
+
+    func testOrdinaryFailureAfterSingleResetStillHasFiveSecondRetry() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let failures = MutableFailureSelection([]), clock = TestClock<Duration>()
+        let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(
+            base: ClaudeCodeSource(roots: [root]), failures: failures)], clock: clock)
+        await coordinator.indexAll(scope: .proseOnly)
+        try Data((line(1) + line(2)).utf8).write(to: file)
+        failures.replace(with: [file.lastPathComponent])
+        let covered = OSAllocatedUnfairLock(initialState: 0)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock)
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(paths: [file.path], rebuild: true, onRebuildReset: {}, onRebuildDeferred: {},
+            automaticallyRetryReset: false, onOrdinaryWorkCompleted: { covered.withLock { $0 += 1 } })
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(covered.withLock { $0 }, 0)
+        failures.replace(with: [])
+        await clock.advance(by: .milliseconds(4_999)); await scheduler.waitUntilIdle()
+        XCTAssertEqual(covered.withLock { $0 }, 0)
+        await clock.advance(by: .milliseconds(1))
+        try await waitForCondition { covered.withLock { $0 } == 1 }
+        await scheduler.waitUntilIdle()
+        let statistics = try await database.statistics(), resets = await database.resetAttemptCountForTesting
+        XCTAssertEqual(statistics.messageCount, 2); XCTAssertEqual(resets, 1)
+        await scheduler.stop(); try await clock.checkSuspension()
+    }
+
+    func testRunningResetRetryCannotConsumeFreshFullScanInputs() async throws {
+        for fails in [false, true] {
+            let root = try directory(), file = root.appendingPathComponent("session.jsonl"), counter = ReadCounter()
+            try Data(line(1).utf8).write(to: file)
+            let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), clock = TestClock<Duration>()
+            let coordinator = IndexCoordinator(database: database,
+                sources: [DiscoveryCountingSource(base: ClaudeCodeSource(roots: [root]), counter: counter)], clock: clock)
+            await coordinator.indexAll(scope: .proseOnly)
+            let before = counter.value, completions = CompletionRecorder(), safety = SafetyRecorder()
+            let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock,
+                didComplete: { activity, marks in await completions.receive(activity: activity, watermarks: marks) },
+                didSatisfySafetyReconciliation: { await safety.receive() })
+            await database.setResetFaultForTesting(.rollback)
+            await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: {})
+            await scheduler.waitUntilIdle()
+            let gate = BatchLatch(), held = Task { await gate.pauseOnce() }
+            await coordinator.gatePreparationForTesting(held)
+            await clock.advance(by: .seconds(5)); try await waitForPreparation(coordinator)
+            if fails { await database.setResetFaultForTesting(.rollback) }
+            try Data((line(1) + line(2)).utf8).write(to: file)
+            await scheduler.request(paths: [file.path], reconcile: true, satisfiesSafetyReconciliation: true,
+                watermarks: ["fresh": 44], streamRoots: ["fresh": [root.path]])
+            await gate.release(); await scheduler.waitUntilIdle()
+            XCTAssertEqual(counter.value - before, fails ? 1 : 2)
+            let entries = await completions.values, safetyCount = await safety.count
+            XCTAssertEqual(entries.filter { $0.watermarks["fresh"] == 44 }.count, 1)
+            XCTAssertEqual(safetyCount, 1)
+            let count = try await database.statistics().messageCount
+            XCTAssertEqual(count, 2)
+            held.cancel(); await scheduler.stop(); try await clock.checkSuspension()
+        }
+    }
+
+    func testWaitingResetFailureCannotParkIndependentPathlessScan() async throws {
+        let root = try directory(), counter = ReadCounter()
+        try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), clock = TestClock<Duration>()
+        let coordinator = IndexCoordinator(database: database,
+            sources: [DiscoveryCountingSource(base: ClaudeCodeSource(roots: [root]), counter: counter)], clock: clock)
+        await coordinator.indexAll(scope: .proseOnly)
+        let before = counter.value, completions = CompletionRecorder()
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock,
+            didComplete: { activity, marks in await completions.receive(activity: activity, watermarks: marks) })
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: {})
+        await scheduler.waitUntilIdle()
+        await scheduler.request(reconcile: true, watermarks: ["scan": 71], streamRoots: ["scan": [root.path]])
+        await scheduler.waitUntilIdle(); XCTAssertEqual(counter.value, before)
+        await database.setResetFaultForTesting(.rollback); await clock.advance(by: .seconds(5))
+        try await waitForCondition { counter.value == before + 1 }
+        await scheduler.waitUntilIdle()
+        let entries = await completions.values
+        XCTAssertEqual(entries.filter { $0.watermarks["scan"] == 71 }.count, 1)
+        let resets = await database.resetAttemptCountForTesting
+        XCTAssertEqual(resets, 2)
+        await scheduler.stop(); try await clock.checkSuspension()
+    }
+
+    func testNavigationReferenceRejectsReusedRowsAndMapsMessageIdentity() async throws {
+        let root = try directory(), selected = root.appendingPathComponent("selected.jsonl")
+        try Data((line(1) + line(2)).utf8).write(to: selected)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let oldRows = try await database.sessions(limit: 10)
+        let old = try XCTUnwrap(oldRows.first)
+        let messages = try await database.messages(sessionID: old.id)
+        let captured = try await database.captureNavigationReference(sessionID: old.id, anchorMessageID: messages[1].id)
+        let reference = try XCTUnwrap(captured)
+        try await database.clearIndex()
+        let other = root.appendingPathComponent("other.jsonl")
+        try Data(line(9, project: "/tmp/Other").utf8).write(to: other)
+        await coordinator.refresh(paths: [other.path], scope: .proseOnly)
+        let wrong = try await database.session(id: old.id)
+        XCTAssertEqual(wrong?.sourcePath, other.path)
+        let absent = try await database.resolveNavigationReference(reference)
+        XCTAssertNil(absent, "a reused numeric ID must not resolve to a different source")
+        await coordinator.refresh(paths: [selected.path], scope: .proseOnly)
+        let resolvedValue = try await database.resolveNavigationReference(reference)
+        let resolved = try XCTUnwrap(resolvedValue)
+        XCTAssertNotEqual(resolved.session.id, old.id)
+        XCTAssertEqual(resolved.session.sourcePath, selected.path)
+        let anchor = try XCTUnwrap(resolved.anchorMessageID)
+        let hydrated = try await coordinator.hydrate(messageID: anchor)
+        XCTAssertTrue(hydrated.sections.prose.contains("2"))
+        try Data((line(1) + line(3)).utf8).write(to: selected)
+        await coordinator.refresh(paths: [selected.path], scope: .proseOnly)
+        let removedValue = try await database.resolveNavigationReference(reference)
+        let removed = try XCTUnwrap(removedValue)
+        XCTAssertNil(removed.anchorMessageID, "the old source offset must not select a different external UUID")
+    }
+
+    func testDiscoveryWrapperForwardsDurableTimestampContext() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        let prefix = line(1)
+        let suffix = "{\"type\":\"user\",\"uuid\":\"second\",\"sessionId\":\"session\",\"message\":{\"content\":\"context\"}}\n"
+        try Data((prefix + suffix).utf8).write(to: file)
+        let source = DiscoveryCountingSource(base: ClaudeCodeSource(roots: [root]), counter: ReadCounter())
+        let discovered = try XCTUnwrap(try source.discover().first)
+        let context = SourceReadContext(sessionID: "session", fallbackTimestampMilliseconds: 123, lastValidTimestampMilliseconds: 456)
+        var timestamps: [Int64] = []
+        for try await record in source.records(in: discovered, from: Int64(prefix.utf8.count), through: nil, initialContext: context) {
+            if case .message(let message) = record { timestamps.append(message.timestampMilliseconds) }
+        }
+        XCTAssertEqual(timestamps, [456], "the compatibility bridge would reread the prefix's different timestamp")
+    }
+
+    private func waitForCondition(_ condition: () async throws -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !(try await condition()) {
+            guard ContinuousClock.now < deadline else { throw BatchLatchError.timedOut }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func testDistinctScopeDemandStillAppliesAfterResetDeferral() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .everything, progress: { _ in })
+        let deferred = OSAllocatedUnfairLock(initialState: 0), committed = OSAllocatedUnfairLock(initialState: 0)
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true, onRebuildReset: { committed.withLock { $0 += 1 } },
+            onRebuildDeferred: { deferred.withLock { $0 += 1 } }, automaticallyRetryReset: false)
+        await scheduler.waitUntilIdle()
+        await scheduler.request(reconcile: true, scope: .proseAndToolInvocations)
+        await scheduler.waitUntilIdle()
+        let scope = try await database.storedIndexScope()
+        XCTAssertEqual(scope, .proseAndToolInvocations)
+        XCTAssertEqual(deferred.withLock { $0 }, 1)
+        XCTAssertEqual(committed.withLock { $0 }, 0, "independent scope change cannot acknowledge returned reset ownership")
+        await scheduler.stop()
+    }
+
     func testRecoveryFilenameClassificationMatchesDiscoveryWithoutDiskReads() {
         XCTAssertTrue(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/deleted/session.jsonl"), agent: .claudeCode))
         XCTAssertTrue(TraceFileIO.isSessionTranscript(URL(fileURLWithPath: "/deleted/rollout-example.jsonl"), agent: .codex))
@@ -5041,6 +5237,9 @@ private struct DiscoveryCountingSource: SessionSource {
     }
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
         base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
     }
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
         try base.hydrate(fileURL: fileURL, format: format, locator: locator)
