@@ -4517,6 +4517,60 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "pending-rebuild-after-overlapping-startup-onboarding")
     }
 
+    func testSelectedReaderSurvivesChainedFileRenames() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let name = "Relocated reader"
+        try addLongSession(name, project: "RelocationProject", directory: directory, count: 8, contentRepeats: 0)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["RelocationProject"].firstMatch.waitForExistence(timeout: 20))
+        app.staticTexts["RelocationProject"].firstMatch.click()
+        openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        var previous = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+        for filename in ["moved-reader.jsonl", "renamed-reader.jsonl"] {
+            let target = previous.deletingLastPathComponent().appendingPathComponent(filename)
+            try FileManager.default.moveItem(at: previous, to: target)
+            XCTAssertNotNil(poll(timeout: 15) {
+                (try? self.sqliteInteger(directory.appendingPathComponent("index.sqlite"),
+                    sql: "SELECT count(*) FROM source_file WHERE path LIKE '%/\(filename)';")) == 1 ? true : nil
+            })
+            XCTAssertTrue(app.windows[name].exists)
+            XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+            previous = target
+        }
+        attach(app, name: "selected-reader-survives-renames")
+    }
+
+    func testSearchTargetMessageSurvivesAutomaticReset() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let name = "Anchor reader"
+        try addLongSession(name, project: "AnchorRecoveryProject", directory: directory, count: 40, contentRepeats: 0)
+        let deferred = directory.appendingPathComponent("anchor-deferred"), committed = directory.appendingPathComponent("anchor-committed")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "2"
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["AnchorRecoveryProject"].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 1 ? true : nil })
+        let query = app.textFields["mainSearch"]
+        query.click(); query.typeText("\"Anchor reader message 25\"")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Anchor reader message 25")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 25, in: scroll).waitForExistence(timeout: 10))
+        try addLongSession("Anchor reset trigger", project: "AnchorTriggerProject", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
+        XCTAssertTrue(app.windows[name].exists)
+        XCTAssertTrue(transcriptMessage(name, index: 25, in: scroll).wait(for: \.isHittable, toEqual: true, timeout: 10))
+        attach(app, name: "search-target-survives-automatic-reset")
+    }
+
     func testAutomaticResetFailureKeepsReaderAndIndexesLiveChange() throws {
         try assertAutomaticResetPreservesReader(failRecoveryFirst: true)
     }

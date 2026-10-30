@@ -782,8 +782,12 @@ public struct SearchCursor: Codable, Hashable, Sendable {
 /// within this generation, including when a reset later fails checkpointing.
 public struct IndexContentGeneration: Hashable, Codable, Sendable {
     let value: String
+    var databaseFamily: String { String(value.split(separator: ":").first ?? "") }
+    func advanced() -> Self {
+        .init(value: (databaseFamily.isEmpty ? UUID().uuidString : databaseFamily) + ":" + UUID().uuidString)
+    }
     public func belongsToSameDatabase(as other: Self) -> Bool {
-        value.split(separator: ":").first == other.value.split(separator: ":").first
+        databaseFamily == other.databaseFamily
     }
 }
 
@@ -875,6 +879,23 @@ public struct SessionNavigationReference: Hashable, Codable, Sendable {
     public func anchored(at identity: MessageNavigationIdentity) -> Self {
         .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
             anchorSourceKey: identity.sourceKey, anchorExternalID: identity.externalID)
+    }
+
+    public func preservingAnchor(from reference: Self) -> Self {
+        .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
+            anchorSourceKey: anchorSourceKey ?? reference.anchorSourceKey,
+            anchorExternalID: anchorExternalID ?? reference.anchorExternalID)
+    }
+
+    var unanchored: Self {
+        .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
+            anchorSourceKey: nil, anchorExternalID: nil)
+    }
+
+    func relocating(to reference: Self) -> Self {
+        .init(agent: reference.agent, root: reference.root, path: reference.path,
+            externalSessionID: reference.externalSessionID,
+            anchorSourceKey: anchorSourceKey, anchorExternalID: anchorExternalID)
     }
 }
 

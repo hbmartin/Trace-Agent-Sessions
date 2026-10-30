@@ -75,15 +75,14 @@ final class AppSettings: ObservableObject {
     }
     func reconcilePreparedNavigation(generation: IndexContentGeneration) {
         guard let prepared = preparedNavigationRecovery else { return }
-        // Same generation means reset never committed. A different database
-        // cannot inherit another database's pending navigation either.
-        if generation == prepared.generation || !generation.belongsToSameDatabase(as: prepared.generation) {
+        preparedNavigationRecovery = nil
+        // Numeric IDs are valid only in the recorded generation. The source
+        // reference can resolve across both a reset and database recreation.
+        if generation == prepared.generation {
             if pendingNavigationReference == prepared.reference { pendingNavigationReference = nil }
-        }
-        if generation != prepared.generation, generation.belongsToSameDatabase(as: prepared.generation), prepared.reference == nil {
+        } else {
             lastSessionID = nil
         }
-        preparedNavigationRecovery = nil
     }
 
     var pendingNavigationReference: SessionNavigationReference? {
