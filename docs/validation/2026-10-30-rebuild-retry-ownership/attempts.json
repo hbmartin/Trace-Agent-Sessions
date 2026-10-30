@@ -1,0 +1,227 @@
+[
+  {
+    "run": "retry-accepted-focused",
+    "final": false,
+    "result": "Failed",
+    "passed": 398,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/retry-accepted-focused.xcresult"
+  },
+  {
+    "run": "retry-confirmed-focused",
+    "final": true,
+    "result": "Passed",
+    "passed": 399,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-confirmed-focused.xcresult"
+  },
+  {
+    "run": "retry-confirmed-stress-1",
+    "final": true,
+    "result": "Passed",
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-confirmed-stress-1.xcresult"
+  },
+  {
+    "run": "retry-confirmed-stress-2",
+    "final": true,
+    "result": "Passed",
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-confirmed-stress-2.xcresult"
+  },
+  {
+    "run": "retry-confirmed-stress-3",
+    "final": true,
+    "result": "Passed",
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-confirmed-stress-3.xcresult"
+  },
+  {
+    "run": "retry-confirmed-stress-4",
+    "final": true,
+    "result": "Passed",
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-confirmed-stress-4.xcresult"
+  },
+  {
+    "run": "retry-confirmed-stress-5",
+    "final": true,
+    "result": "Passed",
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-confirmed-stress-5.xcresult"
+  },
+  {
+    "run": "retry-delivery-focused",
+    "final": false,
+    "result": "Failed",
+    "passed": 387,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/retry-delivery-focused.xcresult"
+  },
+  {
+    "run": "retry-final-focused",
+    "final": false,
+    "result": "Passed",
+    "passed": 387,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-final-focused.xcresult"
+  },
+  {
+    "run": "retry-final-stress-1",
+    "final": false,
+    "result": "Passed",
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-final-stress-1.xcresult"
+  },
+  {
+    "run": "retry-final-stress-2",
+    "final": false,
+    "result": "Passed",
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-final-stress-2.xcresult"
+  },
+  {
+    "run": "retry-final-stress-3",
+    "final": false,
+    "result": "Passed",
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-final-stress-3.xcresult"
+  },
+  {
+    "run": "retry-final-stress-4",
+    "final": false,
+    "result": "Passed",
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-final-stress-4.xcresult"
+  },
+  {
+    "run": "retry-final-stress-5",
+    "final": false,
+    "result": "Passed",
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-final-stress-5.xcresult"
+  },
+  {
+    "run": "retry-focused-1",
+    "final": false,
+    "result": "Failed",
+    "passed": 385,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/retry-focused-1.xcresult"
+  },
+  {
+    "run": "retry-focused-2",
+    "final": false,
+    "result": "Passed",
+    "passed": 386,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-focused-2.xcresult"
+  },
+  {
+    "run": "retry-focused-3",
+    "final": false,
+    "result": "Passed",
+    "passed": 386,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-focused-3.xcresult"
+  },
+  {
+    "run": "retry-initial",
+    "final": false,
+    "result": "Failed",
+    "passed": 91,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/retry-initial.xcresult"
+  },
+  {
+    "run": "retry-stress-1",
+    "final": false,
+    "result": "Passed",
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-stress-1.xcresult"
+  },
+  {
+    "run": "retry-stress-2",
+    "final": false,
+    "result": "Passed",
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-stress-2.xcresult"
+  },
+  {
+    "run": "retry-stress-3",
+    "final": false,
+    "result": "Passed",
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-stress-3.xcresult"
+  },
+  {
+    "run": "retry-stress-4",
+    "final": false,
+    "result": "Passed",
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-stress-4.xcresult"
+  },
+  {
+    "run": "retry-stress-5",
+    "final": false,
+    "result": "Passed",
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-stress-5.xcresult"
+  },
+  {
+    "run": "retry-targeted-1",
+    "final": false,
+    "result": "Passed",
+    "passed": 99,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/retry-targeted-1.xcresult"
+  },
+  {
+    "run": "retry-targeted-2",
+    "final": false,
+    "result": "Failed",
+    "passed": 101,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/retry-targeted-2.xcresult"
+  }
+]

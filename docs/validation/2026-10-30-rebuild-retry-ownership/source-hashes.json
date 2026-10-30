@@ -1,0 +1,14 @@
+{
+  "Sources/TraceApp/AppSettings.swift": "7a75bc2c585f171d1f37053e42ca8d815010010610d1ddaf765c736868bba790",
+  "Sources/TraceApp/MainView.swift": "0e67ad0f55f90145bc17f4b2c21274afd6977405820ca5ab4077e642e60d514f",
+  "Sources/TraceApp/SessionSearchModel.swift": "f1e35ba9799886f2069715897ea53eb3671cd0c4917dbdef74f4cab74fd778be",
+  "Sources/TraceApp/TraceModel.swift": "1530db518cccf4febeca7f7f3ef93482268f1df1bfa54495ea917f5a9b1227ae",
+  "Sources/TraceCore/Database/IndexDatabase.swift": "56d6ced0d4d151fb01e9c8e0ae8efca329656f918507f7b14539f79bc2c0dd87",
+  "Sources/TraceCore/Indexing/IndexCoordinator.swift": "be38927e72831b662b828e3a7509a674bf917087078113dedbdd4a43ff0fb838",
+  "Sources/TraceCore/Indexing/IndexScheduler.swift": "42cdbca6bda54af86ce929de3149c355d0a1834e70e354c35c4784f4f1d04509",
+  "Sources/TraceCore/Models.swift": "a8aa4f889882544eb2b66cef16348582eb6ecb943a752bd969ebaf1a414ad078",
+  "Tests/ExternalClientFixture/DiscoveryClient.swift": "47bc0b52c872a6d2f9127406bdcf6e762ce91eab754a7b18fa72323490ca2607",
+  "Tests/TraceAppTests/AppReviewFollowupTests.swift": "59a48b47ca569425d0d3ed299d9bbde6864a6a14e7460f46d76eff2275e860fc",
+  "Tests/TraceCoreTests/IndexingRegressionTests.swift": "efea1e2c52929fae7d2a1515a5bbbbba499c766a139510985d6f21ba1ca171b2",
+  "Tests/TraceUITests/TraceUITests.swift": "c1652bb31bbf6963326e414eace5fea3c44eaac1b5f5c485c268cde0caddc114"
+}

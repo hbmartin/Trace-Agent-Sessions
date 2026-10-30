@@ -1,0 +1,20 @@
+[
+  "TraceUITests/TraceUITests/testStartupClaimedRebuildSurvivesOnboardingDeferral",
+  "TraceUITests/TraceUITests/testStartupClaimedRebuildSurvivesWatcherRestartDuringOnboardingDeferral",
+  "TraceUITests/TraceUITests/testPostStartupRebuildResumesAfterOnboardingDeferral",
+  "TraceUITests/TraceUITests/testRebuildShowsPreparationBeforeClearingIndex",
+  "TraceUITests/TraceUITests/testQueuedSidebarRetryBecomesUsableAfterRebuildReset",
+  "TraceUITests/TraceUITests/testRebuildDuringHeldRetryKeepsResumingFeedbackUntilWatcherStartupCompletes",
+  "TraceUITests/TraceUITests/testFailedRebuildRetainsAndUnblocksGlobalProjectFilter",
+  "TraceUITests/TraceUITests/testQueuedRebuildCancellationIsExplainedAfterSourceFailure",
+  "TraceUITests/TraceUITests/testWatcherReplacementDuringSubmittedStartupResumesLiveChanges",
+  "TraceUITests/TraceUITests/testPendingRebuildResumesWhileStartupSettlementIsHeld",
+  "TraceUITests/TraceUITests/testOnboardingReversalRetiresHeldStartupAndResumesOnce",
+  "TraceUITests/TraceUITests/testWatcherOnlyOnboardingDeferralKeepsFailedSourceRetryVisible",
+  "TraceUITests/TraceUITests/testAcknowledgedRebuildResetsAfterSourceReplacement",
+  "TraceUITests/TraceUITests/testCommittedRebuildIsNotRepeatedAfterSourceReplacement",
+  "TraceUITests/TraceUITests/testExhaustedResetResumesStartupAndRecoversOnLiveChange",
+  "TraceUITests/TraceUITests/testAutomaticResetFailureKeepsReaderAndIndexesLiveChange",
+  "TraceUITests/TraceUITests/testAutomaticResetCommitRestoresReaderAndBookmark",
+  "TraceUITests/TraceUITests/testSelectionChangedAfterAutomaticDeliverySurvivesCommittedReset"
+]

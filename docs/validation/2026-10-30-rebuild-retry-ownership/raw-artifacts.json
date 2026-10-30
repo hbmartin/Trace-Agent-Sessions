@@ -1,0 +1,452 @@
+[
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-1.log",
+    "bytes": 699553,
+    "sha256": "db1265988b99ac394f9a6d932a148ec7e45c045e751b4b52b12d4df5afb72acc"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-10.log",
+    "bytes": 306642,
+    "sha256": "3f8e60dfb98aa12a3afa2415e7385461fca71baf4688dda172115513a832ccd0"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-11.log",
+    "bytes": 262937,
+    "sha256": "b2c3a516dfbd8cf081182352d701c31b3740aee6ad2af41188171d0e059b8c13"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-12.log",
+    "bytes": 325024,
+    "sha256": "ba5e23bd0aa4edab1f25c49105d66b61d1eaa3cf3ef0000db7aae67617ebf1c4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-13.log",
+    "bytes": 315676,
+    "sha256": "b7c99410b897d7df1fb31037939591a1c46cd3ae10f2d636f0f7e7121a73132f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-14.log",
+    "bytes": 229765,
+    "sha256": "e7d406d5759f5ed35408843fc5276ef6f6df40c6386bb14ccf2896ccb2727ead"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-15.log",
+    "bytes": 231511,
+    "sha256": "d51e4c6bda880a1cadf769f968a2b17495c24f26a6980782e766ced99f3a60f0"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-16.log",
+    "bytes": 197883,
+    "sha256": "0a8f17248d52054c393337718a3e4a478e1c792f7b538e3edd17181d65fbcc9f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-17.log",
+    "bytes": 249892,
+    "sha256": "e5751ed7cfd0c271979ce7d4204433fb202d3f69cf76128cb29a5f72e25ac8d4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-18.log",
+    "bytes": 705691,
+    "sha256": "da4d82e896b27eae1b945c89e6945a7b534c81dfbf8ad7f1a6acbdcea8818e64"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-19.log",
+    "bytes": 197951,
+    "sha256": "46d5d30886a1708ad2b61fe7ecaf92ec42c8a3652810d35b3602e4dceae26bad"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-2.log",
+    "bytes": 419777,
+    "sha256": "8e1eb8b9eecd2cf89ff057d43224219e011f1583306c5cce16834df6b2fb35ee"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-3.log",
+    "bytes": 314383,
+    "sha256": "695d376df2093c52f414cd911dbace6b6e945e09ea39265b1948a905e48b8412"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-4.log",
+    "bytes": 291860,
+    "sha256": "ebcd7193299611858f71e67f7e922238c38f4416e2e895ae2912d4a40dfb1d53"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-5.log",
+    "bytes": 218458,
+    "sha256": "863ca0f984a1b86f92bfdc21b1d7ccef2624754798f1e0baec259249396d8dce"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-6.log",
+    "bytes": 301360,
+    "sha256": "d93539eb6d8b75ed97e5d1de5988b12702c0706de8b3815007aca5f86b6aa2ad"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-7.log",
+    "bytes": 247631,
+    "sha256": "9061ce2f169d827061156ca8fa80021ae1626e4cfb182685a4bfa806e38893b3"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-8.log",
+    "bytes": 159386,
+    "sha256": "5a744ae1648e23902dc2e965082a8e13acbef25330b2fc58c2772236f820b461"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/compile-9.log",
+    "bytes": 252388,
+    "sha256": "6d9b00c317a104a021a7bb7c2053e38a9127685ea30e6fe3af988f2f328e6bc1"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/debug-app.log",
+    "bytes": 159693,
+    "sha256": "540c4fec92d59f34e3d8ea24346efa74a4db2d860c9527ce5975ae5f5cd302d4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/external-client.log",
+    "bytes": 541952,
+    "sha256": "167bdf54edf136ead08adbc0d3d5b3083461d6bd9cdd002dc22eb8f6cd861eef"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/debug-app.log",
+    "bytes": 161686,
+    "sha256": "48faec9f7623f7125f870139e25a13560135744700e1417fce0eb1ad377d9dd6"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/external-client.log",
+    "bytes": 529005,
+    "sha256": "a7e8223e3af149f194aa3511e5f250a920c2c0e56ea1da5c4350e36d8f641d4b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/network.log",
+    "bytes": 176,
+    "sha256": "12aa41bc0f3dbba7bd9811b0767d05707769db605af7feb276da7f576c2b1482"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/project-drift.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/release-app.log",
+    "bytes": 589094,
+    "sha256": "cb7bed6843f446b993ddbf389d6056397e3946def489d3181679240607b25b6e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/script-tests.log",
+    "bytes": 3521,
+    "sha256": "f766457aece4968058ff55f298b179da72f99987a43dd30933305b3d8fc78273"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/signing.log",
+    "bytes": 61,
+    "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/final-checks/whitespace.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/network.log",
+    "bytes": 176,
+    "sha256": "12aa41bc0f3dbba7bd9811b0767d05707769db605af7feb276da7f576c2b1482"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/project-drift.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/release-app.log",
+    "bytes": 804184,
+    "sha256": "fe9ce2c7c91ee2cdfabc5e65b11319df429a6fe2057713884a2a34d94eb14d0e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/script-tests.log",
+    "bytes": 3521,
+    "sha256": "bcadc9a6104e2a1a6aaf6cb5e0868c6624e7737552ad359f6ed4ab8acf37519d"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/signing.log",
+    "bytes": 61,
+    "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup/whitespace.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-accepted-focused.log",
+    "bytes": 158054,
+    "sha256": "1a6bed6b8b9e2a6e6a6c62cebfdc52d247bab771548082026505f34325016d58"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-focused.log",
+    "bytes": 157335,
+    "sha256": "73ccdeef342fb11b2bcb6ba2eb4f5cb8c9427e2f485aca0daf9e8444d0cc35f9"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-1.log",
+    "bytes": 17898,
+    "sha256": "4f7101f9ded7b1c4c58ec0104a6f0f19395899a9f6bf8320d85e0a09f206f6eb"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-2.log",
+    "bytes": 17897,
+    "sha256": "7fb0524621863e21139d0cb691c281ef945df4a207b34091f2aea42812166159"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-3.log",
+    "bytes": 17897,
+    "sha256": "e4be785bbdeb2fd3a0582fb633067403a9b5ce35ba21124756947424ddf82bee"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-4.log",
+    "bytes": 17897,
+    "sha256": "7fca4cb9bf240eecaefed1fbf38c4fb78c13bf87001305c1a1cfd0ae59f8697c"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-5.log",
+    "bytes": 17899,
+    "sha256": "3cbaf5050845c167e7171453db4d23d9885b45744a2a820e100cc5f14a5945e6"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-delivery-focused.log",
+    "bytes": 153801,
+    "sha256": "9b80a69a0b36cc132f81194970f8dc3f6a3494203aa55da580852ddc65a569aa"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-focused.log",
+    "bytes": 152544,
+    "sha256": "c6cc54a805696187eee96f3f771b0304f8cb83261619c8939e182832115bb26f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-1.log",
+    "bytes": 16513,
+    "sha256": "b7633334fe23c8d453c8ca33d9a156cc1a1a09a24115181b7bf6c60743231131"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-2.log",
+    "bytes": 16349,
+    "sha256": "446910868e7fe756a281586d0a3142db3db56938539d1e9d15d42677bd8cfb4a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-3.log",
+    "bytes": 16349,
+    "sha256": "232d24edaad934b2e95f33714a071f1ea229934f5cd41b619bb796c82c0a073e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-4.log",
+    "bytes": 16508,
+    "sha256": "712719fc9d1f0f2231649acec13320b8f6e075d42f2c5680d067c7a5fa513b05"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-5.log",
+    "bytes": 16349,
+    "sha256": "54a18bbc0a8fe22fe931f5fd3fcfdb5a85412a387e5580ff03591acb2d6990d4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-focused-1.log",
+    "bytes": 152533,
+    "sha256": "f0a4a2ec4c27a0d0e2025b884240595fbb64b1ab3ceab1e5449c8c47e877585e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-focused-2.log",
+    "bytes": 152162,
+    "sha256": "c47df44fb0e66c976ed88163e9bcd817fa9a1860ff0b4244eeee638cd2ec26a2"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-focused-3.log",
+    "bytes": 151993,
+    "sha256": "87d8e5e785f7a592a1eb520002228090a30d9fabf80b0976ee5ddb1b1390bd9d"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-initial.log",
+    "bytes": 47207,
+    "sha256": "7802dcd427ed7af4349e5cba00593c85a4730e3b8a7ea6623b2e2967c20f6b7f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-1.log",
+    "bytes": 15938,
+    "sha256": "4dc9e15490399fb078cc9ba32ebea7255f23996e6a0d63e97a15ef575b7af593"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-2.log",
+    "bytes": 15948,
+    "sha256": "51f8b614faa39339647def91e0c92aad9bfd9117735dd1c3bf2f7bbf3693de62"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-3.log",
+    "bytes": 15936,
+    "sha256": "c711c64f1e1b6262cdcdfb53c400dc00e41800a0af70435143a5b9ce1f8c9e31"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-4.log",
+    "bytes": 16049,
+    "sha256": "19f60c03809760d75511f7b2d31dafdf22c4e874a5a102b08ce52efb84547868"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-5.log",
+    "bytes": 16050,
+    "sha256": "534fb701b495ea7690ae2a2c80e98a73aef1ece52ccbd5101098d6d315ea0405"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-targeted-1.log",
+    "bytes": 49661,
+    "sha256": "727b9973739524cea5fd89b4472dd82e964ce25d6b1a0e41a741283bd237be5b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-targeted-2.log",
+    "bytes": 52424,
+    "sha256": "2774c3b8ee598edf15887d31a9b34a1f70aefa211cc5dded12348f8377481851"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-accepted-focused.xcresult",
+    "files": 2470,
+    "bytes": 69390336,
+    "treeSHA256": "55e08adde51eaa2647887b321452a4023f050a95f63b76f60a3b17d60f2bdc6e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-focused.xcresult",
+    "files": 844,
+    "bytes": 1587102,
+    "treeSHA256": "33e8d6d0e0e3e9d146546ea2af74f686dc1a4d2c8692db3e30040697559c39a6"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-1.xcresult",
+    "files": 94,
+    "bytes": 892264,
+    "treeSHA256": "4e6d724c0201f09ec15f9f4a96acbc7f7c6000ff45dabefe41dafa8bc7ad6849"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-2.xcresult",
+    "files": 94,
+    "bytes": 883346,
+    "treeSHA256": "05c05834c091e1949c417b408e31d2a5e5738df6aa31aa63797e9d28a7e04184"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-3.xcresult",
+    "files": 94,
+    "bytes": 890977,
+    "treeSHA256": "b89ca750c759c7cee545533f09803c2079a6081bfcf0536df8dcf6c6aa1eef62"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-4.xcresult",
+    "files": 94,
+    "bytes": 882927,
+    "treeSHA256": "3caf6bfaa2a15ada50463592c7008748ab3e02860d80427c0f10e8a04d02315a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-confirmed-stress-5.xcresult",
+    "files": 94,
+    "bytes": 890959,
+    "treeSHA256": "111e688fcdd115f2310bb002ed1aec32c2363b1f554aceabb059085d17673826"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-delivery-focused.xcresult",
+    "files": 2506,
+    "bytes": 74533870,
+    "treeSHA256": "27c6a283a63536e1fd32f3600a0daf283a5aa9097f5bab8edfdf5a613e3c697d"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-focused.xcresult",
+    "files": 820,
+    "bytes": 1555997,
+    "treeSHA256": "09b18c5c7eca092b754fac5035b68a390b54c35be1457123c5ddac3ec7bd6db2"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-1.xcresult",
+    "files": 88,
+    "bytes": 868995,
+    "treeSHA256": "22fe3584d905f0346492f27736dd6a1cc011b0717cf53235d7985b20ad446803"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-2.xcresult",
+    "files": 88,
+    "bytes": 867971,
+    "treeSHA256": "a788a3593693e3c9d2b18d5b83bfe78073ca70ab6b228893eeb1ca2895847a7b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-3.xcresult",
+    "files": 88,
+    "bytes": 875889,
+    "treeSHA256": "33b6f0cfa08aa876bef41b5314adf2b6082deb2d8616ddbdcb68510b22a003c8"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-4.xcresult",
+    "files": 88,
+    "bytes": 876270,
+    "treeSHA256": "808055927c81c0b867fa0d40a8f9fcfe7a37ecdc08031c1e9c5fc83521991dfc"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-final-stress-5.xcresult",
+    "files": 88,
+    "bytes": 876111,
+    "treeSHA256": "eeec286b9d18c6ace05d9d02f5154fd2d5bdb087ac9d1f520f074dd50ad744bd"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-focused-1.xcresult",
+    "files": 2564,
+    "bytes": 68901384,
+    "treeSHA256": "52f9da9df83c6f0ff51d7feb53da9336bfb85ed4a2572d7294fa3442871bb223"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-focused-2.xcresult",
+    "files": 818,
+    "bytes": 1545442,
+    "treeSHA256": "935c25b2c40899ec89f88a1e3093db9ff8d24bb7166d6ccab59fc566a3cfd3c8"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-focused-3.xcresult",
+    "files": 818,
+    "bytes": 1554369,
+    "treeSHA256": "1efaa59cd689e05cdf10055f81b6594063a1f0bb7ef8c27b4c121980c7214e28"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-initial.xcresult",
+    "files": 2006,
+    "bytes": 69589311,
+    "treeSHA256": "0d1b9dca64aaec6c6b5f971406981921704ffaab0ee05dd52db9fc54f2f4aa22"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-1.xcresult",
+    "files": 86,
+    "bytes": 873898,
+    "treeSHA256": "535ba74461bed6ef189b11c975dc5bf656a7da938a0fee25f6f228ff079416e3"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-2.xcresult",
+    "files": 86,
+    "bytes": 867592,
+    "treeSHA256": "892395a09d8d8a6432608c78e803fd3d4d72e2898e77fcf85c82e5213eb0eb11"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-3.xcresult",
+    "files": 86,
+    "bytes": 874286,
+    "treeSHA256": "1fb184aa154fcb6ed1ae4b0aee5b7f05baaf19dc163cf6ee90d97803ed74725e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-4.xcresult",
+    "files": 86,
+    "bytes": 867773,
+    "treeSHA256": "57f9972812b25e8840faeb5b4a7cb357abd49ec03f516b24e0c7b7e96e67bee8"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-stress-5.xcresult",
+    "files": 86,
+    "bytes": 867486,
+    "treeSHA256": "2e6b43dba9a3ba8d2b53e69129d9b8ae33d93f52924b0d302ba133bae1404b29"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-targeted-1.xcresult",
+    "files": 244,
+    "bytes": 1036529,
+    "treeSHA256": "8317187677809245cdc41b3bb295b4ab5d9be852e6be93b56e874071714bbfd1"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/retry-targeted-2.xcresult",
+    "files": 1982,
+    "bytes": 67672022,
+    "treeSHA256": "761d3a01027822af36d2fadaf258913601191e149c3c2c044a674aa79cc13154"
+  }
+]

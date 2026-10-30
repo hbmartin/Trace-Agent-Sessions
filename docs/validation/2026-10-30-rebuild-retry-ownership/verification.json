@@ -1,0 +1,114 @@
+{
+  "base": "70634d5db0732fff0c2e42f4c5196770a214498e",
+  "candidate": "6f67f03a50cf71e724726e27c4b15ad2d2cdd52f",
+  "platform": "macOS 27.0.1 (26A434), arm64",
+  "xcode": "27.2 (27B52)",
+  "runs": [
+    {
+      "run": "retry-confirmed-focused",
+      "passed": 399,
+      "failed": 0,
+      "skipped": 0,
+      "result": "Passed",
+      "elapsedSeconds": 110.39847849984653,
+      "rawBundle": "build/retry-confirmed-focused.xcresult"
+    },
+    {
+      "run": "retry-confirmed-stress-1",
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "result": "Passed",
+      "elapsedSeconds": 8.585563249886036,
+      "rawBundle": "build/retry-confirmed-stress-1.xcresult"
+    },
+    {
+      "run": "retry-confirmed-stress-2",
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "result": "Passed",
+      "elapsedSeconds": 7.840274167014286,
+      "rawBundle": "build/retry-confirmed-stress-2.xcresult"
+    },
+    {
+      "run": "retry-confirmed-stress-3",
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "result": "Passed",
+      "elapsedSeconds": 7.651886000065133,
+      "rawBundle": "build/retry-confirmed-stress-3.xcresult"
+    },
+    {
+      "run": "retry-confirmed-stress-4",
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "result": "Passed",
+      "elapsedSeconds": 7.425268374849111,
+      "rawBundle": "build/retry-confirmed-stress-4.xcresult"
+    },
+    {
+      "run": "retry-confirmed-stress-5",
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "result": "Passed",
+      "elapsedSeconds": 8.235239292029291,
+      "rawBundle": "build/retry-confirmed-stress-5.xcresult"
+    }
+  ],
+  "checks": [
+    {
+      "step": "debug-app",
+      "exitCode": 0,
+      "elapsedSeconds": 10.482354833045974
+    },
+    {
+      "step": "release-app",
+      "exitCode": 0,
+      "elapsedSeconds": 117.4031261249911
+    },
+    {
+      "step": "external-client",
+      "exitCode": 0,
+      "elapsedSeconds": 32.02115383394994
+    },
+    {
+      "step": "project-drift",
+      "exitCode": 0,
+      "elapsedSeconds": 0.24469537497498095
+    },
+    {
+      "step": "signing",
+      "exitCode": 0,
+      "elapsedSeconds": 5.9564875001087785
+    },
+    {
+      "step": "network",
+      "exitCode": 0,
+      "elapsedSeconds": 0.08958108304068446
+    },
+    {
+      "step": "script-tests",
+      "exitCode": 0,
+      "elapsedSeconds": 106.95627783308737
+    },
+    {
+      "step": "whitespace",
+      "exitCode": 0,
+      "elapsedSeconds": 0.05981595884077251
+    }
+  ],
+  "ui": {
+    "status": "skipped-by-user",
+    "instruction": "Skip UI tests for this follow-up",
+    "compiled": true
+  },
+  "completeSuites": false,
+  "releaseComparisonPairs": false,
+  "localTenPercentAcceptanceClaim": false,
+  "rawDirectory": "/Volumes/Pro2T/TraceValidation/rebuild-retry-ownership-followup",
+  "worktree": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates"
+}
