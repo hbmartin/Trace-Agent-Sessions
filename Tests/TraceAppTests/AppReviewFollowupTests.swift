@@ -601,6 +601,9 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.mainSearch.query, "NavigationNeedle")
         XCTAssertEqual(f.model.mainSearchReturnAnchor?.offset, 41)
         XCTAssertEqual(f.model.mainSearchReturnAnchor?.id, f.model.messages.first?.id)
+        // Restoration publishes the mapped reader before its summary starts
+        // the replacement search. Advance virtual time only after enrollment.
+        try await wait { f.model.mainSearch.isSearching }
         await f.clock.advance(by: .milliseconds(100))
         try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.results.count == 3 }
         XCTAssertTrue(f.model.mainSearch.results.contains { $0.id == f.model.mainSearchReturnAnchor?.id })

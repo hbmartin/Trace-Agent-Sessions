@@ -41,6 +41,25 @@ final class IndexingRegressionTests: XCTestCase {
         await scheduler.stop(); try await clock.checkSuspension()
     }
 
+    func testOrdinaryEventsWithoutCallbacksRetainNoCompletionReceipts() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>(), failures = MutableFailureSelection([file.lastPathComponent])
+        let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(
+            base: ClaudeCodeSource(roots: [root]), failures: failures)], clock: clock)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock)
+        let gate = BatchLatch(), held = Task { await gate.pauseOnce() }
+        await coordinator.gatePreparationForTesting(held)
+        await scheduler.requestOrdinaryRecovery(paths: [file.path])
+        try await waitForPreparation(coordinator)
+        for _ in 0..<20 { await scheduler.requestOrdinaryRecovery(paths: [file.path]) }
+        await gate.release(); await scheduler.waitUntilIdle()
+        let retained = await scheduler.retainedOrdinaryReceiptCountForTesting
+        XCTAssertEqual(retained, 0, "live events without callbacks must not accumulate empty completion receipts on failure")
+        await scheduler.stop(); try await clock.checkSuspension()
+    }
+
     func testNewerCheckpointWaitsForOlderOrdinaryFallback() async throws {
         let root = try directory(), old = root.appendingPathComponent("old.jsonl"), new = root.appendingPathComponent("new.jsonl")
         try Data(line(1).utf8).write(to: old)

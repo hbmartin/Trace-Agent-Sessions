@@ -5859,14 +5859,20 @@ final class TraceModel: ObservableObject {
                 activity: safety ? .safetyVerification : activity(for: changes),
                 satisfiesSafetyReconciliation: safety ? true : nil,
                 watermarks: changes.watermarks, streamRoots: changes.streamRoots,
-                onOrdinaryWorkCompleted: completion ?? {})
-        } else {
+                onOrdinaryWorkCompleted: completion)
+        } else if let completion {
             await scheduler.request(paths: changes.paths,
                 reconciliationPaths: changes.reconciliationPaths, scope: settings.indexScope,
                 activity: safety ? .safetyVerification : (changes.hasIndexWork ? activity(for: changes) : .fileChanges),
                 satisfiesSafetyReconciliation: safety ? true : nil,
                 watermarks: changes.watermarks, streamRoots: changes.streamRoots,
-                onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: completion ?? {})
+                onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: completion)
+        } else {
+            await scheduler.request(paths: changes.paths,
+                reconciliationPaths: changes.reconciliationPaths, scope: settings.indexScope,
+                activity: safety ? .safetyVerification : (changes.hasIndexWork ? activity(for: changes) : .fileChanges),
+                satisfiesSafetyReconciliation: safety ? true : nil,
+                watermarks: changes.watermarks, streamRoots: changes.streamRoots)
         }
         TraceTestHooks.appendLine(changes.paths.sorted().joined(separator: "\n"), pathKey: "TRACE_TEST_SOURCE_CHANGES_AUDIT_PATH")
     }

@@ -211,7 +211,7 @@ public actor IndexScheduler {
                         reconciliationPaths: Set<String> = [], activity: IndexActivity? = nil,
                         satisfiesSafetyReconciliation: Bool? = nil,
                         watermarks: [String: UInt64] = [:], streamRoots: [String: Set<String>] = [:],
-                        onOrdinaryWorkCompleted: @escaping @Sendable () -> Void = {}) {
+                        onOrdinaryWorkCompleted: (@Sendable () -> Void)? = nil) {
         guard !stopping else { return }
         pendingUsesCommittedScope = true
         enqueue(paths: paths, reconcile: reconcile, reconciliationPaths: reconciliationPaths,
