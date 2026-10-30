@@ -56,6 +56,36 @@ final class AppSettings: ObservableObject {
     }
     // An interrupted automatic reset must not restore a reused numeric ID on
     // the next launch. This opaque source reference takes precedence until resolved.
+    struct PreparedNavigationRecovery: Codable {
+        let owner: UUID
+        let generation: IndexContentGeneration
+        let reference: SessionNavigationReference?
+    }
+    var preparedNavigationRecovery: PreparedNavigationRecovery? {
+        get { defaults.data(forKey: "preparedNavigationRecovery").flatMap { try? JSONDecoder().decode(PreparedNavigationRecovery.self, from: $0) } }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: "preparedNavigationRecovery") }
+            else { defaults.removeObject(forKey: "preparedNavigationRecovery") }
+        }
+    }
+    func retirePreparedNavigation(owner: UUID, committed: Bool) {
+        guard let prepared = preparedNavigationRecovery, prepared.owner == owner else { return }
+        if !committed, pendingNavigationReference == prepared.reference { pendingNavigationReference = nil }
+        preparedNavigationRecovery = nil
+    }
+    func reconcilePreparedNavigation(generation: IndexContentGeneration) {
+        guard let prepared = preparedNavigationRecovery else { return }
+        // Same generation means reset never committed. A different database
+        // cannot inherit another database's pending navigation either.
+        if generation == prepared.generation || !generation.belongsToSameDatabase(as: prepared.generation) {
+            if pendingNavigationReference == prepared.reference { pendingNavigationReference = nil }
+        }
+        if generation != prepared.generation, generation.belongsToSameDatabase(as: prepared.generation), prepared.reference == nil {
+            lastSessionID = nil
+        }
+        preparedNavigationRecovery = nil
+    }
+
     var pendingNavigationReference: SessionNavigationReference? {
         get { defaults.data(forKey: Key.pendingNavigationReference).flatMap { try? JSONDecoder().decode(SessionNavigationReference.self, from: $0) } }
         set {

@@ -150,6 +150,8 @@ public actor IndexDatabase {
         )) AS had_recorded_error
         """
     public nonisolated let contentWasResetOnOpen: Bool
+    private nonisolated let generationState: OSAllocatedUnfairLock<IndexContentGeneration>
+    public nonisolated var contentGeneration: IndexContentGeneration { generationState.withLock { $0 } }
     private let pool: DatabasePool
     private let url: URL
 
@@ -190,6 +192,11 @@ public actor IndexDatabase {
             try db.execute(sql: "DELETE FROM trace_meta WHERE key='message_id_overflow'")
         }
         contentWasResetOnOpen = try Self.rebuildContentIfNeeded(pool)
+        try pool.write { db in
+            try db.execute(sql: "INSERT OR IGNORE INTO trace_meta(key,value) VALUES ('content_generation', ?)",
+                arguments: [UUID().uuidString + ":" + UUID().uuidString])
+        }
+        generationState = OSAllocatedUnfairLock(initialState: try pool.read(Self.readContentGeneration))
     }
 
     private static func markRollupsDirty(_ db: Database) throws {
@@ -454,6 +461,7 @@ public actor IndexDatabase {
                 """)
         }
         migrator.registerMigration("trace-v13-agent-source-identity") { db in
+            try advanceContentGeneration(in: db)
             // source_file is derived cache data. Empty it before replacing the
             // shipped UNIQUE(path) table so foreign-key cascades are deliberate.
             try db.execute(sql: """
@@ -554,6 +562,7 @@ public actor IndexDatabase {
             )
             guard stored != String(indexFormatVersion) else { return false }
             try db.inTransaction {
+                try Self.advanceContentGeneration(in: db)
                 try db.execute(sql: "DELETE FROM message_fts")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
@@ -569,6 +578,17 @@ public actor IndexDatabase {
             }
             return true
         }
+    }
+
+    private nonisolated static func readContentGeneration(_ db: Database) throws -> IndexContentGeneration {
+        .init(value: try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='content_generation'") ?? "")
+    }
+
+    private nonisolated static func advanceContentGeneration(in db: Database) throws {
+        let previous = try readContentGeneration(db)
+        let family = previous.value.split(separator: ":").first.map(String.init) ?? UUID().uuidString
+        try db.execute(sql: "INSERT INTO trace_meta(key,value) VALUES ('content_generation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            arguments: [family + ":" + UUID().uuidString])
     }
 
     public func storedIndexScope() throws -> IndexScope {
@@ -663,8 +683,10 @@ public actor IndexDatabase {
         let committed = OSAllocatedUnfairLock(initialState: false)
         defer { if committed.withLock({ $0 }) { committedResetCountForTesting += 1 } }
         #endif
+        let generation = IndexContentGeneration(value: (contentGeneration.value.split(separator: ":").first.map(String.init) ?? UUID().uuidString) + ":" + UUID().uuidString)
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
+                try db.execute(sql: "INSERT INTO trace_meta(key,value) VALUES ('content_generation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", arguments: [generation.value])
                 try db.execute(sql: "DELETE FROM message_fts")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
@@ -682,6 +704,7 @@ public actor IndexDatabase {
             #if DEBUG
             committed.withLock { $0 = true }
             #endif
+            generationState.withLock { $0 = generation }
             onCommitted()
             #if DEBUG
             if fault == .checkpoint { throw DatabaseError(resultCode: .SQLITE_BUSY) }
@@ -1740,7 +1763,9 @@ public actor IndexDatabase {
                            p.display_name AS project_name,
                            coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS session_title,
                            s.agent, s.has_plan,
-                           m.role, m.ts, m.prefix, sf.path AS source_path, NULL AS score
+                           m.source_key, m.external_uuid, s.external_id, m.role, m.ts, m.prefix, sf.path AS source_path,
+                           (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
+                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation, NULL AS score
                     FROM message_fts
                     JOIN message m ON m.id = message_fts.rowid
                     JOIN session s ON s.id = m.session_id
@@ -1817,7 +1842,7 @@ public actor IndexDatabase {
                 let next = hasMore ? results.last.map {
                     SearchCursor(rowID: $0.id, rank: nil, timestampMilliseconds: $0.timestampMilliseconds)
                 } : nil
-                return SearchPage(results: results, nextCursor: next)
+                return SearchPage(results: results, nextCursor: next, contentGeneration: try Self.readContentGeneration(db))
             } else {
                 var cursorSQL = ""
                 if let cursor, let rank = cursor.rank {
@@ -1837,7 +1862,9 @@ public actor IndexDatabase {
                            p.display_name AS project_name,
                            coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS session_title,
                            s.agent, s.has_plan,
-                           m.role, m.ts, m.prefix, sf.path AS source_path, r.score
+                           m.source_key, m.external_uuid, s.external_id, m.role, m.ts, m.prefix, sf.path AS source_path,
+                           (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
+                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation, r.score
                     FROM ranked r
                     JOIN message m ON m.id = r.rowid
                     JOIN session s ON s.id = m.session_id
@@ -1854,7 +1881,7 @@ public actor IndexDatabase {
             if hasMore { rows.removeLast(rows.count - limit) }
             let results = rows.compactMap(searchResult(from:))
             let next = hasMore ? results.last.map { SearchCursor(rowID: $0.id, rank: $0.rank, timestampMilliseconds: $0.timestampMilliseconds) } : nil
-            return SearchPage(results: results, nextCursor: next)
+            return SearchPage(results: results, nextCursor: next, contentGeneration: try Self.readContentGeneration(db))
         }
     }
 
@@ -2125,6 +2152,8 @@ public actor IndexDatabase {
             return try Row.fetchAll(db, sql: """
                 SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                        sf.path AS source_path,
+                           (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
+                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation,
                        sf.content_generation AS source_generation,
                        p.canonical_key AS project_canonical_key
                 FROM session s
@@ -2161,7 +2190,7 @@ public actor IndexDatabase {
             let sessions = Array(rows.prefix(pageSize))
             return .init(sessions: sessions, totalCount: total,
                          nextCursor: sessionCursor(after: sessions, hasMore: rows.count > pageSize,
-                                                   projectCanonicalKey: projectCanonicalKey))
+                                                   projectCanonicalKey: projectCanonicalKey), contentGeneration: try Self.readContentGeneration(db))
         }
     }
 
@@ -2190,7 +2219,8 @@ public actor IndexDatabase {
             return .init(projects: projects,
                          recentSessions: try sessionRows(projectCanonicalKey: nil, cursor: nil, limit: 10, in: db),
                          sessionList: try sessionListSnapshot(projectCanonicalKey: projectCanonicalKey,
-                            pageCount: pageCount, ensuringSessionID: ensuringSessionID, total: total, in: db))
+                            pageCount: pageCount, ensuringSessionID: ensuringSessionID, total: total, in: db),
+                         contentGeneration: try Self.readContentGeneration(db))
         }
         #if DEBUG
         if let gate = sidebarSnapshotPublicationGate {
@@ -2229,7 +2259,9 @@ public actor IndexDatabase {
         arguments += [limit]
         return try Row.fetchAll(db, sql: """
             SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
-                   sf.path AS source_path, sf.content_generation AS source_generation,
+                   sf.path AS source_path,
+                           (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
+                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation, sf.content_generation AS source_generation,
                    p.canonical_key AS project_canonical_key
             FROM session s JOIN source_file sf ON sf.id=s.source_file_id JOIN project p ON p.id=s.project_id
             WHERE \(predicates.joined(separator: " AND "))
@@ -2259,10 +2291,13 @@ public actor IndexDatabase {
             sessions.append(ensured)
             sessions.sort { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }
         }
-        return .init(sessions: sessions, totalCount: total, nextCursor: cursor, pageCount: pages)
+        return .init(sessions: sessions, totalCount: total, nextCursor: cursor, pageCount: pages, contentGeneration: try Self.readContentGeneration(db))
     }
 
     #if DEBUG
+    private var navigationCaptureReads = 0
+    private var navigationResolutionReads = 0
+    func navigationReadCountsForTesting() -> (capture: Int, resolution: Int) { (navigationCaptureReads, navigationResolutionReads) }
     private var sessionListReadGate: Task<Void, Never>?
     private var sessionListReadCount = 0
     private var failsNextSessionListRead = false
@@ -2340,7 +2375,29 @@ public actor IndexDatabase {
         #if DEBUG
         if let error = navigationCaptureErrorForTesting { navigationCaptureErrorForTesting = nil; throw error }
         #endif
+        #if DEBUG
+        navigationCaptureReads += 1
+        #endif
+        return try pool.read { try captureNavigationReference(sessionID: sessionID, anchorMessageID: anchorMessageID, in: $0) }
+    }
+
+    public func captureNavigationReferences(_ anchors: [Int64: Int64?],
+            expectedGeneration: IndexContentGeneration? = nil) throws -> [Int64: SessionNavigationReference] {
+        #if DEBUG
+        if let error = navigationCaptureErrorForTesting { navigationCaptureErrorForTesting = nil; throw error }
+        #endif
+        #if DEBUG
+        navigationCaptureReads += 1
+        #endif
         return try pool.read { db in
+            if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { throw CancellationError() }
+            return try anchors.reduce(into: [:]) { result, entry in
+                result[entry.key] = try captureNavigationReference(sessionID: entry.key, anchorMessageID: entry.value, in: db)
+            }
+        }
+    }
+
+    private nonisolated func captureNavigationReference(sessionID: Int64, anchorMessageID: Int64?, in db: Database) throws -> SessionNavigationReference? {
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT s.agent, s.external_id, sf.path, r.path AS root
                 FROM session s JOIN source_file sf ON sf.id=s.source_file_id
@@ -2358,7 +2415,6 @@ public actor IndexDatabase {
             let external: String? = anchor?["external_uuid"]
             return SessionNavigationReference(agent: agent, root: root, path: path,
                 externalSessionID: session, anchorSourceKey: key, anchorExternalID: external)
-        }
     }
 
     /// Resolve source identity, never an old row ID. Absence is provisional
@@ -2368,7 +2424,29 @@ public actor IndexDatabase {
         #if DEBUG
         if let error = navigationResolutionErrorForTesting { navigationResolutionErrorForTesting = nil; throw error }
         #endif
+        #if DEBUG
+        navigationResolutionReads += 1
+        #endif
+        return try pool.read { try resolveNavigationReference(reference, fallbackMessageIndex: fallbackMessageIndex, in: $0) }
+    }
+
+    public func resolveNavigationReferences(_ references: [SessionNavigationReference: Int?]) throws
+        -> [SessionNavigationReference: (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)] {
+        #if DEBUG
+        if let error = navigationResolutionErrorForTesting { navigationResolutionErrorForTesting = nil; throw error }
+        #endif
+        #if DEBUG
+        navigationResolutionReads += 1
+        #endif
         return try pool.read { db in
+            try references.reduce(into: [:]) { result, entry in
+                result[entry.key] = try resolveNavigationReference(entry.key, fallbackMessageIndex: entry.value, in: db)
+            }
+        }
+    }
+
+    private nonisolated func resolveNavigationReference(_ reference: SessionNavigationReference, fallbackMessageIndex: Int?, in db: Database) throws
+        -> (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)? {
             guard let id = try Int64.fetchOne(db, sql: """
                 SELECT s.id FROM session s JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN source_root r ON r.id=sf.root_id
@@ -2387,7 +2465,7 @@ public actor IndexDatabase {
             if let anchor {
                 index = try Int.fetchOne(db, sql: """
                     SELECT count(*) FROM message WHERE session_id=? AND seq <
-                        (SELECT seq FROM message WHERE id=? AND session_id=?)
+                                (SELECT seq FROM message WHERE id=? AND session_id=?)
                     """, arguments: [id, anchor, id])
             } else if let fallbackMessageIndex, session.messageCount > 0 {
                 let fallback = max(0, min(fallbackMessageIndex, session.messageCount - 1))
@@ -2396,7 +2474,6 @@ public actor IndexDatabase {
                 if anchor != nil { index = fallback }
             }
             return (session, anchor, index)
-        }
     }
 
     public func session(id: Int64) throws -> SessionSummary? {
@@ -2410,6 +2487,13 @@ public actor IndexDatabase {
         return try pool.read { db in try transcriptSession(id: id, in: db) }
     }
 
+    public func session(id: Int64, expectedGeneration: IndexContentGeneration) throws -> SessionSummary? {
+        try pool.read { db in
+            guard try Self.readContentGeneration(db) == expectedGeneration else { throw CancellationError() }
+            return try transcriptSession(id: id, in: db)
+        }
+    }
+
     public func messages(sessionID: Int64) throws -> [MessageSummary] {
         try pool.read { db in try transcriptMessages(sessionID: sessionID, in: db) }
     }
@@ -2417,6 +2501,19 @@ public actor IndexDatabase {
     public func transcriptSnapshot(
         sessionID: Int64, knownSession: SessionSummary? = nil, knownMessageCount: Int? = nil
     ) throws -> SessionTranscriptSnapshot {
+        try transcriptSnapshot(sessionID: sessionID, expectedGeneration: nil,
+            knownSession: knownSession, knownMessageCount: knownMessageCount)
+    }
+
+    public func transcriptSnapshot(sessionID: Int64, expectedGeneration: IndexContentGeneration?,
+        knownSession: SessionSummary? = nil, knownMessageCount: Int? = nil) throws -> SessionTranscriptSnapshot {
+        try transcriptSnapshot(sessionID: sessionID, expectedGeneration: expectedGeneration,
+            expectedReference: nil, knownSession: knownSession, knownMessageCount: knownMessageCount)
+    }
+
+    public func transcriptSnapshot(sessionID: Int64, expectedGeneration: IndexContentGeneration?,
+        expectedReference: SessionNavigationReference?, knownSession: SessionSummary? = nil,
+        knownMessageCount: Int? = nil) throws -> SessionTranscriptSnapshot {
         // This actor does not suspend between assigning the revision and reading
         // the transaction, so revisions order snapshots rather than UI requests.
         transcriptReadRevision += 1
@@ -2433,12 +2530,14 @@ public actor IndexDatabase {
         }
         #endif
         return try pool.read { db in
-            let session = try transcriptSession(id: sessionID, in: db)
-            guard let session else { return .init(readRevision: readRevision, session: nil, messages: []) }
+            if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { throw CancellationError() }
+            var session = try transcriptSession(id: sessionID, in: db)
+            if let expectedReference, session?.navigationReference?.representsSameSession(as: expectedReference) != true { session = nil }
+            guard let session else { return .init(readRevision: readRevision, session: nil, messages: [], contentGeneration: try Self.readContentGeneration(db)) }
             let unchanged = knownSession?.transcriptIdentity == session.transcriptIdentity
                 && knownMessageCount == session.messageCount
             return .init(readRevision: readRevision, session: session, messages: unchanged ? nil
-                : try transcriptMessages(sessionID: sessionID, in: db))
+                : try transcriptMessages(sessionID: sessionID, in: db), contentGeneration: try Self.readContentGeneration(db))
         }
     }
 
@@ -2446,6 +2545,8 @@ public actor IndexDatabase {
         try Row.fetchOne(db, sql: """
             SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                    sf.path AS source_path,
+                           (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
+                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation,
                    sf.content_generation AS source_generation,
                    p.canonical_key AS project_canonical_key
             FROM session s
@@ -2469,7 +2570,12 @@ public actor IndexDatabase {
     }
 
     public func message(id: Int64) throws -> MessageSummary? {
+        try message(id: id, expectedGeneration: nil)
+    }
+
+    public func message(id: Int64, expectedGeneration: IndexContentGeneration?) throws -> MessageSummary? {
         try pool.read { db in
+            if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { throw CancellationError() }
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT m.*, sf.path AS source_path, sf.format AS source_format
                 FROM message m
@@ -2575,7 +2681,10 @@ private func searchResult(from row: Row) -> SearchResult? {
         projectCanonicalKey: projectCanonicalKey,
         projectName: projectName, sessionTitle: sessionTitle, sessionHasPlan: row["has_plan"], agent: agent,
         role: role, timestampMilliseconds: timestamp, prefix: prefix,
-        sourcePath: sourcePath, rank: rank
+        sourcePath: sourcePath, rank: rank,
+        contentGeneration: .init(value: row["index_generation"]),
+        navigationReference: .init(agent: agentRaw, root: row["configured_root"], path: sourcePath,
+            externalSessionID: row["external_id"], anchorSourceKey: row["source_key"], anchorExternalID: row["external_uuid"])
     )
 }
 
@@ -2596,7 +2705,10 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
         title: title, hasPlan: row["has_plan"], startedAtMilliseconds: startedAt,
         lastActivityMilliseconds: lastActivity, messageCount: messageCount,
         hadError: hadError, sourcePath: sourcePath,
-        sourceGeneration: row["source_generation"], errorRevision: row["error_revision"]
+        sourceGeneration: row["source_generation"], errorRevision: row["error_revision"],
+        contentGeneration: .init(value: row["index_generation"]),
+        navigationReference: .init(agent: agentRaw, root: row["configured_root"], path: sourcePath,
+            externalSessionID: row["external_id"], anchorSourceKey: nil, anchorExternalID: nil)
     )
 }
 
@@ -2624,7 +2736,8 @@ private func messageSummary(from row: Row) -> MessageSummary? {
         id: id, role: role, timestampMilliseconds: timestamp,
         prefix: prefix, toolSummary: toolSummary,
         characterCount: characterCount, hasError: hasError,
-        sourcePath: sourcePath, sourceFormat: format, locator: locator, sectionFlags: row["section_flags"]
+        sourcePath: sourcePath, sourceFormat: format, locator: locator, sectionFlags: row["section_flags"],
+        navigationIdentity: .init(sourceKey: row["source_key"], externalID: row["external_uuid"])
     )
 }
 

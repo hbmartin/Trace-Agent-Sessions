@@ -4525,6 +4525,48 @@ final class TraceUITests: XCTestCase {
         try assertAutomaticResetPreservesReader(failRecoveryFirst: false)
     }
 
+    func testSelectionChangedAfterAutomaticDeliverySurvivesCommittedReset() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let first = "First recovery reader", second = "Latest recovery reader"
+        try addLongSession(first, project: "LatestRecoveryProject", directory: directory, count: 40)
+        try addLongSession(second, project: "LatestRecoveryProject", directory: directory, count: 40)
+        let deferred = directory.appendingPathComponent("latest-reader-deferred")
+        let preparation = directory.appendingPathComponent("latest-reader-preparation")
+        let release = directory.appendingPathComponent("latest-reader-release")
+        let committed = directory.appendingPathComponent("latest-reader-committed")
+        try Data().write(to: release)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "2"
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_STARTED_PATH"] = preparation.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["LatestRecoveryProject"].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 1 ? true : nil })
+        app.staticTexts["LatestRecoveryProject"].firstMatch.click()
+        openSidebarSession(first, in: app)
+        XCTAssertTrue(app.windows[first].waitForExistence(timeout: 10))
+        let before = fileLines(in: preparation).count
+        try FileManager.default.removeItem(at: release)
+        try addLongSession("Trigger latest reader reset", project: "LatestLiveInput", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 15) { self.fileLines(in: preparation).count > before ? true : nil })
+        XCTAssertTrue(fileLines(in: committed).isEmpty)
+        openSidebarSession(second, in: app)
+        XCTAssertTrue(app.windows[second].waitForExistence(timeout: 10))
+        try Data().write(to: release)
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        XCTAssertTrue(transcriptMessage(second, index: 0, in: scroll).waitForExistence(timeout: 10))
+        XCTAssertTrue(app.windows[second].exists)
+        attach(app, name: "latest-selection-survives-automatic-reset")
+    }
+
     private func assertAutomaticResetPreservesReader(failRecoveryFirst: Bool) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         installNativeAnchorProbe(app: app, directory: directory)
