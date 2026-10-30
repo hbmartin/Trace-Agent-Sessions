@@ -235,6 +235,26 @@ final class AppReviewFollowupTests: XCTestCase {
         subscription.cancel()
     }
 
+    func testWatermarkOnlyHistoryCompletionWithResetDebtDoesNotRunIndexPass() async throws {
+        let f = try await deferredResetFixture()
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let pass = f.model.progress.passID, request = f.model.rebuildRequestIDForTesting
+        var changedPasses = 0
+        let subscription = f.model.progressChanges.sink { update in
+            if update.passID != pass { changedPasses += 1 }
+        }
+        var changes = SourceChanges()
+        changes.historyDone = true
+        changes.watermarks = ["history-only": 42]
+        changes.streamRoots = ["history-only": [f.root.path]]
+        await f.model.bufferSourceChangesForTesting(changes)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertEqual(changedPasses, 0)
+        XCTAssertEqual(f.model.rebuildRequestIDForTesting, request)
+        XCTAssertTrue(f.model.isRebuildPendingRecovery)
+        subscription.cancel()
+    }
+
     func testLatestSelectionWinsAfterAutomaticResetDeliveryBeforeCommit() async throws {
         for clearsSelection in [false, true] {
             let f = try await deferredResetFixture()
