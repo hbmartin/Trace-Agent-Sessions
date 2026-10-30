@@ -244,9 +244,10 @@ public actor IndexScheduler {
                          onRebuildDeferred: (@Sendable () -> Void)?, automaticallyRetryReset: Bool,
                          onOrdinaryWorkCompleted: (@Sendable () -> Void)? = nil) {
         guard !stopping else { return }
+        let canonicalRoots = streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) }
         for (stream, watermark) in watermarks {
             let receipt = CheckpointReceipt(id: UUID(), stream: stream, watermark: watermark,
-                roots: Set((streamRoots[stream] ?? []).map(TraceFileIO.canonicalPath)))
+                roots: canonicalRoots[stream] ?? [])
             if paths.isEmpty, reconciliationPaths.isEmpty, !reconcile, !rebuild {
                 // A stream's additional roots qualify its retained checkpoint,
                 // even when this event itself contains no indexing inputs.
@@ -305,7 +306,7 @@ public actor IndexScheduler {
         for (volume, eventID) in watermarks {
             pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
         }
-        mergeStreamRoots(streamRoots)
+        mergeCanonicalStreamRoots(canonicalRoots)
         let inferred = activity ?? (rebuild ? .rebuild : (scopeChanged ? .scopeChange : (reconcile ? .initialBuild
             : (!reconciliationPaths.isEmpty ? .subtreeRecovery : .fileChanges))))
         let requestsPass = reconcile || rebuild || !paths.isEmpty
@@ -506,13 +507,6 @@ public actor IndexScheduler {
     private func mergeWatermarks(_ watermarks: [String: UInt64]) {
         for (volume, eventID) in watermarks {
             pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
-        }
-    }
-
-    private func mergeStreamRoots(_ roots: [String: Set<String>]) {
-        for (volume, paths) in roots {
-            let canonical = paths.map(TraceFileIO.canonicalPath)
-            pendingStreamRoots[volume, default: []].formUnion(canonical)
         }
     }
 
