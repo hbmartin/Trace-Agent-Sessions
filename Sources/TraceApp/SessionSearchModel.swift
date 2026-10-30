@@ -347,6 +347,11 @@ final class SessionSearchModel: ObservableObject {
         let query = criteria.query
         let filters = criteria.filters
         let sort = criteria.sort
+        let contentGeneration = database.contentGeneration
+        if !reset, let previous = results.first?.contentGeneration, previous != contentGeneration {
+            resetForIndexReset()
+            return
+        }
         let initialCursor = reset ? nil : nextCursor
         loadingAdditionalPage = !reset
         activeTaskIsReset = reset
@@ -410,6 +415,8 @@ final class SessionSearchModel: ObservableObject {
                     #endif
                     try Task.checkCancellation()
                     guard self.requestID == id else { return }
+                    guard database.contentGeneration == contentGeneration,
+                          page.contentGeneration == nil || page.contentGeneration == contentGeneration else { throw CancellationError() }
                     var effectiveResults = page.results
                     var effectiveNextCursor = page.nextCursor
                     var injectedTestPage = false
@@ -586,7 +593,8 @@ final class SessionSearchModel: ObservableObject {
     }
 
     func hydrate(_ result: SearchResult) async {
-        guard snippets[result.id] == nil, let coordinator else { return }
+        guard snippets[result.id] == nil, let coordinator, let database,
+              result.contentGeneration == nil || result.contentGeneration == database.contentGeneration else { return }
         let setID = resultSetID
         #if DEBUG
         if let gate = snippetHydrationGateForTesting {
@@ -603,7 +611,8 @@ final class SessionSearchModel: ObservableObject {
             do { try await Task.sleep(for: .milliseconds(delay)) }
             catch { return }
         }
-        guard let message = try? await coordinator.hydrate(messageID: result.id),
+        guard let message = try? await coordinator.hydrate(messageID: result.id, expectedGeneration: result.contentGeneration),
+              result.contentGeneration == nil || result.contentGeneration == database.contentGeneration,
               !Task.isCancelled, setID == resultSetID,
               results.contains(where: {
                   $0.id == result.id && $0.sourcePath == result.sourcePath

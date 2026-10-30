@@ -341,6 +341,7 @@ final class TraceModel: ObservableObject {
         set { updateSidebar { $0.hasSearchReturnContext = newValue } }
     }
     var mainSearchReturnAnchor: SearchResultAnchor?
+    private var mainSearchReturnReference: SessionNavigationReference?
     private struct MainSearchReturnContext {
         let projectID: Int64?
         let canonicalKey: String?
@@ -624,14 +625,22 @@ final class TraceModel: ObservableObject {
     }
     @MainActor
     private final class RecoveryEnrollment {
-        enum Outcome { case queued, delivered, retired }
+        enum Outcome { case queued, ordinaryQueued, delivered, ordinaryDelivered, retired }
         let latch = OneShotLatch()
         private(set) var outcome = Outcome.queued
         func finish(_ outcome: Outcome) {
-            guard self.outcome == .queued else { return }
-            self.outcome = outcome; latch.release()
+            guard self.outcome == .queued || self.outcome == .ordinaryQueued else { return }
+            if self.outcome == .ordinaryQueued && outcome == .retired { return }
+            self.outcome = outcome
+            if outcome != .ordinaryQueued { latch.release() }
         }
-        func waitForDelivery() async -> Bool { await latch.wait(); return outcome == .delivered }
+        func retire() {
+            guard outcome == .queued || outcome == .ordinaryQueued else { return }
+            outcome = .retired; latch.release()
+        }
+        func waitForDelivery() async -> Bool {
+            await latch.wait(); return outcome == .delivered || outcome == .ordinaryDelivered
+        }
     }
 
     private struct SavedResetBookmark {
@@ -663,6 +672,30 @@ final class TraceModel: ObservableObject {
             self.searchAnchor = searchAnchor; self.searchReference = searchReference
         }
     }
+    private var navigationCoverageGeneration: IndexContentGeneration?
+    private var observedContentGeneration: IndexContentGeneration?
+    private struct SelectionSourceIdentity {
+        let sessionID: Int64
+        let generation: IndexContentGeneration
+        let reference: SessionNavigationReference?
+    }
+    private var selectionSourceIdentity: SelectionSourceIdentity?
+    private var visitedNavigationReferences: [Int64: SessionNavigationReference] = [:]
+    private func saveCurrentNavigationReference() {
+        guard let id = selectedSessionID, let source = selectionSourceIdentity, source.sessionID == id,
+              var reference = source.reference else { return }
+        if let bookmark = scrollPositions[id], let identity = messages.first(where: { $0.id == bookmark.messageID })?.navigationIdentity {
+            reference = reference.anchored(at: identity)
+        }
+        if scrollPositions[id] != nil { visitedNavigationReferences[id] = reference }
+        else { visitedNavigationReferences.removeValue(forKey: id) }
+    }
+    private struct BufferedOrdinaryWork {
+        let completion: @Sendable () -> Void
+        let delivery: RecoveryEnrollment?
+        let safety: Bool
+    }
+    private var bufferedOrdinaryWork: [BufferedOrdinaryWork] = []
     private var automaticNavigation: AutomaticNavigation?
     private var pendingResetBookmarks: (database: IndexDatabase, references: [SessionNavigationReference: TranscriptBookmark])?
     private var automaticNavigationIsCommitted: Bool {
@@ -691,7 +724,7 @@ final class TraceModel: ObservableObject {
         #if DEBUG
         rebuildRequest?.explicitGate?.release()
         #endif
-        rebuildRequest?.recoveryEnrollment?.finish(.retired)
+        rebuildRequest?.recoveryEnrollment?.retire()
         rebuildRequest = nil
         updateRebuildPresentation()
     }
@@ -883,6 +916,37 @@ final class TraceModel: ObservableObject {
         return enrollment
     }
 
+    private func normalizeTranscriptChanges(_ changes: SourceChanges) -> (changes: SourceChanges, recoveryEligible: Bool) {
+        let roots = watcherRootsByAgent.values.flatMap { $0 }
+        var relevant = changes
+        var eligible = false
+        relevant.paths = Set(changes.paths.compactMap { path in
+            let canonical = TraceFileIO.canonicalPath(path)
+            guard roots.contains(where: { $0.contains(canonical) }) else { return nil }
+            if watcherRootsByAgent.contains(where: { agent, roots in
+                TraceFileIO.isSessionTranscript(URL(fileURLWithPath: canonical.path), agent: agent)
+                    && roots.contains { $0.contains(canonical) }
+            }) { eligible = true }
+            return canonical.path
+        })
+        relevant.reconciliationPaths = []
+        for path in changes.reconciliationPaths {
+            let canonical = TraceFileIO.canonicalPath(path)
+            for root in roots where root.intersects(canonical) {
+                relevant.reconciliationPaths.insert(canonical.contains(root) ? root.path : canonical.path)
+            }
+        }
+        return (relevant, eligible || !relevant.reconciliationPaths.isEmpty)
+    }
+
+    @discardableResult
+    private func admitTranscriptChanges(_ changes: SourceChanges, safety: Bool = false) -> (SourceChanges, RecoveryEnrollment?) {
+        let normalized = normalizeTranscriptChanges(changes)
+        let enrollment = (safety || normalized.recoveryEligible)
+            ? enrollDeferredRebuildRecovery(changes: normalized.changes, safety: safety) : nil
+        return (normalized.changes, enrollment)
+    }
+
     /// Callers normalize/filter live input before this common routing boundary.
     /// Replay uses routeSourceChanges directly and can never enroll reset work.
     @discardableResult
@@ -892,8 +956,7 @@ final class TraceModel: ObservableObject {
             return enrollment
         }
         if safety {
-            await scheduler?.request(reconciliationPaths: changes.reconciliationPaths,
-                scope: settings.indexScope, activity: .safetyVerification)
+            await routeSourceChanges(changes, acceptsCheckpoints: false, safety: true)
         } else { await routeSourceChanges(changes, acceptsCheckpoints: acceptsCheckpoints) }
         return nil
     }
@@ -901,8 +964,7 @@ final class TraceModel: ObservableObject {
     private func ordinaryRecoveryCompleted(_ claim: RebuildClaim) -> @Sendable () -> Void {
         let request = claim.admission.requestID, revision = claim.inputRevision
         let ownerDatabase = claim.admission.database, attachment = claim.admission.attachment
-        let configuration = claim.admission.configuration
-        let navigation = claim.navigation
+        let configuration = claim.admission.configuration, reset = claim.reset
         return { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, !self.terminating,
@@ -911,7 +973,8 @@ final class TraceModel: ObservableObject {
                 if self.rebuildRequest?.id == request, self.rebuildRequest?.recoveryRevision == revision {
                     self.rebuildRequest?.recoveryInputs = .init()
                 }
-                if let navigation, self.automaticNavigationIsCurrent(navigation), navigation.reset.isCommitted {
+                if reset.isCommitted { self.navigationCoverageGeneration = ownerDatabase.contentGeneration }
+                if let navigation = self.automaticNavigation, self.automaticNavigationIsCurrent(navigation), navigation.reset.isCommitted {
                     navigation.scanCoverageComplete = true
                     // The terminal notification precedes accepted scheduler coverage.
                     // Revisit provisional absence, but do not retry a failed read.
@@ -937,24 +1000,18 @@ final class TraceModel: ObservableObject {
             rebuildClaimIsCurrent(claim) && selectedSessionID == sessionID && sessionRequestID == request
         }
         do {
-            let reference: SessionNavigationReference?
-            if let sessionID {
-                reference = try await database.captureNavigationReference(sessionID: sessionID,
-                    anchorMessageID: bookmark?.messageID ?? requestedMessageID)
-                guard isCurrent(), reference != nil else { return false }
-            } else { reference = nil }
-            var saved: [SavedResetBookmark] = []
-            for (id, position) in bookmarks.sorted(by: { $0.key < $1.key }) {
-                let captured: SessionNavigationReference?
-                if id == sessionID { captured = reference }
-                else { captured = try await database.captureNavigationReference(sessionID: id, anchorMessageID: position.messageID) }
-                guard isCurrent() else { return false }
-                if let captured { saved.append(.init(reference: captured, bookmark: position)) }
+            var anchors: [Int64: Int64?] = bookmarks.mapValues { $0.messageID }
+            if let sessionID { anchors.updateValue(bookmark?.messageID ?? requestedMessageID, forKey: sessionID) }
+            let captured = try await database.captureNavigationReferences(anchors,
+                expectedGeneration: observedContentGeneration ?? database.contentGeneration)
+            guard isCurrent() else { return false }
+            saveCurrentNavigationReference()
+            let reference = sessionID.flatMap { visitedNavigationReferences[$0] }
+                ?? selectionSourceIdentity?.reference
+            let saved = bookmarks.compactMap { id, position in
+                (visitedNavigationReferences[id] ?? captured[id]).map { SavedResetBookmark(reference: $0, bookmark: position) }
             }
-            let searchReference: SessionNavigationReference?
-            if let sessionID, let messageID = searchAnchor?.id {
-                searchReference = try await database.captureNavigationReference(sessionID: sessionID, anchorMessageID: messageID)
-            } else { searchReference = nil }
+            let searchReference = mainSearchReturnReference
             #if DEBUG
             if let gate = automaticNavigationCaptureGateForTesting {
                 automaticNavigationCaptureWaitingForTesting = true
@@ -968,7 +1025,8 @@ final class TraceModel: ObservableObject {
                 searchAnchor: searchAnchor, searchReference: searchReference,
                 depth: max(loadedSessionPageCount, pageState.read(\.requestedDepth)))
             claim.navigation = navigation
-            if let reference { settings.pendingNavigationReference = reference }
+            settings.preparedNavigationRecovery = .init(owner: claim.id, generation: database.contentGeneration, reference: reference)
+            settings.pendingNavigationReference = reference
             automaticNavigation = navigation
             return true
         } catch {
@@ -982,25 +1040,44 @@ final class TraceModel: ObservableObject {
         guard !claim.ordinaryFallbackSubmitted, settings.onboardingComplete,
               rebuildSchedulerIsCurrent(claim), let inputs = claim.recovery else { return }
         claim.ordinaryFallbackSubmitted = true
-        let scope = (try? await claim.admission.database.storedIndexScope()) ?? settings.indexScope
-        guard rebuildSchedulerIsCurrent(claim), !terminating else { return }
-        await claim.scheduler.request(paths: inputs.changes.paths,
-            reconciliationPaths: inputs.changes.reconciliationPaths, scope: scope,
-            satisfiesSafetyReconciliation: inputs.safety,
-            watermarks: inputs.changes.watermarks, streamRoots: inputs.changes.streamRoots,
-            onRebuildReset: {}, onRebuildDeferred: {}, automaticallyRetryReset: false,
-            onOrdinaryWorkCompleted: ordinaryRecoveryCompleted(claim))
+        claim.enrollment?.finish(.ordinaryQueued)
+        await routeSourceChanges(inputs.changes, acceptsCheckpoints: true,
+            completion: ordinaryRecoveryCompleted(claim), delivery: claim.enrollment,
+            safety: inputs.safety)
     }
 
     /// This can run from commit delivery or the first admitted progress update.
     /// The synchronous receipt already fences transcript reads before this hop.
     private func stageAutomaticNavigationCommit() {
-        guard let navigation = automaticNavigation, automaticNavigationIsCurrent(navigation),
-              navigation.reset.isCommitted, !navigation.committed else { return }
+        guard !terminating, let database, observedContentGeneration != database.contentGeneration else { return }
+        let currentGeneration = database.contentGeneration
+        observedContentGeneration = currentGeneration
+        navigationCoverageGeneration = nil
+        // Selection may have changed after delivery. Global cursor/read invalidation
+        // still commits, then restoration follows only the latest selection.
+        let reset = automaticNavigation?.reset ?? RebuildResetReceipt()
+        reset.commit()
+        let old = automaticNavigation
+        let source = selectionSourceIdentity
+        saveCurrentNavigationReference()
+        let selectedReference = selectedSessionID.flatMap { visitedNavigationReferences[$0] }
+            ?? source.flatMap { $0.sessionID == selectedSessionID ? $0.reference : nil }
+        let navigation = AutomaticNavigation(database: database, reset: reset,
+            reference: selectedReference ?? (old?.sessionID == selectedSessionID ? old?.reference : nil),
+            sessionID: selectedSessionID, request: sessionRequestID,
+            bookmark: selectedSessionID.flatMap { scrollPositions[$0] },
+            savedBookmarks: old?.savedBookmarks ?? [], searchAnchor: hasSearchReturnContext ? mainSearchReturnAnchor : nil,
+            searchReference: hasSearchReturnContext ? mainSearchReturnReference : nil,
+            depth: max(loadedSessionPageCount, pageState.read(\.requestedDepth)))
+        automaticNavigation = navigation
+        settings.lastSessionID = nil
+        settings.pendingNavigationReference = navigation.reference
+        settings.preparedNavigationRecovery = nil
         navigation.committed = true
         var references = pendingResetBookmarks.flatMap { $0.database === navigation.database ? $0.references : nil } ?? [:]
         for saved in navigation.savedBookmarks { references[saved.reference] = saved.bookmark }
         pendingResetBookmarks = (navigation.database, references)
+        visitedNavigationReferences = [:]
         // Keep only the visible cached bookmark under an old ID. All other
         // bookmarks are owned by stable references until their IDs are resolved.
         if let id = navigation.sessionID, let bookmark = navigation.bookmark { scrollPositions = [id: bookmark] }
@@ -1051,16 +1128,15 @@ final class TraceModel: ObservableObject {
         navigation.resolutionRunning = true
         defer { navigation.resolutionRunning = false }
         do {
-            let resolved: (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)?
-            if let reference = navigation.reference {
-                resolved = try await navigation.database.resolveNavigationReference(reference)
-            } else { resolved = nil }
+            var references = Dictionary(navigation.savedBookmarks.map { ($0.reference, Optional($0.bookmark.index)) }, uniquingKeysWith: { _, last in last })
+            if let reference = navigation.reference { references.updateValue(navigation.bookmark?.index, forKey: reference) }
+            if let reference = navigation.searchReference { references.updateValue(nil, forKey: reference) }
+            let mappedBookmarks = try await navigation.database.resolveNavigationReferences(references)
+            let resolved = navigation.reference.flatMap { mappedBookmarks[$0] }
+            guard isCurrent() else { return }
             var bookmarks: [Int64: TranscriptBookmark] = [:]
             for saved in navigation.savedBookmarks {
-                let mapped = try await navigation.database.resolveNavigationReference(saved.reference,
-                    fallbackMessageIndex: saved.bookmark.index)
-                guard isCurrent() else { return }
-                if let mapped, let message = mapped.anchorMessageID, let index = mapped.anchorMessageIndex {
+                if let mapped = mappedBookmarks[saved.reference], let message = mapped.anchorMessageID, let index = mapped.anchorMessageIndex {
                     bookmarks[mapped.session.id] = .init(messageID: message, offset: saved.bookmark.offset, index: index)
                 }
             }
@@ -1085,19 +1161,17 @@ final class TraceModel: ObservableObject {
                         requestID: navigation.request, paused: true)
                 }
                 guard isCurrent() else { return }
-                if navigation.scanCoverageComplete, update.phase == .complete, update.failedFiles == 0,
+                if navigation.reference != nil, navigation.scanCoverageComplete, update.phase == .complete, update.failedFiles == 0,
                    update.unresolvedFailedFiles == 0, update.unresolvedDiscoveryFailures == 0 {
                     automaticNavigation = nil
                     returnFromSession()
                 }
                 return
             }
-            let searchMessage: Int64?
-            if let reference = navigation.searchReference {
-                searchMessage = try await navigation.database.resolveNavigationReference(reference)?.anchorMessageID
-            } else { searchMessage = nil }
+            let searchMessage = navigation.searchReference.flatMap { mappedBookmarks[$0]?.anchorMessageID }
             guard isCurrent() else { return }
-            let snapshot = try await navigation.database.transcriptSnapshot(sessionID: resolved.session.id)
+            let snapshot = try await navigation.database.transcriptSnapshot(sessionID: resolved.session.id,
+                expectedGeneration: resolved.session.contentGeneration, expectedReference: navigation.reference)
             guard isCurrent(), snapshot.session != nil, acceptTranscript(snapshot) == .accepted else { return }
             let rows = snapshot.messages ?? []
             let id = resolved.session.id, nextRequest = UUID()
@@ -1116,6 +1190,9 @@ final class TraceModel: ObservableObject {
                 }
                 hydrationEpoch = UUID(); hydratingMessageIDs.removeAll(); hydrationOrder.removeAll()
                 scrollPositions = bookmarks
+                for saved in navigation.savedBookmarks {
+                    if let mapped = mappedBookmarks[saved.reference] { visitedNavigationReferences[mapped.session.id] = saved.reference }
+                }
                 if let bookmark = navigation.bookmark, !rows.isEmpty {
                     let index = resolved.anchorMessageID.flatMap { anchor in rows.firstIndex { $0.id == anchor } }
                         ?? max(0, min(bookmark.index, rows.count - 1))
@@ -1123,6 +1200,9 @@ final class TraceModel: ObservableObject {
                 }
                 settings.pendingNavigationReference = nil
                 settings.lastSessionID = id
+                selectionSourceIdentity = snapshot.session.flatMap { session in
+                    session.contentGeneration.map { .init(sessionID: id, generation: $0, reference: session.navigationReference) }
+                }
                 requestedMessageID = resolved.anchorMessageID
                 updateTranscript {
                     $0.sessionID = id
@@ -1155,24 +1235,25 @@ final class TraceModel: ObservableObject {
     private func restorePendingResetBookmarks(owner: SummaryRefreshOwner) async {
         guard !indexWorkflow.isActive, let pending = pendingResetBookmarks,
               pending.database === owner.database else { return }
-        for (reference, bookmark) in pending.references {
-            guard summaryRefreshIsCurrent(owner) else { return }
-            if reference == automaticNavigation?.reference { continue }
-            do {
-                let mapped = try await pending.database.resolveNavigationReference(reference,
-                    fallbackMessageIndex: bookmark.index)
-                guard summaryRefreshIsCurrent(owner), pendingResetBookmarks?.database === pending.database else { return }
-                if let mapped, let message = mapped.anchorMessageID, let index = mapped.anchorMessageIndex {
-                    if scrollPositions[mapped.session.id] == nil {
+        do {
+            let resolved = try await pending.database.resolveNavigationReferences(pending.references.mapValues { Optional($0.index) })
+            guard summaryRefreshIsCurrent(owner), pendingResetBookmarks?.database === pending.database else { return }
+            let authoritative = progress.phase == .complete && progress.unresolvedFailedFiles == 0
+                && progress.unresolvedDiscoveryFailures == 0 && navigationCoverageGeneration == owner.database.contentGeneration
+            for (reference, bookmark) in pending.references {
+                if reference == automaticNavigation?.reference { continue }
+                if let mapped = resolved[reference] {
+                    if let message = mapped.anchorMessageID, let index = mapped.anchorMessageIndex,
+                       scrollPositions[mapped.session.id] == nil {
                         scrollPositions[mapped.session.id] = .init(messageID: message, offset: bookmark.offset, index: index)
                     }
+                    visitedNavigationReferences[mapped.session.id] = reference
                     pendingResetBookmarks?.references.removeValue(forKey: reference)
-                }
-            } catch {
-                guard summaryRefreshIsCurrent(owner) else { return }
-                recordSummaryReadFailure(error, operation: .restoration)
-                return
+                } else if authoritative { pendingResetBookmarks?.references.removeValue(forKey: reference) }
             }
+        } catch {
+            guard summaryRefreshIsCurrent(owner) else { return }
+            recordSummaryReadFailure(error, operation: .restoration)
         }
         if pendingResetBookmarks?.references.isEmpty == true { pendingResetBookmarks = nil }
     }
@@ -1186,8 +1267,9 @@ final class TraceModel: ObservableObject {
             TraceTestHooks.appendLine("request=\(requestID),claim=\(enrollment)", pathKey: "TRACE_TEST_REBUILD_DEFERRED_PATH")
             #endif
             Task { @MainActor [weak self] in
-                guard let self, !self.terminating, self.rebuildRequest?.id == requestID,
-                      reset.isDeferred else { return }
+                guard let self, !self.terminating else { return }
+                self.settings.retirePreparedNavigation(owner: enrollment, committed: false)
+                guard self.rebuildRequest?.id == requestID, reset.isDeferred else { return }
                 ModelPublicationBatch.perform {
                     self.retireRebuildAdmission(admission)
                     self.updateRebuildPresentation()
@@ -1205,7 +1287,7 @@ final class TraceModel: ObservableObject {
     }
 
     private func rebuildResetCallback(_ claim: RebuildClaim) -> @Sendable () -> Void {
-        let reset = claim.reset, requestID = claim.admission.requestID
+        let reset = claim.reset, requestID = claim.admission.requestID, ownerDatabase = claim.admission.database
         #if DEBUG
         let claimID = claim.id
         let deliveryGate = rebuildResetDeliveryGateForTesting
@@ -1224,7 +1306,7 @@ final class TraceModel: ObservableObject {
                     self?.rebuildResetDeliveryWaitingForTesting = false
                 }
                 #endif
-                guard let self, !self.terminating, self.rebuildRequest?.id == requestID else { return }
+                guard let self, !self.terminating, self.database === ownerDatabase else { return }
                 ModelPublicationBatch.perform {
                     self.stageAutomaticNavigationCommit()
                     self.fulfillCommittedRebuild()
@@ -1261,7 +1343,10 @@ final class TraceModel: ObservableObject {
             if claim.phase == .claimed {
                 claim.reset.abandon(claim.id, wasRecovery: !claim.automaticallyRetryReset)
                 if !settings.onboardingComplete, claim.enrollment != nil { rebuildRequest?.recoveryTriggered = true }
-                if automaticNavigation === claim.navigation, !claim.reset.isCommitted { automaticNavigation = nil }
+                if !claim.reset.isCommitted {
+                    settings.retirePreparedNavigation(owner: claim.id, committed: false)
+                    if automaticNavigation === claim.navigation { automaticNavigation = nil }
+                }
             }
         }
         updateRebuildPresentation()
@@ -1370,6 +1455,7 @@ final class TraceModel: ObservableObject {
     private var startupReconciliationPaths: Set<String> = []
     private var startupActivity = IndexActivity.cachedLaunch
     private var pendingStartupRecovery = IndexRecoveryWork()
+    private var watcherRootsByAgent: [AgentKind: [TraceFileIO.CanonicalPath]] = [:]
     private var watchedSourceRoots: [URL] = []
     private var watcherGeneration: UInt64 = 0
     // The first delivered watermark is a conservative replay point while the
@@ -2073,14 +2159,11 @@ final class TraceModel: ObservableObject {
     var bufferedStartupInputsForTesting: SourceChanges { bufferedSourceChanges }
     @discardableResult
     func recoverDeferredRebuildForTesting(_ changes: SourceChanges, safety: Bool = false) -> Bool {
-        let eligible = safety || !changes.reconciliationPaths.isEmpty || changes.paths.contains { path in
-            let canonical = TraceFileIO.canonicalPath(path)
-            return (sourceReloadSourcesForTesting ?? []).contains { source in
-                TraceFileIO.isSessionTranscript(URL(fileURLWithPath: path), agent: source.agent)
-                    && source.roots.contains { TraceFileIO.canonicalPath($0.scanURL.path).contains(canonical) }
-            }
+        let (relevant, enrollment) = admitTranscriptChanges(changes, safety: safety)
+        if enrollment == nil {
+            Task { await routeSourceChanges(relevant, acceptsCheckpoints: true, safety: safety) }
         }
-        return eligible && enrollDeferredRebuildRecovery(changes: changes, safety: safety) != nil
+        return enrollment != nil
     }
 
     var explicitRebuildGateOpenForTesting: Bool? { rebuildRequest?.explicitGate?.open }
@@ -2641,8 +2724,15 @@ final class TraceModel: ObservableObject {
             // A first installation must retain the saved session for startup restoration.
             if rebuildRequest?.database !== database { discardRebuildRequest() }
             bufferedSourceChanges = SourceChanges()
+            bufferedOrdinaryWork.forEach { $0.delivery?.retire() }
+            bufferedOrdinaryWork.removeAll()
             pendingStartupRecovery = .init()
             automaticNavigation = nil
+            observedContentGeneration = database.contentGeneration
+            navigationCoverageGeneration = nil
+            selectionSourceIdentity = nil
+            visitedNavigationReferences = [:]
+            settings.reconcilePreparedNavigation(generation: database.contentGeneration)
             if self.database != nil {
                 _ = prepareForIndexReset(clearSidebarFailure: true)
             } else { resetSidebarSummaryRecovery(clearFailure: true) }
@@ -3088,7 +3178,8 @@ final class TraceModel: ObservableObject {
                     : recoveryActivity.map { IndexActivity.moreSignificant(baseActivity, $0) } ?? baseActivity,
                 satisfiesSafetyReconciliation: baseActivity.satisfiesSafetyReconciliation
                     || (recoveryActivity?.satisfiesSafetyReconciliation ?? false)
-                    || (includesRebuild && rebuild?.recovery?.safety == true),
+                    || (includesRebuild && rebuild?.recovery?.safety == true)
+                    || self.bufferedOrdinaryWork.contains { $0.safety },
                 watermarks: buffered.watermarks, streamRoots: buffered.streamRoots)
             let onReset: @Sendable () -> Void
             let onDeferred: @Sendable () -> Void
@@ -3100,16 +3191,33 @@ final class TraceModel: ObservableObject {
             } else {
                 onReset = {}; onDeferred = {}; onOrdinary = {}
             }
+            let bufferedOrdinary = self.bufferedOrdinaryWork
+            let completed: @Sendable () -> Void = {
+                onOrdinary()
+                for work in bufferedOrdinary { work.completion() }
+            }
+            let usesCommittedScope = !includesRebuild && self.rebuildRequest?.database === self.database
+                && self.rebuildRequest?.reset.isCommitted == false
             if includesRebuild { rebuild?.phase = .submitting }
             // No callbacks between consuming buffered intent and scheduler handoff.
             self.bufferedSourceChanges = SourceChanges()
             self.pendingStartupRecovery = .init()
+            self.bufferedOrdinaryWork.removeAll()
+            if usesCommittedScope {
+                await scheduler.requestOrdinaryRecovery(paths: payload.paths,
+                    reconciliationPaths: payload.reconciliationPaths, activity: payload.activity,
+                    satisfiesSafetyReconciliation: payload.satisfiesSafetyReconciliation,
+                    watermarks: payload.watermarks, streamRoots: payload.streamRoots,
+                    onOrdinaryWorkCompleted: completed)
+            } else {
             await scheduler.request(paths: payload.paths, reconciliationPaths: payload.reconciliationPaths,
                 rebuild: payload.rebuild, scope: payload.scope, activity: payload.activity,
                 satisfiesSafetyReconciliation: payload.satisfiesSafetyReconciliation,
                 watermarks: payload.watermarks, streamRoots: payload.streamRoots, onRebuildReset: onReset,
                 onRebuildDeferred: onDeferred, automaticallyRetryReset: rebuild?.automaticallyRetryReset ?? true,
-                onOrdinaryWorkCompleted: onOrdinary)
+                onOrdinaryWorkCompleted: completed)
+            }
+            for work in bufferedOrdinary { work.delivery?.finish(.ordinaryDelivered) }
             if includesRebuild { rebuild?.enrollment?.finish(.delivered) }
             #if DEBUG
             if includesRebuild { await self.holdRebuildHandoffForTesting() }
@@ -3174,9 +3282,13 @@ final class TraceModel: ObservableObject {
             // saved navigation before the first coordinator is installed.
             guard !terminating, settings.onboardingComplete, coordinator != nil else { return }
             guard let target = pendingAttachment?.database ?? database else { return }
+            var request = RebuildRequest(database: target)
+            if let old = rebuildRequest, old.database === target {
+                request.recoveryInputs = old.recoveryInputs
+                old.recoveryEnrollment?.retire()
+            }
             #if DEBUG
             rebuildRequest?.explicitGate?.release()
-            var request = RebuildRequest(database: target)
             if let gate = rebuildClaimGateForTesting {
                 request.explicitGate = RebuildTestGate(task: gate)
                 rebuildClaimGateForTesting = nil
@@ -3191,10 +3303,8 @@ final class TraceModel: ObservableObject {
                     }
                 }
             }
-            rebuildRequest = request
-            #else
-            rebuildRequest = RebuildRequest(database: target)
             #endif
+            rebuildRequest = request
             updateRebuildPresentation()
             if pendingAttachment != nil {
                 beginIndexReplacement()
@@ -3539,6 +3649,10 @@ final class TraceModel: ObservableObject {
         let query = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty ? projects : projects.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
     }
+    var sidebarSelectedSessionID: Int64? {
+        guard selectionSourceIdentity?.generation == database?.contentGeneration else { return nil }
+        return selectedSessionID
+    }
     var sidebarSelectedProjectID: Int64? {
         guard let selectedProjectID, let selectedProjectCanonicalKey,
               projects.contains(where: {
@@ -3585,9 +3699,11 @@ final class TraceModel: ObservableObject {
         let resetSearch = mainSearchNeedsResetAfterAutomaticCommit
         let context = mainSearchReturnContext
         let anchor = mainSearchReturnAnchor
+        let reference = mainSearchReturnReference
         guard clearSession() else { return }
         if let context {
             mainSearchReturnAnchor = anchor
+            mainSearchReturnReference = reference
             let project = projects.first { $0.canonicalKey == context.canonicalKey }
             selectedProjectID = project?.id ?? context.projectID
             selectedProjectCanonicalKey = context.canonicalKey
@@ -3607,6 +3723,7 @@ final class TraceModel: ObservableObject {
 
     @discardableResult
     func clearSession() -> Bool {
+        saveCurrentNavigationReference()
         automaticNavigation = nil
         settings.pendingNavigationReference = nil
         let request = UUID(), ownerDatabase = database
@@ -3618,6 +3735,7 @@ final class TraceModel: ObservableObject {
         pendingSelectionCompletion = nil
         mainSearchReturnContext = nil
         mainSearchReturnAnchor = nil
+        mainSearchReturnReference = nil
         mayRestoreSession = false
         cancelTranscriptRecovery(clearPresentation: false)
         cancelPendingSelectionTranscriptRead()
@@ -3640,7 +3758,9 @@ final class TraceModel: ObservableObject {
         guard !terminating else { return false }
         automaticNavigation = nil
         pendingResetBookmarks = nil
+        visitedNavigationReferences = [:]
         settings.pendingNavigationReference = nil
+        settings.preparedNavigationRecovery = nil
         let ownerDatabase = database, attachment = attachmentGeneration
         let configuration = sourceConfigurationRevision, workflow = indexWorkflow.generation
         ModelPublicationBatch.perform {
@@ -3930,7 +4050,9 @@ final class TraceModel: ObservableObject {
     /// flight gets one replacement attempt. Missing ensured IDs cannot loop.
     private func replacePageForLatestSelection(_ page: LoadedSessionPages, attempted: Int64?, depth: Int,
                                               isCurrent: () -> Bool) -> Bool {
-        guard isCurrent(), let selectedSessionID, selectedSessionID != attempted,
+        guard isCurrent(), !automaticNavigationIsCommitted,
+              (selectionSourceIdentity?.generation ?? observedContentGeneration) == database?.contentGeneration,
+              let selectedSessionID, selectedSessionID != attempted,
               !alreadyEnsuredMissingSelection(selectedSessionID),
               !page.sessions.contains(where: { $0.id == selectedSessionID }) else { return false }
         // An unresolved selection may still belong to another project. Its
@@ -3943,6 +4065,7 @@ final class TraceModel: ObservableObject {
 
     private func acceptSessionPages(_ page: LoadedSessionPages, attempted: Int64?, depth: Int,
                                     rootReceipt: RootSummaryRefresh?, dataGeneration: UUID, isCurrent: () -> Bool) {
+        guard page.contentGeneration == nil || page.contentGeneration == database?.contentGeneration else { return }
         if replacePageForLatestSelection(page, attempted: attempted, depth: depth, isCurrent: isCurrent) { return }
         applySessionPages(page, attempted: attempted, rootReceipt: rootReceipt, dataGeneration: dataGeneration, isCurrent: isCurrent)
         guard isCurrent() else { return }
@@ -3998,6 +4121,10 @@ final class TraceModel: ObservableObject {
     }
 
     func loadMoreSessions() {
+        if let database, observedContentGeneration != database.contentGeneration {
+            ModelPublicationBatch.perform { stageAutomaticNavigationCommit() }
+            return
+        }
         if backgroundSidebarRequest != nil {
             if pendingSidebarAction == nil {
                 pendingSidebarAction = (selectedProjectCanonicalKey, .loadMore)
@@ -4042,6 +4169,7 @@ final class TraceModel: ObservableObject {
                     try await Task.sleep(for: .milliseconds(delay))
                 }
                 guard isCurrent() else { return }
+                guard page.contentGeneration == database.contentGeneration else { return }
                 summaryReadFailures[.sessionPage] = nil
                 updateSessionPage {
                     let existing = Set($0.sessions.map(\.id))
@@ -4082,7 +4210,17 @@ final class TraceModel: ObservableObject {
     }
 
     func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil, preservingMainSearch: Bool = false) {
-        if selectedSessionID == sessionID, selectedSession != nil, messageID == nil {
+        selectSession(sessionID, showWindow: showWindow, messageID: messageID,
+            preservingMainSearch: preservingMainSearch, source: nil)
+    }
+
+    private func selectSession(_ sessionID: Int64, showWindow: Bool = false, messageID: Int64? = nil,
+                               preservingMainSearch: Bool = false, source: SelectionSourceIdentity?) {
+        if let source, let database, !source.generation.belongsToSameDatabase(as: database.contentGeneration) { return }
+        let matchesSource = source?.reference.map { reference in
+            selectionSourceIdentity?.reference.map { reference.representsSameSession(as: $0) } ?? false
+        } ?? (source == nil)
+        if selectedSessionID == sessionID, selectedSession != nil, messageID == nil, matchesSource {
             if pendingSelectionCompletion != nil {
                 if showWindow { pendingSelectionCompletion?.showWindow = true }
                 if transcriptBanner != nil { showPendingSelectionWindow() }
@@ -4091,6 +4229,7 @@ final class TraceModel: ObservableObject {
             }
             return
         }
+        saveCurrentNavigationReference()
         automaticNavigation = nil
         settings.pendingNavigationReference = nil
         let request = UUID(), ownerDatabase = database
@@ -4099,15 +4238,24 @@ final class TraceModel: ObservableObject {
             !terminating && database === ownerDatabase && sessionRequestID == request
         }
         let cachedSession = sessions.first { $0.id == sessionID } ?? recentSessions.first { $0.id == sessionID }
+        selectionSourceIdentity = source ?? cachedSession.flatMap { session in
+            session.contentGeneration.map { .init(sessionID: sessionID, generation: $0, reference: session.navigationReference) }
+        } ?? ownerDatabase.map { .init(sessionID: sessionID, generation: $0.contentGeneration, reference: nil) }
+        if let prepared = settings.preparedNavigationRecovery {
+            let reference = selectionSourceIdentity?.reference
+            settings.preparedNavigationRecovery = .init(owner: prepared.owner, generation: prepared.generation, reference: reference)
+            settings.pendingNavigationReference = reference
+        }
         rememberSelectionProject(knownProject(for: sessionID), sessionID: sessionID)
         invalidateTranscriptSettlement()
         pausedTranscriptPreservation = nil
         cancelTranscriptRecovery(clearPresentation: false)
         cancelPendingSelectionTranscriptRead()
-        if !preservingMainSearch { mainSearchReturnContext = nil; mainSearchReturnAnchor = nil }
+        if !preservingMainSearch { mainSearchReturnContext = nil; mainSearchReturnAnchor = nil; mainSearchReturnReference = nil }
         pendingSelectionCompletion = nil
         mayRestoreSession = false
-        settings.lastSessionID = sessionID
+        settings.lastSessionID = selectionSourceIdentity?.generation == database?.contentGeneration ? sessionID : nil
+        guard isCurrent() else { return }
         lastAppliedTranscriptReadRevision = 0
         requestedMessageID = messageID
         if let database {
@@ -4116,6 +4264,21 @@ final class TraceModel: ObservableObject {
         }
         resetTranscriptValues(sessionID: sessionID, session: cachedSession)
         guard isCurrent() else { return }
+        if let database, let source = selectionSourceIdentity, source.generation != database.contentGeneration {
+            let reset = RebuildResetReceipt(); reset.commit()
+            let navigation = AutomaticNavigation(database: database, reset: reset, reference: source.reference,
+                sessionID: sessionID, request: request, bookmark: scrollPositions[sessionID], savedBookmarks: [],
+                searchAnchor: mainSearchReturnAnchor, searchReference: nil,
+                depth: max(loadedSessionPageCount, pageState.read(\.requestedDepth)))
+            automaticNavigation = navigation
+            settings.lastSessionID = nil
+            guard isCurrent() else { return }
+            settings.pendingNavigationReference = source.reference
+            updateTranscript { $0.absence = .init(database: database, sessionID: sessionID, requestID: request, paused: true) }
+            guard isCurrent() else { return }
+            if !indexWorkflow.isActive { Task { await restoreAutomaticNavigation(after: progress, event: UUID()) } }
+            return
+        }
         if !preservingMainSearch {
             hasSearchReturnContext = false
             guard isCurrent() else { return }
@@ -4183,16 +4346,18 @@ final class TraceModel: ObservableObject {
     }
 
     func openSession(_ session: SessionSummary) {
-        prepareExternalSessionSelection(
+        let source = session.contentGeneration.map { SelectionSourceIdentity(sessionID: session.id, generation: $0, reference: session.navigationReference) }
+        guard prepareExternalSessionSelection(
             projectID: session.projectID,
             projectCanonicalKey: session.projectCanonicalKey,
             projectDisplayName: nil,
             sessionID: session.id
-        )
-        selectSession(session.id, showWindow: true)
+        ) else { return }
+        selectSession(session.id, showWindow: true, source: source)
     }
 
     func openSearchResult(_ result: SearchResult, fromMainSearch: Bool = false, anchor: SearchResultAnchor? = nil) {
+        let source = result.contentGeneration.map { SelectionSourceIdentity(sessionID: result.sessionID, generation: $0, reference: result.navigationReference) }
         if fromMainSearch {
             cancelAutomaticSearch()
             if mainSearchNeedsRefresh { mainSearch.markResultsStale() }
@@ -4202,14 +4367,15 @@ final class TraceModel: ObservableObject {
                                            displayName: selectedProjectDisplayName)
             hasSearchReturnContext = true
             mainSearchReturnAnchor = anchor
+            mainSearchReturnReference = result.navigationReference
         }
-        prepareExternalSessionSelection(
+        guard prepareExternalSessionSelection(
             projectID: result.projectID,
             projectCanonicalKey: result.projectCanonicalKey,
             projectDisplayName: result.projectName,
             sessionID: result.sessionID
-        )
-        selectSession(result.sessionID, showWindow: true, messageID: result.id, preservingMainSearch: fromMainSearch)
+        ) else { return }
+        selectSession(result.sessionID, showWindow: true, messageID: result.id, preservingMainSearch: fromMainSearch, source: source)
     }
 
     private func prepareExternalSessionSelection(
@@ -4217,23 +4383,27 @@ final class TraceModel: ObservableObject {
         projectCanonicalKey: String,
         projectDisplayName: String?,
         sessionID: Int64
-    ) {
-        rememberSelectionProject(projectCanonicalKey, sessionID: sessionID)
-        let project = projects.first { $0.canonicalKey == projectCanonicalKey }
-        let resolvedDisplayName = project?.displayName ?? projectDisplayName
-        selectedProjectID = project?.id ?? projectID
-        selectedProjectCanonicalKey = projectCanonicalKey
-        selectedProjectDisplayName = resolvedDisplayName
+    ) -> Bool {
+        let owner = database, request = sessionRequestID, attachment = attachmentGeneration
+        ModelPublicationBatch.perform {
+            rememberSelectionProject(projectCanonicalKey, sessionID: sessionID)
+            let project = projects.first { $0.canonicalKey == projectCanonicalKey }
+            let resolvedDisplayName = project?.displayName ?? projectDisplayName
+            selectedProjectID = project?.id ?? projectID
+            selectedProjectCanonicalKey = projectCanonicalKey
+            selectedProjectDisplayName = resolvedDisplayName
 
-        let filter = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !filter.isEmpty,
-           resolvedDisplayName?.localizedCaseInsensitiveContains(filter) != true {
-            projectFilter = ""
+            let filter = projectFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !filter.isEmpty,
+               resolvedDisplayName?.localizedCaseInsensitiveContains(filter) != true {
+                projectFilter = ""
+            }
+            setSidebarRevealRequest(
+                .init(projectCanonicalKey: projectCanonicalKey, sessionID: sessionID)
+            )
+            loadProjectSessions(ensuring: sessionID)
         }
-        setSidebarRevealRequest(
-            .init(projectCanonicalKey: projectCanonicalKey, sessionID: sessionID)
-        )
-        loadProjectSessions(ensuring: sessionID)
+        return !terminating && database === owner && sessionRequestID == request && attachmentGeneration == attachment
     }
 
     @discardableResult
@@ -4327,35 +4497,37 @@ final class TraceModel: ObservableObject {
     }
 
     func copyMessage(id: Int64) {
-        if automaticNavigationIsCommitted {
+        if automaticNavigationIsCommitted || selectionSourceIdentity?.generation != database?.contentGeneration {
             guard let cached = hydratedMessages[id] else { return }
-            let sections = cached.sections
-            let text = [sections.prose, sections.toolInvocation, sections.toolOutput, sections.reasoning]
-                .filter { !$0.isEmpty }.joined(separator: "\n\n")
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            writeMessageToPasteboard(cached)
             return
         }
         guard let coordinator else { return }
         let ownerDatabase = database, request = sessionRequestID
+        let generation = selectionSourceIdentity?.generation
         Task {
             do {
-                let message = try await coordinator.hydrate(messageID: id)
+                let message = try await coordinator.hydrate(messageID: id, expectedGeneration: generation)
                 guard !terminating, database === ownerDatabase, sessionRequestID == request,
                       !automaticNavigationIsCommitted else { return }
-                let sections = message.sections
-                let text = [sections.prose, sections.toolInvocation, sections.toolOutput, sections.reasoning]
-                    .filter { !$0.isEmpty }.joined(separator: "\n\n")
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
+                writeMessageToPasteboard(message)
             } catch {
                 startupError = "Could not copy message: \(error.localizedDescription)"
             }
         }
     }
 
+    private func writeMessageToPasteboard(_ message: HydratedMessage) {
+        let sections = message.sections
+        let text = [sections.prose, sections.toolInvocation, sections.toolOutput, sections.reasoning]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
     func hydrate(_ message: MessageSummary) {
-        guard !automaticNavigationIsCommitted else { return }
+        guard !automaticNavigationIsCommitted,
+              selectionSourceIdentity?.generation == database?.contentGeneration else { return }
         let identity = MessageIdentity(message)
         guard messageIdentities[message.id] == identity else { return }
         if hydratedMessages[message.id] != nil {
@@ -4428,7 +4600,7 @@ final class TraceModel: ObservableObject {
     }
 
     private func hydrationIsCurrent(_ request: HydrationRequest) -> Bool {
-        hydrationEpoch == request.epoch
+        selectionSourceIdentity?.generation == database?.contentGeneration && hydrationEpoch == request.epoch
             && messageIdentities[request.identity.id] == request.identity
             && hydratingMessageIDs[request.identity.id]?.token == request.token
     }
@@ -4442,7 +4614,9 @@ final class TraceModel: ObservableObject {
     private func transcriptRequestIsCurrent(
         database: IndexDatabase, sessionID: Int64, request: UUID, summary: UUID? = nil
     ) -> Bool {
-        !automaticNavigationIsCommitted && self.database === database && selectedSessionID == sessionID
+        !automaticNavigationIsCommitted && self.database === database
+            && (selectionSourceIdentity?.generation ?? observedContentGeneration) == database.contentGeneration
+            && selectedSessionID == sessionID
             && sessionRequestID == request && (summary == nil || summaryRequestID == summary)
     }
 
@@ -4455,7 +4629,9 @@ final class TraceModel: ObservableObject {
     private func readTranscript(database: IndexDatabase, sessionID: Int64, request: UUID,
                                 summary: UUID? = nil, terminal: TerminalSummaryReceipt? = nil) async -> TranscriptReadOutcome {
         let outcome: TranscriptReadOutcome
-        do { outcome = .snapshot(try await database.transcriptSnapshot(sessionID: sessionID)) }
+        do { outcome = .snapshot(try await database.transcriptSnapshot(sessionID: sessionID,
+            expectedGeneration: selectionSourceIdentity?.generation ?? observedContentGeneration,
+            expectedReference: selectionSourceIdentity?.reference)) }
         catch is CancellationError { return .superseded }
         catch { outcome = .failed(error.localizedDescription) }
         guard !Task.isCancelled, terminalSummaryTranscriptIsCurrent(terminal),
@@ -4745,7 +4921,8 @@ final class TraceModel: ObservableObject {
 
     /// After acceptance, apply the snapshot or navigate back without suspension.
     private func acceptTranscript(_ snapshot: SessionTranscriptSnapshot) -> TranscriptAcceptanceResult {
-        guard snapshot.readRevision > highestObservedTranscriptReadRevision else { return .stale }
+        guard snapshot.contentGeneration == nil || snapshot.contentGeneration == database?.contentGeneration,
+              snapshot.readRevision > highestObservedTranscriptReadRevision else { return .stale }
         // Even an unusable omission establishes that older reads are obsolete.
         // The caller recovers with a newer snapshot containing complete rows.
         highestObservedTranscriptReadRevision = snapshot.readRevision
@@ -4802,6 +4979,9 @@ final class TraceModel: ObservableObject {
         } else {
             for id in stale { hydratingMessageIDs.removeValue(forKey: id) }
             hydrationOrder.removeAll { stale.contains($0) }
+        }
+        if let session = snapshot.session, let generation = session.contentGeneration {
+            selectionSourceIdentity = .init(sessionID: session.id, generation: generation, reference: session.navigationReference)
         }
         let resolvedUnknownProject = snapshot.session.map { knownProject(for: $0.id) == nil } ?? false
         if let session = snapshot.session, missingSelectionAttempt?.session == session.id { missingSelectionAttempt = nil }
@@ -5290,6 +5470,8 @@ final class TraceModel: ObservableObject {
 
     func prepareToTerminate() async {
         terminating = true
+        bufferedOrdinaryWork.forEach { $0.delivery?.retire() }
+        bufferedOrdinaryWork.removeAll()
         automaticNavigation = nil
         pendingResetBookmarks = nil
         discardStartupHandoffs()
@@ -5544,6 +5726,7 @@ final class TraceModel: ObservableObject {
         }
 
         guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
+        watcherRootsByAgent = rootsByAgent
         watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
         watcherStartupPending = true
         startupReconciliationPaths = reconciliationPaths
@@ -5562,30 +5745,8 @@ final class TraceModel: ObservableObject {
                         where self.liveWatcherReplayStarts[identifier] == nil {
                         self.liveWatcherReplayStarts[identifier] = eventID
                     }
-                    var relevant = changes
-                    // These streams cover transcript roots only. Metadata callbacks
-                    // already arrive filtered and mapped from their utility queue.
-                    var recoveryEligible = false
-                    relevant.paths = Set(changes.paths.compactMap { path in
-                        let canonical = TraceFileIO.canonicalPath(path)
-                        guard canonicalRoots.contains(where: { $0.contains(canonical) }) else { return nil }
-                        if rootsByAgent.contains(where: { agent, roots in
-                            TraceFileIO.isSessionTranscript(URL(fileURLWithPath: canonical.path), agent: agent)
-                                && roots.contains { $0.contains(canonical) }
-                        }) { recoveryEligible = true }
-                        return canonical.path
-                    })
-                    relevant.reconciliationPaths = []
-                    for path in changes.reconciliationPaths {
-                        let changed = TraceFileIO.canonicalPath(path)
-                        for root in canonicalRoots where root.intersects(changed) {
-                            relevant.reconciliationPaths.insert(changed.contains(root) ? root.path : changed.path)
-                        }
-                    }
-                    guard !relevant.paths.isEmpty || relevant.requiresReconciliation
-                        || !relevant.watermarks.isEmpty else { return }
-                    await self.routeLiveSourceChanges(relevant, acceptsCheckpoints: true,
-                        recoveryEligible: recoveryEligible || !relevant.reconciliationPaths.isEmpty)
+                    let (relevant, enrollment) = self.admitTranscriptChanges(changes)
+                    if enrollment == nil { await self.routeSourceChanges(relevant, acceptsCheckpoints: true) }
                 }
             })
         }
@@ -5671,31 +5832,49 @@ final class TraceModel: ObservableObject {
         return includesRoot ? .rootRecovery : .subtreeRecovery
     }
 
-    private func routeSourceChanges(_ changes: SourceChanges, acceptsCheckpoints: Bool) async {
-        if watcherStartupPending { bufferedSourceChanges.merge(changes) }
-        else if changes.hasIndexWork || (acceptsCheckpoints && !changes.watermarks.isEmpty) {
-            await submitSourceChanges(changes)
-        }
+    private func routeSourceChanges(_ changes: SourceChanges, acceptsCheckpoints: Bool,
+                                    completion: (@Sendable () -> Void)? = nil,
+                                    delivery: RecoveryEnrollment? = nil, safety: Bool = false) async {
+        if watcherStartupPending {
+            bufferedSourceChanges.merge(changes)
+            if completion != nil || delivery != nil || safety {
+                bufferedOrdinaryWork.append(.init(completion: completion ?? {}, delivery: delivery, safety: safety))
+            }
+        } else if changes.hasIndexWork || (acceptsCheckpoints && !changes.watermarks.isEmpty) {
+            await submitSourceChanges(changes, completion: completion, safety: safety)
+            delivery?.finish(.ordinaryDelivered)
+        } else { delivery?.retire() }
     }
 
-    private func submitSourceChanges(_ changes: SourceChanges) async {
+    private func submitSourceChanges(_ changes: SourceChanges,
+                                     completion: (@Sendable () -> Void)? = nil, safety: Bool = false) async {
         guard let scheduler else { return }
         TraceTestHooks.appendLine(
             "paths=\(changes.paths.sorted()),reconcile=\(changes.reconciliationPaths.sorted()),reasons=\(changes.recoveryReasons.map(\.rawValue).sorted())",
             pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"
         )
-        await scheduler.request(
-            paths: changes.paths,
-            reconciliationPaths: changes.reconciliationPaths,
-            scope: settings.indexScope,
-            activity: changes.hasIndexWork ? activity(for: changes) : .fileChanges,
-            watermarks: changes.watermarks,
-            streamRoots: changes.streamRoots
-        )
-        TraceTestHooks.appendLine(
-            changes.paths.sorted().joined(separator: "\n"),
-            pathKey: "TRACE_TEST_SOURCE_CHANGES_AUDIT_PATH"
-        )
+        if rebuildRequest?.database === database, rebuildRequest?.reset.isCommitted == false {
+            await scheduler.requestOrdinaryRecovery(paths: changes.paths,
+                reconciliationPaths: changes.reconciliationPaths,
+                activity: safety ? .safetyVerification : activity(for: changes),
+                satisfiesSafetyReconciliation: safety ? true : nil,
+                watermarks: changes.watermarks, streamRoots: changes.streamRoots,
+                onOrdinaryWorkCompleted: completion)
+        } else if let completion {
+            await scheduler.request(paths: changes.paths,
+                reconciliationPaths: changes.reconciliationPaths, scope: settings.indexScope,
+                activity: safety ? .safetyVerification : (changes.hasIndexWork ? activity(for: changes) : .fileChanges),
+                satisfiesSafetyReconciliation: safety ? true : nil,
+                watermarks: changes.watermarks, streamRoots: changes.streamRoots,
+                onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: completion)
+        } else {
+            await scheduler.request(paths: changes.paths,
+                reconciliationPaths: changes.reconciliationPaths, scope: settings.indexScope,
+                activity: safety ? .safetyVerification : (changes.hasIndexWork ? activity(for: changes) : .fileChanges),
+                satisfiesSafetyReconciliation: safety ? true : nil,
+                watermarks: changes.watermarks, streamRoots: changes.streamRoots)
+        }
+        TraceTestHooks.appendLine(changes.paths.sorted().joined(separator: "\n"), pathKey: "TRACE_TEST_SOURCE_CHANGES_AUDIT_PATH")
     }
 
     private func activity(for changes: SourceChanges) -> IndexActivity {
@@ -5740,6 +5919,7 @@ final class TraceModel: ObservableObject {
         sourceReloadActivation = nil
         _ = beginWatcherConfiguration()
         watchedSourceRoots = []
+        watcherRootsByAgent = [:]
         liveWatcherReplayStarts = [:]
         watcherStartupPending = true
         if !preserveBufferedWork { bufferedSourceChanges = SourceChanges() }
@@ -5801,13 +5981,8 @@ final class TraceModel: ObservableObject {
             safetyChanges.reconciliationPaths = Set(watchedSourceRoots.map(\.path))
             let enrollment = await routeLiveSourceChanges(safetyChanges, acceptsCheckpoints: false,
                 recoveryEligible: true, safety: true)
-            if let enrollment, !(await enrollment.waitForDelivery()) {
-                guard !Task.isCancelled, generation == watcherGeneration else { return }
-                // Retired before delivery: perform the safety work as an ordinary
-                // request, without using another reset admission.
-                await scheduler.request(reconciliationPaths: safetyChanges.reconciliationPaths,
-                    scope: settings.indexScope, activity: .safetyVerification)
-            }
+            if let enrollment { _ = await enrollment.waitForDelivery() }
+            guard !Task.isCancelled, generation == watcherGeneration else { return }
             await scheduler.waitUntilIdle()
             guard !Task.isCancelled, generation == watcherGeneration else { return }
             let after = try? await database.lastSafetyReconciliationMilliseconds()
@@ -5937,7 +6112,7 @@ final class TraceModel: ObservableObject {
         projectRequestID = projectRequest
         backgroundSidebarRequest = projectRequest
         defer { finishBackgroundSidebarRequest(projectRequest) }
-        let ensuredSessionID = selectedSessionID
+        let ensuredSessionID = selectionSourceIdentity?.generation == database.contentGeneration ? selectedSessionID : nil
         let dataGeneration = sidebarDataGeneration
         let selectedSessionRequest = sessionRequestID
         let pageCount = sessionListProjectKey == projectCanonicalKey
@@ -5978,6 +6153,7 @@ final class TraceModel: ObservableObject {
             }
             if let path = sidebarMarkerPathForTesting { _ = writeSidebarMarker(owner.id, path: path) }
             #endif
+            guard snapshot.contentGeneration == database.contentGeneration else { throw CancellationError() }
             sidebar = snapshot
             sidebarError = nil
         } catch {
@@ -6095,7 +6271,8 @@ final class TraceModel: ObservableObject {
            transcriptRequestIsCurrent(database: database, sessionID: ensuredSessionID, request: selectedSessionRequest, summary: refresh) {
             do {
                 loadedTranscript = try await database.transcriptSnapshot(
-                    sessionID: ensuredSessionID, knownSession: selectedSession, knownMessageCount: messages.count
+                    sessionID: ensuredSessionID, expectedGeneration: selectionSourceIdentity?.generation ?? observedContentGeneration,
+                    expectedReference: selectionSourceIdentity?.reference, knownSession: selectedSession, knownMessageCount: messages.count
                 )
             } catch {
                 loadedTranscript = nil
@@ -6195,7 +6372,8 @@ final class TraceModel: ObservableObject {
                 && (indexWorkflow.terminalPhase != nil || [.complete, .failed].contains(progress.phase))
         }
         if mayRestoreSession {
-            if let stored = settings.lastSessionID {
+            if settings.lastSessionID != nil || settings.pendingNavigationReference != nil {
+                let stored = settings.lastSessionID
                 let restored: Result<SessionSummary?, Error>
                 let reference = settings.pendingNavigationReference
                 do {
@@ -6207,7 +6385,8 @@ final class TraceModel: ObservableObject {
                     #endif
                     if let reference {
                         restored = .success(try await database.resolveNavigationReference(reference)?.session)
-                    } else { restored = .success(try await database.session(id: stored)) }
+                    } else if let stored { restored = .success(try await database.session(id: stored)) }
+                    else { restored = .success(nil) }
                 }
                 catch { restored = .failure(error) }
                 #if DEBUG
@@ -6222,7 +6401,7 @@ final class TraceModel: ObservableObject {
                     switch restored {
                     case .success(.some(let session)):
                         summaryReadFailures[.restoration] = nil
-                        guard settings.pendingNavigationReference == reference else { return }
+                        guard settings.pendingNavigationReference == reference else { break }
                         ModelPublicationBatch.perform {
                             settings.pendingNavigationReference = nil
                             selectSession(session.id)

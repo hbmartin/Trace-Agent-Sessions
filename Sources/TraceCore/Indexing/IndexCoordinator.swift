@@ -1124,7 +1124,11 @@ public actor IndexCoordinator {
     }
 
     public func hydrate(messageID: Int64) async throws -> HydratedMessage {
-        guard let summary = try await database.message(id: messageID) else {
+        try await hydrate(messageID: messageID, expectedGeneration: nil)
+    }
+
+    public func hydrate(messageID: Int64, expectedGeneration: IndexContentGeneration?) async throws -> HydratedMessage {
+        guard let summary = try await database.message(id: messageID, expectedGeneration: expectedGeneration) else {
             throw SessionSourceError.missingRecord(String(messageID))
         }
         return try await hydrate(summary)

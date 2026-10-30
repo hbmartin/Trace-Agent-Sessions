@@ -411,7 +411,7 @@ private struct SessionSidebar: View {
                             .accessibilityIdentifier("sessionTotalCount")
                     }.padding(12)
                     ScrollViewReader { proxy in
-                        List(selection: Binding(get: { model.selectedSessionID }, set: { id in
+                        List(selection: Binding(get: { model.sidebarSelectedSessionID }, set: { id in
                             if let token = model.sidebarRevealRequest?.token { model.cancelSidebarReveal(token: token) }
                             if let id { model.selectSession(id) }
                         })) {
@@ -420,7 +420,7 @@ private struct SessionSidebar: View {
                                     .accessibilityElement(children: .contain)
                                     .accessibilityIdentifier("sessionSidebarRow-\(session.id)")
                                     .accessibilityAddTraits(
-                                        model.selectedSessionID == session.id ? .isSelected : []
+                                        model.sidebarSelectedSessionID == session.id ? .isSelected : []
                                     )
                                     .id(session.id)
                                     .tag(Optional(session.id))

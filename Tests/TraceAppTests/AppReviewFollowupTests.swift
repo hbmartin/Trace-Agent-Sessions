@@ -14,6 +14,158 @@ final class AppReviewFollowupTests: XCTestCase {
     private final class WeakModelReference { weak var value: TraceModel? }
     private final class WeakSchedulerReference { weak var value: IndexScheduler? }
 
+    func testLatestSelectionWinsAfterAutomaticResetDeliveryBeforeCommit() async throws {
+        for clearsSelection in [false, true] {
+            let f = try await deferredResetFixture()
+            f.model.selectProject(f.project.id); try await wait { !f.model.isLoadingSessions }
+            let rows = f.model.sessions
+            let first = try XCTUnwrap(rows.first), second = try XCTUnwrap(rows.last)
+            f.model.openSession(first); try await wait { !f.model.messages.isEmpty }
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            await f.model.coordinatorForTesting?.gatePreparationForTesting(held)
+            var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+            XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+            try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
+            if clearsSelection { f.model.returnFromSession() }
+            else { f.model.openSession(second); try await wait { f.model.selectedSession?.title == second.title } }
+            let file = f.root.appendingPathComponent("sessions.jsonl")
+            let text = try String(contentsOf: file, encoding: .utf8)
+            try Data((text.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
+            await gate.open()
+            try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+            await f.model.schedulerForTesting?.waitUntilIdle()
+            if clearsSelection {
+                XCTAssertNil(f.model.selectedSessionID); XCTAssertNil(f.model.settings.lastSessionID)
+                XCTAssertTrue(f.model.messages.isEmpty)
+            } else {
+                try await wait { f.model.selectedSession?.title == second.title && !f.model.messages.isEmpty }
+                XCTAssertEqual(f.model.settings.lastSessionID, f.model.selectedSessionID)
+                let selected = try XCTUnwrap(f.model.selectedSessionID)
+                let current = try await f.database.session(id: selected)
+                XCTAssertEqual(current?.navigationReference, second.navigationReference)
+            }
+            XCTAssertFalse(f.model.isPreparingRebuild)
+        }
+    }
+
+    func testSelectionAfterCommitBeforeCallbackCannotReadReusedIDs() async throws {
+        let f = try await deferredResetFixture()
+        f.model.selectProject(f.project.id); try await wait { !f.model.isLoadingSessions }
+        let first = try XCTUnwrap(f.model.sessions.first), latest = try XCTUnwrap(f.model.sessions.last)
+        f.model.openSession(first); try await wait { !f.model.messages.isEmpty }
+        let commit = ReviewReadGate(), delivery = ReviewReadGate()
+        let heldCommit = Task { await commit.wait() }, heldDelivery = Task { await delivery.wait() }
+        defer { heldCommit.cancel(); heldDelivery.cancel(); Task { await commit.open(); await delivery.open() } }
+        await f.model.coordinatorForTesting?.gatePostResetForTesting(heldCommit)
+        f.model.rebuildResetDeliveryGateForTesting = heldDelivery
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        try Data((text.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        try await wait {
+            let waiting = await f.model.coordinatorForTesting?.postResetWaitingForTesting
+            return f.model.rebuildResetDeliveryWaitingForTesting && waiting == true
+        }
+        let before = await f.database.transcriptReadCountForTesting()
+        f.model.openSession(latest)
+        XCTAssertEqual(f.model.selectedSessionID, latest.id)
+        XCTAssertNil(f.model.settings.lastSessionID, "an old ID cannot be persisted after commitment")
+        XCTAssertNil(f.model.sidebarSelectedSessionID, "an old row cannot highlight a reused sidebar ID")
+        let after = await f.database.transcriptReadCountForTesting()
+        XCTAssertEqual(after, before, "selection waits for source resolution rather than querying the reused ID")
+        await commit.open()
+        try await wait { f.model.progress.phase == .complete && f.model.selectedSession?.title == latest.title && !f.model.messages.isEmpty }
+        await delivery.open()
+        try await wait { !f.model.rebuildResetDeliveryWaitingForTesting }
+        let current = try XCTUnwrap(f.model.selectedSession)
+        XCTAssertEqual(current.navigationReference, latest.navigationReference)
+        XCTAssertEqual(f.model.settings.lastSessionID, current.id)
+    }
+
+    func testManualReplacementReleasesQueuedSafetyEnrollment() async throws {
+        let f = try await deferredResetFixture()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.rebuildSubmissionGateForTesting = held
+        var result: Bool?
+        let safety = Task { result = await f.model.admitSafetyRecoveryForTesting() }
+        try await wait { f.model.rebuildSubmissionWaitingForTesting }
+        let old = f.model.rebuildRequestIDForTesting
+        f.model.rebuildIndex()
+        try await wait { result != nil }
+        await safety.value
+        XCTAssertEqual(result, false, "superseded queued delivery must release the safety loop")
+        XCTAssertNotEqual(f.model.rebuildRequestIDForTesting, old)
+        await gate.open()
+        try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertFalse(f.model.isPreparingRebuild)
+        let safetyDate = try await f.database.lastSafetyReconciliationMilliseconds()
+        XCTAssertNotNil(safetyDate, "a new manual request must preserve the retired enrollment's ordinary safety coverage")
+    }
+
+    func testDeletedSelectedRowDoesNotVetoAutomaticReset() async throws {
+        let f = try await deferredResetFixture()
+        f.model.selectProject(f.project.id); try await wait { !f.model.isLoadingSessions }
+        let session = try XCTUnwrap(f.model.sessions.first { $0.title == "NavigationNeedle 0" })
+        f.model.openSession(session); try await wait { !f.model.messages.isEmpty }
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        var data = Data()
+        for index in 1..<7 { data.append(try line(index, project: index < 3 ? "NavigationReview" : "OtherReview")) }
+        try data.write(to: file)
+        await f.model.coordinatorForTesting?.indexAll(scope: .proseOnly)
+        let missing = try await f.database.session(id: session.id)
+        XCTAssertNotEqual(missing?.navigationReference, session.navigationReference,
+            "the removed row may already alias a different source session before reset")
+        XCTAssertEqual(f.model.selectedSessionID, session.id, "keep cached navigation until the admitted reset reconciles it")
+        let before = await f.database.committedResetCountForTesting
+        var changes = SourceChanges(); changes.paths = [file.path]
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        try await wait { !f.model.pendingRebuildForTesting && f.model.selectedSessionID == nil }
+        let after = await f.database.committedResetCountForTesting
+        XCTAssertEqual(after, before + 1)
+        XCTAssertNil(f.model.settings.lastSessionID)
+    }
+
+    func testSourceIdentityHandoffCannotOverwriteReentrantNavigation() async throws {
+        let f = try await fixture(count: 2)
+        let rows = try await f.database.sessions()
+        let first = try XCTUnwrap(rows.first { $0.projectCanonicalKey == f.project.canonicalKey })
+        let latest = try XCTUnwrap(rows.first { $0.projectCanonicalKey != f.project.canonicalKey })
+        var reentered = false
+        let subscription = f.model.objectWillChange.sink {
+            guard !reentered else { return }
+            reentered = true
+            f.model.openSession(latest)
+        }
+        f.model.openSession(first)
+        try await wait { f.model.selectedSession?.title == latest.title && !f.model.messages.isEmpty }
+        XCTAssertEqual(f.model.selectedProjectCanonicalKey, latest.projectCanonicalKey)
+        XCTAssertEqual(f.model.selectedSession?.navigationReference, latest.navigationReference)
+        XCTAssertEqual(f.model.settings.lastSessionID, latest.id)
+        subscription.cancel()
+    }
+
+    func testPreparedNavigationOrphanCleanupDistinguishesCommittedReset() async throws {
+        let f = try await fixture(count: 2)
+        let rows = try await f.database.sessions()
+        let reference = try XCTUnwrap(rows.first?.navigationReference)
+        let original = f.database.contentGeneration
+        let owner = UUID()
+        f.model.settings.pendingNavigationReference = reference
+        f.model.settings.preparedNavigationRecovery = .init(owner: owner, generation: original, reference: reference)
+        f.model.settings.reconcilePreparedNavigation(generation: original)
+        XCTAssertNil(f.model.settings.pendingNavigationReference, "an uncommitted prepared reference cannot persist forever")
+        f.model.settings.pendingNavigationReference = reference
+        f.model.settings.preparedNavigationRecovery = .init(owner: owner, generation: original, reference: reference)
+        try await f.database.clearIndex()
+        f.model.settings.reconcilePreparedNavigation(generation: f.database.contentGeneration)
+        XCTAssertEqual(f.model.settings.pendingNavigationReference, reference, "committed recovery survives restart")
+        XCTAssertNil(f.model.settings.preparedNavigationRecovery)
+    }
+
     func testFailedAttachmentDoesNotReportCommittedRebuildAsCancelled() async throws {
         let f = try await fixture(count: 2)
         f.model.settings.onboardingComplete = true
@@ -449,6 +601,9 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.mainSearch.query, "NavigationNeedle")
         XCTAssertEqual(f.model.mainSearchReturnAnchor?.offset, 41)
         XCTAssertEqual(f.model.mainSearchReturnAnchor?.id, f.model.messages.first?.id)
+        // Restoration publishes the mapped reader before its summary starts
+        // the replacement search. Advance virtual time only after enrollment.
+        try await wait { f.model.mainSearch.isSearching }
         await f.clock.advance(by: .milliseconds(100))
         try await wait { !f.model.mainSearch.isSearching && f.model.mainSearch.results.count == 3 }
         XCTAssertTrue(f.model.mainSearch.results.contains { $0.id == f.model.mainSearchReturnAnchor?.id })

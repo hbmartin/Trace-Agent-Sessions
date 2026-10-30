@@ -8,6 +8,171 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testBusyResetThenPermanentPathFailureHasBoundedRetryOwnership() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>(), failures = MutableFailureSelection([file.lastPathComponent])
+        let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(
+            base: ClaudeCodeSource(roots: [root]), failures: failures)], clock: clock)
+        let terminal = OSAllocatedUnfairLock(initialState: 0), committed = OSAllocatedUnfairLock(initialState: 0)
+        let covered = OSAllocatedUnfairLock(initialState: 0)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+            progress: { update in if update.phase == .complete || update.phase == .failed { terminal.withLock { $0 += 1 } } }, clock: clock)
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true, onRebuildReset: { committed.withLock { $0 += 1 } },
+            onRebuildDeferred: {}, onOrdinaryWorkCompleted: { covered.withLock { $0 += 1 } })
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(terminal.withLock { $0 }, 1)
+        await clock.advance(by: .seconds(5))
+        try await waitForCondition { terminal.withLock { $0 } == 2 }
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(committed.withLock { $0 }, 1)
+        await clock.advance(by: .seconds(5))
+        try await waitForCondition { terminal.withLock { $0 } == 3 }
+        await scheduler.waitUntilIdle()
+        await clock.advance(by: .seconds(60)); await scheduler.waitUntilIdle()
+        XCTAssertEqual(terminal.withLock { $0 }, 3, "a completed reset cannot self-merge and renew ordinary retry budget")
+        let resets = await database.resetAttemptCountForTesting
+        XCTAssertEqual(resets, 2)
+        let retained = await scheduler.retainedOrdinaryReceiptCountForTesting
+        XCTAssertEqual(retained, 1, "continuations retain one ordinary receipt rather than doubling it")
+        XCTAssertEqual(covered.withLock { $0 }, 0, "a permanent failure cannot acknowledge coverage")
+        await scheduler.stop(); try await clock.checkSuspension()
+    }
+
+    func testOrdinaryEventsWithoutCallbacksRetainNoCompletionReceipts() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>(), failures = MutableFailureSelection([file.lastPathComponent])
+        let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(
+            base: ClaudeCodeSource(roots: [root]), failures: failures)], clock: clock)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock)
+        let gate = BatchLatch(), held = Task { await gate.pauseOnce() }
+        await coordinator.gatePreparationForTesting(held)
+        await scheduler.requestOrdinaryRecovery(paths: [file.path])
+        try await waitForPreparation(coordinator)
+        for _ in 0..<20 { await scheduler.requestOrdinaryRecovery(paths: [file.path]) }
+        await gate.release(); await scheduler.waitUntilIdle()
+        let retained = await scheduler.retainedOrdinaryReceiptCountForTesting
+        XCTAssertEqual(retained, 0, "live events without callbacks must not accumulate empty completion receipts on failure")
+        await scheduler.stop(); try await clock.checkSuspension()
+    }
+
+    func testNewerCheckpointWaitsForOlderOrdinaryFallback() async throws {
+        let root = try directory(), old = root.appendingPathComponent("old.jsonl"), new = root.appendingPathComponent("new.jsonl")
+        try Data(line(1).utf8).write(to: old)
+        try Data(line(2).utf8).write(to: new)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let failures = MutableFailureSelection([]), clock = TestClock<Duration>()
+        let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(
+            base: ClaudeCodeSource(roots: [root]), failures: failures)], clock: clock)
+        await coordinator.indexAll(scope: .proseOnly)
+        try Data((line(1) + line(3)).utf8).write(to: old)
+        failures.replace(with: [old.lastPathComponent])
+        let box = OSAllocatedUnfairLock<IndexScheduler?>(initialState: nil)
+        let injected = OSAllocatedUnfairLock(initialState: false), completions = CompletionRecorder()
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { update in
+            if update.phase == .failed, injected.withLock({ value in if value { return false }; value = true; return true }),
+               let scheduler = box.withLock({ $0 }) {
+                await scheduler.request(paths: [new.path], watermarks: ["stream": 20], streamRoots: ["stream": [root.path]])
+            }
+        }, clock: clock, didComplete: { activity, marks in await completions.receive(activity: activity, watermarks: marks) })
+        box.withLock { $0 = scheduler }
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(paths: [old.path], rebuild: true, watermarks: ["stream": 10],
+            streamRoots: ["stream": [root.path]], onRebuildReset: {}, onRebuildDeferred: {}, automaticallyRetryReset: false)
+        await scheduler.waitUntilIdle()
+        let premature = await completions.values
+        XCTAssertTrue(premature.isEmpty, "newer pending work cannot checkpoint past the older ordinary fallback")
+        failures.replace(with: [])
+        await clock.advance(by: .seconds(5))
+        try await waitForCondition { !(await completions.values).isEmpty }
+        await scheduler.waitUntilIdle()
+        let accepted = await completions.values
+        XCTAssertEqual(accepted.last?.watermarks["stream"], 20)
+        let sessions = try await database.sessions()
+        let session = try XCTUnwrap(sessions.first { $0.sourcePath == old.path })
+        let rows = try await database.messages(sessionID: session.id)
+        XCTAssertEqual(rows.count, 2)
+        box.withLock { $0 = nil }
+        await scheduler.stop(); try await clock.checkSuspension()
+    }
+
+    func testCommittedScopeFullScanDominatesScopedReconciliation() async throws {
+        let first = try directory(), second = try directory()
+        try Data(line(1).utf8).write(to: first.appendingPathComponent("one.jsonl"))
+        try Data(line(2).utf8).write(to: second.appendingPathComponent("two.jsonl"))
+        let database = try IndexDatabase(url: first.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [first, second])])
+        await coordinator.indexAll(scope: .proseOnly)
+        try await database.clearIndex()
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .everything, progress: { _ in })
+        await scheduler.requestOrdinaryRecovery(reconcile: true, reconciliationPaths: [first.path])
+        await scheduler.waitUntilIdle()
+        let statistics = try await database.statistics(), scope = try await database.storedIndexScope()
+        XCTAssertEqual(statistics.messageCount, 2, "a full scan must cover both roots even with subtree provenance")
+        XCTAssertEqual(scope, .proseOnly)
+        let resets = await database.resetAttemptCountForTesting
+        XCTAssertEqual(resets, 1, "ordinary recovery cannot switch requested scope or perform an implicit reset")
+        await scheduler.stop()
+    }
+
+    func testContentGenerationTracksCommittedResetAndRejectsReusedNumericRead() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let original = database.contentGeneration
+        let rows = try await database.sessions()
+        let session = try XCTUnwrap(rows.first)
+        XCTAssertEqual(session.contentGeneration, original)
+        XCTAssertNotNil(session.navigationReference)
+        await database.setResetFaultForTesting(.rollback)
+        do { try await database.clearIndex(); XCTFail("rollback") } catch {}
+        XCTAssertEqual(database.contentGeneration, original)
+        await database.setResetFaultForTesting(.checkpoint)
+        do { try await database.clearIndex(); XCTFail("checkpoint") } catch {}
+        XCTAssertNotEqual(database.contentGeneration, original)
+        let reopened = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        XCTAssertEqual(reopened.contentGeneration, database.contentGeneration)
+        await coordinator.indexAll(scope: .proseOnly)
+        do {
+            _ = try await database.transcriptSnapshot(sessionID: session.id, expectedGeneration: original)
+            XCTFail("old numeric IDs cannot read a replacement generation")
+        } catch is CancellationError {} catch { throw error }
+        let before = await database.navigationReadCountsForTesting()
+        let captures = try await database.captureNavigationReferences([session.id: nil], expectedGeneration: database.contentGeneration)
+        let mapped = try await database.resolveNavigationReferences(captures.values.reduce(into: [:]) { $0[$1] = .some(nil) })
+        XCTAssertEqual(mapped.count, 1)
+        let after = await database.navigationReadCountsForTesting()
+        XCTAssertEqual(after.capture - before.capture, 1)
+        XCTAssertEqual(after.resolution - before.resolution, 1)
+    }
+
+    func testSidebarReadRetainsItsSQLGenerationAcrossReset() async throws {
+        let root = try directory()
+        try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let original = database.contentGeneration
+        let gate = BatchLatch(), held = Task { await gate.pauseOnce() }
+        await database.gateSidebarSnapshotPublicationForTesting(held)
+        let read = Task { try await database.sidebarSnapshot(projectCanonicalKey: nil) }
+        try await waitForCondition { await database.sidebarSnapshotWaitingForTesting }
+        try await database.clearIndex()
+        await coordinator.indexAll(scope: .proseOnly)
+        await gate.release()
+        let snapshot = try await read.value
+        XCTAssertEqual(snapshot.contentGeneration, original)
+        XCTAssertEqual(snapshot.sessionList.contentGeneration, original)
+        XCTAssertEqual(snapshot.sessionList.sessions.first?.contentGeneration, original)
+        XCTAssertNotEqual(snapshot.contentGeneration, database.contentGeneration)
+    }
+
     func testResetReceiptDistinguishesRollbackFromCheckpointFailure() async throws {
         let root = try directory()
         try Data(line(1).utf8).write(to: root.appendingPathComponent("session.jsonl"))

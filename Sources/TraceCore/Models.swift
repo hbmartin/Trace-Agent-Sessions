@@ -778,6 +778,15 @@ public struct SearchCursor: Codable, Hashable, Sendable {
     }
 }
 
+/// Identity of one committed content generation. Row IDs are valid only
+/// within this generation, including when a reset later fails checkpointing.
+public struct IndexContentGeneration: Hashable, Codable, Sendable {
+    let value: String
+    public func belongsToSameDatabase(as other: Self) -> Bool {
+        value.split(separator: ":").first == other.value.split(separator: ":").first
+    }
+}
+
 public struct SearchResult: Identifiable, Sendable {
     public let id: Int64
     public let sessionID: Int64
@@ -792,11 +801,14 @@ public struct SearchResult: Identifiable, Sendable {
     public let prefix: String
     public let sourcePath: String
     public let rank: Double?
+    public var contentGeneration: IndexContentGeneration? = nil
+    public var navigationReference: SessionNavigationReference? = nil
 }
 
 public struct SearchPage: Sendable {
     public let results: [SearchResult]
     public let nextCursor: SearchCursor?
+    public var contentGeneration: IndexContentGeneration? = nil
 
     public func uniqueResults(excluding existingIDs: Set<Int64>) -> [SearchResult] {
         var seen = existingIDs
@@ -829,6 +841,7 @@ public struct SessionPage: Sendable {
     public let sessions: [SessionSummary]
     public let totalCount: Int
     public let nextCursor: SessionCursor?
+    public var contentGeneration: IndexContentGeneration? = nil
 }
 
 public struct SessionListSnapshot: Sendable {
@@ -836,12 +849,14 @@ public struct SessionListSnapshot: Sendable {
     public let totalCount: Int
     public let nextCursor: SessionCursor?
     public let pageCount: Int
+    public var contentGeneration: IndexContentGeneration? = nil
 }
 
 public struct SidebarSnapshot: Sendable {
     public let projects: [ProjectSummary]
     public let recentSessions: [SessionSummary]
     public let sessionList: SessionListSnapshot
+    public var contentGeneration: IndexContentGeneration? = nil
 }
 
 /// An opaque source identity used to restore navigation after row IDs change.
@@ -853,6 +868,19 @@ public struct SessionNavigationReference: Hashable, Codable, Sendable {
     let externalSessionID: String
     let anchorSourceKey: String?
     let anchorExternalID: String?
+
+    public func representsSameSession(as other: Self) -> Bool {
+        agent == other.agent && root == other.root && path == other.path && externalSessionID == other.externalSessionID
+    }
+    public func anchored(at identity: MessageNavigationIdentity) -> Self {
+        .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
+            anchorSourceKey: identity.sourceKey, anchorExternalID: identity.externalID)
+    }
+}
+
+public struct MessageNavigationIdentity: Hashable, Sendable {
+    let sourceKey: String
+    let externalID: String?
 }
 
 public struct SessionSummary: Identifiable, Sendable {
@@ -869,6 +897,8 @@ public struct SessionSummary: Identifiable, Sendable {
     public let sourcePath: String
     public var sourceGeneration: Int64 = 0
     public var errorRevision: Int64 = 0
+    public var contentGeneration: IndexContentGeneration? = nil
+    public var navigationReference: SessionNavigationReference? = nil
 
     public var transcriptIdentity: SessionTranscriptIdentity { .init(self) }
 }
@@ -876,11 +906,13 @@ public struct SessionSummary: Identifiable, Sendable {
 /// Identifies the source contents backing a transcript, independently of its
 /// growing row count and display metadata.
 public struct SessionTranscriptIdentity: Equatable, Sendable {
+    public let contentGeneration: IndexContentGeneration?
     public let sessionID: Int64
     public let sourceGeneration: Int64
     public let sourcePath: String
 
     public init(_ session: SessionSummary) {
+        contentGeneration = session.contentGeneration
         sessionID = session.id
         sourceGeneration = session.sourceGeneration
         sourcePath = session.sourcePath
@@ -894,6 +926,7 @@ public struct SessionTranscriptSnapshot: Sendable {
     public let readRevision: UInt64
     public let session: SessionSummary?
     public let messages: [MessageSummary]?
+    public var contentGeneration: IndexContentGeneration? = nil
 }
 
 public struct MessageSummary: Identifiable, Sendable {
@@ -908,6 +941,7 @@ public struct MessageSummary: Identifiable, Sendable {
     public let sourceFormat: SourceFormat
     public let locator: RecordLocator
     public var sectionFlags: Int? = nil
+    public var navigationIdentity: MessageNavigationIdentity? = nil
 }
 
 public struct SourceHealth: Identifiable, Sendable {

@@ -80,7 +80,7 @@ public actor IndexScheduler {
     private let didComplete: @Sendable (IndexActivity, [String: UInt64]) async -> Void
     private let didSatisfySafetyReconciliation: @Sendable () async -> Void
     private let retryDelay: Duration
-    private let clock: any Clock<Duration>
+    private let clock: AnyClock<Duration>
     private var scope: IndexScope
     private var pendingPaths: Set<String> = []
     private var pendingReconciliationPaths: Set<String> = []
@@ -93,17 +93,27 @@ public actor IndexScheduler {
     private var pendingOrdinaryReceipts: [OrdinaryReceipt] = []
     private var worker: Task<Void, Never>?
     private var operation: Task<IndexProgress, Never>?
-    private var retryBatch: Batch?
-    private var retryReady = false
-    private var retryInFlight = false
+    private struct WaitingRetry {
+        let id = UUID()
+        var batch: Batch
+        let deadline: AnyClock<Duration>.Instant
+    }
+    private var waitingRetries: [WaitingRetry] = []
     private var ordinaryRecovery: Batch?
     private var dormantBatch: Batch?
     private var retryTask: Task<Void, Never>?
+    private var retryTaskID: UUID?
     private var configurationGeneration: UInt64 = 0
     private var stopping = false
     private var preservingDeferredScope = false
+    private var pendingUsesCommittedScope = false
     #if DEBUG
     var generationForTesting: UInt64 { configurationGeneration }
+    var retainedOrdinaryReceiptCountForTesting: Int {
+        waitingRetries.reduce(0) { $0 + $1.batch.ordinaryReceipts.count }
+            + (ordinaryRecovery?.ordinaryReceipts.count ?? 0) + (dormantBatch?.ordinaryReceipts.count ?? 0)
+            + pendingOrdinaryReceipts.count
+    }
     #endif
 
     public init(coordinator: IndexCoordinator, scope: IndexScope,
@@ -115,7 +125,7 @@ public actor IndexScheduler {
         self.coordinator = coordinator
         self.scope = scope
         self.retryDelay = retryDelay
-        self.clock = clock
+        self.clock = AnyClock(clock)
         self.progress = progress
         self.didComplete = didComplete
         self.didSatisfySafetyReconciliation = didSatisfySafetyReconciliation
@@ -195,6 +205,22 @@ public actor IndexScheduler {
             onOrdinaryWorkCompleted: onOrdinaryWorkCompleted)
     }
 
+    /// Recovers ordinary inputs against the committed scope without changing
+    /// the requested scope or implicitly clearing an index whose reset is owed.
+    public func requestOrdinaryRecovery(paths: Set<String> = [], reconcile: Bool = false,
+                        reconciliationPaths: Set<String> = [], activity: IndexActivity? = nil,
+                        satisfiesSafetyReconciliation: Bool? = nil,
+                        watermarks: [String: UInt64] = [:], streamRoots: [String: Set<String>] = [:],
+                        onOrdinaryWorkCompleted: (@Sendable () -> Void)? = nil) {
+        guard !stopping else { return }
+        pendingUsesCommittedScope = true
+        enqueue(paths: paths, reconcile: reconcile, reconciliationPaths: reconciliationPaths,
+            rebuild: false, scope: nil, activity: activity,
+            satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, watermarks: watermarks,
+            streamRoots: streamRoots, onRebuildReset: nil, onRebuildDeferred: nil,
+            automaticallyRetryReset: true, onOrdinaryWorkCompleted: onOrdinaryWorkCompleted)
+    }
+
     private func enqueue(paths: Set<String>, reconcile: Bool, reconciliationPaths: Set<String>,
                          rebuild: Bool, scope: IndexScope?, activity: IndexActivity?,
                          satisfiesSafetyReconciliation: Bool?, watermarks: [String: UInt64],
@@ -208,19 +234,11 @@ public actor IndexScheduler {
                 onDeferred: onRebuildDeferred, automaticallyRetry: automaticallyRetryReset))
         }
         let scopeChanged = scope.map { $0 != self.scope } ?? false
-        if scopeChanged { preservingDeferredScope = false }
+        if scopeChanged { preservingDeferredScope = false; pendingUsesCommittedScope = false }
         if scopeChanged || rebuild {
-            if let retryBatch {
-                mergeWatermarks(retryBatch.watermarks)
-                mergeCanonicalStreamRoots(retryBatch.streamRoots)
-            }
-            if let dormantBatch {
-                mergeWatermarks(dormantBatch.watermarks)
-                mergeCanonicalStreamRoots(dormantBatch.streamRoots)
-            }
-            for batch in [retryBatch, dormantBatch, ordinaryRecovery].compactMap({ $0 }) {
+            for batch in waitingRetries.map(\.batch) + [dormantBatch, ordinaryRecovery].compactMap({ $0 }) {
                 carryPendingResets(batch)
-                pendingOrdinaryReceipts += batch.ordinaryReceipts
+                pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + batch.ordinaryReceipts)
                 pendingPaths.formUnion(batch.paths)
                 pendingReconciliationPaths.formUnion(batch.reconciliationPaths)
                 fullScan = fullScan || batch.independentFullScan
@@ -228,8 +246,7 @@ public actor IndexScheduler {
                 mergeCanonicalStreamRoots(batch.streamRoots)
             }
             ordinaryRecovery = nil
-            retryBatch = nil
-            retryReady = false
+            waitingRetries.removeAll()
             dormantBatch = nil
             cancelScheduledRetry()
             configurationGeneration &+= 1
@@ -259,10 +276,10 @@ public actor IndexScheduler {
 
     private func drain() async {
         defer { worker = nil }
-        while hasPendingWork || ordinaryRecovery != nil || (retryReady && retryBatch != nil) {
+        while hasPendingWork || ordinaryRecovery != nil || readyRetryIndex != nil {
             // Fresh work always wins over a delayed retry, so a bad source cannot
             // starve later filesystem events.
-            let retrying = !hasPendingIndexWork && ordinaryRecovery == nil && retryReady && retryBatch != nil
+            let retrying = !hasPendingIndexWork && ordinaryRecovery == nil && readyRetryIndex != nil
             if !retrying, ordinaryRecovery == nil, !fullScan, pendingResets.isEmpty, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
                pendingActivity == nil {
                 let watermarks = pendingWatermarks
@@ -278,9 +295,11 @@ public actor IndexScheduler {
                 continue
             }
             let batch: Batch
-            if retrying, let retryBatch {
-                batch = retryBatch
-                retryInFlight = true
+            if retrying, let index = readyRetryIndex {
+                // Execution owns this batch exclusively. New arrivals cannot
+                // merge into it and its continuation cannot merge with itself.
+                batch = waitingRetries.remove(at: index).batch
+                scheduleRetry()
             } else if !hasPendingIndexWork, let recovery = ordinaryRecovery {
                 batch = recovery
                 ordinaryRecovery = nil
@@ -295,7 +314,7 @@ public actor IndexScheduler {
                     scope: scope,
                     activity: pendingActivity ?? .fileChanges,
                     satisfiesSafetyReconciliation: pendingSatisfiesSafetyReconciliation,
-                    retryAttempt: 0, resetRetryAttempt: 0, usesCommittedScope: preservingDeferredScope,
+                    retryAttempt: 0, resetRetryAttempt: 0, usesCommittedScope: preservingDeferredScope || pendingUsesCommittedScope,
                     generation: configurationGeneration, ordinaryReceipts: pendingOrdinaryReceipts
                 )
                 fullScan = false
@@ -307,6 +326,7 @@ public actor IndexScheduler {
                 pendingStreamRoots.removeAll()
                 pendingActivity = nil
                 pendingSatisfiesSafetyReconciliation = false
+                pendingUsesCommittedScope = false
             }
             let forward: @Sendable (IndexProgress) async -> Void = { [weak self] update in
                 await self?.forwardProgress(update, generation: batch.generation)
@@ -315,7 +335,7 @@ public actor IndexScheduler {
                 if batch.usesCommittedScope && !batch.rebuild {
                     await coordinator.recoverOrdinaryResult(
                         paths: batch.fullScan ? nil : batch.paths,
-                        reconciliationPaths: batch.reconciliationPaths, scope: batch.scope,
+                        reconciliationPaths: batch.fullScan ? [] : batch.reconciliationPaths, scope: batch.scope,
                         activity: batch.activity,
                         satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
                         progress: forward
@@ -346,12 +366,11 @@ public actor IndexScheduler {
             self.operation = operation
             let result = await operation.value
             self.operation = nil
-            retryInFlight = false
             if batch.resets.contains(where: { $0.isCommitted }) { preservingDeferredScope = false }
             if batch.generation != configurationGeneration {
                 if !stopping {
                     carryPendingResets(batch)
-                    pendingOrdinaryReceipts += batch.ordinaryReceipts
+                    pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + batch.ordinaryReceipts)
                     pendingPaths.formUnion(batch.paths)
                     pendingReconciliationPaths.formUnion(batch.reconciliationPaths)
                     fullScan = fullScan || batch.independentFullScan || batch.resets.contains { $0.isCommitted }
@@ -382,11 +401,9 @@ public actor IndexScheduler {
                     if batch.retryAttempt == 0 {
                         retainForRetry(recovery)
                     } else {
-                        if retrying { clearRetry() }
                         parkDormant(recovery)
                     }
                 } else {
-                    if retrying { clearRetry() }
                     for receipt in batch.ordinaryReceipts { receipt.complete() }
                 }
                 // Failed paths retain their stream watermarks through the one
@@ -406,17 +423,14 @@ public actor IndexScheduler {
                     if batch.resetRetryAttempt == 0 && batch.permitsResetRetry {
                         retainForRetry(batch, reset: true)
                     } else {
-                        if retrying { clearRetry() }
                         deferResetAndRecoverOrdinary(batch)
                     }
                 } else if batch.retryAttempt == 0 {
                     retainForRetry(batch)
                 } else {
-                    if retrying { clearRetry() }
                     parkDormant(batch)
                 }
             } else if result.phase == .cancelled, !stopping {
-                if retrying { clearRetry() }
                 if batch.rebuild && !batch.permitsResetRetry { deferResetAndRecoverOrdinary(batch) }
                 else { retainForRetry(batch, reset: batch.rebuild) }
             }
@@ -474,8 +488,7 @@ public actor IndexScheduler {
             usesCommittedScope: batch.usesCommittedScope,
             generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts
         )
-        retryBatch = merged(retryBatch, candidate, retryAttempt: candidate.retryAttempt)
-        retryReady = false
+        waitingRetries.append(WaitingRetry(batch: candidate, deadline: clock.now.advanced(by: retryDelay)))
         scheduleRetry()
     }
 
@@ -548,8 +561,9 @@ public actor IndexScheduler {
     }
 
     private func coalesceFullScanWithResetRetry() {
-        guard fullScan, pendingResets.isEmpty, !retryInFlight, let retry = retryBatch,
-              retry.rebuild else { return }
+        guard fullScan, pendingResets.isEmpty,
+              let index = waitingRetries.firstIndex(where: { $0.batch.rebuild && $0.batch.scope == scope }) else { return }
+        let retry = waitingRetries[index].batch
         let incoming = Batch(independentFullScan: true, resets: [], paths: pendingPaths,
             reconciliationPaths: pendingReconciliationPaths, watermarks: pendingWatermarks,
             streamRoots: pendingStreamRoots, scope: scope, activity: pendingActivity ?? .initialBuild,
@@ -557,7 +571,7 @@ public actor IndexScheduler {
             retryAttempt: 0, resetRetryAttempt: retry.resetRetryAttempt,
             usesCommittedScope: retry.usesCommittedScope, generation: configurationGeneration,
             ordinaryReceipts: pendingOrdinaryReceipts)
-        retryBatch = merged(retry, incoming, retryAttempt: 0)
+        waitingRetries[index].batch = merged(retry, incoming, retryAttempt: retry.retryAttempt)
         fullScan = false
         pendingPaths.removeAll(); pendingReconciliationPaths.removeAll()
         pendingWatermarks.removeAll(); pendingStreamRoots.removeAll()
@@ -587,11 +601,11 @@ public actor IndexScheduler {
             activity: IndexActivity.moreSignificant(existing.activity, incoming.activity),
             satisfiesSafetyReconciliation: existing.satisfiesSafetyReconciliation
                 || incoming.satisfiesSafetyReconciliation,
-            retryAttempt: min(existing.retryAttempt, retryAttempt),
+            retryAttempt: retryAttempt,
             resetRetryAttempt: max(existing.resetRetryAttempt, incoming.resetRetryAttempt),
             usesCommittedScope: !resets.contains { $0.isPending } && (existing.usesCommittedScope || incoming.usesCommittedScope),
             generation: configurationGeneration,
-            ordinaryReceipts: existing.ordinaryReceipts + incoming.ordinaryReceipts
+            ordinaryReceipts: uniqueOrdinary(existing.ordinaryReceipts + incoming.ordinaryReceipts)
         )
     }
 
@@ -600,19 +614,31 @@ public actor IndexScheduler {
     ) -> [String: UInt64] {
         var checkpointable: [String: UInt64] = [:]
         for (volume, eventID) in watermarks {
-            if let retry = retryBatch, retry.watermarks[volume] != nil {
-                retryBatch = replacingWatermark(
-                    in: retry, volume: volume, eventID: eventID,
-                    streamRoots: streamRoots[volume] ?? []
-                )
-            } else if let dormant = dormantBatch, dormant.watermarks[volume] != nil {
-                dormantBatch = replacingWatermark(
-                    in: dormant, volume: volume, eventID: eventID,
-                    streamRoots: streamRoots[volume] ?? []
-                )
-            } else {
-                checkpointable[volume] = eventID
+            var blocked = false
+            // Every outstanding owner fences the stream, including ordinary
+            // fallback that has not run yet and newer pending work. Transfer
+            // the candidate checkpoint and its roots to all covering owners.
+            for index in waitingRetries.indices where waitingRetries[index].batch.watermarks[volume] != nil {
+                waitingRetries[index].batch = replacingWatermark(in: waitingRetries[index].batch,
+                    volume: volume, eventID: eventID, streamRoots: streamRoots[volume] ?? [])
+                blocked = true
             }
+            if let recovery = ordinaryRecovery, recovery.watermarks[volume] != nil {
+                ordinaryRecovery = replacingWatermark(in: recovery, volume: volume,
+                    eventID: eventID, streamRoots: streamRoots[volume] ?? [])
+                blocked = true
+            }
+            if let dormant = dormantBatch, dormant.watermarks[volume] != nil {
+                dormantBatch = replacingWatermark(in: dormant, volume: volume,
+                    eventID: eventID, streamRoots: streamRoots[volume] ?? [])
+                blocked = true
+            }
+            if pendingWatermarks[volume] != nil {
+                pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
+                pendingStreamRoots[volume, default: []].formUnion(streamRoots[volume] ?? [])
+                blocked = true
+            }
+            if !blocked { checkpointable[volume] = eventID }
         }
         return checkpointable
     }
@@ -675,7 +701,7 @@ public actor IndexScheduler {
         fullScan = fullScan || dormantBatch.independentFullScan
         // A committed reset still owes its scan; an uncommitted one must reset.
         pendingResets = uniqueResets(pendingResets + dormantBatch.resets)
-        pendingOrdinaryReceipts += dormantBatch.ordinaryReceipts
+        pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + dormantBatch.ordinaryReceipts)
         pendingActivity = IndexActivity.moreSignificant(
             pendingActivity, dormantBatch.activity
         )
@@ -684,33 +710,41 @@ public actor IndexScheduler {
         self.dormantBatch = nil
     }
 
-    private func clearRetry() {
-        retryBatch = nil
-        retryReady = false
-        cancelScheduledRetry()
+    private var readyRetryIndex: Int? {
+        waitingRetries.indices.filter { waitingRetries[$0].deadline <= clock.now }
+            .min { waitingRetries[$0].deadline < waitingRetries[$1].deadline }
     }
 
     private func scheduleRetry() {
-        guard retryTask == nil, !stopping else { return }
-        let delay = retryDelay
+        cancelScheduledRetry()
+        guard !stopping, let next = waitingRetries.min(by: { $0.deadline < $1.deadline }) else { return }
+        let id = next.id
+        retryTaskID = id
         let clock = clock
         retryTask = Task { [weak self] in
-            do { try await clock.sleep(for: delay) }
+            do { try await clock.sleep(until: next.deadline) }
             catch { return }
-            await self?.startScheduledRetry()
+            await self?.startScheduledRetry(id)
         }
     }
 
-    private func startScheduledRetry() {
+    private func startScheduledRetry(_ id: UUID) {
+        guard retryTaskID == id else { return }
         retryTask = nil
-        guard !stopping, retryBatch != nil else { return }
-        retryReady = true
+        retryTaskID = nil
+        guard !stopping, readyRetryIndex != nil else { return }
         if worker == nil { worker = Task { await drain() } }
     }
 
     private func cancelScheduledRetry() {
         retryTask?.cancel()
         retryTask = nil
+        retryTaskID = nil
+    }
+
+    private func uniqueOrdinary(_ receipts: [OrdinaryReceipt]) -> [OrdinaryReceipt] {
+        var seen = Set<ObjectIdentifier>()
+        return receipts.filter { seen.insert(ObjectIdentifier($0)).inserted }
     }
 
     public func waitUntilIdle() async {
@@ -728,8 +762,7 @@ public actor IndexScheduler {
         pendingStreamRoots.removeAll()
         pendingActivity = nil
         pendingSatisfiesSafetyReconciliation = false
-        retryBatch = nil
-        retryReady = false
+        waitingRetries.removeAll()
         dormantBatch = nil
         ordinaryRecovery = nil
         cancelScheduledRetry()

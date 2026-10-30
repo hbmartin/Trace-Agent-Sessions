@@ -59,3 +59,12 @@ func compileOrdinaryCoverageClient(_ scheduler: IndexScheduler) async {
     await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: {},
         automaticallyRetryReset: false, onOrdinaryWorkCompleted: {})
 }
+
+func compileGenerationOwnedNavigationClient(_ database: IndexDatabase, scheduler: IndexScheduler, sessionID: Int64) async throws {
+    let generation: IndexContentGeneration = database.contentGeneration
+    _ = try await database.session(id: sessionID, expectedGeneration: generation)
+    _ = try await database.transcriptSnapshot(sessionID: sessionID, expectedGeneration: generation)
+    let captured = try await database.captureNavigationReferences([sessionID: nil], expectedGeneration: generation)
+    _ = try await database.resolveNavigationReferences(Dictionary(captured.values.map { ($0, Optional<Int>.none) }, uniquingKeysWith: { _, last in last }))
+    await scheduler.requestOrdinaryRecovery(reconcile: true, onOrdinaryWorkCompleted: {})
+}
