@@ -882,21 +882,18 @@ public struct SessionNavigationReference: Hashable, Codable, Sendable {
     }
 
     public func preservingAnchor(from reference: Self) -> Self {
-        .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
-            anchorSourceKey: anchorSourceKey ?? reference.anchorSourceKey,
-            anchorExternalID: anchorExternalID ?? reference.anchorExternalID)
+        let anchored = anchorSourceKey != nil || anchorExternalID != nil
+        return .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
+            anchorSourceKey: anchored ? anchorSourceKey : reference.anchorSourceKey,
+            anchorExternalID: anchored ? anchorExternalID : reference.anchorExternalID)
     }
 
-    var unanchored: Self {
+    public var unanchored: Self {
         .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
             anchorSourceKey: nil, anchorExternalID: nil)
     }
 
-    func relocating(to reference: Self) -> Self {
-        .init(agent: reference.agent, root: reference.root, path: reference.path,
-            externalSessionID: reference.externalSessionID,
-            anchorSourceKey: anchorSourceKey, anchorExternalID: anchorExternalID)
-    }
+
 }
 
 public struct MessageNavigationIdentity: Hashable, Sendable {

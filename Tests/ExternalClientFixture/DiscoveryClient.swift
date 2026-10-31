@@ -70,3 +70,19 @@ func compileGenerationOwnedNavigationClient(_ database: IndexDatabase, scheduler
     _ = try await database.resolveNavigationReferences(Dictionary(captured.values.map { ($0, Optional<Int>.none) }, uniquingKeysWith: { _, last in last }))
     await scheduler.requestOrdinaryRecovery(reconcile: true, onOrdinaryWorkCompleted: {})
 }
+
+// Shared checkpoint admission is additive; legacy entry points above stay usable.
+func compileReservedCheckpointClient(_ database: IndexDatabase, coordinator: IndexCoordinator) async throws {
+    let ledger = IndexCheckpointLedger()
+    ledger.seed(stream: "external", checkpoint: try await database.eventCheckpointRecord(volumeID: "external"))
+    let reservation = ledger.reserve(watermarks: ["external": 100], streamRoots: ["external": ["/tmp/external"]],
+        hasIndexWork: true, paths: ["/tmp/external/session.jsonl"])
+    let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+        checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+            try? await database.saveQualifiedEventCheckpoints(updates)
+        })
+    await scheduler.request(paths: ["/tmp/external/session.jsonl"], onRebuildReset: {}, onRebuildDeferred: {},
+        onOrdinaryWorkCompleted: {}, checkpointReservations: [reservation])
+    await scheduler.requestOrdinaryRecovery(paths: ["/tmp/external/session.jsonl"], checkpointReservations: [reservation])
+    await scheduler.stop()
+}

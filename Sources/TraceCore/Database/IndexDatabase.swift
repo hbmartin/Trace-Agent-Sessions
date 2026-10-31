@@ -140,7 +140,7 @@ public actor IndexDatabase {
     func codexNameWriteTransactionCountForTesting() -> Int {
         codexNameWriteTransactionCount
     }
-    public static let schemaVersion = 18
+    public static let schemaVersion = 19
     public static let indexFormatVersion = 7
     private static let sourceStateSelection = """
         sf.*,
@@ -551,6 +551,23 @@ public actor IndexDatabase {
                 UPDATE trace_meta SET value='18' WHERE key='schema_version';
                 """)
         }
+        migrator.registerMigration("trace-v19-navigation-moves-and-checkpoint-epochs", foreignKeyChecks: .immediate) { db in
+            try db.execute(sql: """
+                CREATE TABLE source_move_alias (
+                    generation TEXT NOT NULL,
+                    agent TEXT NOT NULL,
+                    prior_root TEXT NOT NULL,
+                    prior_path TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    source_file_id INTEGER NOT NULL REFERENCES source_file(id) ON DELETE CASCADE,
+                    source_generation INTEGER NOT NULL,
+                    PRIMARY KEY(generation, agent, prior_root, prior_path, external_id)
+                );
+                CREATE INDEX idx_source_move_alias_source ON source_move_alias(source_file_id);
+                ALTER TABLE fsevents_checkpoint ADD COLUMN epoch TEXT NOT NULL DEFAULT 'legacy';
+                UPDATE trace_meta SET value='19' WHERE key='schema_version';
+                """)
+        }
         try migrator.migrate(pool)
     }
 
@@ -625,19 +642,45 @@ public actor IndexDatabase {
         }
     }
 
+    public func eventCheckpointRecord(volumeID: String) throws -> IndexEventCheckpoint? {
+        try pool.read { db in
+            guard let row = try Row.fetchOne(db, sql: "SELECT event_id, epoch FROM fsevents_checkpoint WHERE volume_id=?", arguments: [volumeID]),
+                  let value = UInt64(row["event_id"] as String) else { return nil }
+            return IndexEventCheckpoint(value: value, epoch: row["epoch"], replacingEpochs: [])
+        }
+    }
+
     public func saveEventCheckpoints(_ checkpoints: [String: UInt64]) throws {
-        guard !checkpoints.isEmpty else { return }
-        let now = Int64(Date().timeIntervalSince1970 * 1_000)
         try pool.write { db in
-            for (volumeID, eventID) in checkpoints {
-                try db.execute(sql: """
-                    INSERT INTO fsevents_checkpoint(volume_id, event_id, updated_at_ms)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(volume_id) DO UPDATE SET
-                        event_id=excluded.event_id, updated_at_ms=excluded.updated_at_ms
-                    """, arguments: [volumeID, String(eventID), now])
+            for (stream, value) in checkpoints {
+                let epoch = try String.fetchOne(db, sql: "SELECT epoch FROM fsevents_checkpoint WHERE volume_id=?", arguments: [stream]) ?? "legacy"
+                try Self.saveCheckpoint(stream: stream, update: .init(value: value, epoch: epoch, replacingEpochs: []), in: db)
             }
         }
+    }
+
+    /// Epoch-qualified scheduler coverage rejects a late callback from a wrapped stream.
+    public func saveQualifiedEventCheckpoints(_ checkpoints: [String: IndexEventCheckpoint],
+                                               expectedGeneration: IndexContentGeneration? = nil) throws {
+        try pool.write { db in
+            if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { return }
+            for (stream, update) in checkpoints { try Self.saveCheckpoint(stream: stream, update: update, in: db) }
+        }
+    }
+
+    private static func saveCheckpoint(stream: String, update: IndexEventCheckpoint, in db: Database) throws {
+        let row = try Row.fetchOne(db, sql: "SELECT event_id, epoch FROM fsevents_checkpoint WHERE volume_id=?", arguments: [stream])
+        var value = update.value
+        if let row {
+            let epoch: String = row["epoch"]
+            if epoch == update.epoch { value = max(value, UInt64(row["event_id"] as String) ?? 0) }
+            else if !update.replacingEpochs.contains(epoch) { return }
+        }
+        try db.execute(sql: """
+            INSERT INTO fsevents_checkpoint(volume_id,event_id,updated_at_ms,epoch) VALUES (?,?,?,?)
+            ON CONFLICT(volume_id) DO UPDATE SET event_id=excluded.event_id,
+                updated_at_ms=excluded.updated_at_ms,epoch=excluded.epoch
+            """, arguments: [stream, String(value), Int64(Date().timeIntervalSince1970 * 1_000), update.epoch])
     }
 
     /// The last time a safety sweep completed. Recoverable per-path failures may remain queued.
@@ -705,7 +748,6 @@ public actor IndexDatabase {
             committed.withLock { $0 = true }
             #endif
             generationState.withLock { $0 = generation }
-            relocationLineage.withLock { $0.removeAll() }
             onCommitted()
             #if DEBUG
             if fault == .checkpoint { throw DatabaseError(resultCode: .SQLITE_BUSY) }
@@ -745,9 +787,7 @@ public actor IndexDatabase {
                             WHERE sf.root_id=?
                         )
                         """, arguments: [rootID])
-                    let removedSources = Set(try Int64.fetchAll(db, sql: "SELECT id FROM source_file WHERE root_id=?", arguments: [rootID]))
                     try db.execute(sql: "DELETE FROM source_root WHERE id=?", arguments: [rootID])
-                    db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: removedSources) })
                 }
                 if !removed.isEmpty {
                     try db.execute(sql: "DELETE FROM usage_daily")
@@ -921,61 +961,48 @@ public actor IndexDatabase {
         }
     }
 
-    // Only committed moves establish aliases. A reused row or a matching
-    // external session ID elsewhere cannot manufacture relocation proof.
+    // The source row owns move proof. Its foreign key and content generation
+    // prevent deletion/recreation or content replacement from authorizing reuse.
     private struct Relocation: Sendable {
         let sourceID: Int64
         let generation: IndexContentGeneration
         let target: SessionNavigationReference
     }
-    private nonisolated let relocationLineage = OSAllocatedUnfairLock(
-        initialState: [SessionNavigationReference: Relocation]())
 
-    private nonisolated func retireRelocations(sourceIDs: Set<Int64>) {
-        relocationLineage.withLock { aliases in
-            aliases = aliases.filter { !sourceIDs.contains($0.value.sourceID) }
-        }
-    }
-
-    private nonisolated func recordRelocation(sourceID: Int64, rootID: Int64, path: String,
+    private nonisolated func recordRelocation(sourceID: Int64,
                                               in db: Database) throws {
         let generation = try Self.readContentGeneration(db)
-        let root = try String.fetchOne(db, sql: "SELECT path FROM source_root WHERE id=?", arguments: [rootID]) ?? ""
-        let rows = try Row.fetchAll(db, sql: """
-            SELECT s.agent, s.external_id, sf.path, r.path AS root
+        try db.execute(sql: """
+            INSERT INTO source_move_alias(generation, agent, prior_root, prior_path,
+                external_id, source_file_id, source_generation)
+            SELECT ?, s.agent, r.path, sf.path, s.external_id, sf.id, sf.content_generation
             FROM session s JOIN source_file sf ON sf.id=s.source_file_id
             JOIN source_root r ON r.id=sf.root_id WHERE sf.id=?
-            """, arguments: [sourceID])
-        let moves = rows.map { row -> (SessionNavigationReference, SessionNavigationReference) in
-            let old = SessionNavigationReference(agent: row["agent"], root: row["root"], path: row["path"],
-                externalSessionID: row["external_id"], anchorSourceKey: nil, anchorExternalID: nil)
-            let target = SessionNavigationReference(agent: old.agent, root: root, path: path,
-                externalSessionID: old.externalSessionID, anchorSourceKey: nil, anchorExternalID: nil)
-            return (old, target)
-        }
-        // Called inside the move transaction only to gather inputs; publication
-        // occurs at transaction commitment, never after rollback.
-        db.afterNextTransaction(onCommit: { [relocationLineage] _ in
-            relocationLineage.withLock { aliases in
-                let targets = Dictionary(moves, uniquingKeysWith: { _, last in last })
-                let updates = aliases.compactMap { key, value -> (SessionNavigationReference, Relocation)? in
-                    guard value.sourceID == sourceID, let target = targets[value.target] else { return nil }
-                    return (key, Relocation(sourceID: sourceID, generation: generation, target: target))
-                }
-                for (key, value) in updates { aliases[key] = value }
-                for (old, target) in moves {
-                    aliases[old] = Relocation(sourceID: sourceID, generation: generation, target: target)
-                }
-            }
-        })
+            ON CONFLICT(generation, agent, prior_root, prior_path, external_id) DO UPDATE SET
+                source_file_id=excluded.source_file_id, source_generation=excluded.source_generation
+            """, arguments: [generation.value, sourceID])
+    }
+
+    private nonisolated func relocation(for reference: SessionNavigationReference,
+        generation: IndexContentGeneration, in db: Database) throws -> Relocation? {
+        guard let row = try Row.fetchOne(db, sql: """
+            SELECT sf.id, sf.path, r.path AS root
+            FROM source_move_alias a JOIN source_file sf ON sf.id=a.source_file_id
+            JOIN source_root r ON r.id=sf.root_id
+            WHERE a.generation=? AND a.agent=? AND a.prior_root=? AND a.prior_path=?
+                AND a.external_id=? AND sf.agent=a.agent AND sf.content_generation=a.source_generation
+            """, arguments: [generation.value, reference.agent, reference.root, reference.path, reference.externalSessionID]) else { return nil }
+        return Relocation(sourceID: row["id"], generation: generation,
+            target: .init(agent: reference.agent, root: row["root"], path: row["path"],
+                externalSessionID: reference.externalSessionID, anchorSourceKey: nil, anchorExternalID: nil))
     }
 
     private nonisolated func matchesReference(_ expected: SessionNavigationReference,
         current: SessionNavigationReference?, sessionID: Int64, generation: IndexContentGeneration,
-        aliases: [SessionNavigationReference: Relocation], in db: Database) throws -> Bool {
+        in db: Database) throws -> Bool {
         guard let current else { return false }
         if expected.representsSameSession(as: current) { return true }
-        guard let move = aliases[expected.unanchored], move.generation == generation,
+        guard let move = try relocation(for: expected, generation: generation, in: db),
               move.target.representsSameSession(as: current) else { return false }
         return try Int64.fetchOne(db, sql: "SELECT source_file_id FROM session WHERE id=?",
             arguments: [sessionID]) == move.sourceID
@@ -983,7 +1010,7 @@ public actor IndexDatabase {
 
     func moveSource(id: Int64, rootID: Int64, path: String) throws {
         try pool.write { db in
-            try recordRelocation(sourceID: id, rootID: rootID, path: path, in: db)
+            try recordRelocation(sourceID: id, in: db)
             try db.execute(
                 sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
                 arguments: [rootID, path, id]
@@ -998,7 +1025,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM source_file WHERE id=? AND is_placeholder=1",
                                arguments: [placeholderID])
                 guard db.changesCount == 1 else { throw SessionSourceError.malformedRecord("source placeholder changed") }
-                try recordRelocation(sourceID: movedID, rootID: rootID, path: path, in: db)
+                try recordRelocation(sourceID: movedID, in: db)
                 try db.execute(sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
                                arguments: [rootID, path, movedID])
                 return .commit
@@ -1034,7 +1061,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM source_file WHERE id=?", arguments: [id])
                 try Self.markRollupsDirty(db)
                 try deleteOrphanedProjects(db: db)
-                db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: [id]) })
+                try db.execute(sql: "DELETE FROM source_move_alias WHERE source_file_id=?", arguments: [id])
                 return .commit
             }
         }
@@ -1061,7 +1088,7 @@ public actor IndexDatabase {
                     sql: "UPDATE source_file SET scanned_bytes=0, metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, fallback_ts=NULL, last_valid_ts=NULL, content_generation=content_generation+1 WHERE id=?",
                     arguments: [id]
                 )
-                db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: [id]) })
+                try db.execute(sql: "DELETE FROM source_move_alias WHERE source_file_id=?", arguments: [id])
                 return .commit
             }
         }
@@ -1127,7 +1154,7 @@ public actor IndexDatabase {
                     error: nil,
                     db: db
                 )
-                db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: [id]) })
+                try db.execute(sql: "DELETE FROM source_move_alias WHERE source_file_id=?", arguments: [id])
                 return .commit
             }
         }
@@ -2467,7 +2494,6 @@ public actor IndexDatabase {
         if let error = navigationCaptureErrorForTesting { navigationCaptureErrorForTesting = nil; throw error }
         navigationCaptureReads += 1
         #endif
-        let aliases = relocationLineage.withLock { $0 }
         return try pool.read { db in
             let generation = try Self.readContentGeneration(db)
             if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
@@ -2475,7 +2501,7 @@ public actor IndexDatabase {
                 let reference = try captureNavigationReference(sessionID: entry.key, anchorMessageID: entry.value, in: db)
                 if let expected = expectedReferences[entry.key],
                    try !matchesReference(expected, current: reference, sessionID: entry.key,
-                       generation: generation, aliases: aliases, in: db) { return }
+                       generation: generation, in: db) { return }
                 result[entry.key] = reference
             }
         }
@@ -2511,10 +2537,9 @@ public actor IndexDatabase {
         #if DEBUG
         navigationResolutionReads += 1
         #endif
-        let aliases = relocationLineage.withLock { $0 }
         return try pool.read { db in
             try resolveNavigationReference(reference, fallbackMessageIndex: fallbackMessageIndex,
-                generation: Self.readContentGeneration(db), aliases: aliases, in: db)
+                generation: Self.readContentGeneration(db), in: db)
         }
     }
 
@@ -2526,19 +2551,18 @@ public actor IndexDatabase {
         #if DEBUG
         navigationResolutionReads += 1
         #endif
-        let aliases = relocationLineage.withLock { $0 }
         return try pool.read { db in
             let generation = try Self.readContentGeneration(db)
             return try references.reduce(into: [:]) { result, entry in
-                result[entry.key] = try resolveNavigationReference(entry.key, fallbackMessageIndex: entry.value, generation: generation, aliases: aliases, in: db)
+                result[entry.key] = try resolveNavigationReference(entry.key, fallbackMessageIndex: entry.value, generation: generation, in: db)
             }
         }
     }
 
     private nonisolated func resolveNavigationReference(_ reference: SessionNavigationReference, fallbackMessageIndex: Int?,
-        generation: IndexContentGeneration, aliases: [SessionNavigationReference: Relocation], in db: Database) throws
+        generation: IndexContentGeneration, in db: Database) throws
         -> (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)? {
-            let move = aliases[reference.unanchored].flatMap { $0.generation == generation ? $0 : nil }
+            let move = try relocation(for: reference, generation: generation, in: db)
             let locator = move?.target ?? reference
             guard let id = try Int64.fetchOne(db, sql: """
                 SELECT s.id FROM session s JOIN source_file sf ON sf.id=s.source_file_id
@@ -2624,12 +2648,11 @@ public actor IndexDatabase {
             throw SessionSourceError.unreadableFile("Synthetic transcript read failure")
         }
         #endif
-        let aliases = relocationLineage.withLock { $0 }
         return try pool.read { db in
             let generation = try Self.readContentGeneration(db)
             if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
             var session = try transcriptSession(id: sessionID, generation: generation, in: db)
-            if let expectedReference, try !matchesReference(expectedReference, current: session?.navigationReference, sessionID: sessionID, generation: generation, aliases: aliases, in: db) { session = nil }
+            if let expectedReference, try !matchesReference(expectedReference, current: session?.navigationReference, sessionID: sessionID, generation: generation, in: db) { session = nil }
             guard let session else { return .init(readRevision: readRevision, session: nil, messages: [], contentGeneration: generation) }
             let unchanged = knownSession?.transcriptIdentity == session.transcriptIdentity
                 && knownMessageCount == session.messageCount

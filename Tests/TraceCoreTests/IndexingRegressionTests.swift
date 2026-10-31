@@ -8,6 +8,192 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testStopCannotEnrollAnotherRetryAfterAConcurrentFailure() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let clock = TestClock<Duration>(), coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])], clock: clock)
+        let gate = CheckpointFailureGate(), deferred = OSAllocatedUnfairLock(initialState: 0)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { update in
+            if update.phase == .failed { await gate.wait() }
+        }, clock: clock)
+        await database.setResetFaultForTesting(.rollback)
+        await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: { deferred.withLock { $0 += 1 } })
+        try await waitForCondition { await gate.entered }
+        let stopped = Task { await scheduler.stop() }
+        try await waitForCondition { await scheduler.stoppingForTesting }
+        await gate.open()
+        await stopped.value
+        try await clock.checkSuspension()
+        XCTAssertEqual(deferred.withLock { $0 }, 0)
+    }
+
+    func testReplacementReconciliationAcceptsAbandonedCheckpointInputs() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let ledger = IndexCheckpointLedger(), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        _ = ledger.reserve(watermarks: ["stream": 100], streamRoots: ["stream": [root.path]],
+            hasIndexWork: true, paths: [file.path])
+        let first = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, checkpointLedger: ledger)
+        await first.stop()
+        let replacement = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+            checkpointLedger: ledger, didCompleteCheckpoints: { marks in
+                if let mark = marks["stream"]?.value { accepted.withLock { $0.append(mark) } }
+            })
+        await replacement.request(paths: [file.path])
+        await replacement.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [100], "replayed paths cover the displaced execution lease")
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+        await replacement.stop()
+    }
+
+    func testBufferedWrappedChangesKeepTheNewEpochWatermark() {
+        var changes = SourceChanges()
+        changes.include(path: "/tmp/a/session.jsonl", flags: 0, eventID: 500, streamIdentifier: "stream", streamRoots: ["/tmp/a"])
+        changes.include(path: "/tmp/a/session.jsonl", flags: UInt32(kFSEventStreamEventFlagEventIdsWrapped), eventID: 1,
+            streamIdentifier: "stream", streamRoots: ["/tmp/a"])
+        XCTAssertEqual(changes.watermarks["stream"], 1)
+        var next = SourceChanges(); next.watermarks = ["stream": 2]
+        changes.merge(next)
+        XCTAssertEqual(changes.watermarks["stream"], 2)
+        var before = SourceChanges(); before.watermarks = ["stream": 500]
+        before.merge(changes)
+        XCTAssertEqual(before.watermarks["stream"], 2)
+    }
+
+    func testReservedOlderWatermarkFencesLateDeliveryAndSurvivesSchedulerReplacement() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let ledger = IndexCheckpointLedger(), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let old = ledger.reserve(watermarks: ["stream": 100], streamRoots: ["stream": [root.path]], hasIndexWork: true)
+        let newer = ledger.reserve(watermarks: ["stream": 200], streamRoots: ["stream": [root.path]], hasIndexWork: true)
+        let first = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                if let value = updates["stream"]?.value { accepted.withLock { $0.append(value) } }
+                try? await database.saveQualifiedEventCheckpoints(updates)
+            })
+        await first.request(paths: [file.path], watermarks: ["stream": 200], streamRoots: ["stream": [root.path]],
+            onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [newer])
+        await first.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [])
+        let before = try await database.eventCheckpoint(volumeID: "stream")
+        XCTAssertNil(before)
+        await first.stop()
+        let second = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                if let value = updates["stream"]?.value { accepted.withLock { $0.append(value) } }
+                try? await database.saveQualifiedEventCheckpoints(updates)
+            })
+        await second.request(paths: [file.path], watermarks: ["stream": 100], streamRoots: ["stream": [root.path]],
+            onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [old])
+        await second.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [200])
+        let after = try await database.eventCheckpoint(volumeID: "stream")
+        XCTAssertEqual(after, 200)
+        await second.stop()
+    }
+
+    func testCheckpointsAreMonotonicForFullUnsignedRange() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        for value in [UInt64(9), 10, UInt64(Int64.max) + 1, UInt64.max - 1, 100] {
+            try await database.saveEventCheckpoints(["stream": value])
+        }
+        let checkpoint = try await database.eventCheckpoint(volumeID: "stream")
+        XCTAssertEqual(checkpoint, UInt64.max - 1)
+    }
+
+    func testWrappedEpochRequiresReconciliationAndRejectsOldCallbacks() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let ledger = IndexCheckpointLedger(), updates = OSAllocatedUnfairLock(initialState: [[String: IndexEventCheckpoint]]())
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+            checkpointLedger: ledger, didCompleteCheckpoints: { marks in
+                updates.withLock { $0.append(marks) }; try? await database.saveQualifiedEventCheckpoints(marks)
+            })
+        await scheduler.request(paths: [file.path], watermarks: ["stream": 500], streamRoots: ["stream": [root.path]])
+        await scheduler.waitUntilIdle()
+        let old = try XCTUnwrap(updates.withLock { $0.first })
+        let wrap = ledger.reserve(watermarks: ["stream": 10], streamRoots: ["stream": [root.path]],
+            hasIndexWork: true, wrappedStreams: ["stream"])
+        await scheduler.request(watermarks: ["stream": 10], streamRoots: ["stream": [root.path]],
+            onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [wrap])
+        await scheduler.waitUntilIdle()
+        let held = try await database.eventCheckpoint(volumeID: "stream")
+        XCTAssertEqual(held, 500, "watermark-only delivery cannot qualify a wrapped stream")
+        await scheduler.request(reconciliationPaths: [root.path], watermarks: ["stream": 10], streamRoots: ["stream": [root.path]],
+            onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [wrap])
+        await scheduler.waitUntilIdle()
+        try await database.saveQualifiedEventCheckpoints(old)
+        let current = try await database.eventCheckpoint(volumeID: "stream")
+        XCTAssertEqual(current, 10)
+        await scheduler.stop()
+    }
+
+    func testWatermarkOnlyReservationsHaveBoundedTailStorage() {
+        let ledger = IndexCheckpointLedger()
+        _ = ledger.reserve(watermarks: ["stream": 1], streamRoots: ["stream": ["/tmp/a"]], hasIndexWork: true)
+        for value in 2...10_001 {
+            _ = ledger.reserve(watermarks: ["stream": UInt64(value)], streamRoots: ["stream": ["/tmp/a"]], hasIndexWork: false)
+        }
+        XCTAssertEqual(ledger.retainedRecordCount, 2)
+    }
+
+    func testMoveAliasesSurviveReopeningAndContentReplacementRetiresThem() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl"), moved = root.appendingPathComponent("moved.jsonl")
+        try Data((line(1) + line(2)).utf8).write(to: file)
+        let url = root.appendingPathComponent("index.sqlite"), database = try IndexDatabase(url: url)
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let sessions = try await database.sessions(), session = try XCTUnwrap(sessions.first)
+        let rows = try await database.messages(sessionID: session.id)
+        let captured = try await database.captureNavigationReference(sessionID: session.id, anchorMessageID: rows.last?.id)
+        let reference = try XCTUnwrap(captured)
+        try FileManager.default.moveItem(at: file, to: moved)
+        await coordinator.refresh(paths: [file.path, moved.path], scope: .proseOnly)
+        let reopened = try IndexDatabase(url: url)
+        let resolved = try await reopened.resolveNavigationReference(reference)
+        XCTAssertEqual(resolved?.session.sourcePath, moved.path)
+        XCTAssertEqual(resolved?.anchorMessageID, rows.last?.id)
+        let state = try await reopened.sourceState(agent: .claudeCode, path: moved.path)
+        try await reopened.replaceSourceContents(id: XCTUnwrap(state?.id))
+        let absent = try await reopened.resolveNavigationReference(reference)
+        XCTAssertNil(absent)
+    }
+
+    func testV19MigrationPreservesPopulatedIndexAndGeneration() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl"), url = root.appendingPathComponent("index.sqlite")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: url), coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        try await database.saveEventCheckpoints(["stream": 42])
+        let original = try await database.sessions(), generation = database.contentGeneration
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in
+            try db.execute(sql: "DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; UPDATE trace_meta SET value='18' WHERE key='schema_version'")
+        }
+        let migrated = try IndexDatabase(url: url)
+        XCTAssertFalse(migrated.contentWasResetOnOpen)
+        XCTAssertEqual(migrated.contentGeneration, generation)
+        let after = try await migrated.sessions(), checkpoint = try await migrated.eventCheckpoint(volumeID: "stream")
+        XCTAssertEqual(after.map(\.id), original.map(\.id))
+        XCTAssertEqual(checkpoint, 42)
+        let schema = try await raw.read { db in try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'") }
+        XCTAssertEqual(schema, "19")
+    }
+
+    func testAnchorPreservationNeverCombinesTwoMessages() {
+        let old = SessionNavigationReference(agent: "claudeCode", root: "/r", path: "/r/a", externalSessionID: "s", anchorSourceKey: "old", anchorExternalID: "uuid-old")
+        let current = SessionNavigationReference(agent: "claudeCode", root: "/r", path: "/r/a", externalSessionID: "s", anchorSourceKey: "current", anchorExternalID: nil)
+        let merged = current.preservingAnchor(from: old)
+        XCTAssertEqual(merged.anchorSourceKey, "current")
+        XCTAssertNil(merged.anchorExternalID)
+        XCTAssertEqual(current.unanchored.preservingAnchor(from: old), old)
+    }
+
     func testCommittedMoveLineageValidatesOldReferencesAndPreservesAnchors() async throws {
         let first = try directory(), second = try directory()
         let original = first.appendingPathComponent("original.jsonl")
@@ -1874,7 +2060,7 @@ final class IndexingRegressionTests: XCTestCase {
             )
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
-            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
+            try db.execute(sql: "DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
             try db.execute(sql: "DROP VIEW IF EXISTS supported_agent")
             try db.execute(sql: "DROP TABLE source_scan_error")
             try db.execute(sql: "UPDATE trace_meta SET value='8' WHERE key='schema_version'")
@@ -1952,7 +2138,7 @@ final class IndexingRegressionTests: XCTestCase {
                     WHERE identifier='trace-v16-temporary-supported-agent-view';
                     DELETE FROM grdb_migrations
                     WHERE identifier='trace-v17-codex-name-provenance';
-                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
+                    DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                     DROP VIEW IF EXISTS supported_agent;
                     UPDATE trace_meta SET value='5' WHERE key='index_format_version';
                     UPDATE trace_meta SET value='12' WHERE key='schema_version';
@@ -2047,7 +2233,7 @@ final class IndexingRegressionTests: XCTestCase {
                 WHERE identifier='trace-v16-temporary-supported-agent-view';
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v17-codex-name-provenance';
-                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
+                    DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                 DROP VIEW IF EXISTS supported_agent;
                 UPDATE trace_meta SET value='0' WHERE key='usage_rollups_dirty';
                 UPDATE trace_meta SET value='13' WHERE key='schema_version';
@@ -2103,7 +2289,7 @@ final class IndexingRegressionTests: XCTestCase {
                 WHERE identifier='trace-v16-temporary-supported-agent-view';
                 DELETE FROM grdb_migrations
                 WHERE identifier='trace-v17-codex-name-provenance';
-                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
+                    DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                 UPDATE trace_meta SET value='14' WHERE key='schema_version';
                 """)
         }
@@ -2144,7 +2330,7 @@ final class IndexingRegressionTests: XCTestCase {
         try await raw.write { db in
             try db.execute(sql: "DROP VIEW main.supported_agent")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
-            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
+            try db.execute(sql: "DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
             try db.execute(sql: "UPDATE trace_meta SET value='16' WHERE key='schema_version'")
         }
         _ = try IndexDatabase(url: url)
@@ -2177,7 +2363,7 @@ final class IndexingRegressionTests: XCTestCase {
             try db.execute(sql: "CREATE VIEW supported_agent(agent) AS SELECT 'claude_code'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view'")
             try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance'")
-            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
+            try db.execute(sql: "DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
             try db.execute(sql: "UPDATE trace_meta SET value='15' WHERE key='schema_version'")
             return (sessionID, messageID)
         }
@@ -2218,7 +2404,7 @@ final class IndexingRegressionTests: XCTestCase {
                     DELETE FROM grdb_migrations WHERE identifier='trace-v15-supported-agent-view';
                     DELETE FROM grdb_migrations WHERE identifier='trace-v16-temporary-supported-agent-view';
                     DELETE FROM grdb_migrations WHERE identifier='trace-v17-codex-name-provenance';
-                    DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
+                    DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index';
                     UPDATE trace_meta SET value='14' WHERE key='schema_version';
                     """)
                 return .commit
@@ -5545,4 +5731,16 @@ private struct DiscoveryCountingSource: SessionSource {
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
         try base.hydrate(fileURL: fileURL, format: format, locator: locator)
     }
+}
+
+private actor CheckpointFailureGate {
+    private(set) var entered = false
+    private var released = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func wait() async {
+        guard !released else { return }
+        entered = true
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func open() { released = true; waiter?.resume(); waiter = nil }
 }
