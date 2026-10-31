@@ -50,6 +50,21 @@ public actor IndexScheduler {
         }
     }
 
+    private struct CheckpointReceipt: Sendable {
+        let id: UUID
+        let stream: String
+        let watermark: UInt64
+        let roots: Set<TraceFileIO.CanonicalPath>
+    }
+    private struct CheckpointSegment {
+        var receipt: CheckpointReceipt
+        var covered = false
+    }
+    // Observation order is retained independently of each batch's maximum ID.
+    // A completed prefix can advance while newer work remains pending.
+    private var checkpointStreams: [String: [CheckpointSegment]] = [:]
+    private var pendingCheckpointReceipts: [CheckpointReceipt] = []
+
     private struct Batch: Sendable {
         // A reset forces a full scan; preserve independently requested scans if
         // lifecycle-aware reset ownership is returned to the caller.
@@ -73,6 +88,7 @@ public actor IndexScheduler {
         let usesCommittedScope: Bool
         let generation: UInt64
         var ordinaryReceipts: [OrdinaryReceipt] = []
+        var checkpointReceipts: [CheckpointReceipt] = []
     }
 
     private let coordinator: IndexCoordinator
@@ -228,6 +244,25 @@ public actor IndexScheduler {
                          onRebuildDeferred: (@Sendable () -> Void)?, automaticallyRetryReset: Bool,
                          onOrdinaryWorkCompleted: (@Sendable () -> Void)? = nil) {
         guard !stopping else { return }
+        let canonicalRoots = streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) }
+        for (stream, watermark) in watermarks {
+            let receipt = CheckpointReceipt(id: UUID(), stream: stream, watermark: watermark,
+                roots: canonicalRoots[stream] ?? [])
+            if paths.isEmpty, reconciliationPaths.isEmpty, !reconcile, !rebuild {
+                // A stream's additional roots qualify its retained checkpoint,
+                // even when this event itself contains no indexing inputs.
+                if var segments = checkpointStreams[stream] {
+                    for index in segments.indices {
+                        let old = segments[index].receipt
+                        segments[index].receipt = .init(id: old.id, stream: stream, watermark: old.watermark,
+                            roots: old.roots.union(receipt.roots))
+                    }
+                    checkpointStreams[stream] = segments
+                }
+            }
+            pendingCheckpointReceipts.append(receipt)
+            checkpointStreams[stream, default: []].append(.init(receipt: receipt))
+        }
         if let onOrdinaryWorkCompleted { pendingOrdinaryReceipts.append(OrdinaryReceipt(onOrdinaryWorkCompleted)) }
         if rebuild {
             pendingResets.append(ResetReceipt(onCommit: onRebuildReset ?? {},
@@ -236,9 +271,22 @@ public actor IndexScheduler {
         let scopeChanged = scope.map { $0 != self.scope } ?? false
         if scopeChanged { preservingDeferredScope = false; pendingUsesCommittedScope = false }
         if scopeChanged || rebuild {
+            // A reset invalidates accepted-but-not-yet-durable coverage too.
+            // Keep every stream's roots with the reset that must cover them.
+            for stream in Array(checkpointStreams.keys) {
+                guard var segments = checkpointStreams[stream] else { continue }
+                for index in segments.indices { segments[index].covered = false }
+                pendingCheckpointReceipts = uniqueCheckpoints(pendingCheckpointReceipts + segments.map(\.receipt))
+                for segment in segments {
+                    mergeWatermarks([stream: segment.receipt.watermark])
+                    mergeCanonicalStreamRoots([stream: segment.receipt.roots])
+                }
+                checkpointStreams[stream] = segments
+            }
             for batch in waitingRetries.map(\.batch) + [dormantBatch, ordinaryRecovery].compactMap({ $0 }) {
                 carryPendingResets(batch)
                 pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + batch.ordinaryReceipts)
+                pendingCheckpointReceipts = uniqueCheckpoints(pendingCheckpointReceipts + batch.checkpointReceipts)
                 pendingPaths.formUnion(batch.paths)
                 pendingReconciliationPaths.formUnion(batch.reconciliationPaths)
                 fullScan = fullScan || batch.independentFullScan
@@ -258,7 +306,7 @@ public actor IndexScheduler {
         for (volume, eventID) in watermarks {
             pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
         }
-        mergeStreamRoots(streamRoots)
+        mergeCanonicalStreamRoots(canonicalRoots)
         let inferred = activity ?? (rebuild ? .rebuild : (scopeChanged ? .scopeChange : (reconcile ? .initialBuild
             : (!reconciliationPaths.isEmpty ? .subtreeRecovery : .fileChanges))))
         let requestsPass = reconcile || rebuild || !paths.isEmpty
@@ -282,13 +330,14 @@ public actor IndexScheduler {
             let retrying = !hasPendingIndexWork && ordinaryRecovery == nil && readyRetryIndex != nil
             if !retrying, ordinaryRecovery == nil, !fullScan, pendingResets.isEmpty, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
                pendingActivity == nil {
-                let watermarks = pendingWatermarks
-                let streamRoots = pendingStreamRoots
+                let receipts = pendingCheckpointReceipts
+                let ordinary = pendingOrdinaryReceipts
+                pendingOrdinaryReceipts.removeAll()
+                pendingCheckpointReceipts.removeAll()
                 pendingWatermarks.removeAll()
                 pendingStreamRoots.removeAll()
-                let checkpointable = checkpointableWatermarks(
-                    watermarks, streamRoots: streamRoots
-                )
+                for receipt in ordinary { receipt.complete() }
+                let checkpointable = checkpointableWatermarks(receipts, failedPaths: [])
                 if !checkpointable.isEmpty {
                     await didComplete(.fileChanges, checkpointable)
                 }
@@ -315,11 +364,12 @@ public actor IndexScheduler {
                     activity: pendingActivity ?? .fileChanges,
                     satisfiesSafetyReconciliation: pendingSatisfiesSafetyReconciliation,
                     retryAttempt: 0, resetRetryAttempt: 0, usesCommittedScope: preservingDeferredScope || pendingUsesCommittedScope,
-                    generation: configurationGeneration, ordinaryReceipts: pendingOrdinaryReceipts
+                    generation: configurationGeneration, ordinaryReceipts: pendingOrdinaryReceipts, checkpointReceipts: pendingCheckpointReceipts
                 )
                 fullScan = false
                 pendingResets.removeAll()
                 pendingOrdinaryReceipts.removeAll()
+                pendingCheckpointReceipts.removeAll()
                 pendingPaths.removeAll()
                 pendingReconciliationPaths.removeAll()
                 pendingWatermarks.removeAll()
@@ -371,6 +421,7 @@ public actor IndexScheduler {
                 if !stopping {
                     carryPendingResets(batch)
                     pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + batch.ordinaryReceipts)
+                    pendingCheckpointReceipts = uniqueCheckpoints(pendingCheckpointReceipts + batch.checkpointReceipts)
                     pendingPaths.formUnion(batch.paths)
                     pendingReconciliationPaths.formUnion(batch.reconciliationPaths)
                     fullScan = fullScan || batch.independentFullScan || batch.resets.contains { $0.isCommitted }
@@ -396,7 +447,7 @@ public actor IndexScheduler {
                         activity: .subtreeRecovery, satisfiesSafetyReconciliation: false,
                         retryAttempt: batch.retryAttempt, resetRetryAttempt: 0,
                         usesCommittedScope: batch.usesCommittedScope,
-                        generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts
+                        generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts
                     )
                     if batch.retryAttempt == 0 {
                         retainForRetry(recovery)
@@ -409,9 +460,8 @@ public actor IndexScheduler {
                 // Failed paths retain their stream watermarks through the one
                 // scheduled retry and any dormant period. Unrelated streams can
                 // still advance independently.
-                let checkpointable = checkpointableWatermarks(
-                    batch.watermarks, streamRoots: batch.streamRoots
-                )
+                let checkpointable = checkpointableWatermarks(batch.checkpointReceipts,
+                    failedPaths: result.failedPaths.union(result.failedReconciliationPaths))
                 if !checkpointable.isEmpty {
                     await didComplete(batch.activity, checkpointable)
                 }
@@ -460,13 +510,6 @@ public actor IndexScheduler {
         }
     }
 
-    private func mergeStreamRoots(_ roots: [String: Set<String>]) {
-        for (volume, paths) in roots {
-            let canonical = paths.map(TraceFileIO.canonicalPath)
-            pendingStreamRoots[volume, default: []].formUnion(canonical)
-        }
-    }
-
     private func mergeCanonicalStreamRoots(_ roots: CanonicalStreamRoots) {
         for (volume, paths) in roots {
             pendingStreamRoots[volume, default: []].formUnion(paths)
@@ -486,9 +529,19 @@ public actor IndexScheduler {
             retryAttempt: batch.retryAttempt + (reset ? 0 : 1),
             resetRetryAttempt: batch.resetRetryAttempt + (reset ? 1 : 0),
             usesCommittedScope: batch.usesCommittedScope,
-            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts
+            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts
         )
-        waitingRetries.append(WaitingRetry(batch: candidate, deadline: clock.now.advanced(by: retryDelay)))
+        if !reset, !candidate.rebuild,
+           let index = waitingRetries.firstIndex(where: {
+               !$0.batch.rebuild && $0.batch.generation == candidate.generation
+                   && $0.batch.scope == candidate.scope && $0.batch.usesCommittedScope == candidate.usesCommittedScope
+                   && $0.batch.retryAttempt == candidate.retryAttempt
+                   && $0.batch.resetRetryAttempt == candidate.resetRetryAttempt
+           }) {
+            waitingRetries[index].batch = merged(waitingRetries[index].batch, candidate, retryAttempt: candidate.retryAttempt)
+        } else {
+            waitingRetries.append(WaitingRetry(batch: candidate, deadline: clock.now.advanced(by: retryDelay)))
+        }
         scheduleRetry()
     }
 
@@ -511,7 +564,7 @@ public actor IndexScheduler {
             satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
             retryAttempt: batch.retryAttempt, resetRetryAttempt: batch.resetRetryAttempt,
             usesCommittedScope: batch.usesCommittedScope,
-            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts
+            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts
         )
         dormantBatch = merged(dormantBatch, candidate, retryAttempt: candidate.retryAttempt)
     }
@@ -539,7 +592,7 @@ public actor IndexScheduler {
                 : batch.activity,
             satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
             retryAttempt: batch.retryAttempt, resetRetryAttempt: 0, usesCommittedScope: true,
-            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts)
+            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts)
         if full || !ordinary.paths.isEmpty || !ordinary.reconciliationPaths.isEmpty {
             ordinaryRecovery = merged(ordinaryRecovery, ordinary, retryAttempt: ordinary.retryAttempt)
         } else if !ordinary.watermarks.isEmpty {
@@ -570,13 +623,14 @@ public actor IndexScheduler {
             satisfiesSafetyReconciliation: pendingSatisfiesSafetyReconciliation,
             retryAttempt: 0, resetRetryAttempt: retry.resetRetryAttempt,
             usesCommittedScope: retry.usesCommittedScope, generation: configurationGeneration,
-            ordinaryReceipts: pendingOrdinaryReceipts)
+            ordinaryReceipts: pendingOrdinaryReceipts, checkpointReceipts: pendingCheckpointReceipts)
         waitingRetries[index].batch = merged(retry, incoming, retryAttempt: retry.retryAttempt)
         fullScan = false
         pendingPaths.removeAll(); pendingReconciliationPaths.removeAll()
         pendingWatermarks.removeAll(); pendingStreamRoots.removeAll()
         pendingActivity = nil; pendingSatisfiesSafetyReconciliation = false
         pendingOrdinaryReceipts.removeAll()
+        pendingCheckpointReceipts.removeAll()
         // Keep the original scheduled deadline and retry readiness.
     }
 
@@ -605,42 +659,46 @@ public actor IndexScheduler {
             resetRetryAttempt: max(existing.resetRetryAttempt, incoming.resetRetryAttempt),
             usesCommittedScope: !resets.contains { $0.isPending } && (existing.usesCommittedScope || incoming.usesCommittedScope),
             generation: configurationGeneration,
-            ordinaryReceipts: uniqueOrdinary(existing.ordinaryReceipts + incoming.ordinaryReceipts)
+            ordinaryReceipts: uniqueOrdinary(existing.ordinaryReceipts + incoming.ordinaryReceipts),
+            checkpointReceipts: uniqueCheckpoints(existing.checkpointReceipts + incoming.checkpointReceipts)
         )
     }
 
-    private func checkpointableWatermarks(
-        _ watermarks: [String: UInt64], streamRoots: CanonicalStreamRoots
-    ) -> [String: UInt64] {
-        var checkpointable: [String: UInt64] = [:]
-        for (volume, eventID) in watermarks {
-            var blocked = false
-            // Every outstanding owner fences the stream, including ordinary
-            // fallback that has not run yet and newer pending work. Transfer
-            // the candidate checkpoint and its roots to all covering owners.
-            for index in waitingRetries.indices where waitingRetries[index].batch.watermarks[volume] != nil {
-                waitingRetries[index].batch = replacingWatermark(in: waitingRetries[index].batch,
-                    volume: volume, eventID: eventID, streamRoots: streamRoots[volume] ?? [])
-                blocked = true
-            }
-            if let recovery = ordinaryRecovery, recovery.watermarks[volume] != nil {
-                ordinaryRecovery = replacingWatermark(in: recovery, volume: volume,
-                    eventID: eventID, streamRoots: streamRoots[volume] ?? [])
-                blocked = true
-            }
-            if let dormant = dormantBatch, dormant.watermarks[volume] != nil {
-                dormantBatch = replacingWatermark(in: dormant, volume: volume,
-                    eventID: eventID, streamRoots: streamRoots[volume] ?? [])
-                blocked = true
-            }
-            if pendingWatermarks[volume] != nil {
-                pendingWatermarks[volume] = max(pendingWatermarks[volume] ?? 0, eventID)
-                pendingStreamRoots[volume, default: []].formUnion(streamRoots[volume] ?? [])
-                blocked = true
-            }
-            if !blocked { checkpointable[volume] = eventID }
+    private func checkpointableWatermarks(_ receipts: [CheckpointReceipt], failedPaths: Set<String>) -> [String: UInt64] {
+        let failures = failedPaths.map(TraceFileIO.canonicalPath)
+        for receipt in receipts {
+            guard let index = checkpointStreams[receipt.stream]?.firstIndex(where: { $0.receipt.id == receipt.id }),
+                  let current = checkpointStreams[receipt.stream]?[index].receipt else { continue }
+            let failed = !failures.isEmpty && (current.roots.isEmpty || current.roots.contains { root in
+                failures.contains { root.intersects($0) }
+            })
+            if !failed { checkpointStreams[receipt.stream]?[index].covered = true }
         }
-        return checkpointable
+        var accepted: [String: UInt64] = [:]
+        for stream in Array(checkpointStreams.keys) {
+            guard var segments = checkpointStreams[stream] else { continue }
+            let count = segments.prefix(while: { $0.covered }).count
+            for segment in segments.prefix(count) {
+                accepted[stream] = max(accepted[stream] ?? 0, segment.receipt.watermark)
+            }
+            segments.removeFirst(count)
+            var compacted: [CheckpointSegment] = []
+            for segment in segments {
+                if segment.covered, compacted.last?.covered == true {
+                    let old = compacted[compacted.count - 1].receipt
+                    compacted[compacted.count - 1].receipt = .init(id: old.id, stream: stream,
+                        watermark: max(old.watermark, segment.receipt.watermark),
+                        roots: old.roots.union(segment.receipt.roots))
+                } else { compacted.append(segment) }
+            }
+            checkpointStreams[stream] = compacted.isEmpty ? nil : compacted
+        }
+        return accepted
+    }
+
+    private func uniqueCheckpoints(_ receipts: [CheckpointReceipt]) -> [CheckpointReceipt] {
+        var seen = Set<UUID>()
+        return receipts.filter { seen.insert($0.id).inserted }
     }
 
     private func affectedWatermarks(
@@ -655,26 +713,6 @@ public actor IndexScheduler {
                 failures.contains { root.intersects($0) }
             }
         }
-    }
-
-    private func replacingWatermark(
-        in batch: Batch, volume: String, eventID: UInt64,
-        streamRoots incomingRoots: Set<TraceFileIO.CanonicalPath>
-    ) -> Batch {
-        var watermarks = batch.watermarks
-        watermarks[volume] = max(watermarks[volume] ?? 0, eventID)
-        var streamRoots = batch.streamRoots
-        streamRoots[volume, default: []].formUnion(incomingRoots)
-        return Batch(
-            independentFullScan: batch.independentFullScan, resets: batch.resets,
-            paths: batch.paths, reconciliationPaths: batch.reconciliationPaths,
-            watermarks: watermarks, streamRoots: streamRoots, scope: batch.scope,
-            activity: batch.activity,
-            satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
-            retryAttempt: batch.retryAttempt, resetRetryAttempt: batch.resetRetryAttempt,
-            usesCommittedScope: batch.usesCommittedScope,
-            generation: batch.generation, ordinaryReceipts: batch.ordinaryReceipts
-        )
     }
 
     private func reactivateDormantIfCovered() {
@@ -702,6 +740,7 @@ public actor IndexScheduler {
         // A committed reset still owes its scan; an uncommitted one must reset.
         pendingResets = uniqueResets(pendingResets + dormantBatch.resets)
         pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + dormantBatch.ordinaryReceipts)
+        pendingCheckpointReceipts = uniqueCheckpoints(pendingCheckpointReceipts + dormantBatch.checkpointReceipts)
         pendingActivity = IndexActivity.moreSignificant(
             pendingActivity, dormantBatch.activity
         )
@@ -755,6 +794,8 @@ public actor IndexScheduler {
         stopping = true
         pendingResets.removeAll()
         pendingOrdinaryReceipts.removeAll()
+        pendingCheckpointReceipts.removeAll()
+        checkpointStreams.removeAll()
         fullScan = false
         pendingPaths.removeAll()
         pendingReconciliationPaths.removeAll()

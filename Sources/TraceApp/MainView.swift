@@ -413,7 +413,9 @@ private struct SessionSidebar: View {
                     ScrollViewReader { proxy in
                         List(selection: Binding(get: { model.sidebarSelectedSessionID }, set: { id in
                             if let token = model.sidebarRevealRequest?.token { model.cancelSidebarReveal(token: token) }
-                            if let id { model.selectSession(id) }
+                            if let id, let session = sessions.first(where: { $0.id == id }) {
+                                model.selectSidebarSession(session)
+                            }
                         })) {
                             ForEach(sessions) { session in
                                 SessionRow(session: session) { await model.sessionErrorText(session) }

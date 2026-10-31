@@ -584,11 +584,11 @@ public actor IndexDatabase {
         .init(value: try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='content_generation'") ?? "")
     }
 
-    private nonisolated static func advanceContentGeneration(in db: Database) throws {
-        let previous = try readContentGeneration(db)
-        let family = previous.value.split(separator: ":").first.map(String.init) ?? UUID().uuidString
+    private nonisolated static func advanceContentGeneration(in db: Database,
+            to generation: IndexContentGeneration? = nil) throws {
+        let next = try generation ?? readContentGeneration(db).advanced()
         try db.execute(sql: "INSERT INTO trace_meta(key,value) VALUES ('content_generation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            arguments: [family + ":" + UUID().uuidString])
+            arguments: [next.value])
     }
 
     public func storedIndexScope() throws -> IndexScope {
@@ -683,10 +683,10 @@ public actor IndexDatabase {
         let committed = OSAllocatedUnfairLock(initialState: false)
         defer { if committed.withLock({ $0 }) { committedResetCountForTesting += 1 } }
         #endif
-        let generation = IndexContentGeneration(value: (contentGeneration.value.split(separator: ":").first.map(String.init) ?? UUID().uuidString) + ":" + UUID().uuidString)
+        let generation = contentGeneration.advanced()
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
-                try db.execute(sql: "INSERT INTO trace_meta(key,value) VALUES ('content_generation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", arguments: [generation.value])
+                try Self.advanceContentGeneration(in: db, to: generation)
                 try db.execute(sql: "DELETE FROM message_fts")
                 try db.execute(sql: "DELETE FROM usage_daily")
                 try db.execute(sql: "DELETE FROM source_file")
@@ -705,6 +705,7 @@ public actor IndexDatabase {
             committed.withLock { $0 = true }
             #endif
             generationState.withLock { $0 = generation }
+            relocationLineage.withLock { $0.removeAll() }
             onCommitted()
             #if DEBUG
             if fault == .checkpoint { throw DatabaseError(resultCode: .SQLITE_BUSY) }
@@ -744,7 +745,9 @@ public actor IndexDatabase {
                             WHERE sf.root_id=?
                         )
                         """, arguments: [rootID])
+                    let removedSources = Set(try Int64.fetchAll(db, sql: "SELECT id FROM source_file WHERE root_id=?", arguments: [rootID]))
                     try db.execute(sql: "DELETE FROM source_root WHERE id=?", arguments: [rootID])
+                    db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: removedSources) })
                 }
                 if !removed.isEmpty {
                     try db.execute(sql: "DELETE FROM usage_daily")
@@ -918,8 +921,69 @@ public actor IndexDatabase {
         }
     }
 
+    // Only committed moves establish aliases. A reused row or a matching
+    // external session ID elsewhere cannot manufacture relocation proof.
+    private struct Relocation: Sendable {
+        let sourceID: Int64
+        let generation: IndexContentGeneration
+        let target: SessionNavigationReference
+    }
+    private nonisolated let relocationLineage = OSAllocatedUnfairLock(
+        initialState: [SessionNavigationReference: Relocation]())
+
+    private nonisolated func retireRelocations(sourceIDs: Set<Int64>) {
+        relocationLineage.withLock { aliases in
+            aliases = aliases.filter { !sourceIDs.contains($0.value.sourceID) }
+        }
+    }
+
+    private nonisolated func recordRelocation(sourceID: Int64, rootID: Int64, path: String,
+                                              in db: Database) throws {
+        let generation = try Self.readContentGeneration(db)
+        let root = try String.fetchOne(db, sql: "SELECT path FROM source_root WHERE id=?", arguments: [rootID]) ?? ""
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT s.agent, s.external_id, sf.path, r.path AS root
+            FROM session s JOIN source_file sf ON sf.id=s.source_file_id
+            JOIN source_root r ON r.id=sf.root_id WHERE sf.id=?
+            """, arguments: [sourceID])
+        let moves = rows.map { row -> (SessionNavigationReference, SessionNavigationReference) in
+            let old = SessionNavigationReference(agent: row["agent"], root: row["root"], path: row["path"],
+                externalSessionID: row["external_id"], anchorSourceKey: nil, anchorExternalID: nil)
+            let target = SessionNavigationReference(agent: old.agent, root: root, path: path,
+                externalSessionID: old.externalSessionID, anchorSourceKey: nil, anchorExternalID: nil)
+            return (old, target)
+        }
+        // Called inside the move transaction only to gather inputs; publication
+        // occurs at transaction commitment, never after rollback.
+        db.afterNextTransaction(onCommit: { [relocationLineage] _ in
+            relocationLineage.withLock { aliases in
+                let targets = Dictionary(moves, uniquingKeysWith: { _, last in last })
+                let updates = aliases.compactMap { key, value -> (SessionNavigationReference, Relocation)? in
+                    guard value.sourceID == sourceID, let target = targets[value.target] else { return nil }
+                    return (key, Relocation(sourceID: sourceID, generation: generation, target: target))
+                }
+                for (key, value) in updates { aliases[key] = value }
+                for (old, target) in moves {
+                    aliases[old] = Relocation(sourceID: sourceID, generation: generation, target: target)
+                }
+            }
+        })
+    }
+
+    private nonisolated func matchesReference(_ expected: SessionNavigationReference,
+        current: SessionNavigationReference?, sessionID: Int64, generation: IndexContentGeneration,
+        aliases: [SessionNavigationReference: Relocation], in db: Database) throws -> Bool {
+        guard let current else { return false }
+        if expected.representsSameSession(as: current) { return true }
+        guard let move = aliases[expected.unanchored], move.generation == generation,
+              move.target.representsSameSession(as: current) else { return false }
+        return try Int64.fetchOne(db, sql: "SELECT source_file_id FROM session WHERE id=?",
+            arguments: [sessionID]) == move.sourceID
+    }
+
     func moveSource(id: Int64, rootID: Int64, path: String) throws {
         try pool.write { db in
+            try recordRelocation(sourceID: id, rootID: rootID, path: path, in: db)
             try db.execute(
                 sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
                 arguments: [rootID, path, id]
@@ -934,6 +998,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM source_file WHERE id=? AND is_placeholder=1",
                                arguments: [placeholderID])
                 guard db.changesCount == 1 else { throw SessionSourceError.malformedRecord("source placeholder changed") }
+                try recordRelocation(sourceID: movedID, rootID: rootID, path: path, in: db)
                 try db.execute(sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
                                arguments: [rootID, path, movedID])
                 return .commit
@@ -969,6 +1034,7 @@ public actor IndexDatabase {
                 try db.execute(sql: "DELETE FROM source_file WHERE id=?", arguments: [id])
                 try Self.markRollupsDirty(db)
                 try deleteOrphanedProjects(db: db)
+                db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: [id]) })
                 return .commit
             }
         }
@@ -995,6 +1061,7 @@ public actor IndexDatabase {
                     sql: "UPDATE source_file SET scanned_bytes=0, metadata_revision=NULL, content_session_id=NULL, metadata_session_id=NULL, fallback_ts=NULL, last_valid_ts=NULL, content_generation=content_generation+1 WHERE id=?",
                     arguments: [id]
                 )
+                db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: [id]) })
                 return .commit
             }
         }
@@ -1060,6 +1127,7 @@ public actor IndexDatabase {
                     error: nil,
                     db: db
                 )
+                db.afterNextTransaction(onCommit: { [self] _ in retireRelocations(sourceIDs: [id]) })
                 return .commit
             }
         }
@@ -1725,6 +1793,7 @@ public actor IndexDatabase {
         defer { TracePerformance.end(performanceInterval) }
         guard let pattern = FTSQueryParser.parse(query) else { return .init(results: [], nextCursor: nil) }
         return try pool.read { db in
+            let generation = try Self.readContentGeneration(db)
             var filterArguments = StatementArguments()
             var predicates = ["s.agent IN (SELECT agent FROM supported_agent)"]
 
@@ -1765,7 +1834,7 @@ public actor IndexDatabase {
                            s.agent, s.has_plan,
                            m.source_key, m.external_uuid, s.external_id, m.role, m.ts, m.prefix, sf.path AS source_path,
                            (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
-                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation, NULL AS score
+                            NULL AS score
                     FROM message_fts
                     JOIN message m ON m.id = message_fts.rowid
                     JOIN session s ON s.id = m.session_id
@@ -1838,11 +1907,11 @@ public actor IndexDatabase {
                     }
                 }
                 let hasMore = candidates.count > limit
-                let results = candidates.prefix(limit).compactMap(searchResult(from:))
+                let results = candidates.prefix(limit).compactMap { searchResult(from: $0, generation: generation) }
                 let next = hasMore ? results.last.map {
                     SearchCursor(rowID: $0.id, rank: nil, timestampMilliseconds: $0.timestampMilliseconds)
                 } : nil
-                return SearchPage(results: results, nextCursor: next, contentGeneration: try Self.readContentGeneration(db))
+                return SearchPage(results: results, nextCursor: next, contentGeneration: generation)
             } else {
                 var cursorSQL = ""
                 if let cursor, let rank = cursor.rank {
@@ -1864,7 +1933,7 @@ public actor IndexDatabase {
                            s.agent, s.has_plan,
                            m.source_key, m.external_uuid, s.external_id, m.role, m.ts, m.prefix, sf.path AS source_path,
                            (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
-                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation, r.score
+                            r.score
                     FROM ranked r
                     JOIN message m ON m.id = r.rowid
                     JOIN session s ON s.id = m.session_id
@@ -1879,9 +1948,9 @@ public actor IndexDatabase {
             var rows = try Row.fetchAll(db, sql: sql, arguments: arguments)
             let hasMore = rows.count > limit
             if hasMore { rows.removeLast(rows.count - limit) }
-            let results = rows.compactMap(searchResult(from:))
+            let results = rows.compactMap { searchResult(from: $0, generation: generation) }
             let next = hasMore ? results.last.map { SearchCursor(rowID: $0.id, rank: $0.rank, timestampMilliseconds: $0.timestampMilliseconds) } : nil
-            return SearchPage(results: results, nextCursor: next, contentGeneration: try Self.readContentGeneration(db))
+            return SearchPage(results: results, nextCursor: next, contentGeneration: generation)
         }
     }
 
@@ -2142,6 +2211,7 @@ public actor IndexDatabase {
         projectCanonicalKey: String? = nil, limit: Int = 500
     ) throws -> [SessionSummary] {
         try pool.read { db in
+            let generation = try Self.readContentGeneration(db)
             var predicates = ["s.agent IN (SELECT agent FROM supported_agent)"]
             var arguments = StatementArguments()
             if let projectCanonicalKey {
@@ -2153,7 +2223,7 @@ public actor IndexDatabase {
                 SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                        sf.path AS source_path,
                            (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
-                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation,
+
                        sf.content_generation AS source_generation,
                        p.canonical_key AS project_canonical_key
                 FROM session s
@@ -2161,7 +2231,7 @@ public actor IndexDatabase {
                 JOIN project p ON p.id=s.project_id
                 WHERE \(predicates.joined(separator: " AND "))
                 ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
-                """, arguments: arguments).compactMap(sessionSummary(from:))
+                """, arguments: arguments).compactMap { sessionSummary(from: $0, generation: generation) }
         }
     }
 
@@ -2184,13 +2254,14 @@ public actor IndexDatabase {
         }
         let pageSize = max(1, min(limit, 1_000))
         return try pool.read { db in
+            let generation = try Self.readContentGeneration(db)
             let total = try sessionCount(projectCanonicalKey: projectCanonicalKey, in: db)
             let rows = try sessionRows(projectCanonicalKey: projectCanonicalKey, cursor: cursor,
-                                       limit: pageSize + 1, in: db)
+                                       limit: pageSize + 1, generation: generation, in: db)
             let sessions = Array(rows.prefix(pageSize))
             return .init(sessions: sessions, totalCount: total,
                          nextCursor: sessionCursor(after: sessions, hasMore: rows.count > pageSize,
-                                                   projectCanonicalKey: projectCanonicalKey), contentGeneration: try Self.readContentGeneration(db))
+                                                   projectCanonicalKey: projectCanonicalKey), contentGeneration: generation)
         }
     }
 
@@ -2200,9 +2271,10 @@ public actor IndexDatabase {
                                     ensuringSessionID: Int64? = nil) async throws -> SessionListSnapshot {
         try await waitForSessionListReadForTesting()
         return try await pool.read { db in
-            try sessionListSnapshot(projectCanonicalKey: projectCanonicalKey, pageCount: pageCount,
+            let generation = try Self.readContentGeneration(db)
+            return try sessionListSnapshot(projectCanonicalKey: projectCanonicalKey, pageCount: pageCount,
                                     ensuringSessionID: ensuringSessionID,
-                                    total: sessionCount(projectCanonicalKey: projectCanonicalKey, in: db), in: db)
+                                    total: sessionCount(projectCanonicalKey: projectCanonicalKey, in: db), generation: generation, in: db)
         }
     }
 
@@ -2212,15 +2284,16 @@ public actor IndexDatabase {
                                 ensuringSessionID: Int64? = nil) async throws -> SidebarSnapshot {
         try await waitForSessionListReadForTesting()
         let snapshot: SidebarSnapshot = try await pool.read { db in
+            let generation = try Self.readContentGeneration(db)
             let projects = try projects(in: db)
             let total = projectCanonicalKey.map { key in
                 projects.first { $0.canonicalKey == key }?.sessionCount ?? 0
             } ?? projects.reduce(0) { $0 + $1.sessionCount }
             return .init(projects: projects,
-                         recentSessions: try sessionRows(projectCanonicalKey: nil, cursor: nil, limit: 10, in: db),
+                         recentSessions: try sessionRows(projectCanonicalKey: nil, cursor: nil, limit: 10, generation: generation, in: db),
                          sessionList: try sessionListSnapshot(projectCanonicalKey: projectCanonicalKey,
-                            pageCount: pageCount, ensuringSessionID: ensuringSessionID, total: total, in: db),
-                         contentGeneration: try Self.readContentGeneration(db))
+                            pageCount: pageCount, ensuringSessionID: ensuringSessionID, total: total, generation: generation, in: db),
+                         contentGeneration: generation)
         }
         #if DEBUG
         if let gate = sidebarSnapshotPublicationGate {
@@ -2245,7 +2318,7 @@ public actor IndexDatabase {
     }
 
     private nonisolated func sessionRows(projectCanonicalKey: String?, cursor: SessionCursor?, limit: Int,
-                             in db: Database) throws -> [SessionSummary] {
+                             generation: IndexContentGeneration, in db: Database) throws -> [SessionSummary] {
         var predicates = ["s.agent IN (SELECT agent FROM supported_agent)"]
         var arguments = StatementArguments()
         if let projectCanonicalKey {
@@ -2261,12 +2334,12 @@ public actor IndexDatabase {
             SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                    sf.path AS source_path,
                            (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
-                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation, sf.content_generation AS source_generation,
+                            sf.content_generation AS source_generation,
                    p.canonical_key AS project_canonical_key
             FROM session s JOIN source_file sf ON sf.id=s.source_file_id JOIN project p ON p.id=s.project_id
             WHERE \(predicates.joined(separator: " AND "))
             ORDER BY s.last_activity_at DESC, s.id DESC LIMIT ?
-            """, arguments: arguments).compactMap(sessionSummary(from:))
+            """, arguments: arguments).compactMap { sessionSummary(from: $0, generation: generation) }
     }
 
     private nonisolated func sessionCursor(after sessions: [SessionSummary], hasMore: Bool,
@@ -2278,20 +2351,20 @@ public actor IndexDatabase {
 
     private nonisolated func sessionListSnapshot(projectCanonicalKey: String?, pageCount: Int,
                                      ensuringSessionID: Int64?, total: Int,
-                                     in db: Database) throws -> SessionListSnapshot {
+                                     generation: IndexContentGeneration, in db: Database) throws -> SessionListSnapshot {
         let pageSize = Self.sessionPageSize
         let pages = max(1, min(pageCount, max(1, (total + pageSize - 1) / pageSize)))
         let limit = pages * pageSize
-        let rows = try sessionRows(projectCanonicalKey: projectCanonicalKey, cursor: nil, limit: limit + 1, in: db)
+        let rows = try sessionRows(projectCanonicalKey: projectCanonicalKey, cursor: nil, limit: limit + 1, generation: generation, in: db)
         var sessions = Array(rows.prefix(limit))
         let cursor = sessionCursor(after: sessions, hasMore: rows.count > limit, projectCanonicalKey: projectCanonicalKey)
         if let ensuringSessionID, !sessions.contains(where: { $0.id == ensuringSessionID }),
-           let ensured = try transcriptSession(id: ensuringSessionID, in: db),
+           let ensured = try transcriptSession(id: ensuringSessionID, generation: generation, in: db),
            (projectCanonicalKey == nil || ensured.projectCanonicalKey == projectCanonicalKey) {
             sessions.append(ensured)
             sessions.sort { ($0.lastActivityMilliseconds, $0.id) > ($1.lastActivityMilliseconds, $1.id) }
         }
-        return .init(sessions: sessions, totalCount: total, nextCursor: cursor, pageCount: pages, contentGeneration: try Self.readContentGeneration(db))
+        return .init(sessions: sessions, totalCount: total, nextCursor: cursor, pageCount: pages, contentGeneration: generation)
     }
 
     #if DEBUG
@@ -2337,9 +2410,10 @@ public actor IndexDatabase {
     func usageReadCountForTesting() -> Int { usageReadAttempts }
     func failFailureCountsOnceForTesting(_ error: DatabaseError) { nextFailureCountsError = error }
     private var navigationCaptureErrorForTesting: DatabaseError?
-    private var navigationResolutionErrorForTesting: DatabaseError?
+    private var navigationResolutionErrorForTesting: Error?
     func failNavigationCaptureOnceForTesting(_ error: DatabaseError) { navigationCaptureErrorForTesting = error }
     func failNavigationResolutionOnceForTesting(_ error: DatabaseError) { navigationResolutionErrorForTesting = error }
+    func cancelNavigationResolutionOnceForTesting() { navigationResolutionErrorForTesting = CancellationError() }
     func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }
     func sessionReadCountForTesting() -> Int { sessionReadAttempts }
     func sessionReadFailurePendingForTesting() -> Bool { nextSessionReadError != nil }
@@ -2383,16 +2457,26 @@ public actor IndexDatabase {
 
     public func captureNavigationReferences(_ anchors: [Int64: Int64?],
             expectedGeneration: IndexContentGeneration? = nil) throws -> [Int64: SessionNavigationReference] {
+        try captureNavigationReferences(anchors, expectedGeneration: expectedGeneration, expectedReferences: [:])
+    }
+
+    public func captureNavigationReferences(_ anchors: [Int64: Int64?],
+            expectedGeneration: IndexContentGeneration?,
+            expectedReferences: [Int64: SessionNavigationReference]) throws -> [Int64: SessionNavigationReference] {
         #if DEBUG
         if let error = navigationCaptureErrorForTesting { navigationCaptureErrorForTesting = nil; throw error }
-        #endif
-        #if DEBUG
         navigationCaptureReads += 1
         #endif
+        let aliases = relocationLineage.withLock { $0 }
         return try pool.read { db in
-            if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { throw CancellationError() }
+            let generation = try Self.readContentGeneration(db)
+            if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
             return try anchors.reduce(into: [:]) { result, entry in
-                result[entry.key] = try captureNavigationReference(sessionID: entry.key, anchorMessageID: entry.value, in: db)
+                let reference = try captureNavigationReference(sessionID: entry.key, anchorMessageID: entry.value, in: db)
+                if let expected = expectedReferences[entry.key],
+                   try !matchesReference(expected, current: reference, sessionID: entry.key,
+                       generation: generation, aliases: aliases, in: db) { return }
+                result[entry.key] = reference
             }
         }
     }
@@ -2427,7 +2511,11 @@ public actor IndexDatabase {
         #if DEBUG
         navigationResolutionReads += 1
         #endif
-        return try pool.read { try resolveNavigationReference(reference, fallbackMessageIndex: fallbackMessageIndex, in: $0) }
+        let aliases = relocationLineage.withLock { $0 }
+        return try pool.read { db in
+            try resolveNavigationReference(reference, fallbackMessageIndex: fallbackMessageIndex,
+                generation: Self.readContentGeneration(db), aliases: aliases, in: db)
+        }
     }
 
     public func resolveNavigationReferences(_ references: [SessionNavigationReference: Int?]) throws
@@ -2438,21 +2526,27 @@ public actor IndexDatabase {
         #if DEBUG
         navigationResolutionReads += 1
         #endif
+        let aliases = relocationLineage.withLock { $0 }
         return try pool.read { db in
-            try references.reduce(into: [:]) { result, entry in
-                result[entry.key] = try resolveNavigationReference(entry.key, fallbackMessageIndex: entry.value, in: db)
+            let generation = try Self.readContentGeneration(db)
+            return try references.reduce(into: [:]) { result, entry in
+                result[entry.key] = try resolveNavigationReference(entry.key, fallbackMessageIndex: entry.value, generation: generation, aliases: aliases, in: db)
             }
         }
     }
 
-    private nonisolated func resolveNavigationReference(_ reference: SessionNavigationReference, fallbackMessageIndex: Int?, in db: Database) throws
+    private nonisolated func resolveNavigationReference(_ reference: SessionNavigationReference, fallbackMessageIndex: Int?,
+        generation: IndexContentGeneration, aliases: [SessionNavigationReference: Relocation], in db: Database) throws
         -> (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)? {
+            let move = aliases[reference.unanchored].flatMap { $0.generation == generation ? $0 : nil }
+            let locator = move?.target ?? reference
             guard let id = try Int64.fetchOne(db, sql: """
                 SELECT s.id FROM session s JOIN source_file sf ON sf.id=s.source_file_id
                 JOIN source_root r ON r.id=sf.root_id
                 WHERE s.agent=? AND r.path=? AND sf.path=? AND s.external_id=?
-                """, arguments: [reference.agent, reference.root, reference.path, reference.externalSessionID]),
-                  let session = try transcriptSession(id: id, in: db) else { return nil }
+                """, arguments: [locator.agent, locator.root, locator.path, locator.externalSessionID]),
+                  let session = try transcriptSession(id: id, generation: generation, in: db) else { return nil }
+            if let move, try Int64.fetchOne(db, sql: "SELECT source_file_id FROM session WHERE id=?", arguments: [id]) != move.sourceID { return nil }
             var anchor: Int64?
             if let external = reference.anchorExternalID {
                 anchor = try Int64.fetchOne(db, sql: "SELECT id FROM message WHERE session_id=? AND external_uuid=? ORDER BY seq LIMIT 1",
@@ -2489,8 +2583,9 @@ public actor IndexDatabase {
 
     public func session(id: Int64, expectedGeneration: IndexContentGeneration) throws -> SessionSummary? {
         try pool.read { db in
-            guard try Self.readContentGeneration(db) == expectedGeneration else { throw CancellationError() }
-            return try transcriptSession(id: id, in: db)
+            let generation = try Self.readContentGeneration(db)
+            guard generation == expectedGeneration else { throw CancellationError() }
+            return try transcriptSession(id: id, generation: generation, in: db)
         }
     }
 
@@ -2529,31 +2624,34 @@ public actor IndexDatabase {
             throw SessionSourceError.unreadableFile("Synthetic transcript read failure")
         }
         #endif
+        let aliases = relocationLineage.withLock { $0 }
         return try pool.read { db in
-            if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { throw CancellationError() }
-            var session = try transcriptSession(id: sessionID, in: db)
-            if let expectedReference, session?.navigationReference?.representsSameSession(as: expectedReference) != true { session = nil }
-            guard let session else { return .init(readRevision: readRevision, session: nil, messages: [], contentGeneration: try Self.readContentGeneration(db)) }
+            let generation = try Self.readContentGeneration(db)
+            if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
+            var session = try transcriptSession(id: sessionID, generation: generation, in: db)
+            if let expectedReference, try !matchesReference(expectedReference, current: session?.navigationReference, sessionID: sessionID, generation: generation, aliases: aliases, in: db) { session = nil }
+            guard let session else { return .init(readRevision: readRevision, session: nil, messages: [], contentGeneration: generation) }
             let unchanged = knownSession?.transcriptIdentity == session.transcriptIdentity
                 && knownMessageCount == session.messageCount
             return .init(readRevision: readRevision, session: session, messages: unchanged ? nil
-                : try transcriptMessages(sessionID: sessionID, in: db), contentGeneration: try Self.readContentGeneration(db))
+                : try transcriptMessages(sessionID: sessionID, in: db), contentGeneration: generation)
         }
     }
 
-    private nonisolated func transcriptSession(id: Int64, in db: Database) throws -> SessionSummary? {
-        try Row.fetchOne(db, sql: """
+    private nonisolated func transcriptSession(id: Int64, generation: IndexContentGeneration? = nil, in db: Database) throws -> SessionSummary? {
+        let generation = try generation ?? Self.readContentGeneration(db)
+        return try Row.fetchOne(db, sql: """
             SELECT s.*, coalesce(s.generated_title, s.first_user_message, s.title, 'Untitled session') AS resolved_title,
                    sf.path AS source_path,
                            (SELECT path FROM source_root WHERE id=sf.root_id) AS configured_root,
-                           (SELECT value FROM trace_meta WHERE key='content_generation') AS index_generation,
+
                    sf.content_generation AS source_generation,
                    p.canonical_key AS project_canonical_key
             FROM session s
             JOIN source_file sf ON sf.id=s.source_file_id
             JOIN project p ON p.id=s.project_id
             WHERE s.id=? AND s.agent IN (SELECT agent FROM supported_agent)
-            """, arguments: [id]).flatMap(sessionSummary(from:))
+            """, arguments: [id]).flatMap { sessionSummary(from: $0, generation: generation) }
     }
 
     private func transcriptMessages(sessionID: Int64, in db: Database) throws -> [MessageSummary] {
@@ -2660,7 +2758,7 @@ public actor IndexDatabase {
     }
 }
 
-private func searchResult(from row: Row) -> SearchResult? {
+private func searchResult(from row: Row, generation: IndexContentGeneration) -> SearchResult? {
     let agentRaw: String = row["agent"]
     let roleRaw: String = row["role"]
     guard let agent = AgentKind(rawValue: agentRaw),
@@ -2682,13 +2780,13 @@ private func searchResult(from row: Row) -> SearchResult? {
         projectName: projectName, sessionTitle: sessionTitle, sessionHasPlan: row["has_plan"], agent: agent,
         role: role, timestampMilliseconds: timestamp, prefix: prefix,
         sourcePath: sourcePath, rank: rank,
-        contentGeneration: .init(value: row["index_generation"]),
+        contentGeneration: generation,
         navigationReference: .init(agent: agentRaw, root: row["configured_root"], path: sourcePath,
             externalSessionID: row["external_id"], anchorSourceKey: row["source_key"], anchorExternalID: row["external_uuid"])
     )
 }
 
-private func sessionSummary(from row: Row) -> SessionSummary? {
+private func sessionSummary(from row: Row, generation: IndexContentGeneration) -> SessionSummary? {
     let agentRaw: String = row["agent"]
     guard let agent = AgentKind(rawValue: agentRaw) else { return nil }
     let id: Int64 = row["id"]
@@ -2706,7 +2804,7 @@ private func sessionSummary(from row: Row) -> SessionSummary? {
         lastActivityMilliseconds: lastActivity, messageCount: messageCount,
         hadError: hadError, sourcePath: sourcePath,
         sourceGeneration: row["source_generation"], errorRevision: row["error_revision"],
-        contentGeneration: .init(value: row["index_generation"]),
+        contentGeneration: generation,
         navigationReference: .init(agent: agentRaw, root: row["configured_root"], path: sourcePath,
             externalSessionID: row["external_id"], anchorSourceKey: nil, anchorExternalID: nil)
     )

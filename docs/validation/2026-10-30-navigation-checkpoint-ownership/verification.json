@@ -1,0 +1,120 @@
+{
+  "base": "947e1891df64431ec8099d449cd47969debe71e5",
+  "candidate": "9e9a9556117f9ad9bd2c24daeaf21051aeb2f6f8",
+  "platform": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434",
+  "xcode": "Xcode 27.2\nBuild version 27B52",
+  "runs": [
+    {
+      "run": "nav-final-focused",
+      "final": true,
+      "result": "Passed",
+      "passed": 416,
+      "failed": 0,
+      "skipped": 0,
+      "rawBundle": "build/nav-final-focused.xcresult",
+      "testFailures": []
+    },
+    {
+      "run": "nav-final-stress-1",
+      "final": true,
+      "result": "Passed",
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "rawBundle": "build/nav-final-stress-1.xcresult",
+      "testFailures": []
+    },
+    {
+      "run": "nav-final-stress-2",
+      "final": true,
+      "result": "Passed",
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "rawBundle": "build/nav-final-stress-2.xcresult",
+      "testFailures": []
+    },
+    {
+      "run": "nav-final-stress-3",
+      "final": true,
+      "result": "Passed",
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "rawBundle": "build/nav-final-stress-3.xcresult",
+      "testFailures": []
+    },
+    {
+      "run": "nav-final-stress-4",
+      "final": true,
+      "result": "Passed",
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "rawBundle": "build/nav-final-stress-4.xcresult",
+      "testFailures": []
+    },
+    {
+      "run": "nav-final-stress-5",
+      "final": true,
+      "result": "Passed",
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "rawBundle": "build/nav-final-stress-5.xcresult",
+      "testFailures": []
+    }
+  ],
+  "checks": [
+    {
+      "step": "debug-app",
+      "exitCode": 0,
+      "elapsedSeconds": 16.969934375025332
+    },
+    {
+      "step": "release-app",
+      "exitCode": 0,
+      "elapsedSeconds": 105.23270683409646
+    },
+    {
+      "step": "external-client",
+      "exitCode": 0,
+      "elapsedSeconds": 34.98703029099852
+    },
+    {
+      "step": "project-drift",
+      "exitCode": 0,
+      "elapsedSeconds": 0.2233384579885751
+    },
+    {
+      "step": "signing",
+      "exitCode": 0,
+      "elapsedSeconds": 7.32771420897916
+    },
+    {
+      "step": "network",
+      "exitCode": 0,
+      "elapsedSeconds": 0.08818258391693234
+    },
+    {
+      "step": "script-tests",
+      "exitCode": 0,
+      "elapsedSeconds": 129.04817883414216
+    },
+    {
+      "step": "whitespace",
+      "exitCode": 0,
+      "elapsedSeconds": 0.09384574997238815
+    }
+  ],
+  "buildCheckInputs": "confirmed-checks/check-inputs.json",
+  "ui": {
+    "status": "skipped",
+    "reason": "User explicitly requested: Skip UI tests for this follow-up",
+    "compiledTarget": true,
+    "compiledSelectors": "compiled-ui-selectors.json"
+  },
+  "completeSuites": "omitted as planned",
+  "releaseComparisons": "omitted as planned",
+  "localPerformanceAcceptance": "not evaluated"
+}
