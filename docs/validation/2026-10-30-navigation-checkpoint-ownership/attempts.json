@@ -1,0 +1,269 @@
+[
+  {
+    "run": "nav-checkpoints-1",
+    "final": false,
+    "result": "Passed",
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-checkpoints-1.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-confirmed-focused",
+    "final": false,
+    "result": "Passed",
+    "passed": 416,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-confirmed-focused.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-confirmed-stress-1",
+    "final": false,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-confirmed-stress-1.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-confirmed-stress-2",
+    "final": false,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-confirmed-stress-2.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-confirmed-stress-3",
+    "final": false,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-confirmed-stress-3.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-confirmed-stress-4",
+    "final": false,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-confirmed-stress-4.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-confirmed-stress-5",
+    "final": false,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-confirmed-stress-5.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-final-focused",
+    "final": true,
+    "result": "Passed",
+    "passed": 416,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-final-focused.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-final-stress-1",
+    "final": true,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-final-stress-1.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-final-stress-2",
+    "final": true,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-final-stress-2.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-final-stress-3",
+    "final": true,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-final-stress-3.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-final-stress-4",
+    "final": true,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-final-stress-4.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-final-stress-5",
+    "final": true,
+    "result": "Passed",
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-final-stress-5.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-focused-1",
+    "final": false,
+    "result": "Failed",
+    "passed": 414,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/nav-focused-1.xcresult",
+    "testFailures": [
+      {
+        "failureText": "XCTAssertFalse failed - watermark-only coverage must remain attached to retained recovery",
+        "targetName": "TraceCoreTests",
+        "testIdentifier": 67,
+        "testIdentifierString": "IndexingRegressionTests/testWatermarkOnlyRequestAddsItsStreamRootToRetainedRecovery()",
+        "testIdentifierURL": "test://com.apple.xcode/Trace/TraceCoreTests/IndexingRegressionTests/testWatermarkOnlyRequestAddsItsStreamRootToRetainedRecovery",
+        "testName": "testWatermarkOnlyRequestAddsItsStreamRootToRetainedRecovery()"
+      }
+    ]
+  },
+  {
+    "run": "nav-focused-2",
+    "final": false,
+    "result": "Failed",
+    "passed": 414,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/nav-focused-2.xcresult",
+    "testFailures": [
+      {
+        "failureText": "XCTAssertFalse failed - watermark-only coverage must remain attached to retained recovery",
+        "targetName": "TraceCoreTests",
+        "testIdentifier": 123,
+        "testIdentifierString": "IndexingRegressionTests/testWatermarkOnlyRequestAddsItsStreamRootToRetainedRecovery()",
+        "testIdentifierURL": "test://com.apple.xcode/Trace/TraceCoreTests/IndexingRegressionTests/testWatermarkOnlyRequestAddsItsStreamRootToRetainedRecovery",
+        "testName": "testWatermarkOnlyRequestAddsItsStreamRootToRetainedRecovery()"
+      }
+    ]
+  },
+  {
+    "run": "nav-focused-3",
+    "final": false,
+    "result": "Passed",
+    "passed": 415,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-focused-3.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-initial-1",
+    "final": false,
+    "result": "Passed",
+    "passed": 16,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-initial-1.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-initial-4",
+    "final": false,
+    "result": "Failed",
+    "passed": 19,
+    "failed": 1,
+    "skipped": 0,
+    "rawBundle": "build/nav-initial-4.xcresult",
+    "testFailures": [
+      {
+        "failureText": "XCTAssertEqual failed: (\"[]\") is not equal to (\"[\"NavigationNeedle 6\"]\")",
+        "targetName": "TraceAppTests",
+        "testIdentifier": 18,
+        "testIdentifierString": "AppReviewFollowupTests/testRestorationGenerationCancellationKeepsCachedReaderWithoutError()",
+        "testIdentifierURL": "test://com.apple.xcode/Trace/TraceAppTests/AppReviewFollowupTests/testRestorationGenerationCancellationKeepsCachedReaderWithoutError",
+        "testName": "testRestorationGenerationCancellationKeepsCachedReaderWithoutError()"
+      }
+    ]
+  },
+  {
+    "run": "nav-initial-5",
+    "final": false,
+    "result": "Passed",
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-initial-5.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-stress-1",
+    "final": false,
+    "result": "Passed",
+    "passed": 41,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-stress-1.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-stress-2",
+    "final": false,
+    "result": "Passed",
+    "passed": 41,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-stress-2.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-stress-3",
+    "final": false,
+    "result": "Passed",
+    "passed": 41,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-stress-3.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-stress-4",
+    "final": false,
+    "result": "Passed",
+    "passed": 41,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-stress-4.xcresult",
+    "testFailures": []
+  },
+  {
+    "run": "nav-stress-5",
+    "final": false,
+    "result": "Passed",
+    "passed": 41,
+    "failed": 0,
+    "skipped": 0,
+    "rawBundle": "build/nav-stress-5.xcresult",
+    "testFailures": []
+  }
+]

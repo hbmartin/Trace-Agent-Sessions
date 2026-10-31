@@ -1,0 +1,771 @@
+[
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/add-app-tests.py",
+    "bytes": 11035,
+    "sha256": "d3e4186e0d47553947f20a9d064361f3632a77d09c2bc68bc73e66c060368778"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/add-core-tests.py",
+    "bytes": 9707,
+    "sha256": "07287c520495db38ed42d3b91673ecd47cba3674adb0fecd00b918c7eb867deb"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/add-final-test.py",
+    "bytes": 2473,
+    "sha256": "7a24210cca59ac2d6a534b198094feee1f586e8602be8038d7c2acb8de6c9c07"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/add-ownership-tests.py",
+    "bytes": 7129,
+    "sha256": "7320d1bae0f624f87fc5341f3f83d68fe456926acfba8b3b730eb3192efdeb1b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/add-ui-tests.py",
+    "bytes": 5607,
+    "sha256": "c26f59d20adfe3d77ee77243dccedc41a0f862201e93e30452fe152c9d78e54a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/candidate.json",
+    "bytes": 1302,
+    "sha256": "76328b893f8cfdb631c30e0f96c4b18bf57f36794955d0cfa69df91e174c239f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/checkpoint-selectors.json",
+    "bytes": 612,
+    "sha256": "6e656affd8c7ae9b5c045fbd44ec9fb08208e87674cdf936374a26c1317dd20c"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/checks-confirmed.py",
+    "bytes": 1892,
+    "sha256": "d22ec9fc359cdb2906321ca76e7165d3e7beba16c1e5cf2be5b1ead16899ee2b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/checks-final.py",
+    "bytes": 1898,
+    "sha256": "9f35e1ef83088257a7a2e5ff17b956b9cee1c9b565f0698120fd87ba38880f09"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/checks.py",
+    "bytes": 1888,
+    "sha256": "52257a8ce807d032362fcde5e12153164417ae76c9ed456c6a39e3c74f390d48"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-1.log",
+    "bytes": 717243,
+    "sha256": "55e3b68e0982f1c871a37927be55c072f54b317737cb868af180903df7e7769f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-10.log",
+    "bytes": 260539,
+    "sha256": "b5203c96a2f0d8457c056b91bbd9b33083496c63ad6f83015230726107cba1eb"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-11.log",
+    "bytes": 207505,
+    "sha256": "ce21c2766741bc5d9d72db9d80201046d3e4110d9f06b067e1dfcd5c581b6fbb"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-12.log",
+    "bytes": 705319,
+    "sha256": "b8188b92c540c090e83cf94c33eb2f100fbeb7f7a8753644b3436eeddd3079df"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-13.log",
+    "bytes": 703515,
+    "sha256": "c5898c5b2bd7681dee44e4950287538ec7834ca7968e278054a0bbad69748500"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-2.log",
+    "bytes": 219097,
+    "sha256": "a38915f0c6320c1f2f417f95e196799f2edad439bb6919e14de95b607d950040"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-3.log",
+    "bytes": 308533,
+    "sha256": "aa9d1c83526bf22483036faf1aa4ab2c37933c99f7a8e406774f968b32c1a0c3"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-4.log",
+    "bytes": 304466,
+    "sha256": "c47ab4321653d846a5da0ed55688a558e7d3907b7878073266853bc059344cb3"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-5.log",
+    "bytes": 309826,
+    "sha256": "5e0dfe919869e3c6112287bc19d2423ae4a69ea381cb501a8dac557293e4c133"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-6.log",
+    "bytes": 206780,
+    "sha256": "c8e1760936187108347543f1880cf31f03efb32d1b015c5ad0bec2f436034ca5"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-7.log",
+    "bytes": 204962,
+    "sha256": "1ec3c7325a4ce24d38aa1ba1e0aee0cefa71344a44818752cadba4e491b22262"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-8.log",
+    "bytes": 250169,
+    "sha256": "e7f3cf50ad8fd4f935c20e227c585c487c500d28e3000ba1b5d8206b74191fa0"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/compile-9.log",
+    "bytes": 309702,
+    "sha256": "7da658f031da365d4be14319174e70146037751992ebae413a2b438e3b903ade"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-candidate.json",
+    "bytes": 1248,
+    "sha256": "6c3755e327b76f34d96ab65bdb65c6e6e40d37aee7fbff8048e909df1212686e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/check-inputs.json",
+    "bytes": 1148,
+    "sha256": "1fdec1a4e583c94fbb56d4f0404cbcf13100d3d8d0b4afa5b8fa9e4359d3e353"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/checks.json",
+    "bytes": 766,
+    "sha256": "a249df8b1d0c3e2a588e2fc06c394b3ce1ea5d6d8147ab2433adc13c8df861ff"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/debug-app.log",
+    "bytes": 224245,
+    "sha256": "f6498dfb1e764a9414d87d3158e370744334fdd65a3139143309a62284314b3b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/external-client.log",
+    "bytes": 531324,
+    "sha256": "64b625062f5d3073935c392c5c443ed7b379187d2b032f79764bdce96a9ec5b4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/network.log",
+    "bytes": 176,
+    "sha256": "12aa41bc0f3dbba7bd9811b0767d05707769db605af7feb276da7f576c2b1482"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/project-drift.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/release-app.log",
+    "bytes": 590924,
+    "sha256": "54ef196da2d9d0a5045ddf01192bf3f662c34a89f444d874022bee04084845e3"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/script-tests.log",
+    "bytes": 3521,
+    "sha256": "5576355dcb58e8a0416541c444f0b262dedd313036e83f12bd29c922b8e3b9aa"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/signing.log",
+    "bytes": 61,
+    "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-checks/whitespace.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-focused-selectors.json",
+    "bytes": 24444,
+    "sha256": "e40f7562a601a470662e9567b64dbfa05625355f1a20951a7ffc79c0cf0d570c"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-race-selectors.json",
+    "bytes": 4265,
+    "sha256": "f1000f8a2ac24ab3ee18031aaaecafcfd4b65178dbb6cd8c5f1fb40f9a37b900"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/confirmed-stress-runs.json",
+    "bytes": 532,
+    "sha256": "4502f499e6bc14d0915bdc88b7883a0c03a2fd95cd59c04a4236756452601511"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/edit-app.py",
+    "bytes": 14841,
+    "sha256": "80c2dcc939f0ca71e4f0c68ca36d0ecdaaaa2b4b62c60dc5f9c910486b07e5fa"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/edit-core.py",
+    "bytes": 9762,
+    "sha256": "4d4fb5e00cd8f88b37e2ed450fd88270f2e2e5c738d7250ae1e693d9caba7289"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/edit-scheduler.py",
+    "bytes": 8260,
+    "sha256": "0d097da9ea8dc9cc09ba5d469ae92703fb0a89e2236050194bb48a27f77847df"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/edit-snapshots.py",
+    "bytes": 7200,
+    "sha256": "d733c23990be5c49642c4330ec803706153c20479a33fc5afd247ae26d68c897"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/emit-report.py",
+    "bytes": 8056,
+    "sha256": "0e6ddb9e4dc0420693e9188a4122c4464b0063be474081ef3a248f6a67496e08"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-candidate.json",
+    "bytes": 1302,
+    "sha256": "4c46656a0e94cb55735194f885d128ab2674f770ff8b8376ed282f5a07c4ab7a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/check-inputs.json",
+    "bytes": 1148,
+    "sha256": "f900a0fd855eb71c253515078c7b2da92dc9f7b9318ed073b4802595047c74f9"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/checks.json",
+    "bytes": 764,
+    "sha256": "c4025eea66b7d7e34ca6140721678c54a2d2f7470a91cdd1b0a40f240a2bd0b5"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/debug-app.log",
+    "bytes": 162670,
+    "sha256": "7e2298736f7f67a42371e90d560f51611e37cd5f51a526b5bd5a049e7af7cadb"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/external-client.log",
+    "bytes": 541745,
+    "sha256": "33c7afb48d0999409f7e2bd14c3a04c7f9bd88c1318a04b01fad4b0fd6a3334d"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/network.log",
+    "bytes": 176,
+    "sha256": "12aa41bc0f3dbba7bd9811b0767d05707769db605af7feb276da7f576c2b1482"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/project-drift.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/release-app.log",
+    "bytes": 732814,
+    "sha256": "c91ed311ea1fcbbcb0d3fa76ac290356bbe05c96fe077c14f28328203a02cac8"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/script-tests.log",
+    "bytes": 3521,
+    "sha256": "16720485eed35f5b98d4db30d62497e2b5de3369afff6bbb37818214ebd63f1a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/signing.log",
+    "bytes": 61,
+    "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-checks/whitespace.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-stress-runs.json",
+    "bytes": 510,
+    "sha256": "f8f4a52796ce976a255593d61456154344267a27949c0c6a4f5ed3605594581e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/final-validation.log",
+    "bytes": 366,
+    "sha256": "3810b2687c5027f9de49956edf52f5d29db230629aab01306e9c91bb207ea084"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/fix-checkpoint-roots.py",
+    "bytes": 3612,
+    "sha256": "067ed10398afe4ff503ebdca0606014f5b7c3f44886e91479fb38d281404b6c5"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/focused-selectors.json",
+    "bytes": 24335,
+    "sha256": "f4825a291dc98b7f6ed5ccc6cf792ce9f00cdc674668fd1b7de2e51cd42dba5e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/initial-selectors.json",
+    "bytes": 2096,
+    "sha256": "81aebf259099b3bdb573482cd67df138b449f82f8b8e6c20f4da6e6409be39be"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-checkpoints-1-summary.json",
+    "bytes": 964,
+    "sha256": "de2d41ad901a42f3efbdd7b18f816fc59ee8179114762a56117b48750357cf22"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-confirmed-focused-summary.json",
+    "bytes": 1353,
+    "sha256": "69d0bd66dbe6150adb9f14c7a845a0ebe4d61515b92ecad4cf12b14ce5b7eb57"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-confirmed-stress-1-summary.json",
+    "bytes": 1158,
+    "sha256": "8f50f942533868ff424940f8645558c46080bed2cc07ed74ba2990aa8a22d2e9"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-confirmed-stress-2-summary.json",
+    "bytes": 1158,
+    "sha256": "441f7d0ddf8ca357da9f74a0311b2d68cab753c7b921f701fc7f9155bbb62e8b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-confirmed-stress-3-summary.json",
+    "bytes": 1158,
+    "sha256": "02d5dd339f557566d49e9024cad004d5931ec5a62b4bfa9599d15c59f4875827"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-confirmed-stress-4-summary.json",
+    "bytes": 1158,
+    "sha256": "ae2a2e57cd4f51a04056ca73712e11798216d6f35a40ee04431c0b615c7bf51f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-confirmed-stress-5-summary.json",
+    "bytes": 1158,
+    "sha256": "25e06216b2f084aa4e53ef58064482a57a9e3986788d934c1bc6f26e7d0a3001"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-final-focused-summary.json",
+    "bytes": 1354,
+    "sha256": "ce516f8134b884e7d0651a2e2087f9d59577567a5651650d39c869fa4ef5dec0"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-final-stress-1-summary.json",
+    "bytes": 1158,
+    "sha256": "cef52014c836e8300bf550cfad60dc5d8d86651e91758a190311f97c40218233"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-final-stress-2-summary.json",
+    "bytes": 1157,
+    "sha256": "8cc3fcc34df53d7f7c0e6f1f86bccff717e619707d93f7171df1d967bbd3d358"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-final-stress-3-summary.json",
+    "bytes": 1156,
+    "sha256": "732e7d34f66c40ef4a77f495aed4a9625ebf45eef1fb6847b16eacabdd1b7994"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-final-stress-4-summary.json",
+    "bytes": 1158,
+    "sha256": "8716153fa867b550c7b389588253d58bce62385578e288c87c131ddecc6f0e56"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-final-stress-5-summary.json",
+    "bytes": 1157,
+    "sha256": "a61256b0ec0a4530b1533dadef6b2f5065717dc2f9ff65b47cc28b3b798c24c6"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-focused-1-summary.json",
+    "bytes": 1910,
+    "sha256": "612a64a49167a93532c1b82ed95ea3e1898eb968863e6631bd173263bedfe783"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-focused-2-summary.json",
+    "bytes": 1910,
+    "sha256": "e47a73bd5ff9cebfe80b3d2c177bbb5e845ca12345b4af5a2fe8843c4d373724"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-focused-3-summary.json",
+    "bytes": 1354,
+    "sha256": "50ed023a6a9151c8d54d4948beaa8abfdc14492730dc969f9014cd942a0c6fca"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-initial-1-summary.json",
+    "bytes": 966,
+    "sha256": "3d19c85bb3909dcbb4ca84e1963b26e6d5fe53674a712604d577693a74e2aff2"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-initial-4-summary.json",
+    "bytes": 1529,
+    "sha256": "73ab2e0c903c97d6968d1f82b012f25fb505065c98850c13b81926175974dc4f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-initial-5-summary.json",
+    "bytes": 967,
+    "sha256": "8c126ad8dea7f1183de2da2463c8bb780eb29484c2f1dcc289bce0e59f9e4b67"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-stress-1-summary.json",
+    "bytes": 1158,
+    "sha256": "6b068a9b920206303af0441adb103f42b894653e1a26d9c4b2f507b66f7b0373"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-stress-2-summary.json",
+    "bytes": 1158,
+    "sha256": "fa6a6c26565cec3486eca69f41c476fce9d7087e3762232e3778f6d43d52436e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-stress-3-summary.json",
+    "bytes": 1158,
+    "sha256": "a52f3865405e4157b5821e147e59058a0be8505e67b6ed158bae56a9ac67ea65"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-stress-4-summary.json",
+    "bytes": 1158,
+    "sha256": "b19e95af09a64ed044e6a60820fafbb095677ceb33081f7695998c0fba24391b"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/nav-stress-5-summary.json",
+    "bytes": 1158,
+    "sha256": "119c2cd08555eb5ad818a822a5917eee08c30b7caa3bb543637dc9a74394eefd"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/race-selectors.json",
+    "bytes": 4156,
+    "sha256": "2a232f69fd4022fdcb33f8431dae8968101fdca947ef3bc6ddd508d1d42fd9bc"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/run-confirmed-stress.py",
+    "bytes": 738,
+    "sha256": "12ce7e38a1c251673f5936c11e2fe36cfc18f56bd881e587dd478245ad82edc2"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/run-final-stress.py",
+    "bytes": 730,
+    "sha256": "b0b49f5ee6bd30a02870679b42473a1fbf2fe6f913e3abcade9625d88b98c9fb"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/run-stress.py",
+    "bytes": 708,
+    "sha256": "ac2c13428e7a331c2d6915ff35fe0b91d01fd28eeb03b59b232ea9918ececbcf"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/source-inputs.json",
+    "bytes": 1148,
+    "sha256": "f900a0fd855eb71c253515078c7b2da92dc9f7b9318ed073b4802595047c74f9"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/source.patch",
+    "bytes": 115285,
+    "sha256": "e44cedf4d51a3cba9e4021ae7c6714f8d5b25c3eb10704333b7e5843722422e2"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/stress-runs.json",
+    "bytes": 482,
+    "sha256": "489b001283b28ff15f0dc63d2adbfb3b1ca871d1af0c8fc396cc14496a0f31ae"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/ui-execution.json",
+    "bytes": 145,
+    "sha256": "0b6c2f6f413610d1e79db1e8bb3ffcb3b43523a8004c3e664f1a5e237a217288"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/ui-selectors.json",
+    "bytes": 2034,
+    "sha256": "01bc5e26780489aed12408af67f372be251730353f88402bb85f3da120e9880f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/validate-final.py",
+    "bytes": 1365,
+    "sha256": "26620175cd6b83995c59e0df35b082e9b3994f6cfc3854fe296b868ff929ee17"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/vendor-parent-preserved.patch",
+    "bytes": 233,
+    "sha256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/vendor-preserved.patch",
+    "bytes": 4276,
+    "sha256": "edb046d0948b71b7ec74d9a3102b5d2449a0c6040990823b692be8fb6137f11a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/vendor-verification.json",
+    "bytes": 444,
+    "sha256": "2885aa8b54e7ef65a915652d139f27b7b4f17cf6a58591cc3289787a81bbb5c9"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-checkpoints-1.log",
+    "bytes": 6577,
+    "sha256": "1c0f903e124ae148609522e4b8dc24ddd61d3becdf4db835ecd7d6d03e7c75bf"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-focused.log",
+    "bytes": 164499,
+    "sha256": "964840663b0a28a66c58371ec8d6046bffadd5a28beea4ccd37d0682bb277b19"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-1.log",
+    "bytes": 25595,
+    "sha256": "9216b38c324f4dcbf9770436a0c9175d128a8d205e230c1b72dcb48a52195202"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-2.log",
+    "bytes": 25595,
+    "sha256": "fe00f8d89274d3485b1853096988326f582f90184af7dfe79085a96a2319c6cf"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-3.log",
+    "bytes": 25596,
+    "sha256": "55838ac09ae4b993e98b9e087a93961f2ed16203c1bc7a02f0088b1b639075b5"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-4.log",
+    "bytes": 25596,
+    "sha256": "1ad90e1f34cdf8b72e12ce355c565c61e95d26f4c1dd5fc00a35f385a78e9131"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-5.log",
+    "bytes": 25754,
+    "sha256": "151e811257b1344bbcec8e731fe9c6e79eec089cf043b00b890d52589e10d063"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-focused.log",
+    "bytes": 164487,
+    "sha256": "c41e37ec9f2c2dfcac5c378ba88622fa8028c17059435d48721b429540752dd2"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-1.log",
+    "bytes": 25583,
+    "sha256": "931ea2806e0d1fdda1f0869e0fdfcd6a06b5ca9bf5cdffa6c8a898d66b2131c6"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-2.log",
+    "bytes": 25742,
+    "sha256": "f62dcb0f3da63599dc675e8f11ae39791c7e226336be24da4556577ce504f831"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-3.log",
+    "bytes": 25584,
+    "sha256": "aa61217a8a75ce56d6113b0f718a2b4d1f0a4e7aeaa4842b31b80f70df781bab"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-4.log",
+    "bytes": 25741,
+    "sha256": "1e7569af559f9712e6b232c5f17314de7682b20362df6079e2f03107ebdf160a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-5.log",
+    "bytes": 25743,
+    "sha256": "005351024004c6bdfbc86c1e73816604cd673af7483970a188ce13950a74f6be"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-focused-1.log",
+    "bytes": 164353,
+    "sha256": "1a706d68323b361029adc0a612ccc77c2a501078cfe84ad19e248b608a82ee69"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-focused-2.log",
+    "bytes": 164510,
+    "sha256": "724ca4ce6a8d87a04fc0087273035cab9bd5a2752cb8cbd1faab1c754f4cb46d"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-focused-3.log",
+    "bytes": 163946,
+    "sha256": "7d15defd28836ab319f1284baf8a014efd4f56ab8ae1c5ef4df6332a30beb50e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-initial-1.log",
+    "bytes": 13638,
+    "sha256": "66ac2a7640f860befa2b1f7e10e1930fbee3a354f2185ba9eb5bf14840a9433e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-initial-4.log",
+    "bytes": 15975,
+    "sha256": "8fa2860b840207640fd982f25ff5da7ecca69590cc5326c44cdfd5a404c00ab2"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-initial-5.log",
+    "bytes": 15417,
+    "sha256": "0ac109491505f952b21ee640e54fce07579bdfebe61ec095d2f07a2a48b7bf68"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-1.log",
+    "bytes": 25035,
+    "sha256": "1840e885631b91e4e1006e59bea1fc0da2affe3e260562df9c46c85d19d33f10"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-2.log",
+    "bytes": 25193,
+    "sha256": "b65b35ad0e614b2ff1ffd72c89272d6535a23230743c3335c40b6baae2cc1bbc"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-3.log",
+    "bytes": 25035,
+    "sha256": "d83b4c955e811628625d7233ed7b826ae1ad07756fcd54b3e70d2909d6768283"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-4.log",
+    "bytes": 25036,
+    "sha256": "897f890cf1b06037790c27d739e2182ad5f8bfcd85537c36e267805f68a0de6e"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-5.log",
+    "bytes": 25036,
+    "sha256": "851ca937b853e31953963b5a226465e6a7dbc555fd97bb666497068282e64bb5"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-checkpoints-1.xcresult",
+    "kind": "xcresult",
+    "files": 48,
+    "bytes": 819318,
+    "treeSHA256": "96c515674b2602645849176c0fcd647f1dd47ff7b96e6185f0aed731556aeff4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-focused.xcresult",
+    "kind": "xcresult",
+    "files": 878,
+    "bytes": 1606354,
+    "treeSHA256": "bd3c851c8d858e76eefed1d1ff1b1b73d3783bd9878a5e77cf6d9f696d3503c3"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-1.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 938875,
+    "treeSHA256": "60abb9ae5df722bfe6a2d4338221bc5b26e5fcc324673fd7d18d93e10743e2af"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-2.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 932859,
+    "treeSHA256": "1eb8c5041364096222059c74d05089cb9779e62a33634b6e25c428bc8ea2fe03"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-3.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 940099,
+    "treeSHA256": "72083abb3bcdafffd56c580f98633155a08a303ea0e4c2e548a5c10c998b6238"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-4.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 933154,
+    "treeSHA256": "2f6cd285aa43ae023cde3fb6343811d9946a57c3c93fbc52fe0beec15aa72f0f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-confirmed-stress-5.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 941522,
+    "treeSHA256": "5d5fdbb34834a34f4b2fd6ac2fa22b01422b37c7bc70ffc6f0bef97289e02acc"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-focused.xcresult",
+    "kind": "xcresult",
+    "files": 878,
+    "bytes": 1609224,
+    "treeSHA256": "883a480c440783f1016bc134e9eb0fd898db7df1ef188be5d1a9e19127699fc9"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-1.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 933804,
+    "treeSHA256": "b0d0352fc98d23af0b146500ceb4a60ada837d3e0d78987ad7daa8f5bcdc71aa"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-2.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 939768,
+    "treeSHA256": "415d3c82039cb137b0d42e0921f063d8ca2255de125fd723befc3c2a73ee24ad"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-3.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 932701,
+    "treeSHA256": "06cd7d8a15cc2e90bedc55694277100e0c89b28c3e3d3137e39163ae9d33a2ce"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-4.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 928444,
+    "treeSHA256": "1e56e018f30d8dac6cf66aba7fe9f3af493b4f9da85d6a40dcfb7d21c2a83b57"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-final-stress-5.xcresult",
+    "kind": "xcresult",
+    "files": 130,
+    "bytes": 939562,
+    "treeSHA256": "c2a2a54ef97ec3353b92dabbe08f01b7c25fe72bc24f945802e2e6b279d1c6b0"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-focused-1.xcresult",
+    "kind": "xcresult",
+    "files": 2622,
+    "bytes": 72633421,
+    "treeSHA256": "9df1d65f86035d1804f4b136422f49e751859fc90d0d3b919d11231f1b2824e4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-focused-2.xcresult",
+    "kind": "xcresult",
+    "files": 2620,
+    "bytes": 72315175,
+    "treeSHA256": "45ed5811312d5e346fda55ac08b4827ba73a67bc59f55071b314c3ed5246fd0c"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-focused-3.xcresult",
+    "kind": "xcresult",
+    "files": 876,
+    "bytes": 1614443,
+    "treeSHA256": "f8c30254292fc03ce2a331c446b1ac01b3cf00b15e394623d976faba1dbf3ffc"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-initial-1.xcresult",
+    "kind": "xcresult",
+    "files": 78,
+    "bytes": 881271,
+    "treeSHA256": "e4986ad893bdf685afc477a204097a12fb22f74f8ef576d69b8bc2335fc8f137"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-initial-4.xcresult",
+    "kind": "xcresult",
+    "files": 1820,
+    "bytes": 70657151,
+    "treeSHA256": "fb2f684fd23938704965ffa15741c6b51c4e3c02b198f6b3fd8f642ffecfedd6"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-initial-5.xcresult",
+    "kind": "xcresult",
+    "files": 86,
+    "bytes": 888696,
+    "treeSHA256": "4c6ab0b16dfab50d64f8de09617c34ce1a60b55d00ac685369fb8eb6138b07a7"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-1.xcresult",
+    "kind": "xcresult",
+    "files": 128,
+    "bytes": 937026,
+    "treeSHA256": "b37dbf54639901701004b7f3e7ffda3ef9904776cb5b89082c4a0842df43495a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-2.xcresult",
+    "kind": "xcresult",
+    "files": 128,
+    "bytes": 932092,
+    "treeSHA256": "25e6f61ee887ce54ae7a6d53b82f5a9f966038cbfb43927b9db55d132b1724e4"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-3.xcresult",
+    "kind": "xcresult",
+    "files": 128,
+    "bytes": 931687,
+    "treeSHA256": "817b3db815340099618422653a2f0f0895193b17325ce1e4b34253c8c79fbfec"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-4.xcresult",
+    "kind": "xcresult",
+    "files": 128,
+    "bytes": 937958,
+    "treeSHA256": "0ead6e5f62192724dcb1c44cbd28e4808d8d5be55fb77a2337e64c92acbd43d3"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/nav-stress-5.xcresult",
+    "kind": "xcresult",
+    "files": 128,
+    "bytes": 931150,
+    "treeSHA256": "373fbca977249f6327249b08b55c44b03f7fe00add39f27bbc4fe54ad7175b6f"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/navigation-checkpoint-ownership-followup/artifact-file-inventory.json",
+    "kind": "complete-file-inventory",
+    "bytes": 3633863,
+    "sha256": "d4b8b4625f5ed25608f6438357de1d5cd721c87dc211862b8a75e623b0534b75"
+  }
+]
