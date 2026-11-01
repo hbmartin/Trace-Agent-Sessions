@@ -1,0 +1,105 @@
+{
+  "base": "5b3668ac35f93cc159f23bede659016ffefbbf79",
+  "implementationCandidate": "e795963b970b80d0ed38dbf11dcbcd9df1e87813",
+  "finalSourceHashesVerified": true,
+  "focused": {
+    "run": "durability-final-focused",
+    "passedTests": 430,
+    "failedTests": 0
+  },
+  "raceRuns": [
+    {
+      "run": "durability-final-stress-1",
+      "exitCode": 0,
+      "elapsedSeconds": 12.57046079216525,
+      "passedTests": 56,
+      "failedTests": 0
+    },
+    {
+      "run": "durability-final-stress-2",
+      "exitCode": 0,
+      "elapsedSeconds": 11.441680375020951,
+      "passedTests": 56,
+      "failedTests": 0
+    },
+    {
+      "run": "durability-final-stress-3",
+      "exitCode": 0,
+      "elapsedSeconds": 11.140985667007044,
+      "passedTests": 56,
+      "failedTests": 0
+    },
+    {
+      "run": "durability-final-stress-4",
+      "exitCode": 0,
+      "elapsedSeconds": 11.167476582806557,
+      "passedTests": 56,
+      "failedTests": 0
+    },
+    {
+      "run": "durability-final-stress-5",
+      "exitCode": 0,
+      "elapsedSeconds": 11.34144854103215,
+      "passedTests": 56,
+      "failedTests": 0
+    }
+  ],
+  "repositoryChecks": [
+    {
+      "step": "debug-app",
+      "exitCode": 0,
+      "elapsedSeconds": 6.255256291944534
+    },
+    {
+      "step": "release-app",
+      "exitCode": 0,
+      "elapsedSeconds": 101.42378508392721
+    },
+    {
+      "step": "external-client",
+      "exitCode": 0,
+      "elapsedSeconds": 25.941053417045623
+    },
+    {
+      "step": "project-drift",
+      "exitCode": 0,
+      "elapsedSeconds": 0.2350615831092
+    },
+    {
+      "step": "signing",
+      "exitCode": 0,
+      "elapsedSeconds": 5.443127624923363
+    },
+    {
+      "step": "network",
+      "exitCode": 0,
+      "elapsedSeconds": 0.07718379213474691
+    },
+    {
+      "step": "script-tests",
+      "exitCode": 0,
+      "elapsedSeconds": 97.66377283306792
+    },
+    {
+      "step": "whitespace",
+      "exitCode": 0,
+      "elapsedSeconds": 0.037944542011246085
+    }
+  ],
+  "scriptTests": 53,
+  "ui": {
+    "status": "pending",
+    "compiled": true,
+    "selectedCases": 24,
+    "reason": "Awaiting desktop-idle confirmation; not executed before PR publication."
+  },
+  "optimizedWorkload": {
+    "status": "pending",
+    "harness": "Scripts/benchmark-checkpoint-enqueue.swift",
+    "compiled": true,
+    "reason": "Awaiting quiet-host execution; no measurements collected."
+  },
+  "completeSuites": "omitted as selected",
+  "releaseComparisonPairs": "omitted as selected",
+  "localPerformanceAcceptanceEvaluated": false
+}

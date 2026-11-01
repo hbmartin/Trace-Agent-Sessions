@@ -4541,6 +4541,61 @@ final class TraceUITests: XCTestCase {
             previous = target
         }
         attach(app, name: "selected-reader-survives-renames")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.windows[name].waitForExistence(timeout: 20))
+        let restored = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: restored).waitForExistence(timeout: 10))
+        attach(app, name: "moved-reader-restores-after-relaunch")
+    }
+
+    func testLatestScrollWhileAutomaticResetPreparesSurvivesCommit() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let name = "Latest bookmark reader"
+        try addLongSession(name, project: "LatestBookmarkProject", directory: directory)
+        let deferred = directory.appendingPathComponent("bookmark-deferred")
+        let preparation = directory.appendingPathComponent("bookmark-preparation")
+        let release = directory.appendingPathComponent("bookmark-release")
+        let committed = directory.appendingPathComponent("bookmark-committed")
+        let bookmark = directory.appendingPathComponent("bookmark-position")
+        let idle = directory.appendingPathComponent("bookmark-idle")
+        try Data().write(to: release)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "2"
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_HOLD_MS"] = "30000"
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_STARTED_PATH"] = preparation.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_PREPARATION_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmark.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idle.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["LatestBookmarkProject"].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 1 ? true : nil })
+        app.staticTexts["LatestBookmarkProject"].firstMatch.click()
+        openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -500)
+        XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
+        let old = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
+        let before = fileLines(in: preparation).count
+        try FileManager.default.removeItem(at: release)
+        try addLongSession("Latest bookmark trigger", project: "BookmarkTrigger", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 15) { self.fileLines(in: preparation).count > before ? true : nil })
+        scroll.scroll(byDeltaX: 0, deltaY: -1000)
+        XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 2, timeout: 10))
+        let latest = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
+        XCTAssertNotEqual(latest, old)
+        let y = try XCTUnwrap(savedAnchorY(index: latest, in: scroll, timeout: 10))
+        try Data().write(to: release)
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
+        assertSavedAnchorOnScreen(index: latest, in: scroll, expectedY: y, stage: "latest user bookmark after capture")
+        attach(app, name: "latest-scroll-preserved-through-reset")
     }
 
     func testSearchTargetMessageSurvivesAutomaticReset() throws {

@@ -11,6 +11,119 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testLatestBookmarkAnchorOrExplicitClearWinsOverResetCapture() async throws {
+        for clear in [false, true] {
+            let f = try await deferredResetFixture()
+            let file = f.root.appendingPathComponent("sessions.jsonl")
+            let data = try JSONSerialization.data(withJSONObject: ["type": "user", "uuid": "second-anchor", "sessionId": "s-0",
+                "cwd": "/tmp/NavigationReview", "timestamp": 1_700_000_010_000,
+                "message": ["content": "SecondBookmarkAnchor"]]) + Data([10])
+            let handle = try FileHandle(forWritingTo: file); try handle.seekToEnd(); try handle.write(contentsOf: data); try handle.close()
+            await f.model.coordinatorForTesting?.refresh(paths: [file.path], scope: .proseOnly)
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            f.model.selectProject(f.project.id); try await wait { !f.model.isLoadingSessions }
+            let all = try await f.database.sessions(), a = try XCTUnwrap(all.first { $0.messageCount == 2 })
+            let b = try XCTUnwrap(f.model.sessions.first { $0.id != a.id })
+            f.model.openSession(a); try await wait { f.model.messages.count == 2 }
+            let first = try XCTUnwrap(f.model.messages.first), second = try XCTUnwrap(f.model.messages.last)
+            f.model.updateTranscriptBookmark(sessionID: a.id, bookmark: .init(messageID: first.id, offset: 11, index: 0))
+            f.model.openSession(b); try await wait { f.model.selectedSession?.id == b.id && !f.model.messages.isEmpty }
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            await f.model.coordinatorForTesting?.gatePreparationForTesting(held)
+            var changes = SourceChanges(); changes.paths = [file.path]
+            XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+            try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
+            f.model.openSession(a); try await wait { f.model.selectedSessionID == a.id && f.model.messages.count == 2 }
+            f.model.updateTranscriptBookmark(sessionID: a.id, bookmark: clear ? nil : .init(messageID: second.id, offset: 77, index: 1))
+            f.model.openSession(b); try await wait { f.model.selectedSession?.id == b.id && !f.model.messages.isEmpty }
+            await gate.open()
+            try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+            await f.model.schedulerForTesting?.waitUntilIdle()
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            let after = try await f.database.sessions(), restored = try XCTUnwrap(after.first { $0.navigationReference?.unanchored == a.navigationReference?.unanchored })
+            if clear { XCTAssertNil(f.model.scrollPositions[restored.id]) }
+            else {
+                try await wait { f.model.scrollPositions[restored.id]?.offset == 77 }
+                let rows = try await f.database.messages(sessionID: restored.id)
+                XCTAssertEqual(f.model.scrollPositions[restored.id]?.messageID, rows.last?.id)
+            }
+            await f.model.refreshSummariesForTesting(lightweight: false)
+            if clear { XCTAssertNil(f.model.scrollPositions[restored.id], "a later summary cannot revive a cleared captured bookmark") }
+        }
+    }
+
+    func testClosedSelectionCannotPersistItsReferenceDuringAutomaticCapture() async throws {
+        let f = try await deferredResetFixture(), session = try XCTUnwrap(f.model.sessions.first)
+        f.model.openSession(session); try await wait { !f.model.messages.isEmpty }
+        f.model.returnFromSession()
+        XCTAssertNil(f.model.selectedSessionID)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        await f.model.coordinatorForTesting?.gatePreparationForTesting(held)
+        var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
+        XCTAssertNil(f.model.settings.pendingNavigationReference)
+        XCTAssertNil(f.model.settings.preparedNavigationRecovery?.reference)
+        await gate.open()
+        try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+        XCTAssertNil(f.model.selectedSessionID)
+        XCTAssertNil(f.model.settings.pendingNavigationReference)
+    }
+
+    func testInitialEnvelopeRetainsRecoveryWhenItsSchedulerIsReplaced() async throws {
+        let f = try await fixture(count: 2), source = ClaudeCodeSource(roots: [f.root])
+        XCTAssertTrue(f.model.bufferedWorkHasCurrentDatabaseForTesting)
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        let path = f.root.appendingPathComponent("initial-recovery.jsonl").path
+        f.model.queueStartupRecoveryForTesting(.init(filePaths: [path], reconciliationPaths: [f.root.path]))
+        f.model.startupSettlementGateForTesting = held
+        f.model.startReadyStartupForTesting(sources: [source])
+        let old = try XCTUnwrap(f.model.startupHandoffIDForTesting)
+        try await wait { f.model.startupSettlementWaitingForTesting.contains(old) }
+        await f.model.attachForTesting(database: f.database, sources: [source])
+        await gate.open()
+        try await wait { f.model.completedStartupHandoffsForTesting.contains(old) }
+        XCTAssertTrue(f.model.bufferedStartupInputsForTesting.paths.contains(path))
+        try await prepareStartup(f.model, sources: [source])
+        let scope = f.model.startupReceiptScopeForTesting()
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        let submitted = try f.model.startupSubmissionsForTesting(in: scope)
+        XCTAssertEqual(submitted.count, 1)
+        XCTAssertTrue(try XCTUnwrap(submitted.first).paths.contains(path))
+    }
+
+    func testWatcherOnlySupersessionDoesNotReplayAcceptedStartupPayload() async throws {
+        let f = try await fixture(count: 2), source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        let oldScheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        let path = f.root.appendingPathComponent("already-delivered-recovery.jsonl").path
+        f.model.queueStartupRecoveryForTesting(.init(filePaths: [path], reconciliationPaths: []))
+        f.model.startupSettlementGateForTesting = held
+        f.model.startReadyStartupForTesting(sources: [source])
+        let old = try XCTUnwrap(f.model.startupHandoffIDForTesting)
+        try await wait { f.model.startupSettlementWaitingForTesting.contains(old) }
+        let ready = await f.model.startWatchingForTesting([source], force: true)
+        XCTAssertTrue(ready)
+        XCTAssertTrue(f.model.schedulerForTesting === oldScheduler)
+        f.model.startReadyStartupForTesting(sources: [source])
+        await gate.open()
+        try await wait { !f.model.watcherStartupPendingForTesting && f.model.completedStartupHandoffsForTesting.contains(old) }
+        let submitted = try f.model.startupSubmissionsForTesting(in: f.model.startupReceiptScopeForTesting())
+        XCTAssertEqual(submitted.count, 2)
+        XCTAssertTrue(submitted[0].paths.contains(path))
+        XCTAssertFalse(submitted[1].paths.contains(path), "watcher settlement cannot replay work the same scheduler accepted")
+        XCTAssertTrue(submitted[1].reconciliationPaths.contains(f.root.path), "replacement watcher's new coverage is retained")
+    }
+
     private final class WeakModelReference { weak var value: TraceModel? }
     private final class WeakSchedulerReference { weak var value: IndexScheduler? }
 

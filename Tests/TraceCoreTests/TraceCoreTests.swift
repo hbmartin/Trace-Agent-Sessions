@@ -951,7 +951,7 @@ extension TraceCoreTests {
         _ = try IndexDatabase(url: url)
         let raw = try DatabaseQueue(path: url.path)
         try await raw.write { db in
-            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
+            try db.execute(sql: "DROP TABLE source_move_alias; ALTER TABLE fsevents_checkpoint DROP COLUMN epoch; DELETE FROM grdb_migrations WHERE identifier='trace-v19-navigation-moves-and-checkpoint-epochs'; DELETE FROM grdb_migrations WHERE identifier='trace-v18-timestamps-and-usage-session-index'")
             try db.execute(sql: "ALTER TABLE source_file DROP COLUMN fallback_ts")
             try db.execute(sql: "ALTER TABLE source_file DROP COLUMN last_valid_ts")
             try db.execute(sql: "DROP INDEX idx_usage_session")
@@ -961,7 +961,7 @@ extension TraceCoreTests {
         let upgraded = try IndexDatabase(url: url)
         XCTAssertTrue(upgraded.contentWasResetOnOpen)
         try await raw.read { db in
-            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"), "18")
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='schema_version'"), String(IndexDatabase.schemaVersion))
             let plan = try Row.fetchAll(db, sql: "EXPLAIN QUERY PLAN DELETE FROM session WHERE id=1").map { $0["detail"] as String }
             XCTAssertTrue(plan.contains { $0.contains("idx_usage_session") })
             XCTAssertFalse(plan.contains { $0.contains("SCAN usage_observation") })

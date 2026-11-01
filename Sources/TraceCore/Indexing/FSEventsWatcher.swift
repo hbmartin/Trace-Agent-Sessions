@@ -20,6 +20,7 @@ public struct SourceChanges: Sendable {
     /// Canonical roots covered by each event stream watermark. This lets the
     /// scheduler hold back only streams whose indexed paths failed.
     public var streamRoots: [String: Set<String>] = [:]
+    public var checkpointReservations: [IndexCheckpointReservation] = []
     public var historyDone = false
     public var requiresReconciliation: Bool { !reconciliationPaths.isEmpty }
     public var hasIndexWork: Bool { !paths.isEmpty || requiresReconciliation }
@@ -30,7 +31,8 @@ public struct SourceChanges: Sendable {
         path: String, flags: FSEventStreamEventFlags, eventID: FSEventStreamEventId = 0,
         streamIdentifier: String = "host", streamRoots: [String] = []
     ) {
-        watermarks[streamIdentifier] = max(watermarks[streamIdentifier] ?? 0, eventID)
+        let wrappedID = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
+        watermarks[streamIdentifier] = wrappedID ? eventID : max(watermarks[streamIdentifier] ?? 0, eventID)
         self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
         if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
         let structuralFlags = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
@@ -60,6 +62,7 @@ public struct SourceChanges: Sendable {
     }
 
     public mutating func merge(_ other: SourceChanges) {
+        checkpointReservations = IndexCheckpointReservation.coalesced(checkpointReservations + other.checkpointReservations)
         paths.formUnion(other.paths)
         lexicalPaths.formUnion(other.lexicalPaths)
         structuralPaths.formUnion(other.structuralPaths)
@@ -67,7 +70,8 @@ public struct SourceChanges: Sendable {
         recoveryReasons.formUnion(other.recoveryReasons)
         historyDone = historyDone || other.historyDone
         for (identifier, eventID) in other.watermarks {
-            watermarks[identifier] = max(watermarks[identifier] ?? 0, eventID)
+            watermarks[identifier] = other.recoveryReasons.contains(.eventIDsWrapped)
+                ? eventID : max(watermarks[identifier] ?? 0, eventID)
         }
         for (identifier, roots) in other.streamRoots {
             streamRoots[identifier, default: []].formUnion(roots)

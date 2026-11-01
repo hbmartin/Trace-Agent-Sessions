@@ -1507,7 +1507,7 @@ struct TranscriptRenderer: NSViewRepresentable {
                   let bookmark = (followsBottom ? nil : establishedBookmark) ?? currentBookmark(), let model else { return }
             establishedBookmark = bookmark
             let persisted = deferredContentRestore?.bookmark ?? bookmark
-            model.scrollPositions[sessionID] = persisted
+            model.updateTranscriptBookmark(sessionID: sessionID, bookmark: persisted)
             TraceTestHooks.appendLine("\(persisted.index),\(persisted.offset)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_PERSISTED_BOOKMARK_PATH")
             if TraceTestHooks.isUITesting,
@@ -1530,7 +1530,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         private func savePositionWhileScrolling() {
             guard !applyingProgrammaticScroll, pendingRestore == nil,
                   let bookmark = currentBookmark(), let model else { return }
-            model.scrollPositions[sessionID] = bookmark
+            model.updateTranscriptBookmark(sessionID: sessionID, bookmark: bookmark)
             if TraceTestHooks.isUITesting,
                let path = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] {
                 try? Data("\(bookmark.index)".utf8).write(to: URL(fileURLWithPath: path))
@@ -1622,9 +1622,9 @@ struct TranscriptRenderer: NSViewRepresentable {
             if TraceTestHooks.isUITesting,
                let raw = TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"],
                let index = Int(raw), model.messages.indices.contains(index) {
-                model.scrollPositions[sessionID] = .init(messageID: model.messages[index].id,
+                model.updateTranscriptBookmark(sessionID: sessionID, bookmark: .init(messageID: model.messages[index].id,
                     offset: Double(TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] ?? "0") ?? 0,
-                    index: index)
+                    index: index))
             }
             requestRestore(
                 model.scrollPositions[sessionID]

@@ -1,0 +1,18 @@
+{
+  "base": "5b3668ac35f93cc159f23bede659016ffefbbf79",
+  "commit": "e795963b970b80d0ed38dbf11dcbcd9df1e87813",
+  "sourceHashes": {
+    "Scripts/benchmark-checkpoint-enqueue.swift": "1c4d0a0af76bd9ced3528cd7c0707b4074c2a78baec9fbd59ed4990eaf5b3f7f",
+    "Sources/TraceApp/MainView.swift": "3853bdf70a247229deed0a56961648e1a0352a6e6cca2389bb2139c6b2aea987",
+    "Sources/TraceApp/TraceModel.swift": "5b2a48609ccc39c41fa1464df085290de09c28a953d5c2bb3d3238dcd190d788",
+    "Sources/TraceCore/Database/IndexDatabase.swift": "d41051f3cf964115c9633d94c34a253985cd53dd4c7725a6d78714ed56187de4",
+    "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "c711a309082a06b849911bef0aa26c9569fd9327b896c042621e98db3eccc5b5",
+    "Sources/TraceCore/Indexing/IndexScheduler.swift": "9dbfa7a1aef2aac535ec39ee25d71d0b2186bc1d291a7740e40b1440dc082c49",
+    "Sources/TraceCore/Models.swift": "5904f0237aa376c80085e5a98e706248814657e408aaaec81103cdf24238870d",
+    "Tests/ExternalClientFixture/DiscoveryClient.swift": "fd21976e7116471739e1ba1a54a41378e56cb7b24a93e28adb7ebe5e828f8874",
+    "Tests/TraceAppTests/AppReviewFollowupTests.swift": "d9a26556ffeba0a31280793a68af46da0729bd5ab66801b9df91d2bdf9d9dc15",
+    "Tests/TraceCoreTests/IndexingRegressionTests.swift": "c38b7278d0848c6ca2bbe69b12afc11e29e0421967540f1f938c19df4d0d28e1",
+    "Tests/TraceCoreTests/TraceCoreTests.swift": "eb181e68f09b762660f41fe59cc904e0a20177db0941ad137a53e2b5f7615435",
+    "Tests/TraceUITests/TraceUITests.swift": "0de26a2fb871952815922cf77f7f11a4d7474be6e632d3bcee64e618270edb7b"
+  }
+}

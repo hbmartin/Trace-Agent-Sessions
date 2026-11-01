@@ -1,0 +1,353 @@
+{
+  "algorithm": "SHA-256; tree digest of ordered relative path, byte count, and file hash separated by NUL/newline",
+  "artifacts": [
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "app-tests.swift",
+      "bytes": 8176,
+      "sha256": "d7abca860598dbbe967458388ec781dfca2c07234a8c2ec778f310e8c943ea68"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "benchmark-baseline-provenance.json",
+      "bytes": 368,
+      "sha256": "392acffcd0a8fde9153c91426af9e0cf6f97700e0305a737ab7e3519e63d191d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup/benchmark-baseline-runtime",
+      "files": 47,
+      "bytes": 28063605,
+      "treeSha256": "04518b8253aed3294ef2b63f5f852c7b38d68045a200bbdfb63ba923d3f0c8bc"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "benchmark-candidate-provenance.json",
+      "bytes": 238,
+      "sha256": "1b3e6be63ab99d9ffa705a3a2f67bf0f36a7ceb4a148fa4f05b277717bbf51f4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup/benchmark-candidate-runtime",
+      "files": 47,
+      "bytes": 28236545,
+      "treeSha256": "37f7020d39ddaf8fe57837dc24bdcdf04e99d8c213a6373ed377c835a08bce67"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "benchmark-compile-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "benchmark-compile-candidate.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "candidate.json",
+      "bytes": 1551,
+      "sha256": "f32703ea8e62667e0f2b0623f7e61f7210855e5d057b8112de462a795e0aa8d1"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "checkpoint-benchmark-baseline",
+      "bytes": 119568,
+      "sha256": "11a7921d9b9b32f6899a7d7d7cdafade1950d42cd9a734e6ef1f998a90fd81fb"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "checkpoint-benchmark-candidate",
+      "bytes": 119568,
+      "sha256": "81b88054955ff95765118cb0e3ab21899520d33612a2d9edfbf3dd065f21d5b5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup/checks",
+      "files": 9,
+      "bytes": 1294322,
+      "treeSha256": "eec3b0b367a936741a074c2bb5d718ebdfab7f1372ff1506d5ceaef67736eed1"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "compile-1.log",
+      "bytes": 320633,
+      "sha256": "2509906d10dc915ffa58cd7a9e5ac7a040b960b167fccf1578c40529650008d2"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "compile-2.log",
+      "bytes": 253614,
+      "sha256": "30147bf0be5645d975ecb8a85fc6ddb105e197e1eddd561eae0166e4cb2281d8"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "compile-3.log",
+      "bytes": 301270,
+      "sha256": "846bf3957d04505227e3ee61350650f3a5cfceeb1b245a7c6ef75f62a788df63"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "compile-4.log",
+      "bytes": 310410,
+      "sha256": "5bccc4583a858a57625f9ca753db3369ea769685e55131c4c50b77f0856c6d01"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "compile-5.log",
+      "bytes": 322228,
+      "sha256": "cbab5ba93cd80587188dc6bc0cabc86c593ef33515873f8efee5fc0a5b0d3b95"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "compile-6.log",
+      "bytes": 328744,
+      "sha256": "207297a5e959f75f602c91095a22650b66f53020a693061ddefdf66237c66a07"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "core-tests.swift",
+      "bytes": 9317,
+      "sha256": "c1a2f4c86ec0ca2a6b1c594ac79601624bcd5df09c582d75ecb045eec342083e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "durability-final-focused-summary.json",
+      "bytes": 1354,
+      "sha256": "c82209e494673ba750d7c17d8ec33fbb02c472e5baa9eaf3300ca42515d96744"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "durability-final-stress-1-summary.json",
+      "bytes": 1350,
+      "sha256": "3819cb2f3e62a3a23ade53406b2ed139d541bcf8ccb326b6922b564376e8607e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "durability-final-stress-2-summary.json",
+      "bytes": 1350,
+      "sha256": "f5be827fd60bca0491133134ee2bf5cbea04edab7a1559e78ef4d4725a74908b"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "durability-final-stress-3-summary.json",
+      "bytes": 1348,
+      "sha256": "42e1d0607bbc2ecbf3e7f6d96de329dbfa42fd9068766271fa7afa76644b4675"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "durability-final-stress-4-summary.json",
+      "bytes": 1350,
+      "sha256": "b82f60a07233275bcf99e000d955e73a580d2a3b0ac839f2e1d7b8f35aac33b9"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "durability-final-stress-5-summary.json",
+      "bytes": 1350,
+      "sha256": "dd3ecb755a3105fac94b1a147cbc11654c30b80c30e5d4430a1ac6b82a3b8772"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "durability-focused-2-summary.json",
+      "bytes": 1354,
+      "sha256": "3e5136073c36e41ad9e1f861f1b0dfc434555388fc52d92bbebd838153080839"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "edit-app.py",
+      "bytes": 11300,
+      "sha256": "26f7d7a9e63b306b0a3b231f28cfef920587b8f1fab4059d62d5862968616c0f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "edit-bookmarks.py",
+      "bytes": 12916,
+      "sha256": "6e4450a031860d72f788e41ad71b6353ddbfdb8b2eb94bbaebc5290b5caf0064"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "edit-database.py",
+      "bytes": 8722,
+      "sha256": "5200a7fe6204f4aaf38f042d9a8be2de2cb0f4813290822226fc9151e4b63fb9"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "edit-scheduler.py",
+      "bytes": 6952,
+      "sha256": "b6c3db76deaba110e4d33a294ade377eb3dc3540b0abd792177a99e7eb5510d2"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "finalize-interfaces.py",
+      "bytes": 5360,
+      "sha256": "7b19f26ee51ea941172448bb52c4d35a433e79ec6303b35843482cf5909ae1ec"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "focused-selectors.json",
+      "bytes": 24863,
+      "sha256": "0275404c22d19eb77e71c45293454b0383be80cf59b98eb54f8246aae136c730"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "ledger.swift",
+      "bytes": 8440,
+      "sha256": "eb57c6a4dc7615930d7200a4e129998be36ff25487bdfd6816a95a08e0b8ab28"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "race-runs.json",
+      "bytes": 546,
+      "sha256": "429ef172229d18b8725d7f3ad2dcece162d059ad8e046f6b3a0728424d9cb795"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "race-selectors.json",
+      "bytes": 5694,
+      "sha256": "28efb56c8fdbd8506a204537fcd08d5fafb34ea2ed91f31781bdfa8da1878593"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "races-checks.log",
+      "bytes": 629,
+      "sha256": "bf4526b431b24d9c6dbdcf788ade005146651310d8ad04782c8ee496f41ef6de"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "refine-ledger.py",
+      "bytes": 7678,
+      "sha256": "69345422e3fded63cb50790931dcbb13b7266a804778b55250df9f87856e588c"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "refine-provenance.py",
+      "bytes": 7615,
+      "sha256": "f608b3e77374fd59fd4183488ea0f9b2494b2206b327a38dde74c6b4501c858a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "run-workload.py",
+      "bytes": 1347,
+      "sha256": "f0de8502204392b19edbb78abaea91784f00b01244dbc7061f25c933477fe2d0"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "ui-selectors.json",
+      "bytes": 2123,
+      "sha256": "102bb14013a4344b8448c25be7678be9d6755f558a65fcdd5e52fa385d41a759"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "validate-races-checks.py",
+      "bytes": 2363,
+      "sha256": "2f7955e5ade11307843924669343e98f962dc64feed6590d898632cbeb6eec33"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "vendor-parent.patch",
+      "bytes": 233,
+      "sha256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-navigation-durability-followup",
+      "path": "vendor-sqlite.patch",
+      "bytes": 4276,
+      "sha256": "edb046d0948b71b7ec74d9a3102b5d2449a0c6040990823b692be8fb6137f11a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-final-focused.log",
+      "bytes": 169129,
+      "sha256": "9ac6cb482d9d1374570315cd5908eb1559b9dab4cf365088bbcf77f61cec0879"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-final-focused.xcresult",
+      "files": 906,
+      "bytes": 1641743,
+      "treeSha256": "2a84fc89501d8f6f07e26358f2830c67d8d88d41d6973d1f5f1d99d9357a6c64"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-final-stress-1.log",
+      "bytes": 31343,
+      "sha256": "f9344976c8ff369faaaeb5e47df321d654ebec8261388102254a77847fcb6978"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-final-stress-1.xcresult",
+      "files": 158,
+      "bytes": 970978,
+      "treeSha256": "9c5cf7b17489e911b76a02409f602f62d207b48832242d66e996ec0a429edccc"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-final-stress-2.log",
+      "bytes": 31343,
+      "sha256": "11f1b0bd6038f0f6911d6aa3221099991768ccbc2d96380d804614bbeaa2a54e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-final-stress-2.xcresult",
+      "files": 158,
+      "bytes": 961834,
+      "treeSha256": "023b9727eebdd81edc8f0621a7db863832fd2051ac0ebf41924bded5baf97657"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-final-stress-3.log",
+      "bytes": 31343,
+      "sha256": "ce310fa060a2f48178022e56b8b636f8a9d7c6556390a20e5e507230f50bef99"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-final-stress-3.xcresult",
+      "files": 158,
+      "bytes": 962341,
+      "treeSha256": "a7f14ae6b7585a2ea8815d644efc0403fa8a7986fffc8e285eeed7181ee6a8ee"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-final-stress-4.log",
+      "bytes": 31343,
+      "sha256": "71ce9f6efe8298b99c586e6511a95ce509914cdaab6346e27406913c822f61c6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-final-stress-4.xcresult",
+      "files": 158,
+      "bytes": 970764,
+      "treeSha256": "a1f77c134ddcdf9da29bd9c4600b2da330c32744d36c382ebecf2513c99db408"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-final-stress-5.log",
+      "bytes": 31344,
+      "sha256": "bccdaaf3a260182eb1dc8ab97c1ee0f18c003c4b68af78e198f444397755d9c2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-final-stress-5.xcresult",
+      "files": 158,
+      "bytes": 962138,
+      "treeSha256": "52c8e2f466bb83077270b80c59ccedec6185fe1ac3f007fc86eb7d1d3e130028"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-focused-1.log",
+      "bytes": 166778,
+      "sha256": "910a7552be649a958db5f55c3112a48e67950b7c3c0fdc1180f099aaf3776d27"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-focused-1.xcresult",
+      "files": 2553,
+      "bytes": 71394735,
+      "treeSha256": "0547c6939b8c11e2984c79b6da2eeece0a0b7fa088566a95a1a9526127755e34"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build",
+      "path": "durability-focused-2.log",
+      "bytes": 168215,
+      "sha256": "3ce6a211a5b5fbaaa455646fabaf8b755faa07f0e7bbffb13f07a1a337616130"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/durability-focused-2.xcresult",
+      "files": 900,
+      "bytes": 1628656,
+      "treeSha256": "b41790c8dfaa883b3b1d46b1c3a9ceccb1c048b53559fa557753370b3376a49c"
+    }
+  ]
+}
