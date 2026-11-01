@@ -901,6 +901,19 @@ struct TranscriptRenderer: NSViewRepresentable {
         private var visibility = TranscriptVisibility()
         private var density = TranscriptDensity.comfortable
         private var messageRevision = -1
+        #if DEBUG
+        private var renderedContentGeneration: IndexContentGeneration?
+        private struct NativeRestorationReceipt: Encodable {
+            let generation: IndexContentGeneration
+            let sessionID: Int64
+            let invocation: UUID
+            let messageRevision: Int
+            let inputGeneration: UInt64
+            let messageID: Int64
+            let bookmarkIndex: Int
+            let bookmarkOffset: Double
+        }
+        #endif
         private var contentRevision = -1
         private var scrollRequest: UUID?
         private var hydratedIDs: Set<Int64> = []
@@ -1175,6 +1188,9 @@ struct TranscriptRenderer: NSViewRepresentable {
             let performanceInterval = TracePerformance.begin("Transcript Update")
             defer { TracePerformance.end(performanceInterval) }
             let transcript = model.transcriptSnapshot
+            #if DEBUG
+            renderedContentGeneration = transcript.session?.contentGeneration
+            #endif
             self.model = model
             if self.sessionID != sessionID || self.visibility != visibility || self.density != density
                 || self.messageRevision != messageRevision || self.contentRevision != contentRevision {
@@ -1724,6 +1740,24 @@ struct TranscriptRenderer: NSViewRepresentable {
             }
         }
 
+        #if DEBUG
+        private func recordNativeRestoration(_ request: RestoreRequest, bookmark: TranscriptBookmark?) {
+            guard TraceTestHooks.isUITesting,
+                  TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] != nil,
+                  let generation = renderedContentGeneration, let bookmark,
+                  model?.selectedSessionID == sessionID,
+                  model?.selectedSession?.contentGeneration == generation,
+                  model?.transcriptMessageRevision == messageRevision else { return }
+            let receipt = NativeRestorationReceipt(generation: generation, sessionID: sessionID,
+                invocation: request.token, messageRevision: messageRevision,
+                inputGeneration: request.inputGeneration, messageID: bookmark.messageID,
+                bookmarkIndex: bookmark.index, bookmarkOffset: Double(bookmark.offset))
+            guard let data = try? JSONEncoder().encode(receipt) else { return }
+            TraceTestHooks.appendLine(String(decoding: data, as: UTF8.self),
+                pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH")
+        }
+        #endif
+
         private func cancelDeferredContentRestore() {
             hydrationTimeoutWorkItem?.cancel()
             hydrationTimeoutWorkItem = nil
@@ -1971,6 +2005,9 @@ struct TranscriptRenderer: NSViewRepresentable {
                 positionEstablished = true
                 pendingAnchorCorrection = !pendingHeightMessageIDs.isEmpty || extentNeedsRefresh
                 establishedBookmark = .init(messageID: items[row].summary.id, offset: achievedOffset, index: items[row].sourceIndex)
+                #if DEBUG
+                recordNativeRestoration(request, bookmark: establishedBookmark)
+                #endif
                 if contentReady { cancelDeferredContentRestore() }
                 switch request.reason {
                 case .navigation:

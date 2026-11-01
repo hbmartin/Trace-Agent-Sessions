@@ -14,6 +14,10 @@ Implementation candidate: `e795963b970b80d0ed38dbf11dcbcd9df1e87813`. Base: `5b3
 
 [Verification results](verification.json), [focused selection](focused-selectors.json), [repeated cases](race-selectors.json), [compiled UI selection](compiled-ui-selectors.json), and [source hashes](source-hashes.json) identify the validated inputs. Documentation-only commits may follow the implementation candidate without changing its source inputs.
 
+The compiled UI selector list was corrected in the follow-up to use the actual
+`testPendingLaunchRestorationResumesWithoutUserIntent` method. The original unrun
+raw selection remains retained with the original validation artifacts.
+
 ## Changes exercised
 
 A database-owned checkpoint ledger reserves work before asynchronous capture or buffering and survives scheduler replacement. Watermark ordering fences newer completion behind unfinished older inputs; accepted prefixes can advance despite later pending work. Stream epochs qualify wrap recovery and reject obsolete callbacks. Transactional persistence compares the unsigned watermark range and never regresses within an epoch. Coalesced watermark-only tails retain bounded storage; execution leases and revisions prevent older workers from accepting newer input. Scheduler stop retains shared obligations through worker completion and cannot enroll a new retry after stopping.

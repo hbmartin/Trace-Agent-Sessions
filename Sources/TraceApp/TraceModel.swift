@@ -581,6 +581,10 @@ final class TraceModel: ObservableObject {
     private var sourceReloadActivation: WatcherOwner?
     private var scheduler: IndexScheduler?
     private var checkpointLedger = IndexCheckpointLedger()
+    // These streams cannot enroll new checkpoint obligations until a successful
+    // persisted read. Already-reserved work keeps its original ledger ownership.
+    private var unavailableCheckpointStreams: Set<String> = []
+    private var checkpointReadFailures: [String: Set<DatabaseFailureDiagnostic>] = [:]
     private var attachmentGeneration = UUID()
     private var schedulerTeardownTask: Task<Void, Never>?
     private enum AttachmentIntent { case installation, sourceReload }
@@ -813,7 +817,12 @@ final class TraceModel: ObservableObject {
         work.obligations.forEach { $0.delivery?.finish(.ordinaryDelivered) }
     }
     private var automaticNavigation: AutomaticNavigation?
-    private var pendingResetBookmarks: (database: IndexDatabase, references: [SessionNavigationReference: SavedResetBookmark])?
+    private struct PendingResetBookmarks {
+        let id = UUID()
+        let database: IndexDatabase
+        var references: [SessionNavigationReference: SavedResetBookmark]
+    }
+    private var pendingResetBookmarks: PendingResetBookmarks?
     private var automaticNavigationIsCommitted: Bool {
         automaticNavigation.map { $0.reset.isCommitted && $0.database === database
             && $0.sessionID == selectedSessionID && $0.request == sessionRequestID } == true
@@ -1058,10 +1067,14 @@ final class TraceModel: ObservableObject {
     private func reservingCheckpointWork(_ changes: SourceChanges) -> SourceChanges {
         guard !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty else { return changes }
         var enrolled = changes
-        enrolled.checkpointReservations = [checkpointLedger.reserve(watermarks: changes.watermarks,
-            streamRoots: changes.streamRoots, hasIndexWork: changes.hasIndexWork,
-            wrappedStreams: changes.recoveryReasons.contains(.eventIDsWrapped) ? Set(changes.watermarks.keys) : [],
-            paths: changes.paths, reconciliationPaths: changes.reconciliationPaths)]
+        enrolled.watermarks = changes.watermarks.filter { !unavailableCheckpointStreams.contains($0.key) }
+        enrolled.streamRoots = changes.streamRoots.filter { !unavailableCheckpointStreams.contains($0.key) }
+        enrolled.wrappedStreams.subtract(unavailableCheckpointStreams)
+        guard !enrolled.watermarks.isEmpty else { return enrolled }
+        enrolled.checkpointReservations = [checkpointLedger.reserve(watermarks: enrolled.watermarks,
+            streamRoots: enrolled.streamRoots, hasIndexWork: enrolled.hasIndexWork,
+            wrappedStreams: enrolled.wrappedStreams,
+            paths: enrolled.paths, reconciliationPaths: enrolled.reconciliationPaths)]
         return enrolled
     }
 
@@ -1222,7 +1235,7 @@ final class TraceModel: ObservableObject {
         for saved in mergedResetBookmarks([Array(references.values), navigation.savedBookmarks]) {
             references[saved.reference.unanchored] = saved
         }
-        pendingResetBookmarks = (navigation.database, references)
+        pendingResetBookmarks = .init(database: navigation.database, references: references)
         visitedNavigationReferences = [:]
         // Keep only the visible cached bookmark under an old ID. All other
         // bookmarks are owned by stable references until their IDs are resolved.
@@ -1403,10 +1416,33 @@ final class TraceModel: ObservableObject {
     private func restorePendingResetBookmarks(owner: SummaryRefreshOwner) async {
         guard !indexWorkflow.isActive, let pending = pendingResetBookmarks,
               pending.database === owner.database else { return }
+        let workflow = indexWorkflow.generation
+        func isCurrent() -> Bool {
+            summaryRefreshIsCurrent(owner) && pendingResetBookmarks?.id == pending.id
+                && !indexWorkflow.isActive && indexWorkflow.generation == workflow
+        }
+        #if DEBUG
+        var gate = pendingBookmarkResolutionGateForTesting
+        pendingBookmarkResolutionGateForTesting = nil
+        #endif
         do {
-            let entries = mergedResetBookmarks([Array(pending.references.values)])
-            let resolved = try await pending.database.resolveNavigationReferences(Dictionary(entries.map { ($0.reference, $0.bookmark?.index) }, uniquingKeysWith: { _, last in last }))
-            guard summaryRefreshIsCurrent(owner), pendingResetBookmarks?.database === pending.database else { return }
+            var entries: [SavedResetBookmark] = []
+            var resolved: [SessionNavigationReference: (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)] = [:]
+            while true {
+                let revision = bookmarkRevision
+                entries = mergedResetBookmarks([Array(pending.references.values)])
+                resolved = try await pending.database.resolveNavigationReferences(Dictionary(entries.map { ($0.reference, $0.bookmark?.index) }, uniquingKeysWith: { _, last in last }))
+                #if DEBUG
+                if let held = gate {
+                    gate = nil
+                    pendingBookmarkResolutionWaitingForTesting = true
+                    await held.value
+                    pendingBookmarkResolutionWaitingForTesting = false
+                }
+                #endif
+                guard isCurrent() else { return }
+                if revision == bookmarkRevision { break }
+            }
             let authoritative = progress.phase == .complete && progress.unresolvedFailedFiles == 0
                 && progress.unresolvedDiscoveryFailures == 0 && navigationCoverageGeneration == owner.database.contentGeneration
             for entry in entries {
@@ -1424,10 +1460,10 @@ final class TraceModel: ObservableObject {
                 } else if authoritative { pendingResetBookmarks?.references.removeValue(forKey: reference.unanchored) }
             }
         } catch {
-            guard summaryRefreshIsCurrent(owner) else { return }
+            guard isCurrent() else { return }
             recordSummaryReadFailure(error, operation: .restoration)
         }
-        if pendingResetBookmarks?.references.isEmpty == true { pendingResetBookmarks = nil }
+        if isCurrent(), pendingResetBookmarks?.references.isEmpty == true { pendingResetBookmarks = nil }
     }
 
     private func rebuildDeferredCallback(_ claim: RebuildClaim) -> @Sendable () -> Void {
@@ -2338,6 +2374,16 @@ final class TraceModel: ObservableObject {
             delivery: delivery, safety: safety)
         return Task { await delivery.waitForDelivery() }
     }
+    var checkpointReadGateForTesting: Task<Void, Never>?
+    private(set) var checkpointReadWaitingForTesting = false
+    var pendingBookmarkResolutionGateForTesting: Task<Void, Never>?
+    private(set) var pendingBookmarkResolutionWaitingForTesting = false
+    var pendingBookmarkCountForTesting: Int { pendingResetBookmarks?.references.count ?? 0 }
+    var unavailableCheckpointStreamsForTesting: Set<String> { unavailableCheckpointStreams }
+    func checkpointStreamForTesting(root: URL) -> String {
+        watcherGroupingPolicy.groupIdentifier(for: root, volumeIdentifier: Self.volumeIdentifier(for: root))
+    }
+    var checkpointReadFailureForTesting: ((Int32?, Int32?) -> Void)?
     var copyReadGateForTesting: Task<Void, Never>?
     private(set) var copyReadWaitingForTesting = false
     private(set) var copyReadFinishedForTesting = false
@@ -2437,6 +2483,15 @@ final class TraceModel: ObservableObject {
             if outcome.phase != .superseded { outcome.reason = nil }
         }
         return invocation
+    }
+    func restartWatchingForTesting(_ sources: [any SessionSource]) async -> Bool {
+        guard !terminating, let database else { return false }
+        guard settings.onboardingComplete else { return await startWatchingForTesting(sources, force: true) }
+        let outcome = await startReplacementWatchers(sources,
+            owner: .init(database: database, attachment: attachmentGeneration, revision: sourceConfigurationRevision),
+            forceRootReconciliation: true)
+        guard case .started(let receipt) = outcome else { return false }
+        return watcherReadyIsCurrent(receipt)
     }
     func startWatchingForTesting(_ sources: [any SessionSource], force: Bool = false) async -> Bool {
         switch await startWatching(sources, forceRootReconciliation: force) {
@@ -2933,6 +2988,7 @@ final class TraceModel: ObservableObject {
             // A first installation must retain the saved session for startup restoration.
             if rebuildRequest?.database !== database { discardRebuildRequest() }
             checkpointLedger = IndexCheckpointLedger()
+            unavailableCheckpointStreams = []; checkpointReadFailures = [:]
             discardBufferedSourceWork(nextDatabase: database)
             pendingStartupRecovery = .init()
             automaticNavigation = nil
@@ -5758,6 +5814,7 @@ final class TraceModel: ObservableObject {
         automaticNavigation = nil
         preparedResetNavigation = nil
         pendingResetBookmarks = nil
+        unavailableCheckpointStreams = []; checkpointReadFailures = [:]
         discardStartupHandoffs()
         discardRebuildRequest()
         retireRebuildAdmission()
@@ -5991,13 +6048,38 @@ final class TraceModel: ObservableObject {
             )
             grouped[groupingID, default: []].append(root)
         }
-        var configurations: [(id: String, roots: [URL], checkpoint: UInt64?)] = []
+        unavailableCheckpointStreams.formUnion(grouped.keys)
+        var failedCheckpoints: Set<String> = []
+        var configurations: [(id: String, roots: [URL], checkpoint: UInt64?, tracksWatermarks: Bool)] = []
         for (groupingID, groupRoots) in grouped.sorted(by: { $0.key < $1.key }) {
-            let persisted = try? await database.eventCheckpointRecord(volumeID: groupingID)
+            let read: Result<IndexEventCheckpoint?, Error>
+            do { read = .success(try await database.eventCheckpointRecord(volumeID: groupingID)) }
+            catch { read = .failure(error) }
+            #if DEBUG
+            if let gate = checkpointReadGateForTesting {
+                checkpointReadGateForTesting = nil
+                checkpointReadWaitingForTesting = true
+                await gate.value
+                checkpointReadWaitingForTesting = false
+            }
+            #endif
             guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
-            checkpointLedger.seed(stream: groupingID, checkpoint: persisted)
+            let persisted: IndexEventCheckpoint?
+            let tracksWatermarks: Bool
+            switch read {
+            case .success(let checkpoint):
+                checkpointLedger.seed(stream: groupingID, checkpoint: checkpoint)
+                unavailableCheckpointStreams.remove(groupingID)
+                checkpointReadFailures[groupingID] = nil
+                persisted = checkpoint; tracksWatermarks = true
+            case .failure(let error):
+                if error is CancellationError { return .superseded }
+                failedCheckpoints.insert(groupingID)
+                recordCheckpointReadFailure(error, stream: groupingID)
+                persisted = nil; tracksWatermarks = false
+            }
             let persistedCheckpoint = persisted?.value
-            let checkpoint = persistedCheckpoint ?? liveWatcherReplayStarts[groupingID]
+            let checkpoint = tracksWatermarks ? (persistedCheckpoint ?? liveWatcherReplayStarts[groupingID]) : nil
             guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
             if checkpoint == nil {
                 let sourcePaths = groupRoots.map { TraceFileIO.canonicalPath($0.path) }
@@ -6009,7 +6091,7 @@ final class TraceModel: ObservableObject {
                 "\(groupingID),persisted=\(String(describing: persistedCheckpoint)),replay=\(String(describing: checkpoint)),reconcile=\(reconciliationPaths.sorted())",
                 pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"
             )
-            configurations.append((groupingID, groupRoots, checkpoint))
+            configurations.append((groupingID, groupRoots, checkpoint, tracksWatermarks))
         }
 
         guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
@@ -6020,7 +6102,7 @@ final class TraceModel: ObservableObject {
         let replacements = configurations.map { configuration in
             (configuration, FSEventsWatcher(
                 roots: configuration.roots, identifier: configuration.id,
-                sinceWhen: configuration.checkpoint
+                sinceWhen: configuration.checkpoint, tracksWatermarks: configuration.tracksWatermarks
             ) { [weak self] changes in
                 Task { @MainActor [weak self] in
                     guard let self, self.settings.onboardingComplete,
@@ -6081,14 +6163,17 @@ final class TraceModel: ObservableObject {
             startupReconciliationPaths.formUnion(canonicalRoots.map(\.path))
         }
         TraceTestHooks.appendLine("started,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
+        if !failedCheckpoints.isEmpty {
+            sourceMonitoringWarnings.append("Some source checkpoints could not be loaded. Live updates continue; checkpointing will resume after source monitoring restarts.")
+        }
         if !failedRoots.isEmpty {
             let failedCanonical = failedRoots.map { TraceFileIO.canonicalPath($0.path) }
             startupReconciliationPaths.formUnion(canonicalRoots.compactMap { root in
                 failedCanonical.contains(where: { $0.intersects(root) }) ? root.path : nil
             })
-            sourceMonitoringWarnings = ["Some source folders could not be monitored; periodic reconciliation remains active."]
-            updateMonitoringWarnings()
+            sourceMonitoringWarnings.append("Some source folders could not be monitored; periodic reconciliation remains active.")
         }
+        updateMonitoringWarnings()
         guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         guard settings.onboardingComplete else { return deferWatcherStartup(startup) }
         startupActivity = Self.startupActivity(
@@ -6742,6 +6827,15 @@ final class TraceModel: ObservableObject {
            let data = try? JSONEncoder().encode(completion) {
             try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
         }
+        #endif
+    }
+
+    private func recordCheckpointReadFailure(_ error: Error, stream: String) {
+        let failure = DatabaseFailureDiagnostic(error)
+        guard checkpointReadFailures[stream, default: []].insert(failure).inserted else { return }
+        failure.log(to: Self.summaryReadLog, operation: "checkpoint read")
+        #if DEBUG
+        checkpointReadFailureForTesting?(failure.primary, failure.extended)
         #endif
     }
 
