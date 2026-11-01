@@ -515,6 +515,7 @@ final class TraceModel: ObservableObject {
     }
     private var metadataMonitoringWarnings: [String] = []
     private var sourceMonitoringWarnings: [String] = []
+    private var checkpointMonitoringWarnings: [String] = []
     var transcriptMessageRevision: Int { transcriptState.read(\.messageRevision) }
     var transcriptContentRevision: Int { transcriptState.read(\.contentRevision) }
 
@@ -2989,6 +2990,8 @@ final class TraceModel: ObservableObject {
             if rebuildRequest?.database !== database { discardRebuildRequest() }
             checkpointLedger = IndexCheckpointLedger()
             unavailableCheckpointStreams = []; checkpointReadFailures = [:]
+            checkpointMonitoringWarnings = []
+            updateMonitoringWarnings()
             discardBufferedSourceWork(nextDatabase: database)
             pendingStartupRecovery = .init()
             automaticNavigation = nil
@@ -5815,6 +5818,7 @@ final class TraceModel: ObservableObject {
         preparedResetNavigation = nil
         pendingResetBookmarks = nil
         unavailableCheckpointStreams = []; checkpointReadFailures = [:]
+        checkpointMonitoringWarnings = []
         discardStartupHandoffs()
         discardRebuildRequest()
         retireRebuildAdmission()
@@ -6163,9 +6167,8 @@ final class TraceModel: ObservableObject {
             startupReconciliationPaths.formUnion(canonicalRoots.map(\.path))
         }
         TraceTestHooks.appendLine("started,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
-        if !failedCheckpoints.isEmpty {
-            sourceMonitoringWarnings.append("Some source checkpoints could not be loaded. Live updates continue; checkpointing will resume after source monitoring restarts.")
-        }
+        checkpointMonitoringWarnings = failedCheckpoints.isEmpty ? []
+            : ["Some source checkpoints could not be loaded. Live updates continue; checkpointing will resume after source monitoring restarts."]
         if !failedRoots.isEmpty {
             let failedCanonical = failedRoots.map { TraceFileIO.canonicalPath($0.path) }
             startupReconciliationPaths.formUnion(canonicalRoots.compactMap { root in
@@ -6274,7 +6277,7 @@ final class TraceModel: ObservableObject {
         let previousTeardown = watcherTeardownTask
         watchers = []
         metadataWatcher = nil
-        monitoringWarnings = []
+        monitoringWarnings = checkpointMonitoringWarnings
         metadataMonitoringWarnings = []
         sourceMonitoringWarnings = []
         watcherTeardownTask = Task.detached(priority: .utility) {
@@ -6288,7 +6291,7 @@ final class TraceModel: ObservableObject {
     }
 
     private func updateMonitoringWarnings() {
-        let warnings = Array(Set(metadataMonitoringWarnings + sourceMonitoringWarnings)).sorted()
+        let warnings = Array(Set(metadataMonitoringWarnings + sourceMonitoringWarnings + checkpointMonitoringWarnings)).sorted()
         if monitoringWarnings != warnings { monitoringWarnings = warnings }
     }
 

@@ -48,7 +48,14 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.database.failCheckpointReadOnceForTesting(error, stream: stream)
         let stillFailed = await f.model.restartWatchingForTesting([source])
         XCTAssertTrue(stillFailed); XCTAssertEqual(logged.count, 1, "one identical diagnostic per failed stream episode")
-        let ready = await f.model.restartWatchingForTesting([source])
+        let readGate = ReviewReadGate(), heldRead = Task { await readGate.wait() }
+        defer { heldRead.cancel(); Task { await readGate.open() } }
+        f.model.checkpointReadGateForTesting = heldRead
+        let restart = Task { await f.model.restartWatchingForTesting([source]) }
+        try await wait { f.model.checkpointReadWaitingForTesting }
+        XCTAssertFalse(f.model.monitoringWarnings.isEmpty, "restart admission cannot clear an unresolved checkpoint warning")
+        await readGate.open()
+        let ready = await restart.value
         XCTAssertTrue(ready)
         f.model.startReadyStartupForTesting(sources: [source])
         try await wait { !f.model.watcherStartupPendingForTesting }
@@ -377,11 +384,15 @@ final class AppReviewFollowupTests: XCTestCase {
         let found = try await f.database.search(query: "ExactTargetNeedle"), result = try XCTUnwrap(found.results.first)
         f.model.openSearchResult(result); try await wait { f.model.messages.count == 2 }
         XCTAssertNil(f.model.scrollPositions[result.sessionID])
+        let oldGeneration = f.database.contentGeneration
         var changes = SourceChanges(); changes.paths = [file.path]
         XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
-        try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 2 }
+        try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 2
+            && f.database.contentGeneration != oldGeneration
+            && f.model.selectedSession?.contentGeneration == f.database.contentGeneration }
         let current = try await f.database.search(query: "ExactTargetNeedle")
-        XCTAssertEqual(f.model.requestedMessageID, current.results.first?.id)
+        let currentResult = try XCTUnwrap(current.results.first)
+        XCTAssertEqual(f.model.requestedMessageID, currentResult.id)
         XCTAssertNotEqual(f.model.requestedMessageID, f.model.messages.first?.id)
     }
 

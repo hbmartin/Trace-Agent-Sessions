@@ -4621,8 +4621,8 @@ final class TraceUITests: XCTestCase {
         let restoreStarted = directory.appendingPathComponent("bookmark-native-started")
         try Data().write(to: restoreRelease)
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = restored.path
-        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RELEASE_PATH"] = restoreRelease.path
-        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] = restoreStarted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_ALL_RELEASE_PATH"] = restoreRelease.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_ALL_STARTED_PATH"] = restoreStarted.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"] = "30000"
         let bookmark = directory.appendingPathComponent("bookmark-position")
         let idle = directory.appendingPathComponent("bookmark-idle")

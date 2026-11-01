@@ -1706,7 +1706,7 @@ struct TranscriptRenderer: NSViewRepresentable {
                     ? TraceTestHooks.delayMilliseconds(for: "TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS") ?? 0
                     : 0
             }
-            let releaseKey: String?
+            var releaseKey: String?
             switch request.reason {
             case .navigation, .visibility:
                 releaseKey = "TRACE_TEST_TRANSCRIPT_RESTORE_RELEASE_PATH"
@@ -1716,6 +1716,11 @@ struct TranscriptRenderer: NSViewRepresentable {
                 releaseKey = "TRACE_TEST_TRANSCRIPT_INTERACTION_RESTORE_RELEASE_PATH"
             case .passive:
                 releaseKey = nil
+            }
+            if TraceTestHooks.isUITesting,
+               TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_RESTORE_ALL_RELEASE_PATH"] != nil {
+                releaseKey = "TRACE_TEST_TRANSCRIPT_RESTORE_ALL_RELEASE_PATH"
+                TraceTestHooks.touch(pathKey: "TRACE_TEST_TRANSCRIPT_RESTORE_ALL_STARTED_PATH")
             }
             if TraceTestHooks.isUITesting, let releaseKey,
                TraceTestHooks.environment[releaseKey] != nil {
