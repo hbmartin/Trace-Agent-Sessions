@@ -1,0 +1,175 @@
+{
+  "base": "b282be23987b11a9d977653994dd6ec0b463dec8",
+  "implementationCandidate": "f06c853e619a78b3a4cf4d4e3404ed4aefa23407",
+  "finalSourceHashesVerified": true,
+  "focused": {
+    "run": "checkpoint-recovery-v2-focused",
+    "exitCode": 0,
+    "elapsedSeconds": 80.49492679093964,
+    "passedTests": 439,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  "raceRuns": [
+    {
+      "run": "checkpoint-recovery-v2-stress-1",
+      "exitCode": 0,
+      "elapsedSeconds": 15.178802875103429,
+      "passedTests": 65,
+      "failedTests": 0,
+      "skippedTests": 0
+    },
+    {
+      "run": "checkpoint-recovery-v2-stress-2",
+      "exitCode": 0,
+      "elapsedSeconds": 13.932064292021096,
+      "passedTests": 65,
+      "failedTests": 0,
+      "skippedTests": 0
+    },
+    {
+      "run": "checkpoint-recovery-v2-stress-3",
+      "exitCode": 0,
+      "elapsedSeconds": 13.53291808301583,
+      "passedTests": 65,
+      "failedTests": 0,
+      "skippedTests": 0
+    },
+    {
+      "run": "checkpoint-recovery-v2-stress-4",
+      "exitCode": 0,
+      "elapsedSeconds": 13.748252833029255,
+      "passedTests": 65,
+      "failedTests": 0,
+      "skippedTests": 0
+    },
+    {
+      "run": "checkpoint-recovery-v2-stress-5",
+      "exitCode": 0,
+      "elapsedSeconds": 13.859136499930173,
+      "passedTests": 65,
+      "failedTests": 0,
+      "skippedTests": 0
+    }
+  ],
+  "uiRuns": [
+    {
+      "run": "checkpoint-recovery-ui-new-1",
+      "exitCode": 0,
+      "elapsedSeconds": 69.92299820808694,
+      "passedTests": 2,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "acceptedAsQuietValidation": false,
+      "reason": "Competing GitX native builds resumed after the initial empty process check. Both UI cases passed, but this attempt is retained as diagnostic evidence and does not validate the full selected UI scope."
+    }
+  ],
+  "repositoryChecks": [
+    {
+      "step": "debug-app",
+      "exitCode": 0,
+      "elapsedSeconds": 10.708121625008062
+    },
+    {
+      "step": "release-app",
+      "exitCode": 0,
+      "elapsedSeconds": 124.50976554187946
+    },
+    {
+      "step": "external-client",
+      "exitCode": 0,
+      "elapsedSeconds": 35.16398041602224
+    },
+    {
+      "step": "project-drift",
+      "exitCode": 0,
+      "elapsedSeconds": 0.26874262490309775
+    },
+    {
+      "step": "signing",
+      "exitCode": 0,
+      "elapsedSeconds": 7.299834707984701
+    },
+    {
+      "step": "network",
+      "exitCode": 0,
+      "elapsedSeconds": 0.10575304203666747
+    },
+    {
+      "step": "script-tests",
+      "exitCode": 0,
+      "elapsedSeconds": 117.66847395920195
+    },
+    {
+      "step": "whitespace",
+      "exitCode": 0,
+      "elapsedSeconds": 0.10684245801530778
+    },
+    {
+      "step": "test-enumeration",
+      "exitCode": 0,
+      "elapsedSeconds": 8.636615250026807
+    },
+    {
+      "step": "benchmark-cli-compile",
+      "exitCode": 0,
+      "elapsedSeconds": 10.96934329206124
+    }
+  ],
+  "cliCases": [
+    {
+      "argument": "0",
+      "exitCode": 2,
+      "elapsedSeconds": 0.03642004216089845
+    },
+    {
+      "argument": "-1",
+      "exitCode": 2,
+      "elapsedSeconds": 0.02503883303143084
+    },
+    {
+      "argument": "not-a-number",
+      "exitCode": 2,
+      "elapsedSeconds": 0.025014500133693218
+    },
+    {
+      "argument": "99999999999999999999999999999999999999",
+      "exitCode": 2,
+      "elapsedSeconds": 0.035786416148766875
+    },
+    {
+      "argument": "1",
+      "exitCode": 0,
+      "elapsedSeconds": 2.1194300421047956
+    }
+  ],
+  "compiledSelection": {
+    "focused-selectors.json": {
+      "requestedIdentifiers": 255,
+      "matchingTests": 439,
+      "missing": []
+    },
+    "race-selectors.json": {
+      "requestedIdentifiers": 65,
+      "matchingTests": 65,
+      "missing": []
+    },
+    "new-selectors.json": {
+      "requestedIdentifiers": 9,
+      "matchingTests": 9,
+      "missing": []
+    },
+    "ui-selectors.json": {
+      "requestedIdentifiers": 25,
+      "matchingTests": 25,
+      "missing": []
+    }
+  },
+  "omitted": [
+    "quiet selected UI validation (user-directed omission)",
+    "complete suites",
+    "optimized event-burst measurements",
+    "three Release comparison pairs"
+  ],
+  "performanceAcceptanceClaim": false
+}
