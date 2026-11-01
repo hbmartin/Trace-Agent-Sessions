@@ -1,0 +1,59 @@
+[
+  {
+    "run": "compile-1 through compile-6",
+    "result": "passed",
+    "evidence": "compile-1.log through compile-6.log; final compile includes final UI target"
+  },
+  {
+    "run": "durability-focused-1",
+    "result": "failed",
+    "failure": "testV15ImmediateChecksAllowPreexistingOrphan",
+    "resolution": "Use immediate foreign-key checks in the new migration to preserve prior migration tolerance for a preexisting orphan. Final regression remains enabled and passes."
+  },
+  {
+    "run": "durability-focused-2",
+    "result": "passed",
+    "passedTests": 427,
+    "role": "Intermediate candidate before three additional Core regressions"
+  },
+  {
+    "run": "durability-final-focused",
+    "result": "passed",
+    "passedTests": 430
+  },
+  {
+    "run": "durability-final-stress-1",
+    "result": "passed",
+    "passedTests": 56
+  },
+  {
+    "run": "durability-final-stress-2",
+    "result": "passed",
+    "passedTests": 56
+  },
+  {
+    "run": "durability-final-stress-3",
+    "result": "passed",
+    "passedTests": 56
+  },
+  {
+    "run": "durability-final-stress-4",
+    "result": "passed",
+    "passedTests": 56
+  },
+  {
+    "run": "durability-final-stress-5",
+    "result": "passed",
+    "passedTests": 56
+  },
+  {
+    "run": "selected-ui",
+    "result": "not run",
+    "role": "Compiled selection; pending desktop-idle confirmation"
+  },
+  {
+    "run": "optimized-event-burst",
+    "result": "not run",
+    "role": "Both optimized executables compiled; pending quiet-host execution"
+  }
+]
