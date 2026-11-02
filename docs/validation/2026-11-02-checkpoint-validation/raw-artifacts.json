@@ -1,0 +1,293 @@
+{
+  "algorithm": "SHA-256. Select regular files recursively without following directory symlinks; exclude symlinks. Sort relative POSIX paths lexicographically by their tuples of case-sensitive Unicode path components, without Unicode normalization. For each file concatenate UTF-8(relativePath), NUL, ASCII(decimal byte count without leading zeroes), NUL, ASCII(lowercase hexadecimal SHA-256 of file bytes), LF. Concatenate all records including each trailing LF and hash those bytes with SHA-256; emit lowercase hexadecimal. An empty tree hashes the empty byte string.",
+  "artifacts": [
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "base.json",
+      "bytes": 57,
+      "sha256": "2c360181d302f48266f677760ed8de33e8cf47ae0fb60d629ae5d01c3810dabe"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "candidate.json",
+      "bytes": 1049,
+      "sha256": "914698c93a27c1f0745f0e14f15a75ace550db632f45d8b91cdd87a15c0eb9ca"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-focused-run.json",
+      "bytes": 362,
+      "sha256": "dbfbda0e91c291d4412dfa8b12b7af906f9ef402fe6914062ce9b185031cc97b"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-focused-summary.json",
+      "bytes": 964,
+      "sha256": "3f34b1acc9309dbff5becdce059a9159c66965d68d0c0ea010aa929cc14de9cb"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-focused.log",
+      "bytes": 11256,
+      "sha256": "0bc3c94b276dc831f5f6e671e0644d4b0f0d1f5799c7fa7627fe32acfda754bd"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-negative-run.json",
+      "bytes": 368,
+      "sha256": "28f9e4007dace698e5673645a5c85850bb311ae6993750557268f554c29c22a9"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-negative-summary.json",
+      "bytes": 1533,
+      "sha256": "e100e1874ddf8aae7243ca107e8e747c312ba24ea224f78419849e1242dc3724"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-negative.log",
+      "bytes": 6472,
+      "sha256": "2a23ae78384d295d0ea861d9cff5defdf55529b9f16cf8f03b9088f0cbf9fbd8"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-1-run.json",
+      "bytes": 359,
+      "sha256": "d465dad6ca86ac1e49c4987d5f3be3d0029d6616418890bafd4b6f34c326e4f6"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-1-summary.json",
+      "bytes": 964,
+      "sha256": "2b5b18cb792ccd4203e20570aa8fc41aefc65814fa0bbc41b683cb4ee350e67d"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-1.log",
+      "bytes": 5950,
+      "sha256": "57c46c24ab26a5b9834e15cfbea6be9d1c8ff4ecd068227217525dd437021d77"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-2-run.json",
+      "bytes": 359,
+      "sha256": "5d10fea7338b184c251cd44634d3a01882f0f5caf76b4c3bc3e2ea5b5fcdb685"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-2-summary.json",
+      "bytes": 964,
+      "sha256": "98fd5dc60f24ca37f44a5a78b6d807388aae09b1cb7a8f28d6943cc92cac30cd"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-2.log",
+      "bytes": 5951,
+      "sha256": "f1c321fc756dbbc8ead21ce8268576d379b4a596c3a7e588e56600fb48547afc"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-3-run.json",
+      "bytes": 359,
+      "sha256": "643a20845c2c697b8174f3d5132682b00daf57896996b19c19090fbd25fcaf8b"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-3-summary.json",
+      "bytes": 963,
+      "sha256": "00eca256f61d884f06c6de3caa1a468576c9886be5477ff4b2ee778b5dc7638e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-3.log",
+      "bytes": 5951,
+      "sha256": "bf22afba542e43e3b52ac56ec6528646b2a8767654803c98a7f3a5f955430c18"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-4-run.json",
+      "bytes": 359,
+      "sha256": "ac3d3f1cab6aa9405be091b3016f843a30c2237147e8b59ec51b8bb7888cad9f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-4-summary.json",
+      "bytes": 963,
+      "sha256": "ff57203a931d0b7328e2a0267684b6abb047915bfe2f37b807005ef1e9e8520e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-4.log",
+      "bytes": 5950,
+      "sha256": "6d1e20e0d22ccde5ae24129e1404dd057e16c8c1defcb46d91e6c62832ff6bfe"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-5-run.json",
+      "bytes": 359,
+      "sha256": "d4f679694ec55af2c0fccdf4513ab54da28496cb7f11edb33ce191e0209c75cb"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-5-summary.json",
+      "bytes": 964,
+      "sha256": "120b13f4493a7f82669c845184fe62f5259b8c1423e0da22e17068b2748b5108"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "checkpoint-validation-races-5.log",
+      "bytes": 5950,
+      "sha256": "c1ff645fd2680617d656d4bc43d40ae2e3779e1cbfacc1166bdc5c0256a2ad63"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup/checks",
+      "files": 10,
+      "bytes": 1294819,
+      "treeSha256": "bf78414aedebcbc8f29070d8847a0aceed35752026313429624f96b4b8e688ee"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "compile-final-1.log",
+      "bytes": 235485,
+      "sha256": "2bf348c04b23fe14fcaf509c0e314ae53a5d93a30072db4493eb9a083b7d8034"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "compile-negative.log",
+      "bytes": 735213,
+      "sha256": "beff08e59ee854d8d2996506535d0005dee3bd80f992c9fd95ba22ab1e877704"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "dependency-state.json",
+      "bytes": 325,
+      "sha256": "94098f0e9f391c9812d20041a390b3224f935c4224be40fe004882a3b0c1ebc1"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "discovered-tests.json",
+      "bytes": 123988,
+      "sha256": "0084afc28bc9e862523276b7e3a63ce1a2c699cbcf98e4ffa6e1a59d3c8907b3"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "focused-selectors.json",
+      "bytes": 958,
+      "sha256": "6ba39c87a06c8812ceb09b54680ecc3e8c85a451563f7b67dbfea503c4b8c06c"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "grdb-original.patch",
+      "bytes": 233,
+      "sha256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "historical-verification.json",
+      "bytes": 5811,
+      "sha256": "af6f5041e595247ec9f7b2d54dbf1f905af2f833f8dd4938a9befeec2b6f5ebd"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "intended-TraceModel.swift",
+      "bytes": 354565,
+      "sha256": "8c93fa1dac0a3e2ab0f6541bb0d3d33d3429d546d24637e7f2138115784f4d6f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "negative-control.json",
+      "bytes": 525,
+      "sha256": "93089011329ff4ea4d3e8839eac8fff9180280f9ad25fc9c956bca2f93beafea"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "negative-control.patch",
+      "bytes": 591,
+      "sha256": "2708403598a905a793b3ef6784e9d889a55f6929242f36dbfff385e4a97b365f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "negative-selectors.json",
+      "bytes": 104,
+      "sha256": "3d5b854ac19237eddb54c3b6c9234dce831f8c9b60a6b2f367fd76004d48dfec"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "publication-request.json",
+      "bytes": 245,
+      "sha256": "d230092ec42362dcc51c47f8aa1ecfe9f16b14303134762f88cbfffb5507ffa4"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "race-selectors.json",
+      "bytes": 315,
+      "sha256": "3537590b8ccd3982b16e54e8eadef655baa147930bc337cb77863869ef26ffa6"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "selector-validation.json",
+      "bytes": 428,
+      "sha256": "9d563b5c64c2f62fa5a75473ae156f4ede64eef5480f962c5d2fbc6ed44af7ed"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "sqlite-original.patch",
+      "bytes": 4276,
+      "sha256": "edb046d0948b71b7ec74d9a3102b5d2449a0c6040990823b692be8fb6137f11a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup",
+      "path": "ui-selectors.json",
+      "bytes": 187,
+      "sha256": "9a8505fc31213acefca30c2d19e612069d59ae37a8d08895bd6226ce76ac30ae"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-validation-followup/validation-controls",
+      "files": 7,
+      "bytes": 31227,
+      "treeSha256": "e19679ab765775d9a657256ade34ecf2ecaf452b2249a4b6d518d9583a713fe1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-validation-focused.xcresult",
+      "files": 64,
+      "bytes": 856911,
+      "treeSha256": "a1261584e42cc8c9fbd899a15a701e2ad0af50b4fa365953ddfb089c4850f5b8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-validation-negative.xcresult",
+      "files": 1664,
+      "bytes": 66611091,
+      "treeSha256": "ee16ca52ee88a987148cfae64e6fbab7527cd4b0e7f833bf64371f6354370a93"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-validation-races-1.xcresult",
+      "files": 42,
+      "bytes": 836763,
+      "treeSha256": "e2b3e2e33d6d642d118a35ed98c65d8cb0bba7359657d4a3270b89ed12a9c1b7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-validation-races-2.xcresult",
+      "files": 42,
+      "bytes": 837659,
+      "treeSha256": "64c4c9c699e5bd10a1fc30eddbbb09b56a570990181b184eac07310c4dd1b01e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-validation-races-3.xcresult",
+      "files": 42,
+      "bytes": 829084,
+      "treeSha256": "b638dff4276628d79ddd76d743788cfe0ada4df3ec94cf8b1607d21d57aa1571"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-validation-races-4.xcresult",
+      "files": 42,
+      "bytes": 828820,
+      "treeSha256": "174357a7f148e99df5e14a0d298e9d8cfb09793d94bfe5c7de9111a9e01e3667"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-validation-races-5.xcresult",
+      "files": 42,
+      "bytes": 829409,
+      "treeSha256": "ad14f849a52ec45653e5054e29a23163db050a861d2ab351ecae282979cd4374"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+[
+  "TraceUITests/TraceUITests/testLatestScrollWhileAutomaticResetPreparesSurvivesCommit",
+  "TraceUITests/TraceUITests/testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart"
+]

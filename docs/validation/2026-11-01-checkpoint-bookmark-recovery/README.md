@@ -34,6 +34,8 @@ The first frozen candidate (`589d41d`) passed 439 focused cases and three 65-cas
 
 No failed attempt is classified as unrelated or baseline-safe. Original logs, intermediate manifests, and XCTest bundles remain retained. The diagnostic UI attempt passed both checkpoint recovery and latest-scroll restoration. Competing GitX builds resumed after the initial empty process check. The user then directed publication without further UI tests; the full quiet selection remains unverified.
 
+Raw payloads are local-only and are not attached as downloadable repository or CI artifacts. The paths below identify retained provenance, not public download locations.
+
 Raw evidence: `/Volumes/Pro2T/TraceValidation/checkpoint-bookmark-recovery-followup`.
 XCTest bundles: `/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-*.xcresult`.
 The complete per-file bundle inventory is retained locally; repository metadata records each bundle's tree digest. The unrelated primary checkout, vendor changes, triage artifacts, and prior reports were preserved. No merge was performed.

@@ -1,5 +1,5 @@
 {
-  "algorithm": "SHA-256; tree digest of ordered relative path, byte count, and file hash separated by NUL/newline",
+  "algorithm": "SHA-256. Select regular files recursively without following directory symlinks; exclude symlinks. Sort relative POSIX paths lexicographically by their tuples of case-sensitive Unicode path components, without Unicode normalization. For each file concatenate UTF-8(relativePath), NUL, ASCII(decimal byte count without leading zeroes), NUL, ASCII(lowercase hexadecimal SHA-256 of file bytes), LF. Concatenate all records including each trailing LF and hash those bytes with SHA-256; emit lowercase hexadecimal. An empty tree hashes the empty byte string.",
   "artifacts": [
     {
       "root": "/Volumes/Pro2T/TraceValidation/checkpoint-bookmark-recovery-followup",

@@ -1,0 +1,13 @@
+{
+  "base": "66511124abcbd15e38417009f8c8b792762c6e78",
+  "commit": "81c27891aae616813db367e02e1dc5177f06bae0",
+  "sourceHashes": {
+    "Sources/TraceApp/TraceModel.swift": "8c93fa1dac0a3e2ab0f6541bb0d3d33d3429d546d24637e7f2138115784f4d6f",
+    "Tests/ExternalClientFixture/DiscoveryClient.swift": "08cc9ae2e7ab35af338432cec3046d920d88935579d127bbbb93418b9368959a",
+    "Tests/TraceAppTests/AppReviewFollowupTests.swift": "7a054ed55f4c15fbdfd4a877585c200138fff623c1d003f1fb90cdb138772c33",
+    "Tests/TraceUITests/TraceUITests.swift": "88d5231be47d080bba0aa051ba41a810d71f7cbd5bd6b496a5c85816efbdd278",
+    "docs/validation/2026-11-01-checkpoint-bookmark-recovery/README.md": "c482af1245f99831d5cb0a9cb2eb53e763afc81e5235f789717c6ec37f96b5cc",
+    "docs/validation/2026-11-01-checkpoint-bookmark-recovery/raw-artifacts.json": "57c737fe846a175c2d66a22b83f3ab36ff860e2aa35f2457e8d8568f8678808c",
+    "docs/validation/2026-11-01-checkpoint-bookmark-recovery/source-hashes.json": "ec2caf9d5e9f867c8962de687a15f01f0bce4b785a47fd32388d68487e23662e"
+  }
+}

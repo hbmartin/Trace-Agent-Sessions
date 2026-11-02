@@ -1,0 +1,172 @@
+{
+  "base": "66511124abcbd15e38417009f8c8b792762c6e78",
+  "implementationCandidate": "81c27891aae616813db367e02e1dc5177f06bae0",
+  "sourceHashesVerifiedAgainstCommitAndWorktree": true,
+  "focused": {
+    "run": "checkpoint-validation-focused",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.160080834059045
+  },
+  "raceRuns": [
+    {
+      "run": "checkpoint-validation-races-1",
+      "exitCode": 0,
+      "passedTests": 3,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 5.549000750062987
+    },
+    {
+      "run": "checkpoint-validation-races-2",
+      "exitCode": 0,
+      "passedTests": 3,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 4.494260624982417
+    },
+    {
+      "run": "checkpoint-validation-races-3",
+      "exitCode": 0,
+      "passedTests": 3,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 4.859884500037879
+    },
+    {
+      "run": "checkpoint-validation-races-4",
+      "exitCode": 0,
+      "passedTests": 3,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 4.885574833024293
+    },
+    {
+      "run": "checkpoint-validation-races-5",
+      "exitCode": 0,
+      "passedTests": 3,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 4.475978958886117
+    }
+  ],
+  "uiRuns": [],
+  "uiAccepted": false,
+  "pendingChecks": [
+    {
+      "test": "TraceUITests/TraceUITests/testLatestScrollWhileAutomaticResetPreparesSurvivesCommit",
+      "status": "not run",
+      "reason": "Fresh desktop-idle confirmation has not been received."
+    },
+    {
+      "test": "TraceUITests/TraceUITests/testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart",
+      "status": "not run",
+      "reason": "Fresh desktop-idle confirmation has not been received."
+    }
+  ],
+  "publication": {
+    "mode": "publish_with_pending_ui",
+    "userRequest": "open ready PR",
+    "handling": "Publish the ready PR with the unrun UI checks disclosed. Do not infer that the planned UI checks were waived.",
+    "desktopIdleConfirmationReceived": false
+  },
+  "repositoryChecks": [
+    {
+      "step": "debug-app",
+      "exitCode": 0,
+      "elapsedSeconds": 6.931055124849081
+    },
+    {
+      "step": "release-app",
+      "exitCode": 0,
+      "elapsedSeconds": 98.39851291687228
+    },
+    {
+      "step": "external-client",
+      "exitCode": 0,
+      "elapsedSeconds": 26.91944312513806
+    },
+    {
+      "step": "project-drift",
+      "exitCode": 0,
+      "elapsedSeconds": 0.2425082081463188
+    },
+    {
+      "step": "signing",
+      "exitCode": 0,
+      "elapsedSeconds": 5.722940625157207
+    },
+    {
+      "step": "network",
+      "exitCode": 0,
+      "elapsedSeconds": 0.0942530408501625
+    },
+    {
+      "step": "script-tests",
+      "exitCode": 0,
+      "elapsedSeconds": 98.48797683301382
+    },
+    {
+      "step": "whitespace",
+      "exitCode": 0,
+      "elapsedSeconds": 0.045276249991729856
+    },
+    {
+      "step": "test-enumeration",
+      "exitCode": 0,
+      "elapsedSeconds": 4.656777957919985
+    }
+  ],
+  "negativeControl": {
+    "outcome": "expected failure",
+    "run": {
+      "run": "checkpoint-validation-negative",
+      "exitCode": 65,
+      "passedTests": 0,
+      "failedTests": 1,
+      "skippedTests": 0,
+      "elapsedSeconds": 19.592118208063766
+    },
+    "expectedResult": "failure",
+    "operation": "Bypass only pending-bookmark revision revalidation",
+    "intendedSourceSha256": "8c93fa1dac0a3e2ab0f6541bb0d3d33d3429d546d24637e7f2138115784f4d6f",
+    "negativeSourceSha256": "bc8d3588cdd1f993838b663db008acf72021b52186cd9cff647faa56cab5cf64",
+    "restoredSourceMatchesIntended": true,
+    "failureCount": 1,
+    "expectedAssertionFailures": 4,
+    "bothNewerBookmarkAndExplicitClearDetected": true,
+    "patchSha256": "2708403598a905a793b3ef6784e9d889a55f6929242f36dbfff385e4a97b365f"
+  },
+  "compiledSelection": {
+    "focused-selectors.json": {
+      "requestedIdentifiers": 9,
+      "matchingTests": 9,
+      "missing": []
+    },
+    "race-selectors.json": {
+      "requestedIdentifiers": 3,
+      "matchingTests": 3,
+      "missing": []
+    },
+    "ui-selectors.json": {
+      "requestedIdentifiers": 2,
+      "matchingTests": 2,
+      "missing": []
+    },
+    "negative-selectors.json": {
+      "requestedIdentifiers": 1,
+      "matchingTests": 1,
+      "missing": []
+    }
+  },
+  "historicalArtifactRecordsVerified": 80,
+  "historicalTreesVerified": 16,
+  "omitted": [
+    "complete suites",
+    "optimized performance measurements",
+    "Release comparison pairs"
+  ],
+  "performanceAcceptanceClaim": false
+}

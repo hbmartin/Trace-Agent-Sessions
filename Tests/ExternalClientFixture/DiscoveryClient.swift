@@ -78,7 +78,7 @@ func compileReservedCheckpointClient(_ database: IndexDatabase, coordinator: Ind
     let ledger = IndexCheckpointLedger()
     ledger.seed(stream: "external", checkpoint: try await database.eventCheckpointRecord(volumeID: "external"))
     let reservation = ledger.reserve(watermarks: ["external": 100], streamRoots: ["external": ["/tmp/external"]],
-        hasIndexWork: true, paths: ["/tmp/external/session.jsonl"])
+        hasIndexWork: true, wrappedStreams: changes.wrappedStreams, paths: ["/tmp/external/session.jsonl"])
     let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
         checkpointLedger: ledger, didCompleteCheckpoints: { updates in
             try? await database.saveQualifiedEventCheckpoints(updates)
