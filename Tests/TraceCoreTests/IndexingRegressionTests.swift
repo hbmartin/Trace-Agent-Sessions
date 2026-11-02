@@ -8,6 +8,92 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testReservationOnlyMetadataDrainsWithoutIndexing() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), checkpoints = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let passes = OSAllocatedUnfairLock(initialState: 0)
+        let coordinator = IndexCoordinator(database: database, sources: [])
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+            progress: { _ in passes.withLock { $0 += 1 } }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in
+                if let mark = updates["stream"]?.value { checkpoints.withLock { $0.append(mark) } }
+                try? await database.saveQualifiedEventCheckpoints(updates)
+            })
+        let reservation = ledger.reserve(watermarks: ["stream": 100], streamRoots: [:], hasIndexWork: false)
+        await scheduler.request(onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [reservation])
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(checkpoints.withLock { $0 }, [100])
+        XCTAssertEqual(passes.withLock { $0 }, 0)
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+        await scheduler.stop()
+    }
+
+    func testReservationOnlyIndexOrWrapRemainsUnpaidUntilCoveredAfterReplacement() async throws {
+        for wrapped in [false, true] {
+            let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+            try Data(line(1).utf8).write(to: file)
+            let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+            let ledger = IndexCheckpointLedger(), checkpoints = OSAllocatedUnfairLock(initialState: [UInt64]())
+            let reservation = ledger.reserve(watermarks: ["stream": 100], streamRoots: ["stream": [root.path]],
+                hasIndexWork: !wrapped, wrappedStreams: wrapped ? ["stream"] : [],
+                paths: wrapped ? [] : [file.path])
+            let first = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+                checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                    if let mark = updates["stream"]?.value { checkpoints.withLock { $0.append(mark) } }
+                })
+            await first.request(onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [reservation])
+            await first.waitUntilIdle()
+            XCTAssertTrue(checkpoints.withLock { $0.isEmpty })
+            XCTAssertEqual(ledger.retainedRecordCount, 1)
+            await first.request(watermarks: ["stream": 200], streamRoots: ["stream": [root.path]])
+            await first.waitUntilIdle()
+            XCTAssertTrue(checkpoints.withLock { $0.isEmpty }, "newer metadata cannot cover the older indexed obligation")
+            await first.stop()
+            let replacement = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+                checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                    if let mark = updates["stream"]?.value { checkpoints.withLock { $0.append(mark) } }
+                })
+            if wrapped { await replacement.request(reconciliationPaths: [root.path]) }
+            else { await replacement.request(paths: [file.path]) }
+            await replacement.waitUntilIdle()
+            XCTAssertEqual(checkpoints.withLock { $0 }, [200])
+            XCTAssertEqual(ledger.retainedRecordCount, 0)
+            await replacement.stop()
+        }
+    }
+
+    func testWrappedStreamMergeCannotRegressSiblingOrReplaceItsEpoch() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        try await database.saveQualifiedEventCheckpoints([
+            "A": .init(value: 500, epoch: "epoch-A", replacingEpochs: []),
+            "B": .init(value: 900, epoch: "epoch-B", replacingEpochs: [])])
+        var buffered = SourceChanges(); buffered.watermarks = ["A": 500, "B": 900]
+        var wrapped = SourceChanges()
+        wrapped.include(path: root.path, flags: UInt32(kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagItemIsDir),
+            eventID: 1, streamIdentifier: "A", streamRoots: [root.path])
+        var sibling = SourceChanges(); sibling.watermarks = ["B": 800]; sibling.streamRoots = ["B": [root.path]]
+        wrapped.merge(sibling); buffered.merge(wrapped)
+        XCTAssertEqual(buffered.watermarks, ["A": 1, "B": 900])
+        XCTAssertEqual(buffered.wrappedStreams, ["A"])
+        XCTAssertTrue(buffered.recoveryReasons.contains(.eventsDropped))
+        XCTAssertTrue(buffered.recoveryReasons.contains(.eventIDsWrapped))
+        sibling.watermarks = ["B": 1_000]; buffered.merge(sibling)
+        XCTAssertEqual(buffered.watermarks["B"], 1_000)
+        let ledger = IndexCheckpointLedger()
+        for stream in ["A", "B"] { ledger.seed(stream: stream, checkpoint: try await database.eventCheckpointRecord(volumeID: stream)) }
+        let reservation = ledger.reserve(watermarks: buffered.watermarks, streamRoots: ["A": [root.path], "B": [root.path]],
+            hasIndexWork: true, wrappedStreams: buffered.wrappedStreams, reconciliationPaths: [root.path])
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly, progress: { _ in },
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in try? await database.saveQualifiedEventCheckpoints(updates) })
+        await scheduler.request(reconcile: true, onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [reservation])
+        await scheduler.waitUntilIdle()
+        let a = try await database.eventCheckpointRecord(volumeID: "A"), b = try await database.eventCheckpointRecord(volumeID: "B")
+        XCTAssertEqual(a?.value, 1); XCTAssertNotEqual(a?.epoch, "epoch-A")
+        XCTAssertEqual(b?.value, 1_000); XCTAssertEqual(b?.epoch, "epoch-B")
+        await scheduler.stop()
+    }
+
     func testStopCannotEnrollAnotherRetryAfterAConcurrentFailure() async throws {
         let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
         let clock = TestClock<Duration>(), coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])], clock: clock)

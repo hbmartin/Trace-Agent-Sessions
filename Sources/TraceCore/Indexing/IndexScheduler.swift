@@ -120,6 +120,18 @@ public final class IndexCheckpointLedger: Sendable {
         reservations.filter { $0.ledger == id }.flatMap(\.entries)
     }
 
+    /// A metadata-only drain may publish history progress, but cannot prove that
+    /// a file or wrapped stream has been reconciled.
+    fileprivate func metadataOnlyEntries(_ entries: [Entry]) -> [Entry] {
+        state.withLock { value in
+            entries.filter { entry in
+                guard let stream = value.streams[entry.stream], stream.epoch == entry.epoch,
+                      let record = stream.records[entry.id], record.entry.version == entry.version else { return false }
+                return !record.hasIndexWork && !record.requiresReconciliation
+            }
+        }
+    }
+
     fileprivate func invalidateCoverage() -> [Entry] {
         state.withLock { value in
             value.revision &+= 1
@@ -584,7 +596,7 @@ public actor IndexScheduler {
             let retrying = !hasPendingIndexWork && ordinaryRecovery == nil && readyRetryIndex != nil
             if !retrying, ordinaryRecovery == nil, !fullScan, pendingResets.isEmpty, pendingPaths.isEmpty, pendingReconciliationPaths.isEmpty,
                pendingActivity == nil {
-                let receipts = pendingCheckpointReceipts
+                let receipts = checkpointLedger.metadataOnlyEntries(pendingCheckpointReceipts)
                 let ordinary = pendingOrdinaryReceipts
                 pendingOrdinaryReceipts.removeAll()
                 pendingCheckpointReceipts.removeAll()
@@ -751,7 +763,7 @@ public actor IndexScheduler {
 
     private var hasPendingWork: Bool {
         fullScan || !pendingResets.isEmpty || !pendingPaths.isEmpty || !pendingReconciliationPaths.isEmpty
-            || pendingActivity != nil || !pendingWatermarks.isEmpty
+            || pendingActivity != nil || !pendingWatermarks.isEmpty || !pendingCheckpointReceipts.isEmpty
     }
 
     private var hasPendingIndexWork: Bool {

@@ -1660,6 +1660,19 @@ final class TraceUITests: XCTestCase {
         return (value, latestError)
     }
 
+    private struct NativeRestorationRecord: Decodable {
+        struct Generation: Decodable { let value: String }
+        let generation: Generation
+        let sessionID: Int64
+        let invocation: UUID
+        let bookmarkIndex: Int
+        let bookmarkOffset: Double
+    }
+
+    private func nativeRestorationRecords(in path: URL) -> [NativeRestorationRecord] {
+        fileLines(in: path).compactMap { try? JSONDecoder().decode(NativeRestorationRecord.self, from: Data($0.utf8)) }
+    }
+
     private struct UsageAttemptRecord: Decodable {
         let databaseGeneration: UUID
         let workerID: UUID
@@ -4549,6 +4562,51 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "moved-reader-restores-after-relaunch")
     }
 
+    func testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_RESUME_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_STARTUP_SETTLEMENT_CONTROL"] = "1"
+        let outcomes = directory.appendingPathComponent("checkpoint-watcher-outcomes")
+        app.launchEnvironment["TRACE_TEST_WATCHER_RESTART_COMPLETED_PATH"] = outcomes.path
+        let database = directory.appendingPathComponent("index.sqlite")
+        app.launch()
+        XCTAssertNotNil(poll(timeout: 15) {
+            (try? self.sqliteInteger(database, sql: "SELECT count(*) FROM fsevents_checkpoint WHERE epoch != 'legacy';")) == 1 ? true : nil
+        })
+        app.terminate()
+        let before = try sqliteText(database, sql: "SELECT event_id FROM fsevents_checkpoint LIMIT 1;")
+        app.launchEnvironment["TRACE_TEST_FAIL_CHECKPOINT_READ_ONCE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["TraceUIExample"].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["indexProgress"].click()
+        let warning = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "Some source checkpoints could not be loaded.")).firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "checkpoint_sql_sentinel")).firstMatch.exists)
+        app.typeKey(.escape, modifierFlags: [])
+        try addLongSession("Live while checkpoint unavailable", project: "CheckpointLiveProject", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 15) {
+            (try? self.sqliteInteger(database, sql: "SELECT count(*) FROM session WHERE external_id='Live while checkpoint unavailable';")) == 1 ? true : nil
+        })
+        XCTAssertEqual(try sqliteText(database, sql: "SELECT event_id FROM fsevents_checkpoint LIMIT 1;"), before)
+        app.buttons["testRestartStartupWatchers"].click()
+        XCTAssertNotNil(poll(timeout: 15) {
+            self.fileLines(in: outcomes).contains { line in
+                guard let record = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return false }
+                return record["phase"] as? String == "started"
+            } ? true : nil
+        })
+        try addLongSession("Checkpoint resumed", project: "CheckpointResumedProject", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 15) {
+            guard let after = try? self.sqliteText(database, sql: "SELECT event_id FROM fsevents_checkpoint LIMIT 1;"), after != before else { return nil }
+            return true
+        })
+        app.buttons["indexProgress"].click()
+        XCTAssertFalse(warning.exists)
+        app.typeKey(.escape, modifierFlags: [])
+        attach(app, name: "checkpoint-failure-live-updates-and-monitoring-recovery")
+    }
+
     func testLatestScrollWhileAutomaticResetPreparesSurvivesCommit() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         installNativeAnchorProbe(app: app, directory: directory)
@@ -4558,6 +4616,14 @@ final class TraceUITests: XCTestCase {
         let preparation = directory.appendingPathComponent("bookmark-preparation")
         let release = directory.appendingPathComponent("bookmark-release")
         let committed = directory.appendingPathComponent("bookmark-committed")
+        let restored = directory.appendingPathComponent("bookmark-restored-receipts")
+        let restoreRelease = directory.appendingPathComponent("bookmark-native-release")
+        let restoreStarted = directory.appendingPathComponent("bookmark-native-started")
+        try Data().write(to: restoreRelease)
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = restored.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_ALL_RELEASE_PATH"] = restoreRelease.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_ALL_STARTED_PATH"] = restoreStarted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_DELAY_MS"] = "30000"
         let bookmark = directory.appendingPathComponent("bookmark-position")
         let idle = directory.appendingPathComponent("bookmark-idle")
         try Data().write(to: release)
@@ -4592,8 +4658,30 @@ final class TraceUITests: XCTestCase {
         let latest = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
         XCTAssertNotEqual(latest, old)
         let y = try XCTUnwrap(savedAnchorY(index: latest, in: scroll, timeout: 10))
+        let database = directory.appendingPathComponent("index.sqlite")
+        let oldGeneration = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
+        let priorRestores = Set(nativeRestorationRecords(in: restored).map(\.invocation))
+        try FileManager.default.removeItem(at: restoreRelease)
+        try? FileManager.default.removeItem(at: restoreStarted)
         try Data().write(to: release)
         XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
+        let generation: String = try XCTUnwrap(poll(timeout: 10) { () -> String? in
+            guard let value = try? self.sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';"),
+                  value != oldGeneration else { return nil }
+            return value
+        })
+        XCTAssertTrue(waitForFile(restoreStarted, timeout: 20))
+        XCTAssertFalse(nativeRestorationRecords(in: restored).contains { $0.generation.value == generation },
+            "old visible rows and their receipts cannot satisfy post-reset restoration")
+        try Data().write(to: restoreRelease)
+        let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Latest bookmark reader';")
+        let completion: NativeRestorationRecord = try XCTUnwrap(poll(timeout: 20) { () -> NativeRestorationRecord? in
+            self.nativeRestorationRecords(in: restored).first {
+                $0.generation.value == generation && $0.sessionID == selected && $0.bookmarkIndex == latest
+                    && !priorRestores.contains($0.invocation)
+            }
+        })
+        XCTAssertEqual(completion.bookmarkOffset, Double(y), accuracy: 8)
         assertSavedAnchorOnScreen(index: latest, in: scroll, expectedY: y, stage: "latest user bookmark after capture")
         attach(app, name: "latest-scroll-preserved-through-reset")
     }
@@ -7081,6 +7169,10 @@ final class TraceUITests: XCTestCase {
     }
 
     private func sqliteInteger(_ database: URL, sql: String) throws -> Int64 {
+        try XCTUnwrap(Int64(sqliteText(database, sql: sql)), "Expected integer sqlite3 output for: \(sql)")
+    }
+
+    private func sqliteText(_ database: URL, sql: String) throws -> String {
         let output = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
@@ -7097,7 +7189,7 @@ final class TraceUITests: XCTestCase {
         let data = output.fileHandleForReading.readDataToEndOfFile()
         let value = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return try XCTUnwrap(Int64(value), "Expected integer sqlite3 output for: \(sql)")
+        return value
     }
 
 }

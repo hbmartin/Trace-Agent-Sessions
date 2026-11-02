@@ -19,7 +19,7 @@
   "TraceUITests/TraceUITests/testSelectionChangedAfterAutomaticDeliverySurvivesCommittedReset",
   "TraceUITests/TraceUITests/testSelectedReaderSurvivesChainedFileRenames",
   "TraceUITests/TraceUITests/testSearchTargetMessageSurvivesAutomaticReset",
-  "TraceUITests/TraceUITests/testPendingLaunchRestorationRetriesOnLaterOrdinaryRefresh",
+  "TraceUITests/TraceUITests/testPendingLaunchRestorationResumesWithoutUserIntent",
   "TraceUITests/TraceUITests/testPaginationFailureShowsSafeTextAndRetryRecovers",
   "TraceUITests/TraceUITests/testCachedCostsFailureShowsSafeTextAndProductionRetryRecoversWithoutFileChanges",
   "TraceUITests/TraceUITests/testLatestScrollWhileAutomaticResetPreparesSurvivesCommit"

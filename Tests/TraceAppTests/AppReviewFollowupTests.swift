@@ -1,6 +1,7 @@
 import AppKit
 import Clocks
 import Combine
+import CoreServices
 import CustomDump
 import GRDB
 import os
@@ -11,6 +12,191 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testCheckpointReadFailureKeepsLiveUpdatesAndRecoversOnMonitoringRestart() async throws {
+        let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
+        let stream = f.model.checkpointStreamForTesting(root: f.root)
+        let initial = UInt64(FSEventsGetCurrentEventId())
+        try await f.database.saveQualifiedEventCheckpoints([stream: .init(value: initial, epoch: "persisted-current-epoch", replacingEpochs: [])])
+        let error = DatabaseError(resultCode: .SQLITE_BUSY, message: "private-checkpoint-message",
+            sql: "SELECT private_checkpoint_sql", arguments: ["private-checkpoint-argument"], publicStatementArguments: true)
+        await f.database.failCheckpointReadOnceForTesting(error, stream: stream)
+        var logged: [(Int32?, Int32?)] = []
+        f.model.checkpointReadFailureForTesting = { logged.append(($0, $1)) }
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        var withheld = SourceChanges()
+        withheld.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        withheld.watermarks = [stream: initial + 1]; withheld.streamRoots = [stream: [f.root.path]]
+        await f.model.bufferSourceChangesForTesting(withheld)
+        XCTAssertNil(f.model.bufferedStartupInputsForTesting.watermarks[stream])
+        XCTAssertTrue(f.model.bufferedStartupInputsForTesting.paths.isSuperset(of: withheld.paths))
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.contains(stream))
+        XCTAssertEqual(logged.count, 1); XCTAssertEqual(logged.first?.0, ResultCode.SQLITE_BUSY.rawValue)
+        XCTAssertEqual(f.model.monitoringWarnings, ["Some source checkpoints could not be loaded. Live updates continue; checkpointing will resume after source monitoring restarts."])
+        let reads = await f.database.checkpointReadCountForTesting(stream: stream)
+        try await prepareStartup(f.model, sources: [source])
+        let duplicateReads = await f.database.checkpointReadCountForTesting(stream: stream)
+        XCTAssertEqual(duplicateReads, reads, "duplicate readiness cannot retry a failed read")
+        let file = f.root.appendingPathComponent("live-after-checkpoint-failure.jsonl")
+        try line(900).write(to: file)
+        try await wait { try await f.database.sessions().contains { $0.title == "NavigationNeedle 900" } }
+        let paused = try await f.database.eventCheckpointRecord(volumeID: stream)
+        XCTAssertEqual(paused?.value, initial)
+        XCTAssertEqual(paused?.epoch, "persisted-current-epoch")
+        await f.database.failCheckpointReadOnceForTesting(error, stream: stream)
+        let stillFailed = await f.model.restartWatchingForTesting([source])
+        XCTAssertTrue(stillFailed); XCTAssertEqual(logged.count, 1, "one identical diagnostic per failed stream episode")
+        let readGate = ReviewReadGate(), heldRead = Task { await readGate.wait() }
+        defer { heldRead.cancel(); Task { await readGate.open() } }
+        f.model.checkpointReadGateForTesting = heldRead
+        let restart = Task { await f.model.restartWatchingForTesting([source]) }
+        try await wait { f.model.checkpointReadWaitingForTesting }
+        XCTAssertFalse(f.model.monitoringWarnings.isEmpty, "restart admission cannot clear an unresolved checkpoint warning")
+        await readGate.open()
+        let ready = await restart.value
+        XCTAssertTrue(ready)
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        XCTAssertFalse(f.model.unavailableCheckpointStreamsForTesting.contains(stream))
+        XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
+        try line(901).write(to: f.root.appendingPathComponent("live-after-checkpoint-recovery.jsonl"))
+        try await wait { (try await f.database.eventCheckpointRecord(volumeID: stream)?.value ?? 0) > initial }
+        let recovered = try await f.database.eventCheckpointRecord(volumeID: stream)
+        XCTAssertEqual(recovered?.epoch, "persisted-current-epoch")
+        await f.database.failCheckpointReadOnceForTesting(error, stream: stream)
+        _ = await f.model.restartWatchingForTesting([source])
+        XCTAssertEqual(logged.count, 2, "accepted initialization resets its diagnostic episode")
+        f.model.checkpointReadFailureForTesting = nil
+    }
+
+    func testCheckpointFailureDoesNotBlockHealthySiblingOrSeedMissingRowAsFailure() async throws {
+        let f = try await fixture(count: 2, grouping: .byRoot)
+        let other = FileManager.default.temporaryDirectory.appendingPathComponent("TraceHealthyCheckpoint-\(UUID())")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: other) }
+        let source = ClaudeCodeSource(roots: [f.root, other])
+        await f.model.attachForTesting(database: f.database, sources: [source])
+        let failedStream = f.model.checkpointStreamForTesting(root: f.root), healthyStream = f.model.checkpointStreamForTesting(root: other)
+        await f.database.failCheckpointReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY), stream: failedStream)
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        try line(902).write(to: other.appendingPathComponent("healthy.jsonl"))
+        try await wait { try await f.database.sessions().contains { $0.title == "NavigationNeedle 902" } }
+        try await wait { try await f.database.eventCheckpointRecord(volumeID: healthyStream) != nil }
+        let failed = try await f.database.eventCheckpointRecord(volumeID: failedStream)
+        XCTAssertNil(failed)
+        XCTAssertEqual(f.model.unavailableCheckpointStreamsForTesting, [failedStream])
+    }
+
+    func testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination() async throws {
+        for replace in [false, true] {
+            let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
+            let stream = f.model.checkpointStreamForTesting(root: f.root)
+            let gate = ReviewReadGate(), held = Task { await gate.wait() }
+            defer { held.cancel(); Task { await gate.open() } }
+            f.model.checkpointReadGateForTesting = held
+            f.model.settings.onboardingComplete = true
+            let starting = Task { await f.model.startWatchingForTesting([source]) }
+            try await wait { f.model.checkpointReadWaitingForTesting }
+            if replace {
+                let replacement = try IndexDatabase(url: f.root.appendingPathComponent("replacement.sqlite"))
+                await f.model.attachForTesting(database: replacement, sources: [source])
+            } else {
+                await f.model.prepareToTerminate()
+            }
+            await gate.open()
+            let ready = await starting.value
+            XCTAssertFalse(ready)
+            XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.isEmpty)
+            XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
+            let oldCheckpoint = try await f.database.eventCheckpointRecord(volumeID: stream)
+            XCTAssertNil(oldCheckpoint)
+        }
+    }
+
+    private func heldPendingBookmarkResolution() async throws -> (fixture: Fixture, session: SessionSummary, gate: ReviewReadGate) {
+        let f = try await deferredResetFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let data = try JSONSerialization.data(withJSONObject: ["type": "user", "uuid": "pending-second-anchor", "sessionId": "s-0",
+            "cwd": "/tmp/NavigationReview", "timestamp": 1_700_000_010_000,
+            "message": ["content": "PendingBookmarkSecondAnchor"]]) + Data([10])
+        let handle = try FileHandle(forWritingTo: file); try handle.seekToEnd(); try handle.write(contentsOf: data); try handle.close()
+        await f.model.coordinatorForTesting?.refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        let all = try await f.database.sessions(), a = try XCTUnwrap(all.first { $0.messageCount == 2 })
+        let b = try XCTUnwrap(all.first { $0.id != a.id && $0.projectCanonicalKey == a.projectCanonicalKey })
+        f.model.openSession(a); try await wait { f.model.messages.count == 2 }
+        let first = try XCTUnwrap(f.model.messages.first)
+        f.model.updateTranscriptBookmark(sessionID: a.id, bookmark: .init(messageID: first.id, offset: 19, index: 0))
+        f.model.openSession(b); try await wait { f.model.selectedSessionID == b.id && !f.model.messages.isEmpty }
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        addTeardownBlock { held.cancel(); await gate.open() }
+        f.model.pendingBookmarkResolutionGateForTesting = held
+        var changes = SourceChanges(); changes.paths = [file.path]
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        try await wait { f.model.pendingBookmarkResolutionWaitingForTesting }
+        let current = try await f.database.sessions()
+        return (f, try XCTUnwrap(current.first { $0.title == a.title }), gate)
+    }
+
+    func testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear() async throws {
+        for clear in [false, true] {
+            let pending = try await heldPendingBookmarkResolution(), model = pending.fixture.model
+            model.openSession(pending.session); try await wait { model.messages.count == 2 }
+            let last = try XCTUnwrap(model.messages.last)
+            model.updateTranscriptBookmark(sessionID: pending.session.id,
+                bookmark: clear ? nil : .init(messageID: last.id, offset: 77, index: 1))
+            await pending.gate.open()
+            try await wait { !model.pendingBookmarkResolutionWaitingForTesting }
+            await model.refreshSummariesForTesting(lightweight: false)
+            XCTAssertEqual(model.pendingBookmarkCountForTesting, 0)
+            if clear { XCTAssertNil(model.scrollPositions[pending.session.id]) }
+            else {
+                XCTAssertEqual(model.scrollPositions[pending.session.id]?.messageID, last.id)
+                XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 77)
+            }
+        }
+    }
+
+    func testPendingBookmarkReadRejectsReplacementAndTermination() async throws {
+        for replace in [false, true] {
+            let pending = try await heldPendingBookmarkResolution(), f = pending.fixture
+            let transition: Task<Void, Never>
+            if replace {
+                let replacement = try IndexDatabase(url: f.root.appendingPathComponent("bookmark-replacement.sqlite"))
+                transition = Task { await f.model.attachForTesting(database: replacement, sources: [ClaudeCodeSource(roots: [f.root])]) }
+                try await wait { f.model.schedulerForTesting == nil || f.model.databaseForTesting === replacement }
+            } else {
+                transition = Task { await f.model.prepareToTerminate() }
+                try await wait { f.model.isTerminatingForTesting }
+            }
+            let state = f.model.scrollPositions.mapValues { [$0.messageID, Int64($0.offset), Int64($0.index)] }
+            await pending.gate.open()
+            await transition.value
+            try await wait { !f.model.pendingBookmarkResolutionWaitingForTesting }
+            if replace { XCTAssertTrue(f.model.scrollPositions.isEmpty) }
+            else { XCTAssertEqual(f.model.scrollPositions.mapValues { [$0.messageID, Int64($0.offset), Int64($0.index)] }, state) }
+            XCTAssertEqual(f.model.pendingBookmarkCountForTesting, 0)
+        }
+    }
+
+    func testCancelledCheckpointInitializationDoesNotPublishFailure() async throws {
+        let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
+        let stream = f.model.checkpointStreamForTesting(root: f.root)
+        await f.database.failCheckpointReadOnceForTesting(CancellationError(), stream: stream)
+        f.model.settings.onboardingComplete = true
+        let cancelled = await f.model.startWatchingForTesting([source])
+        XCTAssertFalse(cancelled)
+        XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
+        let restarted = await f.model.restartWatchingForTesting([source])
+        XCTAssertTrue(restarted)
+        XCTAssertFalse(f.model.unavailableCheckpointStreamsForTesting.contains(stream))
+    }
+
     func testLatestBookmarkAnchorOrExplicitClearWinsOverResetCapture() async throws {
         for clear in [false, true] {
             let f = try await deferredResetFixture()
@@ -198,11 +384,15 @@ final class AppReviewFollowupTests: XCTestCase {
         let found = try await f.database.search(query: "ExactTargetNeedle"), result = try XCTUnwrap(found.results.first)
         f.model.openSearchResult(result); try await wait { f.model.messages.count == 2 }
         XCTAssertNil(f.model.scrollPositions[result.sessionID])
+        let oldGeneration = f.database.contentGeneration
         var changes = SourceChanges(); changes.paths = [file.path]
         XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
-        try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 2 }
+        try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 2
+            && f.database.contentGeneration != oldGeneration
+            && f.model.selectedSession?.contentGeneration == f.database.contentGeneration }
         let current = try await f.database.search(query: "ExactTargetNeedle")
-        XCTAssertEqual(f.model.requestedMessageID, current.results.first?.id)
+        let currentResult = try XCTUnwrap(current.results.first)
+        XCTAssertEqual(f.model.requestedMessageID, currentResult.id)
         XCTAssertNotEqual(f.model.requestedMessageID, f.model.messages.first?.id)
     }
 
@@ -3193,7 +3383,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let project: ProjectSummary
     }
 
-    private func fixture(count: Int = 430) async throws -> Fixture {
+    private func fixture(count: Int = 430, grouping: WatcherGroupingPolicy = .byVolume) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceAppReview-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("sessions.jsonl")
@@ -3209,7 +3399,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await coordinator.indexAll(scope: .proseOnly)
         let suite = "TraceAppReview.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let model = TraceModel(settings: AppSettings(defaults: defaults), clock: clock, diagnosticsURL: root.appendingPathComponent("diagnostics.json"))
+        let model = TraceModel(settings: AppSettings(defaults: defaults), clock: clock, watcherGroupingPolicy: grouping, diagnosticsURL: root.appendingPathComponent("diagnostics.json"))
         model.collectsStartupHandoffsForTesting = true
         await model.attachForTesting(database: database, sources: [source])
         model.sourceReloadSourcesForTesting = [source]

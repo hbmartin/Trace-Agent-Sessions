@@ -643,7 +643,14 @@ public actor IndexDatabase {
     }
 
     public func eventCheckpointRecord(volumeID: String) throws -> IndexEventCheckpoint? {
-        try pool.read { db in
+        #if DEBUG
+        checkpointReadAttempts[volumeID, default: 0] += 1
+        if let error = checkpointReadErrors.removeValue(forKey: volumeID) { throw error }
+        if TraceTestHooks.isUITesting, TraceTestHooks.failOnce(for: "TRACE_TEST_FAIL_CHECKPOINT_READ_ONCE") {
+            throw DatabaseError(resultCode: .SQLITE_BUSY, message: "checkpoint read sentinel", sql: "SELECT checkpoint_sql_sentinel")
+        }
+        #endif
+        return try pool.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT event_id, epoch FROM fsevents_checkpoint WHERE volume_id=?", arguments: [volumeID]),
                   let value = UInt64(row["event_id"] as String) else { return nil }
             return IndexEventCheckpoint(value: value, epoch: row["epoch"], replacingEpochs: [])
@@ -651,6 +658,7 @@ public actor IndexDatabase {
     }
 
     public func saveEventCheckpoints(_ checkpoints: [String: UInt64]) throws {
+        guard !checkpoints.isEmpty else { return }
         try pool.write { db in
             for (stream, value) in checkpoints {
                 let epoch = try String.fetchOne(db, sql: "SELECT epoch FROM fsevents_checkpoint WHERE volume_id=?", arguments: [stream]) ?? "legacy"
@@ -662,6 +670,7 @@ public actor IndexDatabase {
     /// Epoch-qualified scheduler coverage rejects a late callback from a wrapped stream.
     public func saveQualifiedEventCheckpoints(_ checkpoints: [String: IndexEventCheckpoint],
                                                expectedGeneration: IndexContentGeneration? = nil) throws {
+        guard !checkpoints.isEmpty else { return }
         try pool.write { db in
             if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { return }
             for (stream, update) in checkpoints { try Self.saveCheckpoint(stream: stream, update: update, in: db) }
@@ -2395,6 +2404,10 @@ public actor IndexDatabase {
     }
 
     #if DEBUG
+    private var checkpointReadErrors: [String: Error] = [:]
+    private var checkpointReadAttempts: [String: Int] = [:]
+    func failCheckpointReadOnceForTesting(_ error: Error, stream: String) { checkpointReadErrors[stream] = error }
+    func checkpointReadCountForTesting(stream: String) -> Int { checkpointReadAttempts[stream, default: 0] }
     private var navigationCaptureReads = 0
     private var navigationResolutionReads = 0
     func navigationReadCountsForTesting() -> (capture: Int, resolution: Int) { (navigationCaptureReads, navigationResolutionReads) }

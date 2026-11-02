@@ -16,6 +16,8 @@ public struct SourceChanges: Sendable {
     public var structuralPaths: Set<String> = []
     public var reconciliationPaths: Set<String> = []
     public var recoveryReasons: Set<FSEventsRecoveryReason> = []
+    /// Epoch changes belong to individual streams, even when batches are merged.
+    public var wrappedStreams: Set<String> = []
     public var watermarks: [String: UInt64] = [:]
     /// Canonical roots covered by each event stream watermark. This lets the
     /// scheduler hold back only streams whose indexed paths failed.
@@ -32,6 +34,7 @@ public struct SourceChanges: Sendable {
         streamIdentifier: String = "host", streamRoots: [String] = []
     ) {
         let wrappedID = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
+        if wrappedID { wrappedStreams.insert(streamIdentifier) }
         watermarks[streamIdentifier] = wrappedID ? eventID : max(watermarks[streamIdentifier] ?? 0, eventID)
         self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
         if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
@@ -46,7 +49,8 @@ public struct SourceChanges: Sendable {
         let wrapped = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
         if dropped || wrapped {
             reconciliationPaths.formUnion(streamRoots)
-            recoveryReasons.insert(dropped ? .eventsDropped : .eventIDsWrapped)
+            if dropped { recoveryReasons.insert(.eventsDropped) }
+            if wrapped { recoveryReasons.insert(.eventIDsWrapped) }
         } else if flags & UInt32(kFSEventStreamEventFlagRootChanged) != 0 {
             reconciliationPaths.insert(canonical)
             recoveryReasons.insert(.rootChanged)
@@ -68,9 +72,10 @@ public struct SourceChanges: Sendable {
         structuralPaths.formUnion(other.structuralPaths)
         reconciliationPaths.formUnion(other.reconciliationPaths)
         recoveryReasons.formUnion(other.recoveryReasons)
+        wrappedStreams.formUnion(other.wrappedStreams)
         historyDone = historyDone || other.historyDone
         for (identifier, eventID) in other.watermarks {
-            watermarks[identifier] = other.recoveryReasons.contains(.eventIDsWrapped)
+            watermarks[identifier] = other.wrappedStreams.contains(identifier)
                 ? eventID : max(watermarks[identifier] ?? 0, eventID)
         }
         for (identifier, roots) in other.streamRoots {
@@ -178,6 +183,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
             if !watcher.tracksWatermarks {
                 changes.watermarks = [:]
                 changes.streamRoots = [:]
+                changes.wrappedStreams = []
             }
             if changes.hasIndexWork, TraceTestHooks.isUITesting,
                let fragment = TraceTestHooks.environment["TRACE_TEST_GATE_FILESYSTEM_ROOT_CONTAINS"],

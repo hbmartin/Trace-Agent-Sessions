@@ -38,7 +38,10 @@ private func cpuSeconds() -> Double {
 
 @main struct CheckpointEnqueueWorkload {
     static func main() async throws {
-        let count = Int(CommandLine.arguments.dropFirst().first ?? "1000")!
+        guard let count = Int(CommandLine.arguments.dropFirst().first ?? "1000"), count > 0 else {
+            FileHandle.standardError.write(Data("Usage: checkpoint-enqueue [positive event count] [label]\n".utf8))
+            exit(2)
+        }
         let label = CommandLine.arguments.dropFirst(2).first ?? "sample"
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceCheckpointBenchmark-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

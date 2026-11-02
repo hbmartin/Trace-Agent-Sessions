@@ -73,6 +73,8 @@ func compileGenerationOwnedNavigationClient(_ database: IndexDatabase, scheduler
 
 // Shared checkpoint admission is additive; legacy entry points above stay usable.
 func compileReservedCheckpointClient(_ database: IndexDatabase, coordinator: IndexCoordinator) async throws {
+    var changes = SourceChanges()
+    changes.wrappedStreams = ["external"]
     let ledger = IndexCheckpointLedger()
     ledger.seed(stream: "external", checkpoint: try await database.eventCheckpointRecord(volumeID: "external"))
     let reservation = ledger.reserve(watermarks: ["external": 100], streamRoots: ["external": ["/tmp/external"]],

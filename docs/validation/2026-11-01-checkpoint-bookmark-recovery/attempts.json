@@ -1,0 +1,112 @@
+[
+  {
+    "run": "compile-1",
+    "result": "failed",
+    "resolution": "Correct fixture argument order and use explicit UI polling result types."
+  },
+  {
+    "run": "compile-2 through compile-6",
+    "result": "passed",
+    "role": "Successive compile checks; compile-6 includes final source and UI controls."
+  },
+  {
+    "run": "checkpoint-recovery-new-1",
+    "result": "failed",
+    "resolution": "Correct sibling source fixture, restart through actual replacement-watcher path, and release held read after initiating owner retirement."
+  },
+  {
+    "run": "checkpoint-recovery-new-2",
+    "result": "passed",
+    "tests": 9,
+    "role": "Intermediate source"
+  },
+  {
+    "run": "checkpoint-recovery-final-focused-1",
+    "result": "passed",
+    "tests": 439,
+    "role": "Initial candidate 589d41d"
+  },
+  {
+    "run": "checkpoint-recovery-final-stress-1",
+    "result": "passed",
+    "tests": 65,
+    "role": "Initial candidate 589d41d"
+  },
+  {
+    "run": "checkpoint-recovery-final-stress-2",
+    "result": "passed",
+    "tests": 65,
+    "role": "Initial candidate 589d41d"
+  },
+  {
+    "run": "checkpoint-recovery-final-stress-3",
+    "result": "passed",
+    "tests": 65,
+    "role": "Initial candidate 589d41d"
+  },
+  {
+    "run": "checkpoint-recovery-final-stress-4",
+    "result": "failed",
+    "passedTests": 64,
+    "failedTests": 1,
+    "resolution": "Wait for the selected-session content generation after reset, then require a nonempty search result before comparing the target. Cached pre-reset rows no longer satisfy completion."
+  },
+  {
+    "run": "checkpoint-recovery-v2-focused",
+    "exitCode": 0,
+    "elapsedSeconds": 80.49492679093964,
+    "passedTests": 439,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  {
+    "run": "checkpoint-recovery-v2-stress-1",
+    "exitCode": 0,
+    "elapsedSeconds": 15.178802875103429,
+    "passedTests": 65,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  {
+    "run": "checkpoint-recovery-v2-stress-2",
+    "exitCode": 0,
+    "elapsedSeconds": 13.932064292021096,
+    "passedTests": 65,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  {
+    "run": "checkpoint-recovery-v2-stress-3",
+    "exitCode": 0,
+    "elapsedSeconds": 13.53291808301583,
+    "passedTests": 65,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  {
+    "run": "checkpoint-recovery-v2-stress-4",
+    "exitCode": 0,
+    "elapsedSeconds": 13.748252833029255,
+    "passedTests": 65,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  {
+    "run": "checkpoint-recovery-v2-stress-5",
+    "exitCode": 0,
+    "elapsedSeconds": 13.859136499930173,
+    "passedTests": 65,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  {
+    "run": "checkpoint-recovery-ui-new-1",
+    "exitCode": 0,
+    "elapsedSeconds": 69.92299820808694,
+    "passedTests": 2,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "acceptedAsQuietValidation": false,
+    "reason": "Competing GitX native builds resumed after the initial empty process check. Both UI cases passed, but this attempt is retained as diagnostic evidence and does not validate the full selected UI scope."
+  }
+]
