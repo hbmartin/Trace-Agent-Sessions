@@ -1,0 +1,5 @@
+[
+  "TraceAppTests/AppReviewFollowupTests/testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination",
+  "TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear",
+  "TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRejectsReplacementAndTermination"
+]

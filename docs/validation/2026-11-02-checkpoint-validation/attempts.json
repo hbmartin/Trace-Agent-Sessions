@@ -1,0 +1,76 @@
+[
+  {
+    "run": "compile-negative",
+    "outcome": "passed",
+    "role": "Temporary expected-failure control"
+  },
+  {
+    "run": "checkpoint-validation-negative",
+    "outcome": "expected failure",
+    "assertionFailures": 4,
+    "reason": "Bypassing pending-bookmark revision validation restores the wrong message, offset, index, and an explicitly cleared bookmark."
+  },
+  {
+    "run": "compile-final-1",
+    "outcome": "passed",
+    "role": "Intended source restored byte-for-byte before freeze"
+  },
+  {
+    "run": "checkpoint-validation-focused",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.160080834059045
+  },
+  {
+    "run": "checkpoint-validation-races-1",
+    "exitCode": 0,
+    "passedTests": 3,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 5.549000750062987
+  },
+  {
+    "run": "checkpoint-validation-races-2",
+    "exitCode": 0,
+    "passedTests": 3,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 4.494260624982417
+  },
+  {
+    "run": "checkpoint-validation-races-3",
+    "exitCode": 0,
+    "passedTests": 3,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 4.859884500037879
+  },
+  {
+    "run": "checkpoint-validation-races-4",
+    "exitCode": 0,
+    "passedTests": 3,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 4.885574833024293
+  },
+  {
+    "run": "checkpoint-validation-races-5",
+    "exitCode": 0,
+    "passedTests": 3,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 4.475978958886117
+  },
+  {
+    "test": "TraceUITests/TraceUITests/testLatestScrollWhileAutomaticResetPreparesSurvivesCommit",
+    "status": "not run",
+    "reason": "Fresh desktop-idle confirmation has not been received."
+  },
+  {
+    "test": "TraceUITests/TraceUITests/testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart",
+    "status": "not run",
+    "reason": "Fresh desktop-idle confirmation has not been received."
+  }
+]
