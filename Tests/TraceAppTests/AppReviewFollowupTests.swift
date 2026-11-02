@@ -93,28 +93,48 @@ final class AppReviewFollowupTests: XCTestCase {
     }
 
     func testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination() async throws {
-        for replace in [false, true] {
-            let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
-            let stream = f.model.checkpointStreamForTesting(root: f.root)
-            let gate = ReviewReadGate(), held = Task { await gate.wait() }
-            defer { held.cancel(); Task { await gate.open() } }
-            f.model.checkpointReadGateForTesting = held
-            f.model.settings.onboardingComplete = true
-            let starting = Task { await f.model.startWatchingForTesting([source]) }
-            try await wait { f.model.checkpointReadWaitingForTesting }
-            if replace {
-                let replacement = try IndexDatabase(url: f.root.appendingPathComponent("replacement.sqlite"))
-                await f.model.attachForTesting(database: replacement, sources: [source])
-            } else {
-                await f.model.prepareToTerminate()
+        for fails in [false, true] {
+            for replace in [false, true] {
+                let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
+                let stream = f.model.checkpointStreamForTesting(root: f.root)
+                let context = "failed read=\(fails), replacement=\(replace)"
+                var failures = 0
+                var seededDatabases: [ObjectIdentifier] = []
+                f.model.checkpointReadFailureForTesting = { _, _ in failures += 1 }
+                f.model.checkpointSeedForTesting = { database, name in
+                    if name == stream { seededDatabases.append(ObjectIdentifier(database)) }
+                }
+                if fails {
+                    await f.database.failCheckpointReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY,
+                        message: "obsolete-checkpoint-message", sql: "SELECT obsolete_checkpoint_sql",
+                        arguments: ["obsolete-checkpoint-argument"], publicStatementArguments: true), stream: stream)
+                }
+                let gate = ReviewReadGate(), held = Task { await gate.wait() }
+                defer {
+                    f.model.checkpointReadFailureForTesting = nil
+                    f.model.checkpointSeedForTesting = nil
+                    held.cancel(); Task { await gate.open() }
+                }
+                f.model.checkpointReadGateForTesting = held
+                f.model.settings.onboardingComplete = true
+                let starting = Task { await f.model.startWatchingForTesting([source]) }
+                try await wait { f.model.checkpointReadWaitingForTesting }
+                if replace {
+                    let replacement = try IndexDatabase(url: f.root.appendingPathComponent("replacement.sqlite"))
+                    await f.model.attachForTesting(database: replacement, sources: [source])
+                } else {
+                    await f.model.prepareToTerminate()
+                }
+                await gate.open()
+                let ready = await starting.value
+                XCTAssertFalse(ready, context)
+                XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.isEmpty, context)
+                XCTAssertTrue(f.model.monitoringWarnings.isEmpty, context)
+                XCTAssertEqual(failures, 0, context)
+                XCTAssertFalse(seededDatabases.contains(ObjectIdentifier(f.database)), context)
+                let oldCheckpoint = try await f.database.eventCheckpointRecord(volumeID: stream)
+                XCTAssertNil(oldCheckpoint, context)
             }
-            await gate.open()
-            let ready = await starting.value
-            XCTAssertFalse(ready)
-            XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.isEmpty)
-            XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
-            let oldCheckpoint = try await f.database.eventCheckpointRecord(volumeID: stream)
-            XCTAssertNil(oldCheckpoint)
         }
     }
 
@@ -151,13 +171,13 @@ final class AppReviewFollowupTests: XCTestCase {
             model.updateTranscriptBookmark(sessionID: pending.session.id,
                 bookmark: clear ? nil : .init(messageID: last.id, offset: 77, index: 1))
             await pending.gate.open()
-            try await wait { !model.pendingBookmarkResolutionWaitingForTesting }
-            await model.refreshSummariesForTesting(lightweight: false)
-            XCTAssertEqual(model.pendingBookmarkCountForTesting, 0)
+            try await wait { model.pendingBookmarkCountForTesting == 0 }
+            XCTAssertFalse(model.pendingBookmarkResolutionWaitingForTesting)
             if clear { XCTAssertNil(model.scrollPositions[pending.session.id]) }
             else {
                 XCTAssertEqual(model.scrollPositions[pending.session.id]?.messageID, last.id)
                 XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 77)
+                XCTAssertEqual(model.scrollPositions[pending.session.id]?.index, 1)
             }
         }
     }

@@ -2385,6 +2385,7 @@ final class TraceModel: ObservableObject {
         watcherGroupingPolicy.groupIdentifier(for: root, volumeIdentifier: Self.volumeIdentifier(for: root))
     }
     var checkpointReadFailureForTesting: ((Int32?, Int32?) -> Void)?
+    var checkpointSeedForTesting: ((IndexDatabase, String) -> Void)?
     var copyReadGateForTesting: Task<Void, Never>?
     private(set) var copyReadWaitingForTesting = false
     private(set) var copyReadFinishedForTesting = false
@@ -6076,6 +6077,9 @@ final class TraceModel: ObservableObject {
                 unavailableCheckpointStreams.remove(groupingID)
                 checkpointReadFailures[groupingID] = nil
                 persisted = checkpoint; tracksWatermarks = true
+                #if DEBUG
+                checkpointSeedForTesting?(database, groupingID)
+                #endif
             case .failure(let error):
                 if error is CancellationError { return .superseded }
                 failedCheckpoints.insert(groupingID)

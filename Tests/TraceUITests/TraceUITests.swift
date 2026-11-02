@@ -4602,7 +4602,7 @@ final class TraceUITests: XCTestCase {
             return true
         })
         app.buttons["indexProgress"].click()
-        XCTAssertFalse(warning.exists)
+        XCTAssertTrue(warning.waitForNonExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])
         attach(app, name: "checkpoint-failure-live-updates-and-monitoring-recovery")
     }
