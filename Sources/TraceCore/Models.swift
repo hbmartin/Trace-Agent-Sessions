@@ -888,6 +888,14 @@ public struct SessionNavigationReference: Hashable, Codable, Sendable {
             anchorExternalID: anchored ? anchorExternalID : reference.anchorExternalID)
     }
 
+    /// Match with the same precedence as database resolution: an external ID
+    /// owns the anchor even if a rewrite changed its source offset.
+    public func matchesAnchor(_ identity: MessageNavigationIdentity) -> Bool {
+        if let external = anchorExternalID { return identity.externalID == external }
+        if let key = anchorSourceKey { return identity.sourceKey == key }
+        return false
+    }
+
     public var unanchored: Self {
         .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
             anchorSourceKey: nil, anchorExternalID: nil)

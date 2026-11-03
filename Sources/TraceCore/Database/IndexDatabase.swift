@@ -657,6 +657,10 @@ public actor IndexDatabase {
         }
     }
 
+    /// Legacy raw event IDs remain monotonic. They cannot express an ID wrap;
+    /// wrap-aware clients must persist the scheduler's epoch-qualified updates
+    /// with saveQualifiedEventCheckpoints instead of inferring an epoch from a
+    /// smaller (possibly delayed) value.
     public func saveEventCheckpoints(_ checkpoints: [String: UInt64]) throws {
         guard !checkpoints.isEmpty else { return }
         try pool.write { db in
@@ -673,7 +677,11 @@ public actor IndexDatabase {
         guard !checkpoints.isEmpty else { return }
         try pool.write { db in
             if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { return }
-            for (stream, update) in checkpoints { try Self.saveCheckpoint(stream: stream, update: update, in: db) }
+            let generation = try Self.readContentGeneration(db)
+            for (stream, update) in checkpoints {
+                guard update.contentGeneration == nil || update.contentGeneration == generation else { continue }
+                try Self.saveCheckpoint(stream: stream, update: update, in: db)
+            }
         }
     }
 

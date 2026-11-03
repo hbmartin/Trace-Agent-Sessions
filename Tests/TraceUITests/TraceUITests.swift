@@ -1667,6 +1667,23 @@ final class TraceUITests: XCTestCase {
         let invocation: UUID
         let bookmarkIndex: Int
         let bookmarkOffset: Double
+        func matches(generation: String, sessionID: Int64, bookmark: Int, excluding prior: Set<UUID>) -> Bool {
+            self.generation.value == generation && self.sessionID == sessionID && bookmarkIndex == bookmark
+                && !prior.contains(invocation)
+        }
+    }
+
+    func testNativeRestorationPredicateRejectsCachedAndUnrelatedReceipts() {
+        let prior = UUID(), fresh = UUID()
+        let old = NativeRestorationRecord(generation: .init(value: "old"), sessionID: 7, invocation: fresh, bookmarkIndex: 3, bookmarkOffset: 0)
+        let reused = NativeRestorationRecord(generation: .init(value: "new"), sessionID: 7, invocation: prior, bookmarkIndex: 3, bookmarkOffset: 0)
+        let wrongSession = NativeRestorationRecord(generation: .init(value: "new"), sessionID: 8, invocation: fresh, bookmarkIndex: 3, bookmarkOffset: 0)
+        let wrongBookmark = NativeRestorationRecord(generation: .init(value: "new"), sessionID: 7, invocation: fresh, bookmarkIndex: 4, bookmarkOffset: 0)
+        let current = NativeRestorationRecord(generation: .init(value: "new"), sessionID: 7, invocation: fresh, bookmarkIndex: 3, bookmarkOffset: 0)
+        for stale in [old, reused, wrongSession, wrongBookmark] {
+            XCTAssertFalse(stale.matches(generation: "new", sessionID: 7, bookmark: 3, excluding: [prior]))
+        }
+        XCTAssertTrue(current.matches(generation: "new", sessionID: 7, bookmark: 3, excluding: [prior]))
     }
 
     private func nativeRestorationRecords(in path: URL) -> [NativeRestorationRecord] {
@@ -4602,6 +4619,7 @@ final class TraceUITests: XCTestCase {
             return true
         })
         app.buttons["indexProgress"].click()
+        XCTAssertTrue(app.staticTexts["indexProgressDetails"].waitForExistence(timeout: 5))
         XCTAssertTrue(warning.waitForNonExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])
         attach(app, name: "checkpoint-failure-live-updates-and-monitoring-recovery")
@@ -4677,8 +4695,7 @@ final class TraceUITests: XCTestCase {
         let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Latest bookmark reader';")
         let completion: NativeRestorationRecord = try XCTUnwrap(poll(timeout: 20) { () -> NativeRestorationRecord? in
             self.nativeRestorationRecords(in: restored).first {
-                $0.generation.value == generation && $0.sessionID == selected && $0.bookmarkIndex == latest
-                    && !priorRestores.contains($0.invocation)
+                $0.matches(generation: generation, sessionID: selected, bookmark: latest, excluding: priorRestores)
             }
         })
         XCTAssertEqual(completion.bookmarkOffset, Double(y), accuracy: 8)

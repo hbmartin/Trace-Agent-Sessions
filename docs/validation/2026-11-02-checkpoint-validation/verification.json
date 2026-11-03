@@ -134,10 +134,10 @@
     "intendedSourceSha256": "8c93fa1dac0a3e2ab0f6541bb0d3d33d3429d546d24637e7f2138115784f4d6f",
     "negativeSourceSha256": "bc8d3588cdd1f993838b663db008acf72021b52186cd9cff647faa56cab5cf64",
     "restoredSourceMatchesIntended": true,
-    "failureCount": 1,
-    "expectedAssertionFailures": 4,
     "bothNewerBookmarkAndExplicitClearDetected": true,
-    "patchSha256": "2708403598a905a793b3ef6784e9d889a55f6929242f36dbfff385e4a97b365f"
+    "patchSha256": "2708403598a905a793b3ef6784e9d889a55f6929242f36dbfff385e4a97b365f",
+    "failedTests": 1,
+    "assertionFailures": 4
   },
   "compiledSelection": {
     "focused-selectors.json": {
@@ -168,5 +168,11 @@
     "optimized performance measurements",
     "Release comparison pairs"
   ],
-  "performanceAcceptanceClaim": false
+  "performanceAcceptanceClaim": false,
+  "historicalProvenance": {
+    "candidate": "f06c853e619a78b3a4cf4d4e3404ed4aefa23407",
+    "source": "../2026-11-01-checkpoint-bookmark-recovery/raw-artifacts.json",
+    "verification": "historical-verification.json",
+    "note": "Historical artifacts, not follow-up candidate measurements."
+  }
 }
