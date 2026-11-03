@@ -98,6 +98,7 @@ public final class IndexCheckpointLedger: Sendable {
         var predecessors: Set<String>
         var floor: UInt64?
         var roots: Set<TraceFileIO.CanonicalPath> = []
+        var coverageRoots: Set<TraceFileIO.CanonicalPath> = []
         var records: [UUID: Record] = [:]
         var tail: UUID?
         var initialized = false
@@ -169,17 +170,29 @@ public final class IndexCheckpointLedger: Sendable {
 
     public func reserve(watermarks: [String: UInt64], streamRoots: [String: Set<String>],
                         hasIndexWork: Bool, wrappedStreams: Set<String> = [],
+                        paths: Set<String> = [], reconciliationPaths: Set<String> = []) -> IndexCheckpointReservation {
+        reserve(watermarks: watermarks, streamRoots: streamRoots, hasIndexWork: hasIndexWork,
+            wrappedStreams: wrappedStreams, paths: paths, reconciliationPaths: reconciliationPaths, streamEpochs: [:])
+    }
+
+    public func reserve(watermarks: [String: UInt64], streamRoots: [String: Set<String>],
+                        hasIndexWork: Bool, wrappedStreams: Set<String> = [],
                         paths: Set<String> = [], reconciliationPaths: Set<String> = [],
-                        streamEpochs: [String: IndexEventStreamEpoch] = [:]) -> IndexCheckpointReservation {
+                        streamEpochs: [String: IndexEventStreamEpoch]) -> IndexCheckpointReservation {
         let inputPaths = Set(paths.map(TraceFileIO.canonicalPath))
         let inputReconciliation = Set(reconciliationPaths.map(TraceFileIO.canonicalPath))
         let roots = streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) }
         return state.withLock { value in
             var entries: [Entry] = []
             for (name, watermark) in watermarks {
-                var stream = value.streams[name] ?? Stream(epoch: "", predecessors: [], floor: nil)
+                // Remove/reinsert under the same lock so the dictionary does
+                // not retain a second owner of records during each reservation.
+                var stream = value.streams.removeValue(forKey: name) ?? Stream(epoch: "", predecessors: [], floor: nil)
                 let incoming = streamEpochs[name]
-                if let incoming, stream.ingressEpoch?.predecessors.contains(incoming.id) == true { continue }
+                if let incoming, stream.ingressEpoch?.predecessors.contains(incoming.id) == true {
+                    value.streams[name] = stream
+                    continue
+                }
                 let repeatedWrap = incoming != nil && incoming == stream.ingressEpoch
                 if wrappedStreams.contains(name) && !repeatedWrap {
                     let retainedRoots = stream.records.values.reduce(into: stream.roots) { $0.formUnion($1.entry.roots) }
@@ -192,6 +205,7 @@ public final class IndexCheckpointLedger: Sendable {
                 }
                 if let incoming { stream.ingressEpoch = incoming }
                 let qualification = roots[name] ?? []
+                stream.coverageRoots.formUnion(qualification)
                 if !hasIndexWork { stream.roots.formUnion(qualification) }
                 // Watermark-only inputs share one pending tail. A revision keeps
                 // a running older snapshot from accepting newer qualification.
@@ -287,8 +301,11 @@ public final class IndexCheckpointLedger: Sendable {
         let changed = Set(changedPaths.map(TraceFileIO.canonicalPath))
         let paths = reconciliationPaths.map(TraceFileIO.canonicalPath)
         let snapshot = state.withLock { $0.streams }
-        return snapshot.values.flatMap { stream in
-            stream.records.values.compactMap { record in
+        return snapshot.values.flatMap { stream -> [Entry] in
+            guard fullScan || stream.coverageRoots.isEmpty || stream.coverageRoots.contains(where: { root in
+                changed.contains { root.intersects($0) } || paths.contains { root.intersects($0) }
+            }) else { return [] }
+            return stream.records.values.compactMap { record in
                 guard stream.initialized,
                       Self.requirement(record, stream: stream).covered(paths: changed,
                         reconciliation: Set(paths), fullScan: fullScan, failures: []) else { return nil }
@@ -365,7 +382,7 @@ public final class IndexCheckpointLedger: Sendable {
                 snapshot.streams[entry.stream]?.records[entry.id] = record
             }
             var accepted: [String: IndexEventCheckpoint] = [:]
-            for name in Array(snapshot.streams.keys) {
+            for name in Set(coverage.entries.map(\.stream)) {
                 guard var stream = snapshot.streams[name], stream.initialized else { continue }
                 let barrier = stream.records.values.filter { !$0.covered }.map { $0.entry.watermark }.min()
                 let prefix = stream.records.values.filter { $0.covered && (barrier == nil || $0.entry.watermark < barrier!) }
