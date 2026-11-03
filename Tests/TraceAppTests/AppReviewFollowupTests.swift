@@ -12,6 +12,23 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testReservationOnlyMetadataRoutesThroughSharedEnvelope() async throws {
+        let f = try await fixture(count: 2), source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let reservation = f.model.checkpointLedgerForTesting.reserve(watermarks: ["reserved-only": 100],
+            streamRoots: [:], hasIndexWork: false)
+        var changes = SourceChanges(); changes.checkpointReservations = [reservation]
+        await f.model.bufferSourceChangesForTesting(changes)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let saved = try await f.database.eventCheckpoint(volumeID: "reserved-only")
+        XCTAssertEqual(saved, 100)
+        XCTAssertEqual(f.model.checkpointLedgerForTesting.initializationForTesting(stream: "reserved-only").floor, 100)
+    }
+
     func testOnboardingDeferralRetiresUnreadCheckpointPreparation() async throws {
         let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
         let gate = ReviewReadGate(), held = Task { await gate.wait() }

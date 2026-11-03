@@ -835,7 +835,8 @@ final class TraceModel: ObservableObject {
         }
         if watcherStartupPending { retainBufferedSourceWork(work); return }
         guard let scheduler = self.scheduler else { retainBufferedSourceWork(work); return }
-        guard work.changes.hasIndexWork || !work.changes.watermarks.isEmpty || !work.obligations.isEmpty else { return }
+        guard work.changes.hasIndexWork || !work.changes.watermarks.isEmpty
+                || !work.changes.checkpointReservations.isEmpty || !work.obligations.isEmpty else { return }
         let completion: (@Sendable () -> Void)?
         if work.obligations.isEmpty { completion = nil }
         else { completion = { for obligation in work.obligations { obligation.completion() } } }
@@ -6287,26 +6288,23 @@ final class TraceModel: ObservableObject {
     private func routeSourceChanges(_ changes: SourceChanges, acceptsCheckpoints: Bool,
                                     completion: (@Sendable () -> Void)? = nil,
                                     delivery: RecoveryEnrollment? = nil, safety: Bool = false) async {
+        guard changes.hasIndexWork || (acceptsCheckpoints && !changes.watermarks.isEmpty)
+                || !changes.checkpointReservations.isEmpty || completion != nil || delivery != nil || safety else {
+            delivery?.retire()
+            return
+        }
         let changes = reservingCheckpointWork(changes)
-        if watcherStartupPending {
-            bufferedSourceChanges.merge(changes)
-            if completion != nil || delivery != nil || safety {
-                let once = BufferedCompletion(completion ?? {})
-                bufferedSourceWork.obligations.append(.init(completion: { once.complete() }, delivery: delivery, safety: safety))
-            }
-        } else if changes.hasIndexWork || (acceptsCheckpoints && !changes.watermarks.isEmpty) {
-            await submitSourceChanges(changes, completion: completion, safety: safety)
-            delivery?.finish(.ordinaryDelivered)
-        } else { delivery?.retire() }
+        let obligations: [BufferedOrdinaryWork]
+        if completion != nil || delivery != nil || safety {
+            let once = BufferedCompletion(completion ?? {})
+            obligations = [.init(completion: { once.complete() }, delivery: delivery, safety: safety)]
+        } else { obligations = [] }
+        await routeBufferedSourceWork(.init(database: database, changes: changes, obligations: obligations))
     }
 
     private func submitSourceChanges(_ changes: SourceChanges,
                                      completion: (@Sendable () -> Void)? = nil, safety: Bool = false) async {
-        guard let scheduler else {
-            retainBufferedSourceWork(.init(database: database, changes: changes,
-                obligations: completion.map { [.init(completion: $0, delivery: nil, safety: safety)] } ?? []))
-            return
-        }
+        guard let scheduler else { return }
         TraceTestHooks.appendLine(
             "paths=\(changes.paths.sorted()),reconcile=\(changes.reconciliationPaths.sorted()),reasons=\(changes.recoveryReasons.map(\.rawValue).sorted())",
             pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"
