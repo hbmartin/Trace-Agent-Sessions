@@ -1,0 +1,150 @@
+{
+  "candidate": "f06c853e619a78b3a4cf4d4e3404ed4aefa23407",
+  "sourceHashes": [
+    {
+      "path": "Scripts/benchmark-checkpoint-enqueue.swift",
+      "sha256": "0bc7127b114ec8165a9677b27b85b01a511a490437ff3749b39c05c179c8b4e3"
+    },
+    {
+      "path": "Sources/TraceApp/MainView.swift",
+      "sha256": "84afc2d41261232cbdcafb78b0b49954e76b4537cafeda28ff2bfa2069f956e6"
+    },
+    {
+      "path": "Sources/TraceApp/TraceModel.swift",
+      "sha256": "5982a84af587535686e578f3206f6a0c39bba37c11047bf78e8b6d90553baf6a"
+    },
+    {
+      "path": "Sources/TraceCore/Database/IndexDatabase.swift",
+      "sha256": "c3e52da1b6fa224753a6929484c14e23f5d638225f0cb7905f19dbcfcc85cd0c"
+    },
+    {
+      "path": "Sources/TraceCore/Indexing/FSEventsWatcher.swift",
+      "sha256": "5f5aaf4a8e8ac66769f4346aa5fcb6d3a4106827d01add70eb5e0f07a92451b4"
+    },
+    {
+      "path": "Sources/TraceCore/Indexing/IndexScheduler.swift",
+      "sha256": "0b62af5bbd547e19d248c82bd40eedde71d3b3a30cd48cb74b29830805677e6c"
+    },
+    {
+      "path": "Tests/ExternalClientFixture/DiscoveryClient.swift",
+      "sha256": "1db2c9c7fe9169ca4a8eca43039a6b88a194bf88b1fe7b5ad61affec4ea6881b"
+    },
+    {
+      "path": "Tests/TraceAppTests/AppReviewFollowupTests.swift",
+      "sha256": "77e12fbe6833e8ec0a185270fc1911c78cbc15a96ababa9a8100c9c4f1b0018f"
+    },
+    {
+      "path": "Tests/TraceCoreTests/IndexingRegressionTests.swift",
+      "sha256": "bcbac03fbddc6970ae4f0940a545f7583068f150543ab4a4d2c7c6c63ea4d408"
+    },
+    {
+      "path": "Tests/TraceUITests/TraceUITests.swift",
+      "sha256": "ac68c3e2a697d38a3b904ff5f3c28adadfe4d92bb8dab395faf1da7505d11225"
+    }
+  ],
+  "historicalCandidates": [
+    {
+      "candidate": "589d41d03dbbd4aab47b0f1851e07c4388c95471",
+      "verifiedSourceHashes": 12
+    }
+  ],
+  "verifiedArtifactRecords": 80,
+  "trees": [
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-bookmark-recovery-followup/checks",
+      "files": 22,
+      "bytes": 1299601,
+      "treeSha256": "0265cc737e0fa67dd54fedbfdca6c1c989bd45a53c48b005afd65435810f0952"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-bookmark-recovery-followup/validation-controls",
+      "files": 5,
+      "bytes": 11226,
+      "treeSha256": "9a40cf7cb80218aa8110bf6828b3df018d0a7caae640187f599708d7a90ad109"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-final-focused-1.xcresult",
+      "files": 924,
+      "bytes": 1678727,
+      "treeSha256": "21d8493edf3a2901dc78e3a14ed87cd2d89efcfee9de63a1f2f44e6365f7c02f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-final-stress-1.xcresult",
+      "files": 176,
+      "bytes": 992363,
+      "treeSha256": "62f219eac4f15deada566a4a760e70361df0cf0f860f363709fade99ed971667"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-final-stress-2.xcresult",
+      "files": 176,
+      "bytes": 985986,
+      "treeSha256": "9d8400f9a41c8ec3dfa2f2f2b85a07c0605042a79a125ae4df7b312ba08dba5b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-final-stress-3.xcresult",
+      "files": 176,
+      "bytes": 994572,
+      "treeSha256": "04f34d5219dcceefcf36ea6c6067b4d45e216afe784dbd00a1a0225b66de4e1b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-final-stress-4.xcresult",
+      "files": 1656,
+      "bytes": 71309281,
+      "treeSha256": "10fe6e124b27d3424cca88e2e36d961875c04959aa01b658b025be96c5b36ddc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-new-1.xcresult",
+      "files": 1590,
+      "bytes": 77808575,
+      "treeSha256": "4ee86275f6c3e8c16c487d7cef26035f8ca34af9ce22a30bb520d2946c019867"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-new-2.xcresult",
+      "files": 64,
+      "bytes": 849180,
+      "treeSha256": "dcac172422d94b3c84b435724306d9000233f7671176cc0164fed033f837d9f5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-ui-new-1.xcresult",
+      "files": 1594,
+      "bytes": 75193727,
+      "treeSha256": "f7a6011e1d87c34fa4cbefbbfe93c270f3cad35caae2c740a45aa32bf915489a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-v2-focused.xcresult",
+      "files": 924,
+      "bytes": 1671936,
+      "treeSha256": "49a35e505f3d79c13bb6c9e3530ac1d4d81aec7e8f87ac36352985be8dd7b71e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-v2-stress-1.xcresult",
+      "files": 176,
+      "bytes": 985192,
+      "treeSha256": "20a7e18ad9639a238a25886fca6a9e80fc20fabc8909f98144e7ed5e95d29480"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-v2-stress-2.xcresult",
+      "files": 176,
+      "bytes": 985434,
+      "treeSha256": "cb3b2cd347b8407b528c0b73cc2b750754f065cc9186e0223c94aa8de0fb7641"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-v2-stress-3.xcresult",
+      "files": 176,
+      "bytes": 992799,
+      "treeSha256": "eb00b318dc51f3637143bf9fce859fe2733767beb38efee34165cd9eb51f62a6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-v2-stress-4.xcresult",
+      "files": 176,
+      "bytes": 991896,
+      "treeSha256": "feddd20b5e74be96e67563c05ba731eb5893ee220f76516f9d8dea3e1d4c8b60"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-recovery-v2-stress-5.xcresult",
+      "files": 176,
+      "bytes": 992752,
+      "treeSha256": "325d73cb96dea09092bb7aa9bfc9cb67e21d6b2d6cf2f91cd6ed09dbe9140cea"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "validatedCandidate": "c0a2fbccd49013711f5f080f2e2261673c8f5583",
+  "currentCandidate": "8f314a0754ea86ba68fcbfa476ed85bff98d3193",
+  "unchangedInputs": {
+    "Scripts/benchmark-checkpoint-enqueue.swift": "0bc7127b114ec8165a9677b27b85b01a511a490437ff3749b39c05c179c8b4e3",
+    "Scripts/benchmark-transcript-comparison.sh": "ffd52a49e8613a8522c32885d091229f384979107cf7c51f392dcc332dbe0a81",
+    "Scripts/check-local-benchmark-regressions.py": "d70d26d6fb532392b8f262cb17e02e73f2e993d0767ab70ee874293653dbc2a2",
+    "Scripts/check-network-surface.sh": "5a7e897d31fa78c344d1a7d5b25c998b6b2d067db734abd56475ca3fd5523302",
+    "Scripts/check-project-drift.sh": "49278717ad7f322ba95ffa7d14dfb5a98e3b791829317f4b6cc903da745ec18e",
+    "Scripts/check-release-signing.py": "de3e502dd9fad0ba5ab61a7f861577c933f9f9a101d20540a265f7daba7b9ca9",
+    "Scripts/check-signing-settings.sh": "2d980494784a8923273aea8c769acbce69aec5b89b9621bccd8be1bb0928f396",
+    "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+    "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+    "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+    "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+    "Scripts/normalize-trace-scheme.py": "1b966edd1a6b775ebe8b209687d5942070ecc6cbaf2e534a14810a2118efc75b",
+    "Scripts/prepare-benchmark-baseline.py": "e79bd20aa51ce87d46a651f4cdf66f482c62f84318c14f29527bf2e797168166",
+    "Scripts/release.sh": "f4b67f3eabb4740490e900efa2d564f2449b19cdd428f2e193e25b30a5bd87ac",
+    "Scripts/run-deny-network-smoke.sh": "db5bdcee1875cdd196e001aabc1ec6b1f523b09c04bf1b712a8a6cada7cbfaba",
+    "Scripts/run-local-benchmark-comparisons.py": "40c252105186e7b5e9fbb441969f4763c034021b6476e43f25e4ae1519e097ed",
+    "Scripts/run-performance-tests.sh": "a57939e82dcfd6d1d315fc967486244e80454b3c2edfdb92f3ecbd25322a8029",
+    "Scripts/run-snapshot-tests.sh": "6c47ffc4cbd2f330b3654c88ede5bfa24abf21bf512a80c95e1e2fa2d6edc8cf",
+    "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+    "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+    "Tests/Scripts/test_benchmark_reliability.py": "612bbb045bc54e8b287a4824fbeb94ed8726ada60b30845eeee1906a99f175b1",
+    "Tests/Scripts/test_normalize_trace_scheme.py": "a3860296f525d883f4285599104a4270defb5f80092005d6c0766e3b33bf4fff",
+    "Tests/Scripts/test_review_fix_regressions.py": "fe2bfa167bbea930e14c68991a2b7577a8f84692fd504ceed6d076b372a64e87",
+    "Tests/Scripts/test_transcript_benchmark_scripts.py": "6c391439d8a88a234c17bc0339e1b6d85e580c72faaff87fbf8da95932e5a066"
+  },
+  "evidence": "checks-final/script-tests.log",
+  "tests": 53
+}

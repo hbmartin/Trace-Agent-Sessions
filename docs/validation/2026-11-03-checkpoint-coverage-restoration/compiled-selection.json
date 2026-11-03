@@ -1,0 +1,22 @@
+{
+  "focused-selectors.json": {
+    "requestedIdentifiers": 172,
+    "matchingTests": 172,
+    "missing": []
+  },
+  "race-selectors.json": {
+    "requestedIdentifiers": 9,
+    "matchingTests": 9,
+    "missing": []
+  },
+  "ui-selectors.json": {
+    "requestedIdentifiers": 8,
+    "matchingTests": 8,
+    "missing": []
+  },
+  "regression-selectors.json": {
+    "requestedIdentifiers": 16,
+    "matchingTests": 16,
+    "missing": []
+  }
+}

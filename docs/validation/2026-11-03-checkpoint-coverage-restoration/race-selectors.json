@@ -1,0 +1,11 @@
+[
+  "TraceCoreTests/IndexingRegressionTests/testStopDoesNotDrainPendingMetadataOrIndexedReceipts",
+  "TraceCoreTests/IndexingRegressionTests/testCheckpointPersistenceRejectsResetDuringCallbackDelivery",
+  "TraceAppTests/AppReviewFollowupTests/testPendingBookmarkResolutionSurvivesUnrelatedSummary",
+  "TraceAppTests/AppReviewFollowupTests/testActiveBookmarkChangedDuringTranscriptReadWins",
+  "TraceAppTests/AppReviewFollowupTests/testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination",
+  "TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear",
+  "TraceCoreTests/IndexingRegressionTests/testFailedResetFallbackCannotAcknowledgeUntouchedPaths",
+  "TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRejectsReplacementAndTermination",
+  "TraceAppTests/AppReviewFollowupTests/testOnboardingDeferralRetiresUnreadCheckpointPreparation"
+]

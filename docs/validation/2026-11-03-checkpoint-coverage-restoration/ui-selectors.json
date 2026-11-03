@@ -1,0 +1,10 @@
+[
+  "TraceUITests/TraceUITests/testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart",
+  "TraceUITests/TraceUITests/testLatestScrollWhileAutomaticResetPreparesSurvivesCommit",
+  "TraceUITests/TraceUITests/testWatcherReplacementDuringSubmittedStartupResumesLiveChanges",
+  "TraceUITests/TraceUITests/testStartupClaimedRebuildSurvivesOnboardingDeferral",
+  "TraceUITests/TraceUITests/testRebuildShowsPreparationBeforeClearingIndex",
+  "TraceUITests/TraceUITests/testQueuedSidebarRetryBecomesUsableAfterRebuildReset",
+  "TraceUITests/TraceUITests/testRebuildDuringHeldRetryKeepsResumingFeedbackUntilWatcherStartupCompletes",
+  "TraceUITests/TraceUITests/testNativeRestorationPredicateRejectsCachedAndUnrelatedReceipts"
+]

@@ -1,0 +1,762 @@
+{
+  "algorithm": "SHA-256. Select regular files recursively without following directory symlinks; exclude symlinks. Sort relative POSIX paths lexicographically by their tuples of case-sensitive Unicode path components, without Unicode normalization. For each file concatenate UTF-8(relativePath), NUL, ASCII(decimal byte count without leading zeroes), NUL, ASCII(lowercase hexadecimal SHA-256 of file bytes), LF. Concatenate all records including each trailing LF and hash those bytes with SHA-256; emit lowercase hexadecimal. An empty tree hashes the empty byte string.",
+  "availability": "Raw payloads are local-only, not downloadable repository or CI attachments.",
+  "artifacts": [
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "approval-review-blocks.json",
+      "bytes": 556,
+      "sha256": "c4f60e5e0bcf4ee8fd9b28ad0b5d7813cacf28d2f97616574843995a18685c77"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "base.json",
+      "bytes": 119,
+      "sha256": "15d08c194c4a6b9dc08291175989ab32e41ab8a14e5012d2cad93b14adb3a33a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "candidate-3904975.json",
+      "bytes": 13164,
+      "sha256": "297084613259e557dd3f71c3c64201dea869d05c2725b0106073a78762db47e1"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "candidate-c0a2fbc.json",
+      "bytes": 13164,
+      "sha256": "425a60cda5ab6a52d9847ee4f070740debcc7b07c6653fd2c2c523cc5ee707fb"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "candidate.json",
+      "bytes": 13164,
+      "sha256": "fdda97c7eaa79e101dc63cc2f7860c5b5f9cdcee9e9aeb7c07795fab9ab17530"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/checks",
+      "files": 10,
+      "bytes": 1298530,
+      "treeSha256": "3dd359b591a8f489879ee773aba6fca5d64dcebf4f26908f993df7c31b92a722"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/checks-compat",
+      "files": 9,
+      "bytes": 1292276,
+      "treeSha256": "94c02897346595c73d9376122c180128b237aefc3425137d79bb152dbcab5d20"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/checks-final",
+      "files": 15,
+      "bytes": 1314601,
+      "treeSha256": "96e62320f6d1140127aa93b648a8d964edebad2c3e41a46368fda07746edf0c9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/checks-route",
+      "files": 9,
+      "bytes": 1290096,
+      "treeSha256": "1689e39067b9f3e035da5eb313166f241fc0bc315dd99c078aafbc7757882f71"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-focused-run.json",
+      "bytes": 328,
+      "sha256": "557d6c5397c60c950bbe3da78ea4b5b6a4fd64ad54e64e2ed840223f114c3eaa"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-focused-summary.json",
+      "bytes": 1353,
+      "sha256": "a6e9f621f639f05ede4c1ad7f3b85d9ba2eed302fee2d3ec6d474cacc27fd5c0"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-focused.log",
+      "bytes": 82845,
+      "sha256": "70dbc0aa193d1f2867ebcb975cab6e8652bccaae4de11e4638741b2517df74ac"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-1-run.json",
+      "bytes": 324,
+      "sha256": "a924942b932350d5183fa369550a22cf5a4d7a32323c3178697f9190fdcf46a4"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-1-summary.json",
+      "bytes": 964,
+      "sha256": "e593a96dc7cffb46120fe4bcb603b379e56bdfc3860d5e06d64114f6fcbbeca2"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-1.log",
+      "bytes": 11016,
+      "sha256": "57739f90f51e8cb1b59b4a3e515bdf7371aeee2ce0c9bf0bc8323a8c91345e18"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-2-run.json",
+      "bytes": 324,
+      "sha256": "057a22421ff909431c5a77ebbce0729496419982adef471a428f5f75ce271061"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-2-summary.json",
+      "bytes": 964,
+      "sha256": "cef1a34f3c93f497ff62b2f938f6733a26bda076fe6d5257aa6b619aadf307d4"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-2.log",
+      "bytes": 11015,
+      "sha256": "438576023190341905d187779b3751410b2a8d22b24466eb07b7d15d4c30f3dc"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-3-run.json",
+      "bytes": 324,
+      "sha256": "bf064b16f75e5a322711d2d5b1204c48f46a6cf1fe36591092190e368eaea661"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-3-summary.json",
+      "bytes": 964,
+      "sha256": "350b73e098c5ff77038087e8795f5ceea6e51c60715ac6216898b42bf6df6969"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-3.log",
+      "bytes": 11015,
+      "sha256": "ed714f3632b055d7e4b140a809fc0f7db445af2fed7592e0309f4cce01dba1f0"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-4-run.json",
+      "bytes": 324,
+      "sha256": "484fcf4d8621350982a5a1a058e791e6d5317ec299e2afb988d6e06cc2ebdabb"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-4-summary.json",
+      "bytes": 964,
+      "sha256": "5867e8cae0f14898bf07fae9c3a13519d2e6ac23269a6fc1e463815fdd80465f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-4.log",
+      "bytes": 11016,
+      "sha256": "cc664ed8c0a02e9a8558a8f1c4780bf375c05f91ef51a148f9ba7e092648a463"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-5-run.json",
+      "bytes": 324,
+      "sha256": "4c89365e1698307a640caee1acb4fa18e139be32e587330c69a051c3a6a6ddf3"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-5-summary.json",
+      "bytes": 963,
+      "sha256": "50478d81071271c4609fc6ac30a2be3bb20d3d289aaa3b47c6de65983a149ff8"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compat-races-5.log",
+      "bytes": 11015,
+      "sha256": "c0fe08d27804898e82466aa94ec9519fccbd554a7be73abeb386a43cc259cac5"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-1.log",
+      "bytes": 535475,
+      "sha256": "88112f4bb2044f680805e295eaa6d527e59614bcd546c44dcd69a8e1c578d95a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-10.log",
+      "bytes": 237011,
+      "sha256": "3ff0bf431dcdb27967b890d24011219daa0efd01c42cd50d6043ca7038e211f7"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-11.log",
+      "bytes": 199508,
+      "sha256": "f9ca84549bf81169412763fc5ade7bd7542c1c56fa98720304f4a89be4a2419c"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-2.log",
+      "bytes": 306112,
+      "sha256": "00adf48f8111793364f710823e9e248fb637d8e10c0ece694525c13f0e81fd45"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-3.log",
+      "bytes": 349449,
+      "sha256": "afd165b644e0e643502e27a20ec40653fabc031321ba43a1fdac37fb1c32ef99"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-4.log",
+      "bytes": 303037,
+      "sha256": "1ccea6cdd7011cca9d3dd0f39e77ebd1820dcb539f702f593197f08250ca211b"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-5.log",
+      "bytes": 313196,
+      "sha256": "93e2683d973b2ac6243c4c0fe71ebdad055b16840353e518679db2c5b4465e42"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-6.log",
+      "bytes": 251605,
+      "sha256": "df8dacb1f9a360b30d7f7d8a8241de9de1636a9bd42d6c6a268a3995f302158d"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-7.log",
+      "bytes": 736101,
+      "sha256": "da0f73b11c1a204eae455e08538228735f6f6dd96e1aa413a145a8551272e34f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-8.log",
+      "bytes": 704509,
+      "sha256": "80d397abdfb2ba8895624dc03aa30d85e32b18add33b3154e45a1fbad2f90038"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "compile-9.log",
+      "bytes": 705330,
+      "sha256": "94ccd96eb0177d50344aab3083f1de28eceab722140ef1b8e8ceb7af5d902abf"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "continuation-state.json",
+      "bytes": 693,
+      "sha256": "a9d167447c395cb263954f7fc3add8c794372380c471d8164a7e90a03b4c59a8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/controls",
+      "files": 24,
+      "bytes": 122284,
+      "treeSha256": "08de7057504e1ffe5f686b18fc6ca508c7628e51043e3ea3faf4fbfd3437f8bd"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "discovered-tests-compat.json",
+      "bytes": 125867,
+      "sha256": "959f9ad8bf1ac9d208085cdc530f189fdfbd00c6ff70061a32d21ef5e8a1de3e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "discovered-tests-route.json",
+      "bytes": 126009,
+      "sha256": "97fb0a3f5b9cc9105e1aa4aa1263f68c87bbc396b6a6d7eed59afa08aec4dc3f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "discovered-tests.json",
+      "bytes": 125577,
+      "sha256": "22c47490f5e906e39a8be1565cbdd78a59bb0229071a4fe368803c2a33cafe0d"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-focused-run.json",
+      "bytes": 325,
+      "sha256": "a89ca5be68ee6360f65abc2d48319badee70c8a0f8976d2c0c26364f796338b0"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-focused-summary.json",
+      "bytes": 1353,
+      "sha256": "1ef81e5c5029226342d6d797cc3f5b1f7e209c67b462c50698178a2c7eaf11b7"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-focused.log",
+      "bytes": 82677,
+      "sha256": "8e49c548eb9a7e60e9d30c2c7fd2dd0ad406586127805d045788484d4a4b0df1"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-1-run.json",
+      "bytes": 321,
+      "sha256": "79f3b3e5906895d4ce6cec4039619cb0f81ec4d53d839c5f17ece05e6e2cca9b"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-1-summary.json",
+      "bytes": 964,
+      "sha256": "69bf8a298a2b8489ceac2bc12618b0c9a39b0e3a4bfbff7189b1dfaac7cf2b8e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-1.log",
+      "bytes": 11012,
+      "sha256": "d03fe691e1f55ef0ff6022088b236051bfd0e5e94bc18662373a3dd8d06a8786"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-2-run.json",
+      "bytes": 321,
+      "sha256": "e077f1e566164211050e5812b898fff5bc1d2711ade25f38b58a1580ad46a6b0"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-2-summary.json",
+      "bytes": 964,
+      "sha256": "4a54fd7888e8bc5cc0ed46d3e9d4018bf5ff93681496ee3d1feea392e963928a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-2.log",
+      "bytes": 11013,
+      "sha256": "83ffa6a2396bd2fd8b158cc427eb0f2279936205f6adde47c05fa0dba10a3f6a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-3-run.json",
+      "bytes": 321,
+      "sha256": "9735c91efc10dec850d2886e0f832f5d49ca077e46b3f65b8a6fd4893b9e15c3"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-3-summary.json",
+      "bytes": 964,
+      "sha256": "0f33e1c72e8aed3c22274b83de6ce7c103af0678a60c4d6809aa7020a1589a3b"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-3.log",
+      "bytes": 11013,
+      "sha256": "135f0751f826ce8e285a899a4a6abb42fa48c62bd27e911590a3b030de9c25aa"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-4-run.json",
+      "bytes": 321,
+      "sha256": "cb13c8186958d434e2deb77d90372dba22d43dbc05db735f317198f3964d03f8"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-4-summary.json",
+      "bytes": 964,
+      "sha256": "ddcae96dcf64a756c8655401019c85040585c0704b7abe3752b237ff30c32396"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-4.log",
+      "bytes": 11013,
+      "sha256": "834f0e781cea9eac31cd9ed14a173ee2461e70f587906ff55b217c04d7091d9d"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-5-run.json",
+      "bytes": 322,
+      "sha256": "bdf2cf4c28f429d0bd385297507737790b9d5c668a6565a6b4a598843f535457"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-5-summary.json",
+      "bytes": 964,
+      "sha256": "c557f849f9bb0c4ffadb17304f4b9b4481f4e28ae1fd7cfe936ae053bdda45cb"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "final-races-5.log",
+      "bytes": 11013,
+      "sha256": "4bad8fdd0529477b7e6751a3b37d53d5fa3a1d12d6c09e3e2cd20760071acffc"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-1-run.json",
+      "bytes": 313,
+      "sha256": "825c3519bd69eaecfa6e6ddae3969938c0332bcae31f721151ab273e619c2e53"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-1-summary.json",
+      "bytes": 3642,
+      "sha256": "6980b3442ec568a4e53a781ace529db86ac5813d8308973fcca64d8f525ff476"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-1.log",
+      "bytes": 82274,
+      "sha256": "16bb23f3835f73e7a6894d70e7777df6007a004c8574f2f7b28a66da94f329d4"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-2-run.json",
+      "bytes": 312,
+      "sha256": "82633efcfe41244437b065c63a7969e68c585be7096461f433af0b7981bbbd9e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-2-summary.json",
+      "bytes": 1351,
+      "sha256": "b46d6fb151306e6200fa010586c769b8c426c038f909a8020457ef270e7c7d21"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-2.log",
+      "bytes": 80653,
+      "sha256": "31e9790f50c0b58c99986596163b645fbf63b96c2b6a5fc38b05be93468067c1"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-3-run.json",
+      "bytes": 312,
+      "sha256": "e29ad0a944a66f6beee9328b3ac415c3994fa1b51b8c5a4aa308d9bb33f712a2"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-3-summary.json",
+      "bytes": 1352,
+      "sha256": "dc244ef28613c2e3a4ee3ed1a3ab58d55116b1bfd7e4352272ea7fd85630bfa2"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-3.log",
+      "bytes": 82126,
+      "sha256": "ba5153a9626aad3902a852c5dc586bdac52bedc53eaaa0cc87baff17c1becc03"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-4-run.json",
+      "bytes": 312,
+      "sha256": "8ae4dcf45014ebadbabce90fb9749c8e5ce90d71df52bde41bc054efc5f7c486"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-4-summary.json",
+      "bytes": 1353,
+      "sha256": "4b4885e0ced0ada6e3bfacbece48e2d084d819b559ee0d6754198ddeaa5c8e84"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-4.log",
+      "bytes": 82133,
+      "sha256": "911374a4df4f965a2b77b5975a93674b1eece7e40f7f34b92d423152f28d11da"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "focused-selectors.json",
+      "bytes": 17612,
+      "sha256": "275ce97bc69223e5f836e079cc1726b173e8cd0853e0e039a308c181ab24e584"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "historical-verification.json",
+      "bytes": 5952,
+      "sha256": "0a3c70e624e3e72e1e36d88b696da7d0966948af5db8b87d9b2d41b91e93dafa"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "race-selectors.json",
+      "bytes": 902,
+      "sha256": "15064dc17d6b8aa384ea1fec41738b7b98c18b53d965f507c39b0eb080d105ff"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "regression-1-run.json",
+      "bytes": 324,
+      "sha256": "7663145544843b6f9931ae9b25f5bf87a3006d158bdae543f97052fd0b5689e5"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "regression-1-summary.json",
+      "bytes": 967,
+      "sha256": "6f1276dcd6926530e84fa5a3f8eeafd66cf082212f428a55005d73795e3f86e2"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "regression-1.log",
+      "bytes": 11836,
+      "sha256": "a8a35ee3034bee4364e5a614758cdfe94627a42d31a4614cda4b453dfd89c773"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "regression-selectors.json",
+      "bytes": 1614,
+      "sha256": "1c58887cf8687020f685671a32b3a4f02c85c398e99accf524b9f82dc16df41f"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-focused-run.json",
+      "bytes": 324,
+      "sha256": "d6322605f1751bcd4a62452c377a857839872f205deb2a854d16659c5c77b986"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-focused-summary.json",
+      "bytes": 1352,
+      "sha256": "e2b6e5cc810184217f444cbf611dda85ce4f47581b6a04181fa19a2396494f25"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-focused.log",
+      "bytes": 83033,
+      "sha256": "3c856c6ebc7650bcde1c71bc8a94533fc1abc2ce6c14aac7e922a8d328b7c960"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-1-run.json",
+      "bytes": 322,
+      "sha256": "5e9b3b1545db230578f99159f7859c548f22d83a7566b3ad79febab6b6f97884"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-1-summary.json",
+      "bytes": 964,
+      "sha256": "7448cd71b59f12d239fb5c7891a9b867a13974948b2a5afae9bfaee329482a94"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-1.log",
+      "bytes": 11012,
+      "sha256": "0839a31f4973fc5555515e987532aac3ad11fd2496cde6e02f19918daeb4e892"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-2-run.json",
+      "bytes": 319,
+      "sha256": "8f6d2534c5dada7ba1e3280ee23837e397b230dbe0743b5b27e283889d518c65"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-2-summary.json",
+      "bytes": 964,
+      "sha256": "8cb70cb160285bdf056f5199cedbfd550b84f6a9e4306f9b9fcf4701d56172a2"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-2.log",
+      "bytes": 11012,
+      "sha256": "022bad3dc70c8993b604d14c8a9cf8e0ee9edb01b9a80016cc907351a9e6c3f0"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-3-run.json",
+      "bytes": 321,
+      "sha256": "4c620de9b8a4cd160cc07ee431fce2b6f5c332a9a295b31729ac78890cab1ec9"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-3-summary.json",
+      "bytes": 963,
+      "sha256": "41eb0aafc4254b9064d51f32456a815809c5e449398fa55925c7033628302fa0"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-3.log",
+      "bytes": 11012,
+      "sha256": "d7c1b9d89ec292faeebd920ab83992e966134c8e708bbd6b2af9e02622779c0e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-4-run.json",
+      "bytes": 321,
+      "sha256": "e47ed00d2183e53c17f51f816f0a82e7a0b058912b1a833dda6e0ea25011286e"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-4-summary.json",
+      "bytes": 963,
+      "sha256": "15a6d6910d6c18c31f4c5be2682565af75dc5a5bf2d9a956649c21286aa9b694"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-4.log",
+      "bytes": 11012,
+      "sha256": "04dd4c1b89b163986391a452ca96ab305c844611fe7ef327c038a73d3ce809b8"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-5-run.json",
+      "bytes": 321,
+      "sha256": "272ce7ddb1dd7cba23e9463dc41c3e19242d13bcc76dcddbfaab3e1afd904637"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-5-summary.json",
+      "bytes": 964,
+      "sha256": "07f338873bc37eae9769006b23ef69737d88e38641c3630f9c3509c0a07d1df3"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "route-races-5.log",
+      "bytes": 11012,
+      "sha256": "066e3336377df238d35912c6b739688c8a235532765c9a914c1d9c6a1abb313c"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "script-test-input-equivalence.json",
+      "bytes": 2928,
+      "sha256": "44ee6b7ac2a03486a58e91f14b16b764db0834619f44cdffee9255c402b9c19a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "sqlite-vendor-before.patch",
+      "bytes": 233,
+      "sha256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "ui-selectors.json",
+      "bytes": 728,
+      "sha256": "b347f1ad66ada4002d9c559067f1abe5735325adbb0a7a12bd4831f965cfe85a"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "vendor-before.patch",
+      "bytes": 233,
+      "sha256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410"
+    },
+    {
+      "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup",
+      "path": "working-inputs.json",
+      "bytes": 13078,
+      "sha256": "ce0c5c66c57c979e7a4f9f404efcabf6679eabf87023236648d32ce8c36d3ec4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/regression-1.xcresult",
+      "files": 70,
+      "bytes": 860241,
+      "treeSha256": "45b058e5fbaa58774c727cf14a9226e67d5233bd59a6ae02a40b4bc0255ce44c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/focused-1.xcresult",
+      "files": 2024,
+      "bytes": 69294145,
+      "treeSha256": "aa69ff767136c9527baed20bdecd22073408bd6c50ff7a21c45fc455cbc906fc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/focused-2.xcresult",
+      "files": 378,
+      "bytes": 1194675,
+      "treeSha256": "c0bac09f7f17dd031d6a438c55254468e83a9080b1c66f1e7cdb5bf448f9c847"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/focused-3.xcresult",
+      "files": 386,
+      "bytes": 1199316,
+      "treeSha256": "1b594959427e6058b5063671276b078a80491399dba5739ef7b70758ad727b6d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/focused-4.xcresult",
+      "files": 386,
+      "bytes": 1201970,
+      "treeSha256": "903ea9df08eb15648ae1870a35cc566615cf67d693698936bacc89416250d013"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/final-focused.xcresult",
+      "files": 388,
+      "bytes": 1202735,
+      "treeSha256": "5a9d685f00f763a6004b40f6ba3a8344e7e62186acf67f3d8628be000cdac85c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/compat-focused.xcresult",
+      "files": 388,
+      "bytes": 1213263,
+      "treeSha256": "c0da50a28a36f22696243edc4b33488c63c3dd5d9875af17b7e59dbb0c5f6173"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/route-focused.xcresult",
+      "files": 390,
+      "bytes": 1206299,
+      "treeSha256": "f6020a2360648eb94ec072482c282455b95a1601f3e98e91490a5a50be5543a3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/final-races-1.xcresult",
+      "files": 64,
+      "bytes": 852241,
+      "treeSha256": "fe0ee13c8d3f78cd32410c6800757331560e6f7543d19a505508233396cfdf78"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/final-races-2.xcresult",
+      "files": 64,
+      "bytes": 860729,
+      "treeSha256": "2a31c5c35d5397a82284b3c2e6ca1ac0263e2a6842288009f856ade60a5553d4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/final-races-3.xcresult",
+      "files": 64,
+      "bytes": 853540,
+      "treeSha256": "bddbf1193979f76d7d15d3ab98bdebd9f60b7966324e76080fbe13ce678a6cbd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/final-races-4.xcresult",
+      "files": 64,
+      "bytes": 853413,
+      "treeSha256": "8c2ff94b1f65aa9955633eaa4aa912a5cf3be0600a5ec1becbe35621d794a9e4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/final-races-5.xcresult",
+      "files": 64,
+      "bytes": 860061,
+      "treeSha256": "d3e387b47ba73324c60eca0939a6a08a0fa14ee08c8c92e5a6943a31e192ff19"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/compat-races-1.xcresult",
+      "files": 64,
+      "bytes": 852416,
+      "treeSha256": "23c0729a632cc6f3bb783dc2c07e1c0b935db40835bab979122562a6cfdc7882"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/compat-races-2.xcresult",
+      "files": 64,
+      "bytes": 860455,
+      "treeSha256": "2786a30a8ee46ef411d3f3a569822868e8cf3346f55c629a778b3a98055fb926"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/compat-races-3.xcresult",
+      "files": 64,
+      "bytes": 861016,
+      "treeSha256": "40e2ddae776c0e465463d91ece4450088d84a372fc341da1e795d1208436b706"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/compat-races-4.xcresult",
+      "files": 64,
+      "bytes": 859464,
+      "treeSha256": "fdfa87ba54aa7ab01d6b2c5b86403cad22ca751900a67ff9c69c869965238029"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/compat-races-5.xcresult",
+      "files": 64,
+      "bytes": 852650,
+      "treeSha256": "07631ec644096b0c9fc6e72382c1e3091985dc081a40eb254c8a547f63194631"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/route-races-1.xcresult",
+      "files": 64,
+      "bytes": 859498,
+      "treeSha256": "789a1a57a126aa0b9ad45d6c54d02adb96d664364e01e2646ac9205c6ce1d583"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/route-races-2.xcresult",
+      "files": 64,
+      "bytes": 851929,
+      "treeSha256": "747dbaa67abf6d5e9b1ddb9de5940c98af1714d5538bb101cdef22cb75d75427"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/route-races-3.xcresult",
+      "files": 64,
+      "bytes": 848980,
+      "treeSha256": "691d6d63853c00af111dc1b137e3eed4e26892cc9057feb445a62df4d6d1742a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/route-races-4.xcresult",
+      "files": 64,
+      "bytes": 852354,
+      "treeSha256": "b3e6e0a0dbce714f95713c328a1a06b74eeaabf13081715de57efb474429e9f3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/route-races-5.xcresult",
+      "files": 64,
+      "bytes": 853353,
+      "treeSha256": "c24e67e48a41ee23ebf5b0e3f112cf4b5691d5f94f30a42b8dc7c34becaf50fc"
+    }
+  ]
+}
