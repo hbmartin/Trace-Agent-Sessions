@@ -8,6 +8,171 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing() async throws {
+        let root = try directory(), a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [a, b])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let ledger = IndexCheckpointLedger(), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        ledger.seed(stream: "stream", checkpoint: .init(value: 1_000, epoch: "before-wrap", replacingEpochs: []))
+        let wrapped = ledger.reserve(watermarks: ["stream": 1], streamRoots: ["stream": [a.path, b.path]],
+            hasIndexWork: false, wrappedStreams: ["stream"])
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                if let mark = updates["stream"]?.value { accepted.withLock { $0.append(mark) } }
+            })
+        await scheduler.request(reconciliationPaths: [a.path], checkpointReservations: [wrapped])
+        await scheduler.waitUntilIdle()
+        XCTAssertTrue(accepted.withLock { $0.isEmpty }, "one root cannot cover the other root's wrap debt")
+        await scheduler.request(watermarks: ["stream": 20], streamRoots: ["stream": [a.path, b.path]])
+        await scheduler.waitUntilIdle()
+        XCTAssertTrue(accepted.withLock { $0.isEmpty }, "coalescing metadata must retain the unscanned root")
+        await scheduler.request(reconciliationPaths: [b.path])
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [20], "the second root completes the original obligation without rescanning the first")
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+        await scheduler.stop()
+    }
+
+    func testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives() async throws {
+        for seeded in [false, true] {
+            for wrapFirst in [false, true] {
+                let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+                try Data(line(1).utf8).write(to: file)
+                let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+                try await database.saveQualifiedEventCheckpoints(["stream": .init(value: 1_000, epoch: "before-wrap", replacingEpochs: [])])
+                let ledger = IndexCheckpointLedger(), before = IndexEventStreamEpoch(), after = before.advanced()
+                if seeded { ledger.seed(stream: "stream", checkpoint: try await database.eventCheckpointRecord(volumeID: "stream")) }
+                _ = ledger.reserve(watermarks: ["stream": 1_000], streamRoots: ["stream": [root.path]],
+                    hasIndexWork: false, streamEpochs: ["stream": before])
+                var reservations: [IndexCheckpointReservation] = []
+                for wrapped in wrapFirst ? [true, false] : [false, true] {
+                    reservations.append(ledger.reserve(watermarks: ["stream": wrapped ? 1 : 20], streamRoots: ["stream": [root.path]],
+                        hasIndexWork: true, wrappedStreams: wrapped ? ["stream"] : [],
+                        paths: wrapped ? [] : [file.path], streamEpochs: ["stream": after]))
+                }
+                let accepted = OSAllocatedUnfairLock(initialState: [IndexEventCheckpoint]())
+                let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]),
+                    scope: .proseOnly, progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                        if let value = updates["stream"] { accepted.withLock { $0.append(value) } }
+                        try? await database.saveQualifiedEventCheckpoints(updates)
+                    })
+                await scheduler.request(reconciliationPaths: [root.path], checkpointReservations: reservations)
+                await scheduler.waitUntilIdle()
+                let saved = try await database.eventCheckpointRecord(volumeID: "stream")
+                XCTAssertEqual(saved?.value, 20, "seeded=\(seeded), wrapFirst=\(wrapFirst)")
+                XCTAssertNotEqual(saved?.epoch, "before-wrap")
+                let stale = ledger.reserve(watermarks: ["stream": 1_001], streamRoots: ["stream": [root.path]],
+                    hasIndexWork: false, streamEpochs: ["stream": before])
+                await scheduler.request(checkpointReservations: [stale])
+                await scheduler.waitUntilIdle()
+                XCTAssertEqual(accepted.withLock { $0.map(\.value) }, [20])
+                await scheduler.stop()
+            }
+        }
+    }
+
+    func testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), attempts = OSAllocatedUnfairLock(initialState: 0)
+        let discoveries = OSAllocatedUnfairLock(initialState: 0), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        ledger.setAcceptanceCommitHookForTesting {
+            let attempt = attempts.withLock { $0 += 1; return $0 }
+            if attempt <= 3 { _ = ledger.reserve(watermarks: ["ingress": UInt64(attempt)], streamRoots: [:], hasIndexWork: false) }
+        }
+        defer { ledger.setAcceptanceCommitHookForTesting(nil) }
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]),
+            scope: .proseOnly, progress: { update in if update.phase == .discovering { discoveries.withLock { $0 += 1 } } },
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                if let mark = updates["stream"]?.value { accepted.withLock { $0.append(mark) } }
+            })
+        await scheduler.request(paths: [file.path], watermarks: ["stream": 100], streamRoots: ["stream": [root.path]])
+        try await waitForCondition { accepted.withLock { $0 == [100] } }
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(attempts.withLock { $0 }, 4, "three conflicts must retain the same proof for the successor")
+        XCTAssertEqual(discoveries.withLock { $0 }, 1, "retry acceptance without another coordinator pass")
+        await scheduler.stop()
+    }
+
+    func testConflictedAcceptanceLetsFreshIndexWorkProceed() async throws {
+        let root = try directory(), a = root.appendingPathComponent("a.jsonl"), b = root.appendingPathComponent("b.jsonl")
+        try Data(line(1).utf8).write(to: a); try Data(line(2).utf8).write(to: b)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), attempts = OSAllocatedUnfairLock(initialState: 0)
+        let discoveries = OSAllocatedUnfairLock(initialState: 0), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let gate = CheckpointFailureGate()
+        ledger.setAcceptanceCommitHookForTesting {
+            let attempt = attempts.withLock { $0 += 1; return $0 }
+            if attempt <= 6 { _ = ledger.reserve(watermarks: ["ingress": UInt64(attempt)], streamRoots: [:], hasIndexWork: false) }
+        }
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]),
+            scope: .proseOnly, progress: { update in if update.phase == .discovering { discoveries.withLock { $0 += 1 } } },
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                if let mark = updates["stream"]?.value { accepted.withLock { $0.append(mark) } }
+            })
+        defer {
+            ledger.setAcceptanceCommitHookForTesting(nil)
+            Task { await gate.open(); await scheduler.stop() }
+        }
+        await scheduler.setDeferredCheckpointAcceptanceHookForTesting { await gate.wait() }
+        await scheduler.request(paths: [a.path], watermarks: ["stream": 100], streamRoots: ["stream": [root.path]])
+        try await waitForCondition { await gate.entered }
+        await scheduler.request(paths: [b.path], watermarks: ["stream": 200], streamRoots: ["stream": [root.path]])
+        await gate.open()
+        try await waitForCondition { accepted.withLock { $0 == [200] } }
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(attempts.withLock { $0 }, 8)
+        XCTAssertEqual(discoveries.withLock { $0 }, 2, "fresh indexing must proceed while the older acceptance remains conflicted")
+        let sessions = try await database.sessions()
+        XCTAssertEqual(sessions.count, 2)
+        await scheduler.stop()
+    }
+
+    func testQueuedCheckpointAcceptanceRetiresOnStopOrReset() async throws {
+        for reset in [false, true] {
+            let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+            try Data(line(1).utf8).write(to: file)
+            let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let ledger = IndexCheckpointLedger(), attempts = OSAllocatedUnfairLock(initialState: 0)
+            let accepted = OSAllocatedUnfairLock(initialState: [IndexEventCheckpoint]()), gate = CheckpointFailureGate()
+            ledger.setAcceptanceCommitHookForTesting {
+                let attempt = attempts.withLock { $0 += 1; return $0 }
+                if attempt <= 3 { _ = ledger.reserve(watermarks: ["ingress": UInt64(attempt)], streamRoots: [:], hasIndexWork: false) }
+            }
+            let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]),
+                scope: .proseOnly, progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                    if let value = updates["stream"] { accepted.withLock { $0.append(value) } }
+                })
+            defer {
+                ledger.setAcceptanceCommitHookForTesting(nil)
+                Task { await gate.open(); await scheduler.stop() }
+            }
+            await scheduler.setDeferredCheckpointAcceptanceHookForTesting { await gate.wait() }
+            await scheduler.request(paths: [file.path], watermarks: ["stream": 100], streamRoots: ["stream": [root.path]])
+            try await waitForCondition { await gate.entered }
+            let oldGeneration = database.contentGeneration
+            if reset {
+                await scheduler.request(rebuild: true)
+                await gate.open()
+                try await waitForCondition { !accepted.withLock { $0.isEmpty } }
+                await scheduler.waitUntilIdle()
+                XCTAssertNotEqual(database.contentGeneration, oldGeneration)
+                XCTAssertTrue(accepted.withLock { $0.allSatisfy { $0.contentGeneration == database.contentGeneration } })
+            } else {
+                let stopped = Task { await scheduler.stop() }
+                try await waitForCondition { await scheduler.stoppingForTesting }
+                await gate.open(); await stopped.value
+                XCTAssertTrue(accepted.withLock { $0.isEmpty }, "stopping must discard the queued proof")
+            }
+            await scheduler.stop()
+            ledger.setAcceptanceCommitHookForTesting(nil)
+        }
+    }
+
     func testLatestAnchorMatchUsesExternalIdentityBeforeChangedOffset() {
         let reference = SessionNavigationReference(agent: "claudeCode", root: "/tmp", path: "/tmp/a", externalSessionID: "session",
             anchorSourceKey: "old-offset", anchorExternalID: "message")

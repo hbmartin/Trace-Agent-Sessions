@@ -110,11 +110,22 @@ public final class IndexCheckpointLedger: Sendable {
         var revision: UInt64 = 0
         var mutation: UInt64 = 0
     }
-    fileprivate struct Coverage {
+    fileprivate struct Coverage: Sendable {
         let entries: [Entry]
         let owner: UUID
         let revision: UInt64
     }
+    fileprivate enum Acceptance {
+        case committed([String: IndexEventCheckpoint])
+        case superseded
+        case conflicted
+    }
+    #if DEBUG
+    private let acceptanceCommitHook = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
+    func setAcceptanceCommitHookForTesting(_ hook: (@Sendable () -> Void)?) {
+        acceptanceCommitHook.withLock { $0 = hook }
+    }
+    #endif
     private let id = UUID()
     private let state = OSAllocatedUnfairLock(initialState: State())
     public init() {}
@@ -194,7 +205,11 @@ public final class IndexCheckpointLedger: Sendable {
                     continue
                 }
                 let repeatedWrap = incoming != nil && incoming == stream.ingressEpoch
-                if wrappedStreams.contains(name) && !repeatedWrap {
+                // A later callback can arrive before the callback carrying the
+                // wrap flag. Its lineage still owes the checkpoint transition.
+                let advancedEpoch = incoming.map { $0 != stream.ingressEpoch && !$0.predecessors.isEmpty } ?? false
+                let appliesWrap = advancedEpoch || (wrappedStreams.contains(name) && !repeatedWrap)
+                if appliesWrap {
                     let retainedRoots = stream.records.values.reduce(into: stream.roots) { $0.formUnion($1.entry.roots) }
                     stream.predecessors.insert(stream.epoch.isEmpty ? "legacy" : stream.epoch)
                     stream.epoch = stream.initialized ? UUID().uuidString : ""
@@ -219,10 +234,11 @@ public final class IndexCheckpointLedger: Sendable {
                 let scopedReconciliation = inputReconciliation.filter { input in qualification.isEmpty || qualification.contains { $0.intersects(input) } }
                 let unspecified = hasIndexWork && inputPaths.isEmpty && inputReconciliation.isEmpty
                 stream.records[key] = Record(entry: entry,
-                    requiresReconciliation: previous?.requiresReconciliation == true || wrappedStreams.contains(name),
-                    hasIndexWork: unspecified || !scopedPaths.isEmpty || !scopedReconciliation.isEmpty,
-                    requiresFullScan: unspecified && !wrappedStreams.contains(name),
-                    inputPaths: scopedPaths, inputReconciliationPaths: scopedReconciliation)
+                    requiresReconciliation: previous?.requiresReconciliation == true || appliesWrap || wrappedStreams.contains(name),
+                    hasIndexWork: previous?.hasIndexWork == true || unspecified || !scopedPaths.isEmpty || !scopedReconciliation.isEmpty,
+                    requiresFullScan: previous?.requiresFullScan == true || (unspecified && !appliesWrap && !wrappedStreams.contains(name)),
+                    inputPaths: (previous?.inputPaths ?? []).union(scopedPaths),
+                    inputReconciliationPaths: (previous?.inputReconciliationPaths ?? []).union(scopedReconciliation))
                 stream.tail = hasIndexWork ? nil : key
                 value.streams[name] = stream
                 entries.append(entry)
@@ -340,7 +356,8 @@ public final class IndexCheckpointLedger: Sendable {
 
     fileprivate func accept(_ coverage: Coverage, failedPaths: Set<String>,
                             paths: Set<String> = [], reconciliationPaths: Set<String> = [],
-                            failedReconciliationPaths: Set<String> = [], fullScan: Bool = false, contentGeneration: IndexContentGeneration? = nil) -> [String: IndexEventCheckpoint] {
+                            failedReconciliationPaths: Set<String> = [], fullScan: Bool = false, contentGeneration: IndexContentGeneration? = nil) -> Acceptance {
+        guard !coverage.entries.isEmpty else { return .committed([:]) }
         let changed = Set(paths.map(TraceFileIO.canonicalPath))
         let reconciled = Set(reconciliationPaths.map(TraceFileIO.canonicalPath))
         let fileFailures = Set(failedPaths.map(TraceFileIO.canonicalPath))
@@ -352,7 +369,7 @@ public final class IndexCheckpointLedger: Sendable {
         for _ in 0..<3 {
             var snapshot = state.withLock { $0 }
             let mutation = snapshot.mutation
-            guard snapshot.revision == coverage.revision else { return [:] }
+            guard snapshot.revision == coverage.revision else { return .superseded }
             for (name, entries) in grouped {
                 guard var stream = snapshot.streams.removeValue(forKey: name) else { continue }
                 if stream.initialized {
@@ -373,6 +390,10 @@ public final class IndexCheckpointLedger: Sendable {
                                 fullScan || reconciled.contains { $0.contains(input) }
                             }
                             let coversWhole = fullScan || !scanned.isEmpty
+                            // Convert implicit roots into explicit remaining work
+                            // once; later partial scans must not re-add paid roots.
+                            record.inputReconciliationPaths.formUnion(required.reconciliation)
+                            if fullScan || !required.reconciliation.isEmpty { record.requiresReconciliation = false }
                             record.inputPaths.subtract(attempted.filter { input in !failures.contains { $0.intersects(input) } })
                             record.inputReconciliationPaths.subtract(scanned.filter { input in
                                 !reconciliationFailures.contains { $0.intersects(input) }
@@ -385,9 +406,6 @@ public final class IndexCheckpointLedger: Sendable {
                                 }
                                 record.inputPaths.formUnion(fileFailures.filter(relevant))
                                 record.inputReconciliationPaths.formUnion(reconciliationFailures.filter(relevant))
-                                if !required.reconciliation.isEmpty && record.inputReconciliationPaths.isEmpty {
-                                    record.requiresReconciliation = false
-                                }
                             }
                             record.hasIndexWork = record.requiresFullScan || !record.inputPaths.isEmpty || !record.inputReconciliationPaths.isEmpty
                             // Unattempted unknown work must never become metadata-only.
@@ -430,16 +448,20 @@ public final class IndexCheckpointLedger: Sendable {
             }
             snapshot.mutation &+= 1
             let next = snapshot
+            #if DEBUG
+            let hook = acceptanceCommitHook.withLock { $0 }
+            hook?()
+            #endif
             let committed = state.withLock { value in
                 guard value.mutation == mutation else { return false }
                 value = next
                 return true
             }
-            if committed { return accepted }
+            if committed { return .committed(accepted) }
         }
-        // Concurrent ingress owns a newer snapshot. Its scheduled successor can
-        // accept these still-unpaid records; never publish a speculative prefix.
-        return [:]
+        // Execution is complete, but its proof must survive concurrent ingress.
+        // Let the scheduler retry acceptance without repeating the indexing pass.
+        return .conflicted
     }
 
     #if DEBUG || TRACE_CHECKPOINT_BENCHMARK
@@ -512,6 +534,18 @@ public actor IndexScheduler {
     private let installationID = UUID()
     private let qualifiedCompletion: (@Sendable ([String: IndexEventCheckpoint]) async -> Void)?
     private var pendingCheckpointReceipts: [CheckpointReceipt] = []
+    private struct CheckpointAcceptance {
+        let coverage: IndexCheckpointLedger.Coverage
+        let paths: Set<String>
+        let reconciliationPaths: Set<String>
+        let failedPaths: Set<String>
+        let failedReconciliationPaths: Set<String>
+        let fullScan: Bool
+        let contentGeneration: IndexContentGeneration?
+        let activity: IndexActivity
+        let generation: UInt64
+    }
+    private var pendingCheckpointAcceptances: [CheckpointAcceptance] = []
 
     private struct Batch: Sendable {
         // A reset forces a full scan; preserve independently requested scans if
@@ -573,6 +607,10 @@ public actor IndexScheduler {
     private var preservingDeferredScope = false
     private var pendingUsesCommittedScope = false
     #if DEBUG
+    private var deferredCheckpointAcceptanceHookForTesting: (@Sendable () async -> Void)?
+    func setDeferredCheckpointAcceptanceHookForTesting(_ hook: (@Sendable () async -> Void)?) {
+        deferredCheckpointAcceptanceHookForTesting = hook
+    }
     var generationForTesting: UInt64 { configurationGeneration }
     var stoppingForTesting: Bool { stopping }
     var retainedOrdinaryReceiptCountForTesting: Int {
@@ -781,6 +819,7 @@ public actor IndexScheduler {
         let scopeChanged = scope.map { $0 != self.scope } ?? false
         if scopeChanged { preservingDeferredScope = false; pendingUsesCommittedScope = false }
         if scopeChanged || rebuild {
+            pendingCheckpointAcceptances.removeAll()
             // A reset invalidates accepted-but-not-yet-durable coverage too.
             // Keep every stream's roots with the reset that must cover them.
             let retained = checkpointLedger.invalidateCoverage()
@@ -830,7 +869,17 @@ public actor IndexScheduler {
 
     private func drain() async {
         defer { worker = nil }
-        while !stopping && (hasPendingWork || ordinaryRecovery != nil || readyRetryIndex != nil) {
+        while !stopping && (hasPendingWork || ordinaryRecovery != nil || readyRetryIndex != nil || !pendingCheckpointAcceptances.isEmpty) {
+            if !pendingCheckpointAcceptances.isEmpty {
+                let acceptance = pendingCheckpointAcceptances.removeFirst()
+                await acceptCheckpoints(acceptance)
+                guard !stopping else { return }
+                if !hasPendingWork, ordinaryRecovery == nil, readyRetryIndex == nil {
+                    // Give ingress and stop/replacement calls their actor turn.
+                    if !pendingCheckpointAcceptances.isEmpty { await Task.yield() }
+                    continue
+                }
+            }
             for stream in checkpointLedger.uninitializedStreams.sorted() {
                 do {
                     let record = try await coordinator.checkpointRecord(stream: stream)
@@ -856,9 +905,10 @@ public actor IndexScheduler {
                 let content = await coordinator.checkpointContentGeneration
                 guard !stopping else { return }
                 completeOrdinary(ordinary, paths: [], reconciliationPaths: [], fullScan: false, failures: [])
-                let checkpointable = checkpointLedger.accept(checkpointLedger.begin(receipts, owner: installationID),
-                    failedPaths: [], contentGeneration: content)
-                await publishCheckpoints(checkpointable, activity: .fileChanges)
+                await acceptCheckpoints(.init(coverage: checkpointLedger.begin(receipts, owner: installationID),
+                    paths: [], reconciliationPaths: [], failedPaths: [], failedReconciliationPaths: [],
+                    fullScan: false, contentGeneration: content, activity: .fileChanges,
+                    generation: configurationGeneration))
                 continue
             }
             var batch: Batch
@@ -984,12 +1034,11 @@ public actor IndexScheduler {
                 // Failed paths retain their stream watermarks through the one
                 // scheduled retry and any dormant period. Unrelated streams can
                 // still advance independently.
-                let checkpointable = checkpointLedger.accept(checkpointCoverage,
-                    failedPaths: result.failedPaths, paths: batch.paths,
-                    reconciliationPaths: batch.reconciliationPaths,
+                await acceptCheckpoints(.init(coverage: checkpointCoverage, paths: batch.paths,
+                    reconciliationPaths: batch.reconciliationPaths, failedPaths: result.failedPaths,
                     failedReconciliationPaths: result.failedReconciliationPaths, fullScan: batch.fullScan,
-                    contentGeneration: result.checkpointContentGeneration)
-                await publishCheckpoints(checkpointable, activity: batch.activity)
+                    contentGeneration: result.checkpointContentGeneration, activity: batch.activity,
+                    generation: batch.generation))
                 if batch.satisfiesSafetyReconciliation {
                     await didSatisfySafetyReconciliation()
                 }
@@ -1208,6 +1257,25 @@ public actor IndexScheduler {
         }
     }
 
+    private func acceptCheckpoints(_ acceptance: CheckpointAcceptance) async {
+        guard !stopping, acceptance.generation == configurationGeneration else { return }
+        switch checkpointLedger.accept(acceptance.coverage,
+            failedPaths: acceptance.failedPaths, paths: acceptance.paths,
+            reconciliationPaths: acceptance.reconciliationPaths,
+            failedReconciliationPaths: acceptance.failedReconciliationPaths,
+            fullScan: acceptance.fullScan, contentGeneration: acceptance.contentGeneration) {
+        case .committed(let updates):
+            await publishCheckpoints(updates, activity: acceptance.activity)
+        case .superseded:
+            break
+        case .conflicted:
+            pendingCheckpointAcceptances.append(acceptance)
+            #if DEBUG
+            await deferredCheckpointAcceptanceHookForTesting?()
+            #endif
+        }
+    }
+
     private func publishCheckpoints(_ updates: [String: IndexEventCheckpoint], activity: IndexActivity) async {
         guard !updates.isEmpty else { return }
         if let qualifiedCompletion { await qualifiedCompletion(updates) }
@@ -1317,6 +1385,7 @@ public actor IndexScheduler {
 
     public func stop() async {
         stopping = true
+        pendingCheckpointAcceptances.removeAll()
         pendingCheckpointReceipts.removeAll()
         unprovenOrdinaryReceipts.removeAll()
         pendingResets.removeAll()

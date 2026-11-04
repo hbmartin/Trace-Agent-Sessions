@@ -1,0 +1,497 @@
+{
+  "implementationCandidate": "83de9cbcba7be628c07331c58c86c564a3fc53cf",
+  "base": "0576876ea16c3dd7b64d7d252850267682222fbf",
+  "sourceHashManifest": "source-hashes.json",
+  "verifiedInputCount": 105,
+  "focused": {
+    "run": {
+      "name": "final-focused",
+      "command": [
+        "xcodebuild",
+        "test",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-resultBundlePath",
+        "build/checkpoint-acceptance-final-focused.xcresult",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests",
+        "-skip-testing:TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 181.20862345816568,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/final-focused.log"
+    },
+    "passedTests": 555,
+    "failedTests": 0,
+    "excludedBaselineTest": "TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData"
+  },
+  "raceRepetitions": [
+    {
+      "run": {
+        "name": "races-1",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/checkpoint-acceptance-races-1.xcresult",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testConflictedAcceptanceLetsFreshIndexWorkProceed",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testQueuedCheckpointAcceptanceRetiresOnStopOrReset",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testStopDoesNotDrainPendingMetadataOrIndexedReceipts",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testCheckpointPersistenceRejectsResetDuringCallbackDelivery",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 10.592063457937911,
+        "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/races-1.log"
+      },
+      "passedTests": 9,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "races-2",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/checkpoint-acceptance-races-2.xcresult",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testConflictedAcceptanceLetsFreshIndexWorkProceed",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testQueuedCheckpointAcceptanceRetiresOnStopOrReset",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testStopDoesNotDrainPendingMetadataOrIndexedReceipts",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testCheckpointPersistenceRejectsResetDuringCallbackDelivery",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 7.466944792075083,
+        "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/races-2.log"
+      },
+      "passedTests": 9,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "races-3",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/checkpoint-acceptance-races-3.xcresult",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testConflictedAcceptanceLetsFreshIndexWorkProceed",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testQueuedCheckpointAcceptanceRetiresOnStopOrReset",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testStopDoesNotDrainPendingMetadataOrIndexedReceipts",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testCheckpointPersistenceRejectsResetDuringCallbackDelivery",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 7.529501874931157,
+        "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/races-3.log"
+      },
+      "passedTests": 9,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "races-4",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/checkpoint-acceptance-races-4.xcresult",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testConflictedAcceptanceLetsFreshIndexWorkProceed",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testQueuedCheckpointAcceptanceRetiresOnStopOrReset",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testStopDoesNotDrainPendingMetadataOrIndexedReceipts",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testCheckpointPersistenceRejectsResetDuringCallbackDelivery",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 6.933827083092183,
+        "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/races-4.log"
+      },
+      "passedTests": 9,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "races-5",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/checkpoint-acceptance-races-5.xcresult",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testConflictedAcceptanceLetsFreshIndexWorkProceed",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testQueuedCheckpointAcceptanceRetiresOnStopOrReset",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testStopDoesNotDrainPendingMetadataOrIndexedReceipts",
+          "-only-testing:TraceCoreTests/IndexingRegressionTests/testCheckpointPersistenceRejectsResetDuringCallbackDelivery",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testCheckpointReadCompletionCannotSeedReplacementDatabaseOrTermination",
+          "-only-testing:TraceAppTests/AppReviewFollowupTests/testPendingBookmarkReadRechecksNewerAnchorAndExplicitClear"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 6.595962875057012,
+        "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/races-5.log"
+      },
+      "passedTests": 9,
+      "failedTests": 0
+    }
+  ],
+  "checks": [
+    {
+      "name": "debug-app",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 16.801612458191812,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/debug-app.log"
+    },
+    {
+      "name": "release-app",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 134.08839779207483,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/release-app.log"
+    },
+    {
+      "name": "external-client",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 34.55397958308458,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/external-client.log"
+    },
+    {
+      "name": "script-tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "Tests/Scripts",
+        "-p",
+        "test_*.py"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 114.4419706671033,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/script-tests.log"
+    },
+    {
+      "name": "project-drift",
+      "command": [
+        "bash",
+        "Scripts/check-project-drift.sh"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.25439741695299745,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/project-drift.log"
+    },
+    {
+      "name": "signing",
+      "command": [
+        "bash",
+        "Scripts/check-signing-settings.sh"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 6.402724165935069,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/signing.log"
+    },
+    {
+      "name": "network",
+      "command": [
+        "bash",
+        "Scripts/check-network-surface.sh",
+        "build/DerivedData/Build/Products/Release/Trace.app"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.1020632500294596,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/network.log"
+    },
+    {
+      "name": "whitespace",
+      "command": [
+        "git",
+        "diff",
+        "0576876ea16c3dd7b64d7d252850267682222fbf",
+        "--check"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.06440245802514255,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/whitespace.log"
+    }
+  ],
+  "scriptPassedTests": 53,
+  "negativeControl": {
+    "run": {
+      "name": "negative-controls",
+      "command": [
+        "xcodebuild",
+        "test",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-resultBundlePath",
+        "build/checkpoint-acceptance-negative-controls.xcresult",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests/testFilteredWrapStillAdvancesChronologyAndReconciliation"
+      ],
+      "exitCode": 65,
+      "elapsedSeconds": 59.234427750110626,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/negative-controls.log"
+    },
+    "failedTests": 4,
+    "assertionFailures": 12,
+    "expected": true,
+    "inputs": {
+      "selectors": [
+        "TraceCoreTests/IndexingRegressionTests/testPartialWrappedReconciliationRetainsImplicitRootsThroughMetadataCoalescing",
+        "TraceCoreTests/IndexingRegressionTests/testReorderedLedgerWrapAppliesTransitionBeforeFlaggedBatchArrives",
+        "TraceCoreTests/IndexingRegressionTests/testAcceptanceConflictsRetainCoverageWithoutRepeatingIndexing",
+        "TraceCoreTests/FSEventsWatcherTests/testFilteredWrapStillAdvancesChronologyAndReconciliation"
+      ],
+      "sourceHashes": {
+        "Sources/TraceCore/Indexing/IndexScheduler.swift": "80235d6e507399749c77d935e6485bc4de336c27e3a3ad295cd263bc4647f4d5",
+        "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "ea67969c1dce1dbc5c732740e638ad4d885d2af09e7ef6b93f249e6006962c71"
+      },
+      "purpose": "Expected failures with each of the four fixes disabled; not final validation."
+    },
+    "restoredBeforeFreeze": true
+  },
+  "baselineFailure": {
+    "test": "testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+    "baseInputs": {
+      "commit": "0576876ea16c3dd7b64d7d252850267682222fbf",
+      "sourceHashes": {
+        "Sources/TraceCore/Indexing/IndexScheduler.swift": "6ed7ff26e0d73566bb6dbff03f238d611c47dc1d684fbea2528c85282b1cb9c8",
+        "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "abd6563182f6d901b53b4ee8a2b2f1d213a08502a262bd5611405422cce6e966",
+        "Tests/TraceCoreTests/IndexingRegressionTests.swift": "de402c09e5c6cb71c7806f1783761d082ff48194b54ccb6c4a79678fb2f7bac7",
+        "Tests/TraceCoreTests/FSEventsWatcherTests.swift": "c2b2b21a04ba9cc43a97adf613eb6ea2a344204ba74820d473ebcf0f155d042b"
+      }
+    },
+    "baselineRun": {
+      "name": "base-app-timeout",
+      "command": [
+        "xcodebuild",
+        "test",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-resultBundlePath",
+        "build/checkpoint-acceptance-base-app-timeout.xcresult",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData"
+      ],
+      "exitCode": 65,
+      "elapsedSeconds": 66.10542808310129,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/base-app-timeout.log"
+    },
+    "candidateRerun": {
+      "name": "app-timeout-rerun",
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-resultBundlePath",
+        "build/checkpoint-acceptance-app-timeout-rerun.xcresult",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData"
+      ],
+      "exitCode": 65,
+      "elapsedSeconds": 29.20044037490152,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/app-timeout-rerun.log"
+    },
+    "initialGroupRun": {
+      "name": "initial-focused",
+      "command": [
+        "xcodebuild",
+        "test",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-resultBundlePath",
+        "build/checkpoint-acceptance-initial.xcresult",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests"
+      ],
+      "exitCode": 65,
+      "elapsedSeconds": 198.0713536660187,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup/initial-focused.log"
+    },
+    "symptom": "Timed out waiting for summaryTranscriptWaitingForTesting; one failed test reports two assertion failures.",
+    "excludedOnlyAfterMatchingBaselineReproduction": true
+  },
+  "limitations": [
+    "Complete Core/App suites were not run; these are the affected test groups.",
+    "UI automation was not run for this candidate.",
+    "Optimized measurements and the three repository-wide Release comparison pairs were not run.",
+    "No local 10% performance-acceptance claim."
+  ],
+  "rawPayloads": {
+    "root": "/Volumes/Pro2T/TraceValidation/checkpoint-acceptance-followup",
+    "availability": "Local-only; not downloadable repository or CI artifacts.",
+    "resultBundles": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/checkpoint-acceptance-*.xcresult"
+  }
+}
