@@ -4,6 +4,64 @@ import os
 
 final class FSEventsWatcherTests: XCTestCase {
     #if DEBUG
+    func testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence() throws {
+        let root = TraceFileIO.canonicalPath("/tmp/TraceCombinedWrap").path
+        let path = root + "/nested/session.jsonl"
+        let wrap = UInt32(kFSEventStreamEventFlagEventIdsWrapped)
+        let combinations = [
+            UInt32(kFSEventStreamEventFlagRootChanged),
+            UInt32(kFSEventStreamEventFlagMustScanSubDirs),
+            UInt32(kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagMustScanSubDirs),
+            UInt32(kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemRenamed),
+            UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemCloned),
+            UInt32(kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagUserDropped),
+            UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagHistoryDone)
+        ]
+        for extra in combinations {
+            for wrapped in [false, true] {
+                for accepted in [false, true] {
+                    for tracked in [false, true] {
+                        let flags = extra | (wrapped ? wrap : 0)
+                        let context = "flags=\(flags), accepted=\(accepted), tracked=\(tracked)"
+                        let watcher = FSEventsWatcher(roots: [URL(fileURLWithPath: root)], identifier: "stream",
+                            eventFilter: { _, _ in accepted }, tracksWatermarks: tracked, onChange: { _ in })
+                        let before = watcher.changesForTesting([])
+                        var expected = SourceChanges()
+                        expected.streamEpochs = before.streamEpochs
+                        if accepted {
+                            expected.include(path: path, flags: flags, eventID: 1, streamIdentifier: "stream", streamRoots: [root])
+                        } else if wrapped {
+                            expected.include(path: path, flags: wrap | UInt32(kFSEventStreamEventFlagItemIsDir),
+                                eventID: 1, streamIdentifier: "stream", streamRoots: [root])
+                        }
+                        if !tracked {
+                            expected.streamEpochs = [:]; expected.watermarks = [:]
+                            expected.streamRoots = [:]; expected.wrappedStreams = []
+                        }
+                        let actual = watcher.changesForTesting([(path, flags, 1)])
+                        XCTAssertEqual(actual.paths, expected.paths, context)
+                        XCTAssertEqual(actual.lexicalPaths, expected.lexicalPaths, context)
+                        XCTAssertEqual(actual.structuralPaths, expected.structuralPaths, context)
+                        XCTAssertEqual(actual.reconciliationPaths, expected.reconciliationPaths, context)
+                        XCTAssertEqual(actual.recoveryReasons, expected.recoveryReasons, context)
+                        XCTAssertEqual(actual.watermarks, expected.watermarks, context)
+                        XCTAssertEqual(actual.streamRoots, expected.streamRoots, context)
+                        XCTAssertEqual(actual.wrappedStreams, expected.wrappedStreams, context)
+                        XCTAssertEqual(actual.historyDone, expected.historyDone, context)
+                        if tracked && wrapped {
+                            let previous = try XCTUnwrap(before.streamEpochs["stream"])
+                            let current = try XCTUnwrap(actual.streamEpochs["stream"])
+                            XCTAssertNotEqual(current.id, previous.id, context)
+                            XCTAssertEqual(current.predecessors, [previous.id], context)
+                        } else {
+                            XCTAssertEqual(actual.streamEpochs, before.streamEpochs, context)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     func testFilteredWrapStillAdvancesChronologyAndReconciliation() {
         let watcher = FSEventsWatcher(roots: [URL(fileURLWithPath: "/tmp")], identifier: "stream",
             eventFilter: { path, _ in path.hasSuffix("accepted.jsonl") }, onChange: { _ in })
