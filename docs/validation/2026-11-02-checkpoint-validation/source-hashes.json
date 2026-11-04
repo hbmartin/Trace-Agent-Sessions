@@ -9,5 +9,6 @@
     "docs/validation/2026-11-01-checkpoint-bookmark-recovery/README.md": "c482af1245f99831d5cb0a9cb2eb53e763afc81e5235f789717c6ec37f96b5cc",
     "docs/validation/2026-11-01-checkpoint-bookmark-recovery/raw-artifacts.json": "57c737fe846a175c2d66a22b83f3ab36ff860e2aa35f2457e8d8568f8678808c",
     "docs/validation/2026-11-01-checkpoint-bookmark-recovery/source-hashes.json": "ec2caf9d5e9f867c8962de687a15f01f0bce4b785a47fd32388d68487e23662e"
-  }
+  },
+  "hashAlgorithm": "SHA-256"
 }

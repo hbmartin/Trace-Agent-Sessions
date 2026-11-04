@@ -1,0 +1,388 @@
+{
+  "candidate": "d4e8ff171c0656851accbc459415cda0725e1769",
+  "base": "12f16d38604ac8eaaa9c40a79c74605cda3740ee",
+  "sourceHashesVerifiedAgainstCommitAndWorktree": true,
+  "reasonForFollowupMutation": "The approved workload exposed per-entry dictionary copies; stream dictionaries are now mutated with one local owner while preserving epoch, owner, version, mutation, and generation fences.",
+  "focusedAndRaceRuns": [
+    {
+      "name": "bulk-focused",
+      "passedTests": 172,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 40.3724962498527,
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/bulk-focused.xcresult"
+    },
+    {
+      "name": "bulk-races-1",
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 6.721200624946505,
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/bulk-races-1.xcresult"
+    },
+    {
+      "name": "bulk-races-2",
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 6.104309624992311,
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/bulk-races-2.xcresult"
+    },
+    {
+      "name": "bulk-races-3",
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 6.210871000075713,
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/bulk-races-3.xcresult"
+    },
+    {
+      "name": "bulk-races-4",
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 5.856502000009641,
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/bulk-races-4.xcresult"
+    },
+    {
+      "name": "bulk-races-5",
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 6.812806834001094,
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/bulk-races-5.xcresult"
+    }
+  ],
+  "repositoryChecks": [
+    {
+      "step": "debug-app",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 7.701223541051149
+    },
+    {
+      "step": "release-app",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 94.82992024999112
+    },
+    {
+      "step": "external-client",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Debug"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 26.690157332923263
+    },
+    {
+      "step": "project-drift",
+      "command": [
+        "bash",
+        "Scripts/check-project-drift.sh"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.25977379200048745
+    },
+    {
+      "step": "signing",
+      "command": [
+        "bash",
+        "Scripts/check-signing-settings.sh"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 5.706129957921803
+    },
+    {
+      "step": "network",
+      "command": [
+        "bash",
+        "Scripts/check-network-surface.sh",
+        "build/DerivedData/Build/Products/Release/Trace.app"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.09316429099999368
+    },
+    {
+      "step": "whitespace",
+      "command": [
+        "git",
+        "diff",
+        "12f16d38604ac8eaaa9c40a79c74605cda3740ee",
+        "--check"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.06303895893506706
+    }
+  ],
+  "scriptTests": {
+    "passedTests": 53,
+    "reusedRun": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/script-tests.json",
+    "unchangedInputHashes": {
+      "Scripts/benchmark-checkpoint-enqueue.swift": "c10d50f5db88ec992627d1507a72ba18dfeee64304a432e1ee3c00609197d015",
+      "Scripts/benchmark-transcript-comparison.sh": "ffd52a49e8613a8522c32885d091229f384979107cf7c51f392dcc332dbe0a81",
+      "Scripts/check-local-benchmark-regressions.py": "d70d26d6fb532392b8f262cb17e02e73f2e993d0767ab70ee874293653dbc2a2",
+      "Scripts/check-network-surface.sh": "5a7e897d31fa78c344d1a7d5b25c998b6b2d067db734abd56475ca3fd5523302",
+      "Scripts/check-project-drift.sh": "49278717ad7f322ba95ffa7d14dfb5a98e3b791829317f4b6cc903da745ec18e",
+      "Scripts/check-release-signing.py": "de3e502dd9fad0ba5ab61a7f861577c933f9f9a101d20540a265f7daba7b9ca9",
+      "Scripts/check-signing-settings.sh": "2d980494784a8923273aea8c769acbce69aec5b89b9621bccd8be1bb0928f396",
+      "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+      "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+      "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+      "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+      "Scripts/normalize-trace-scheme.py": "1b966edd1a6b775ebe8b209687d5942070ecc6cbaf2e534a14810a2118efc75b",
+      "Scripts/prepare-benchmark-baseline.py": "e79bd20aa51ce87d46a651f4cdf66f482c62f84318c14f29527bf2e797168166",
+      "Scripts/release.sh": "f4b67f3eabb4740490e900efa2d564f2449b19cdd428f2e193e25b30a5bd87ac",
+      "Scripts/run-deny-network-smoke.sh": "db5bdcee1875cdd196e001aabc1ec6b1f523b09c04bf1b712a8a6cada7cbfaba",
+      "Scripts/run-local-benchmark-comparisons.py": "40c252105186e7b5e9fbb441969f4763c034021b6476e43f25e4ae1519e097ed",
+      "Scripts/run-performance-tests.sh": "a57939e82dcfd6d1d315fc967486244e80454b3c2edfdb92f3ecbd25322a8029",
+      "Scripts/run-snapshot-tests.sh": "6c47ffc4cbd2f330b3654c88ede5bfa24abf21bf512a80c95e1e2fa2d6edc8cf",
+      "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+      "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+      "Tests/Scripts/test_benchmark_reliability.py": "612bbb045bc54e8b287a4824fbeb94ed8726ada60b30845eeee1906a99f175b1",
+      "Tests/Scripts/test_normalize_trace_scheme.py": "a3860296f525d883f4285599104a4270defb5f80092005d6c0766e3b33bf4fff",
+      "Tests/Scripts/test_review_fix_regressions.py": "fe2bfa167bbea930e14c68991a2b7577a8f84692fd504ceed6d076b372a64e87",
+      "Tests/Scripts/test_transcript_benchmark_scripts.py": "6c391439d8a88a234c17bc0339e1b6d85e580c72faaff87fbf8da95932e5a066"
+    }
+  },
+  "currentUI": {
+    "accepted": false,
+    "run": {
+      "name": "ui-bulk-final",
+      "selectors": "ui-selectors.json",
+      "exitCode": 75,
+      "elapsedSeconds": 481.7040155827999,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/ui-bulk-final.log",
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/ui-bulk-final.xcresult"
+    },
+    "nativeOverlap": {
+      "acceptedAsQuietValidation": false,
+      "observations": 158,
+      "sampleIntervalSeconds": 3,
+      "overlaps": [
+        {
+          "elapsedSeconds": 110.32617608387955,
+          "processes": [
+            {
+              "pid": 33507,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 33508,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 33511,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 33512,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 33516,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 33517,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            }
+          ]
+        },
+        {
+          "elapsedSeconds": 232.89854012499563,
+          "processes": [
+            {
+              "pid": 33821,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 33822,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            }
+          ]
+        }
+      ],
+      "exitCode": 75
+    },
+    "reason": "macOS reissued the protected removable-volume prompt for the rebuilt Trace app. Launches stalled; the invocation was interrupted. Manual handling was requested.",
+    "screenshot": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/acceptance-fix/rebuilt-app-protected-prompt.png"
+  },
+  "previousUI": {
+    "candidate": "ef82abed5af1ba8127763bc3f179855fac1d1a56",
+    "allEightSelectedCasesPassed": true,
+    "evidence": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/ui-coverage.json",
+    "reusedForCurrentCandidate": false
+  },
+  "previousExploratoryMeasurements": {
+    "candidate": "ef82abed5af1ba8127763bc3f179855fac1d1a56",
+    "samplesRetained": 11,
+    "accepted": false,
+    "quietWindow": {
+      "command": [
+        "python3",
+        "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/controls/checkpoint-performance.py"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "exitCode": 1,
+      "elapsedSeconds": 431.936119500082,
+      "acceptedAsQuietValidation": false,
+      "observations": 211,
+      "sampleIntervalSeconds": 2,
+      "overlaps": [
+        {
+          "elapsedSeconds": 196.49143112497404,
+          "processes": [
+            {
+              "pid": 27422,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 27423,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 27424,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 27425,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 27426,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 27427,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 27428,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 27429,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            }
+          ]
+        },
+        {
+          "elapsedSeconds": 198.53652108297683,
+          "processes": [
+            {
+              "pid": 27876,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 27880,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            }
+          ]
+        },
+        {
+          "elapsedSeconds": 235.44745395798236,
+          "processes": [
+            {
+              "pid": 28246,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 28247,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 28248,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 28249,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 28250,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 28251,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 28252,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            },
+            {
+              "pid": 28253,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            }
+          ]
+        },
+        {
+          "elapsedSeconds": 237.49733237503096,
+          "processes": [
+            {
+              "pid": 28267,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            },
+            {
+              "pid": 28268,
+              "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+            }
+          ]
+        }
+      ]
+    },
+    "failure": "The 50k candidate acceptance workload hit its gate timeout. The record-copy mutation was corrected afterward.",
+    "reusedForCurrentCandidate": false
+  },
+  "currentTargetedMeasurements": {
+    "accepted": false,
+    "samples": 0,
+    "reason": "Awaiting manual protected-dialog handling and an idle validation window."
+  },
+  "omitted": [
+    "complete suites",
+    "three repository-wide Release comparison pairs"
+  ],
+  "local10PercentAcceptanceClaim": false,
+  "rawPayloads": {
+    "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/acceptance-fix",
+    "availability": "Local-only, not downloadable repository or CI attachments."
+  }
+}

@@ -1,0 +1,569 @@
+{
+  "benchmarkCandidate": "ef82abed5af1ba8127763bc3f179855fac1d1a56",
+  "unchangedAppCoreAndXCTestCandidate": "8f314a0754ea86ba68fcbfa476ed85bff98d3193",
+  "base": "12f16d38604ac8eaaa9c40a79c74605cda3740ee",
+  "sourceHashesVerifiedAgainstCommitAndWorktree": true,
+  "authorization": "User explicitly approved the targeted workload and measurements and confirmed desktop idle on 2026-11-03.",
+  "scriptTests": {
+    "exitCode": 0,
+    "elapsedSeconds": 102.17826154199429,
+    "passedTests": 53
+  },
+  "releaseBuildPreparation": {
+    "steps": [
+      {
+        "side": "baseline",
+        "command": [
+          "xcodebuild",
+          "build",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Release",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/baseline-derived",
+          "CODE_SIGNING_ALLOWED=NO"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 121.89074162510224
+      },
+      {
+        "side": "candidate",
+        "command": [
+          "xcodebuild",
+          "build",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Release",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/candidate-derived",
+          "CODE_SIGNING_ALLOWED=NO"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 126.7309616249986
+      }
+    ],
+    "measurementsExecuted": false
+  },
+  "releasePreparationOverlap": {
+    "command": [
+      "python3",
+      "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/controls/prepare-frameworks.py"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "exitCode": 0,
+    "elapsedSeconds": 250.46905620815232,
+    "acceptedAsQuietValidation": false,
+    "observations": 122,
+    "sampleIntervalSeconds": 2,
+    "overlaps": [
+      {
+        "elapsedSeconds": 102.69170529209077,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 104.73779595806263,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 106.78818166698329,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 108.85693262517452,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 110.90573783311993,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 112.94868404208682,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 115.00090920808725,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 117.05021608294919,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 119.09930808306672,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 121.15230525005609,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 123.19519500015303,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 125.23860587505624,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 127.28200241713785,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 129.3426823329646,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 131.39842633297667,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 133.46133570815437,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 135.51762833306566,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 137.56888145813718,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 139.61832866701297,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 141.66736587509513,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 143.71702724997886,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 145.7590125419665,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 147.80767550016753,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 149.85236966703087,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 151.90196566702798,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 153.95171920815483,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 155.99514816701412,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 158.03850479214452,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 160.08466825005598,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 162.1321882500779,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 164.18279550014995,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 166.23334391694516,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 168.27599079208449,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 170.32614749995992,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 172.37470720801502,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 174.46837795805186,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          },
+          {
+            "pid": 34383,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34384,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34385,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34386,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34387,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          },
+          {
+            "pid": 34388,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          },
+          {
+            "pid": 34389,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          },
+          {
+            "pid": 34390,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 176.52176987496205,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          },
+          {
+            "pid": 34415,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34416,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          },
+          {
+            "pid": 34511,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34512,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 178.57216474995948,
+        "processes": [
+          {
+            "pid": 29420,
+            "executable": "ctest"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 215.57125625014305,
+        "processes": [
+          {
+            "pid": 34812,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34813,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 217.6384472080972,
+        "processes": [
+          {
+            "pid": 34834,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34835,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          }
+        ]
+      },
+      {
+        "elapsedSeconds": 219.68784012505785,
+        "processes": [
+          {
+            "pid": 34866,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          },
+          {
+            "pid": 34867,
+            "executable": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          }
+        ]
+      }
+    ]
+  },
+  "standaloneCompile": {
+    "command": [
+      "python3",
+      "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted/controls/compile-smoke2.py"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "exitCode": 0,
+    "elapsedSeconds": 2.050723958062008,
+    "acceptedAsQuietValidation": true,
+    "observations": 1,
+    "sampleIntervalSeconds": 2,
+    "overlaps": []
+  },
+  "invalidArgumentChecks": {
+    "checks": [
+      {
+        "argument": "0",
+        "exitCode": 2,
+        "stderr": "Usage: checkpoint-enqueue [positive event count] [label] [enqueue|acceptance]\n"
+      },
+      {
+        "argument": "-1",
+        "exitCode": 2,
+        "stderr": "Usage: checkpoint-enqueue [positive event count] [label] [enqueue|acceptance]\n"
+      },
+      {
+        "argument": "invalid",
+        "exitCode": 2,
+        "stderr": "Usage: checkpoint-enqueue [positive event count] [label] [enqueue|acceptance]\n"
+      }
+    ],
+    "measurementsExecuted": false
+  },
+  "uiAttempt": {
+    "run": {
+      "name": "ui-approved-1",
+      "selectors": "ui-selectors.json",
+      "exitCode": 75,
+      "elapsedSeconds": 264.8955322501715,
+      "log": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/ui-approved-1.log",
+      "bundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/ui-approved-1.xcresult"
+    },
+    "nativeOverlap": {
+      "acceptedAsQuietValidation": true,
+      "observations": 88,
+      "sampleIntervalSeconds": 3,
+      "overlaps": [],
+      "exitCode": 75
+    },
+    "accepted": false,
+    "reason": "Trace launch blocked by a protected macOS removable-volume access prompt. Remaining cases were interrupted; Xcode did not finalize a readable result bundle. Partial data, logs, and screenshot are retained locally.",
+    "partialLogOutcome": "Two launch timeouts and the independent receipt-predicate case passed before interruption.",
+    "manualActionRequired": "Allow Trace access manually, minimize other windows, and confirm the Mac is unlocked and idle.",
+    "rule": "AGENTS.md: Do not bypass a protected macOS dialog."
+  },
+  "targetedMeasurements": {
+    "status": "not run; awaiting manual protected-dialog handling and idle confirmation",
+    "samples": 0
+  },
+  "omitted": [
+    "complete suites",
+    "three repository-wide Release comparison pairs"
+  ],
+  "local10PercentAcceptanceClaim": false,
+  "rawPayloads": {
+    "root": "/Volumes/Pro2T/TraceValidation/checkpoint-coverage-restoration-followup/approved-targeted",
+    "availability": "Local-only, not downloadable repository or CI attachments."
+  },
+  "historicalEvidence": "Original verification.json/source-hashes.json remain the publication snapshot; this status and targeted-source-hashes.json describe the later approved work."
+}

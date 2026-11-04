@@ -12,5 +12,25 @@
     "Tests/TraceAppTests/AppReviewFollowupTests.swift": "77e12fbe6833e8ec0a185270fc1911c78cbc15a96ababa9a8100c9c4f1b0018f",
     "Tests/TraceCoreTests/IndexingRegressionTests.swift": "bcbac03fbddc6970ae4f0940a545f7583068f150543ab4a4d2c7c6c63ea4d408",
     "Tests/TraceUITests/TraceUITests.swift": "ac68c3e2a697d38a3b904ff5f3c28adadfe4d92bb8dab395faf1da7505d11225"
-  }
+  },
+  "hashAlgorithm": "SHA-256",
+  "historicalCandidates": [
+    {
+      "commit": "589d41d03dbbd4aab47b0f1851e07c4388c95471",
+      "sourceHashes": {
+        "Scripts/benchmark-checkpoint-enqueue.swift": "0bc7127b114ec8165a9677b27b85b01a511a490437ff3749b39c05c179c8b4e3",
+        "Sources/TraceApp/MainView.swift": "772c25edfa463598b0cc70fd717b88a0d3d4c237ef150052b79aa8b0c1a5cc68",
+        "Sources/TraceApp/TraceModel.swift": "61919f8b5d6032b26d201cb355349661d66df58b77ed6f0233dcfb959e163b7d",
+        "Sources/TraceCore/Database/IndexDatabase.swift": "c3e52da1b6fa224753a6929484c14e23f5d638225f0cb7905f19dbcfcc85cd0c",
+        "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "5f5aaf4a8e8ac66769f4346aa5fcb6d3a4106827d01add70eb5e0f07a92451b4",
+        "Sources/TraceCore/Indexing/IndexScheduler.swift": "0b62af5bbd547e19d248c82bd40eedde71d3b3a30cd48cb74b29830805677e6c",
+        "Tests/ExternalClientFixture/DiscoveryClient.swift": "1db2c9c7fe9169ca4a8eca43039a6b88a194bf88b1fe7b5ad61affec4ea6881b",
+        "Tests/TraceAppTests/AppReviewFollowupTests.swift": "8dca6a6b8fa630249d276212500480f1622d89accecebbec83439b43ee1c6ee8",
+        "Tests/TraceCoreTests/IndexingRegressionTests.swift": "bcbac03fbddc6970ae4f0940a545f7583068f150543ab4a4d2c7c6c63ea4d408",
+        "Tests/TraceUITests/TraceUITests.swift": "4b6c9f0cc9383e4ca498e8e58b82e5df302c36dd8091396b5f42ce7f117e432c",
+        "docs/validation/2026-11-01-checkpoint-navigation-durability/README.md": "a0a5664265f8ce55a4c2a1e75cf15cac31b7d93a2cce07f559d586e8ee9a00d7",
+        "docs/validation/2026-11-01-checkpoint-navigation-durability/compiled-ui-selectors.json": "7f87177f7bd864e207debe5288ad532f5b4f4e5b649fec948e0e7275bf778f13"
+      }
+    }
+  ]
 }

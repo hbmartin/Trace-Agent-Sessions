@@ -1,0 +1,202 @@
+[
+  {
+    "run": "compat-focused",
+    "exitCode": 0,
+    "passedTests": 171,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 40.199092166963965
+  },
+  {
+    "run": "compat-races-1",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.521765166893601
+  },
+  {
+    "run": "compat-races-2",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.135510041145608
+  },
+  {
+    "run": "compat-races-3",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.984314499888569
+  },
+  {
+    "run": "compat-races-4",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.945438040886074
+  },
+  {
+    "run": "compat-races-5",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.362918707774952
+  },
+  {
+    "run": "final-focused",
+    "exitCode": 0,
+    "passedTests": 171,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 40.921255958033726
+  },
+  {
+    "run": "final-races-1",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.442298208130524
+  },
+  {
+    "run": "final-races-2",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.494875541888177
+  },
+  {
+    "run": "final-races-3",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.651367416139692
+  },
+  {
+    "run": "final-races-4",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.843958041165024
+  },
+  {
+    "run": "final-races-5",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.6058585830032825
+  },
+  {
+    "run": "focused-1",
+    "exitCode": 65,
+    "passedTests": 162,
+    "failedTests": 4,
+    "skippedTests": 0,
+    "elapsedSeconds": 70.12076691701077,
+    "reason": "Four affected coverage/replacement regressions exposed during implementation; corrected and all passed subsequently."
+  },
+  {
+    "run": "focused-2",
+    "exitCode": 0,
+    "passedTests": 166,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 32.91816129209474
+  },
+  {
+    "run": "focused-3",
+    "exitCode": 0,
+    "passedTests": 170,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 34.37765479204245
+  },
+  {
+    "run": "focused-4",
+    "exitCode": 0,
+    "passedTests": 170,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 50.04479949991219
+  },
+  {
+    "run": "regression-1",
+    "exitCode": 0,
+    "passedTests": 12,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.622435000026599
+  },
+  {
+    "run": "route-focused",
+    "exitCode": 0,
+    "passedTests": 172,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 39.10666312510148
+  },
+  {
+    "run": "route-races-1",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.0330382499378175
+  },
+  {
+    "run": "route-races-2",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.8937449590303
+  },
+  {
+    "run": "route-races-3",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.088731499854475
+  },
+  {
+    "run": "route-races-4",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 7.119170874822885
+  },
+  {
+    "run": "route-races-5",
+    "exitCode": 0,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 6.898181084077805
+  },
+  {
+    "run": "compile-1",
+    "exitCode": 65,
+    "reason": "Swift Sendable capture required an immutable publication snapshot; corrected."
+  },
+  {
+    "run": "compile-2",
+    "exitCode": 65,
+    "reason": "Tests still referenced the retired surrogate seed observer; corrected to actual ledger inspection."
+  },
+  {
+    "run": "checks-final/test-enumeration",
+    "exitCode": 64,
+    "reason": "Existing output filename; corrected by unique-path enumeration without overwriting the original."
+  }
+]

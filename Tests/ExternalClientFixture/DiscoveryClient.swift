@@ -67,6 +67,9 @@ func compileGenerationOwnedNavigationClient(_ database: IndexDatabase, scheduler
     let captured = try await database.captureNavigationReferences([sessionID: nil], expectedGeneration: generation)
     _ = try await database.captureNavigationReferences([sessionID: nil], expectedGeneration: generation, expectedReferences: captured)
     if let reference = captured[sessionID] { _ = reference.preservingAnchor(from: reference) }
+    if let reference = captured[sessionID], let identity = try await database.messages(sessionID: sessionID).first?.navigationIdentity {
+        _ = reference.matchesAnchor(identity)
+    }
     _ = try await database.resolveNavigationReferences(Dictionary(captured.values.map { ($0, Optional<Int>.none) }, uniquingKeysWith: { _, last in last }))
     await scheduler.requestOrdinaryRecovery(reconcile: true, onOrdinaryWorkCompleted: {})
 }
@@ -77,6 +80,9 @@ func compileReservedCheckpointClient(_ database: IndexDatabase, coordinator: Ind
     changes.wrappedStreams = ["external"]
     let ledger = IndexCheckpointLedger()
     ledger.seed(stream: "external", checkpoint: try await database.eventCheckpointRecord(volumeID: "external"))
+    let reserve: ([String: UInt64], [String: Set<String>], Bool, Set<String>, Set<String>, Set<String>) -> IndexCheckpointReservation = ledger.reserve
+    _ = reserve([:], [:], false, [], [], [])
+    _ = ledger.reserve(watermarks: [:], streamRoots: [:], hasIndexWork: false)
     let reservation = ledger.reserve(watermarks: ["external": 100], streamRoots: ["external": ["/tmp/external"]],
         hasIndexWork: true, wrappedStreams: changes.wrappedStreams, paths: ["/tmp/external/session.jsonl"])
     let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },

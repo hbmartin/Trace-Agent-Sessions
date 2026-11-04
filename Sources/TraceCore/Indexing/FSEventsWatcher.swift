@@ -8,6 +8,15 @@ public enum FSEventsRecoveryReason: String, Hashable, Sendable {
     case eventIDsWrapped
 }
 
+/// Opaque watcher chronology. Equality identifies the same post-wrap epoch;
+/// lineage distinguishes delayed pre-wrap batches without comparing event IDs.
+public struct IndexEventStreamEpoch: Sendable, Equatable {
+    let id: UUID
+    let predecessors: Set<UUID>
+    init(id: UUID = UUID(), predecessors: Set<UUID> = []) { self.id = id; self.predecessors = predecessors }
+    func advanced() -> Self { .init(predecessors: predecessors.union([id])) }
+}
+
 public struct SourceChanges: Sendable {
     public var paths: Set<String> = []
     /// Preserve symlink paths so a sidecar link change can be mapped even if
@@ -18,6 +27,7 @@ public struct SourceChanges: Sendable {
     public var recoveryReasons: Set<FSEventsRecoveryReason> = []
     /// Epoch changes belong to individual streams, even when batches are merged.
     public var wrappedStreams: Set<String> = []
+    public var streamEpochs: [String: IndexEventStreamEpoch] = [:]
     public var watermarks: [String: UInt64] = [:]
     /// Canonical roots covered by each event stream watermark. This lets the
     /// scheduler hold back only streams whose indexed paths failed.
@@ -34,7 +44,10 @@ public struct SourceChanges: Sendable {
         streamIdentifier: String = "host", streamRoots: [String] = []
     ) {
         let wrappedID = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
-        if wrappedID { wrappedStreams.insert(streamIdentifier) }
+        if wrappedID {
+            wrappedStreams.insert(streamIdentifier)
+            streamEpochs[streamIdentifier] = (streamEpochs[streamIdentifier] ?? .init()).advanced()
+        }
         watermarks[streamIdentifier] = wrappedID ? eventID : max(watermarks[streamIdentifier] ?? 0, eventID)
         self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
         if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
@@ -72,11 +85,18 @@ public struct SourceChanges: Sendable {
         structuralPaths.formUnion(other.structuralPaths)
         reconciliationPaths.formUnion(other.reconciliationPaths)
         recoveryReasons.formUnion(other.recoveryReasons)
+        let previouslyWrapped = wrappedStreams
         wrappedStreams.formUnion(other.wrappedStreams)
         historyDone = historyDone || other.historyDone
         for (identifier, eventID) in other.watermarks {
-            watermarks[identifier] = other.wrappedStreams.contains(identifier)
+            let existing = streamEpochs[identifier], incoming = other.streamEpochs[identifier]
+            if let existing, let incoming, existing.predecessors.contains(incoming.id) { continue }
+            let newerEpoch = incoming.map { next in existing.map { next.predecessors.contains($0.id) } ?? false } ?? false
+            let sameEpoch = existing != nil && existing == incoming
+            let firstWrap = other.wrappedStreams.contains(identifier) && !previouslyWrapped.contains(identifier)
+            watermarks[identifier] = newerEpoch || (firstWrap && !sameEpoch)
                 ? eventID : max(watermarks[identifier] ?? 0, eventID)
+            if let incoming { streamEpochs[identifier] = incoming }
         }
         for (identifier, roots) in other.streamRoots {
             streamRoots[identifier, default: []].formUnion(roots)
@@ -111,6 +131,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let lock = NSLock()
     private var pending = SourceChanges()
+    private var checkpointEpoch = IndexEventStreamEpoch()
     private var flushWorkItem: DispatchWorkItem?
 
     public convenience init(roots: [URL], latency: CFTimeInterval = 0.02,
@@ -173,6 +194,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
             guard let watcher = owner.watcher else { return }
             let pathArray = unsafeBitCast(paths, to: NSArray.self) as? [String] ?? []
             var changes = SourceChanges()
+            changes.streamEpochs[watcher.identifier] = watcher.checkpointEpoch
             for (index, path) in pathArray.prefix(count).enumerated() {
                 guard watcher.eventFilter?(path, flags[index]) != false else { continue }
                 changes.include(
@@ -180,7 +202,9 @@ public final class FSEventsWatcher: @unchecked Sendable {
                     streamIdentifier: watcher.identifier, streamRoots: watcher.roots
                 )
             }
+            watcher.checkpointEpoch = changes.streamEpochs[watcher.identifier] ?? watcher.checkpointEpoch
             if !watcher.tracksWatermarks {
+                changes.streamEpochs = [:]
                 changes.watermarks = [:]
                 changes.streamRoots = [:]
                 changes.wrappedStreams = []

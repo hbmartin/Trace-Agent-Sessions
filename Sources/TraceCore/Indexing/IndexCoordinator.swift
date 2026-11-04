@@ -79,6 +79,7 @@ public struct IndexProgress: Sendable {
     public var error: String?
     public var metadataWarning: String?
     public var rollupError: String?
+    var checkpointContentGeneration: IndexContentGeneration?
 
     public init(phase: Phase, agent: AgentKind? = nil, completedFiles: Int = 0,
                 totalFiles: Int = 0, currentPath: String? = nil, error: String? = nil) {
@@ -462,11 +463,25 @@ public actor IndexCoordinator {
         return result
     }
 
+    func checkpointRecord(stream: String) async throws -> IndexEventCheckpoint? {
+        do {
+            let checkpoint = try await database.eventCheckpointRecord(volumeID: stream)
+            failures.succeeded("Checkpoint initialization", scope: stream)
+            return checkpoint
+        } catch {
+            if !(error is CancellationError) { failures.record(error, operation: "Checkpoint initialization", scope: stream) }
+            throw error
+        }
+    }
+
+    var checkpointContentGeneration: IndexContentGeneration { database.contentGeneration }
+
     private func run(scope requestedScope: IndexScope, paths: Set<String>?, reconciliationPaths: Set<String>,
                      rebuild: Bool, preservingCommittedScope: Bool = false, onRebuildReset: @escaping @Sendable () -> Void = {}, activity: IndexActivity,
                      satisfiesSafetyReconciliation: Bool,
                      progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         var status = IndexProgress(phase: .discovering)
+        status.checkpointContentGeneration = database.contentGeneration
         status.activity = activity
         status.incremental = activity == .fileChanges
         status.metadataWarning = codexWarningMessage()
@@ -513,6 +528,7 @@ public actor IndexCoordinator {
                     })
                 } catch { resetError = error }
                 if committed.withLock({ $0 }) {
+                    status.checkpointContentGeneration = database.contentGeneration
                     deferredCodexSessionIDs = [:]
                     codexWarnings = codexWarnings.filter { $0.key.kind != .deferredLegacy }
                     status.metadataWarning = codexWarningMessage()

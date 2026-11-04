@@ -1,0 +1,150 @@
+{
+  "base": "12f16d38604ac8eaaa9c40a79c74605cda3740ee",
+  "implementationCandidate": "8f314a0754ea86ba68fcbfa476ed85bff98d3193",
+  "sourceHashesVerifiedAgainstCommitAndWorktree": true,
+  "focused": {
+    "run": "route-focused",
+    "exitCode": 0,
+    "passedTests": 172,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "elapsedSeconds": 39.10666312510148
+  },
+  "raceRuns": [
+    {
+      "run": "route-races-1",
+      "exitCode": 0,
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 7.0330382499378175
+    },
+    {
+      "run": "route-races-2",
+      "exitCode": 0,
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 6.8937449590303
+    },
+    {
+      "run": "route-races-3",
+      "exitCode": 0,
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 7.088731499854475
+    },
+    {
+      "run": "route-races-4",
+      "exitCode": 0,
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 7.119170874822885
+    },
+    {
+      "run": "route-races-5",
+      "exitCode": 0,
+      "passedTests": 9,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "elapsedSeconds": 6.898181084077805
+    }
+  ],
+  "repositoryChecks": [
+    {
+      "step": "debug-app",
+      "exitCode": 0,
+      "elapsedSeconds": 9.68867454212159
+    },
+    {
+      "step": "release-app",
+      "exitCode": 0,
+      "elapsedSeconds": 115.78438962483779
+    },
+    {
+      "step": "external-client",
+      "exitCode": 0,
+      "elapsedSeconds": 30.00009408313781
+    },
+    {
+      "step": "project-drift",
+      "exitCode": 0,
+      "elapsedSeconds": 0.3663662080653012
+    },
+    {
+      "step": "signing",
+      "exitCode": 0,
+      "elapsedSeconds": 6.1454072499182075
+    },
+    {
+      "step": "network",
+      "exitCode": 0,
+      "elapsedSeconds": 0.08385254186578095
+    },
+    {
+      "step": "whitespace",
+      "exitCode": 0,
+      "elapsedSeconds": 0.06685587507672608
+    },
+    {
+      "step": "test-enumeration",
+      "exitCode": 0,
+      "elapsedSeconds": 4.5669443749357015
+    }
+  ],
+  "scriptTests": {
+    "step": "script-tests",
+    "exitCode": 0,
+    "elapsedSeconds": 125.4041202920489,
+    "tests": 53,
+    "inputEquivalence": "script-test-input-equivalence.json",
+    "validatedCandidate": "c0a2fbccd49013711f5f080f2e2261673c8f5583"
+  },
+  "compiledSelection": {
+    "focused-selectors.json": {
+      "requestedIdentifiers": 172,
+      "matchingTests": 172,
+      "missing": []
+    },
+    "race-selectors.json": {
+      "requestedIdentifiers": 9,
+      "matchingTests": 9,
+      "missing": []
+    },
+    "ui-selectors.json": {
+      "requestedIdentifiers": 8,
+      "matchingTests": 8,
+      "missing": []
+    },
+    "regression-selectors.json": {
+      "requestedIdentifiers": 16,
+      "matchingTests": 16,
+      "missing": []
+    }
+  },
+  "uiRuns": [],
+  "uiAccepted": false,
+  "uiPendingReason": "Fresh desktop-idle confirmation has not been received.",
+  "targetedPerformance": {
+    "status": "blocked pending explicit user confirmation after automatic approval rejection",
+    "measurements": []
+  },
+  "omitted": [
+    "complete suites",
+    "three repository-wide Release comparison pairs"
+  ],
+  "performanceAcceptanceClaim": false,
+  "historicalProvenance": {
+    "source": "../2026-11-01-checkpoint-bookmark-recovery/raw-artifacts.json",
+    "candidate": "f06c853e619a78b3a4cf4d4e3404ed4aefa23407",
+    "sourceHashes": 10,
+    "earlierCandidate": {
+      "candidate": "589d41d03dbbd4aab47b0f1851e07c4388c95471",
+      "verifiedSourceHashes": 12
+    },
+    "artifactRecords": 80,
+    "trees": 16
+  }
+}

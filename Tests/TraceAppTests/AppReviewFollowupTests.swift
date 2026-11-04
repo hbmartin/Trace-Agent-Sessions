@@ -12,6 +12,93 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testReservationOnlyMetadataRoutesThroughSharedEnvelope() async throws {
+        let f = try await fixture(count: 2), source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let reservation = f.model.checkpointLedgerForTesting.reserve(watermarks: ["reserved-only": 100],
+            streamRoots: [:], hasIndexWork: false)
+        var changes = SourceChanges(); changes.checkpointReservations = [reservation]
+        await f.model.bufferSourceChangesForTesting(changes)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let saved = try await f.database.eventCheckpoint(volumeID: "reserved-only")
+        XCTAssertEqual(saved, 100)
+        XCTAssertEqual(f.model.checkpointLedgerForTesting.initializationForTesting(stream: "reserved-only").floor, 100)
+    }
+
+    func testOnboardingDeferralRetiresUnreadCheckpointPreparation() async throws {
+        let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.checkpointReadGateForTesting = held
+        f.model.settings.onboardingComplete = true
+        let starting = Task { await f.model.startWatchingForTesting([source]) }
+        try await wait { f.model.checkpointReadWaitingForTesting }
+        f.model.settings.onboardingComplete = false
+        let deferred = await f.model.startWatchingForTesting([source])
+        XCTAssertFalse(deferred)
+        XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.isEmpty)
+        XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
+        await gate.open()
+        let old = await starting.value; XCTAssertFalse(old)
+        XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.isEmpty)
+    }
+
+    func testSuccessfulCheckpointInitializationSeedsTheActualLedger() async throws {
+        let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
+        let stream = f.model.checkpointStreamForTesting(root: f.root)
+        try await f.database.saveQualifiedEventCheckpoints([stream: .init(value: 47, epoch: "positive-seed", replacingEpochs: [])])
+        let ledger = f.model.checkpointLedgerForTesting
+        XCTAssertFalse(ledger.initializationForTesting(stream: stream).initialized)
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        let state = ledger.initializationForTesting(stream: stream)
+        XCTAssertTrue(state.initialized)
+        XCTAssertEqual(state.epoch, "positive-seed")
+        XCTAssertEqual(state.floor, 47)
+    }
+
+    func testPendingBookmarkResolutionSurvivesUnrelatedSummary() async throws {
+        let pending = try await heldPendingBookmarkResolution(), model = pending.fixture.model
+        await model.refreshSummariesForTesting(lightweight: true)
+        await pending.gate.open()
+        try await wait { model.pendingBookmarkCountForTesting == 0 }
+        XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 19)
+    }
+
+    func testActiveBookmarkChangedDuringTranscriptReadWins() async throws {
+        let f = try await deferredResetFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let second = try JSONSerialization.data(withJSONObject: ["type": "user", "uuid": "late-anchor", "sessionId": "s-0",
+            "cwd": "/tmp/NavigationReview", "timestamp": 1_700_000_010_000,
+            "message": ["content": "LateBookmarkAnchor"]]) + Data([10])
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd(); try handle.write(contentsOf: second); try handle.close()
+        await f.model.coordinatorForTesting?.refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        let sessions = try await f.database.sessions()
+        let session = try XCTUnwrap(sessions.first { $0.messageCount == 2 })
+        f.model.openSession(session); try await wait { f.model.messages.count == 2 }
+        let first = try XCTUnwrap(f.model.messages.first), last = try XCTUnwrap(f.model.messages.last)
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: .init(messageID: first.id, offset: 19, index: 0))
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.automaticNavigationTranscriptGateForTesting = held
+        var changes = SourceChanges(); changes.paths = [file.path]
+        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        try await wait { f.model.automaticNavigationTranscriptWaitingForTesting }
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: .init(messageID: last.id, offset: 94, index: 1))
+        await gate.open()
+        try await wait { f.model.selectedSession?.contentGeneration == f.database.contentGeneration && !f.model.messages.isEmpty }
+        let id = try XCTUnwrap(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.scrollPositions[id]?.offset, 94)
+        XCTAssertEqual(f.model.scrollPositions[id]?.index, 1)
+        XCTAssertEqual(f.model.scrollPositions[id]?.messageID, f.model.messages.last?.id)
+    }
+
     func testCheckpointReadFailureKeepsLiveUpdatesAndRecoversOnMonitoringRestart() async throws {
         let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
         let stream = f.model.checkpointStreamForTesting(root: f.root)
@@ -99,11 +186,9 @@ final class AppReviewFollowupTests: XCTestCase {
                 let stream = f.model.checkpointStreamForTesting(root: f.root)
                 let context = "failed read=\(fails), replacement=\(replace)"
                 var failures = 0
-                var seededDatabases: [ObjectIdentifier] = []
+                let originalLedger = f.model.checkpointLedgerForTesting
+                XCTAssertFalse(originalLedger.initializationForTesting(stream: stream).initialized)
                 f.model.checkpointReadFailureForTesting = { _, _ in failures += 1 }
-                f.model.checkpointSeedForTesting = { database, name in
-                    if name == stream { seededDatabases.append(ObjectIdentifier(database)) }
-                }
                 if fails {
                     await f.database.failCheckpointReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY,
                         message: "obsolete-checkpoint-message", sql: "SELECT obsolete_checkpoint_sql",
@@ -112,7 +197,6 @@ final class AppReviewFollowupTests: XCTestCase {
                 let gate = ReviewReadGate(), held = Task { await gate.wait() }
                 defer {
                     f.model.checkpointReadFailureForTesting = nil
-                    f.model.checkpointSeedForTesting = nil
                     held.cancel(); Task { await gate.open() }
                 }
                 f.model.checkpointReadGateForTesting = held
@@ -131,7 +215,8 @@ final class AppReviewFollowupTests: XCTestCase {
                 XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.isEmpty, context)
                 XCTAssertTrue(f.model.monitoringWarnings.isEmpty, context)
                 XCTAssertEqual(failures, 0, context)
-                XCTAssertFalse(seededDatabases.contains(ObjectIdentifier(f.database)), context)
+                XCTAssertFalse(originalLedger.initializationForTesting(stream: stream).initialized, context)
+                XCTAssertFalse(f.model.checkpointLedgerForTesting.initializationForTesting(stream: stream).initialized, context)
                 let oldCheckpoint = try await f.database.eventCheckpointRecord(volumeID: stream)
                 XCTAssertNil(oldCheckpoint, context)
             }
@@ -179,6 +264,13 @@ final class AppReviewFollowupTests: XCTestCase {
                 XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 77)
                 XCTAssertEqual(model.scrollPositions[pending.session.id]?.index, 1)
             }
+            await model.refreshSummariesForTesting(lightweight: false)
+            if clear { XCTAssertNil(model.scrollPositions[pending.session.id]) }
+            else {
+                XCTAssertEqual(model.scrollPositions[pending.session.id]?.messageID, last.id)
+                XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 77)
+                XCTAssertEqual(model.scrollPositions[pending.session.id]?.index, 1)
+            }
         }
     }
 
@@ -210,7 +302,8 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.database.failCheckpointReadOnceForTesting(CancellationError(), stream: stream)
         f.model.settings.onboardingComplete = true
         let cancelled = await f.model.startWatchingForTesting([source])
-        XCTAssertFalse(cancelled)
+        XCTAssertTrue(cancelled, "a read-level cancellation leaves the current watcher live without tracking")
+        XCTAssertTrue(f.model.unavailableCheckpointStreamsForTesting.contains(stream))
         XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
         let restarted = await f.model.restartWatchingForTesting([source])
         XCTAssertTrue(restarted)
