@@ -3,6 +3,42 @@ import os
 @testable import TraceCore
 
 final class FSEventsWatcherTests: XCTestCase {
+    #if DEBUG
+    func testFilteredWrapStillAdvancesChronologyAndReconciliation() {
+        let watcher = FSEventsWatcher(roots: [URL(fileURLWithPath: "/tmp")], identifier: "stream",
+            eventFilter: { path, _ in path.hasSuffix("accepted.jsonl") }, onChange: { _ in })
+        let before = watcher.changesForTesting([("/tmp/accepted.jsonl", 0, 1_000)])
+        let wrapped = watcher.changesForTesting([("/tmp/filtered", UInt32(kFSEventStreamEventFlagEventIdsWrapped), 1)])
+        XCTAssertTrue(wrapped.paths.isEmpty)
+        XCTAssertEqual(wrapped.wrappedStreams, ["stream"])
+        XCTAssertEqual(wrapped.reconciliationPaths, [TraceFileIO.canonicalPath("/tmp").path])
+        XCTAssertNotEqual(wrapped.streamEpochs["stream"], before.streamEpochs["stream"])
+        let after = watcher.changesForTesting([("/tmp/accepted.jsonl", 0, 20)])
+        XCTAssertEqual(after.streamEpochs["stream"], wrapped.streamEpochs["stream"])
+        var delayed = after; delayed.merge(before); delayed.merge(wrapped)
+        XCTAssertEqual(delayed.watermarks["stream"], 20)
+    }
+
+    func testAcceptedWrapAdvancesOnceAndUntrackedWrapKeepsReconciliation() throws {
+        for tracked in [false, true] {
+            let watcher = FSEventsWatcher(roots: [URL(fileURLWithPath: "/tmp")], identifier: "stream",
+                tracksWatermarks: tracked, onChange: { _ in })
+            let before = watcher.changesForTesting([("/tmp/session.jsonl", 0, 1_000)])
+            let wrapped = watcher.changesForTesting([("/tmp/session.jsonl", UInt32(kFSEventStreamEventFlagEventIdsWrapped), 1)])
+            XCTAssertEqual(wrapped.paths, [TraceFileIO.canonicalPath("/tmp/session.jsonl").path])
+            XCTAssertEqual(wrapped.reconciliationPaths, [TraceFileIO.canonicalPath("/tmp").path])
+            if tracked {
+                XCTAssertEqual(wrapped.streamEpochs["stream"]?.predecessors, Set([try XCTUnwrap(before.streamEpochs["stream"]).id]))
+                XCTAssertEqual(wrapped.watermarks["stream"], 1)
+            } else {
+                XCTAssertTrue(wrapped.streamEpochs.isEmpty)
+                XCTAssertTrue(wrapped.watermarks.isEmpty)
+                XCTAssertTrue(wrapped.wrappedStreams.isEmpty)
+            }
+        }
+    }
+    #endif
+
     func testMergedChangesKeepLexicalSidecarPathAcrossRepointing() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("TraceSidecarEvents-\(UUID())")

@@ -196,19 +196,9 @@ public final class FSEventsWatcher: @unchecked Sendable {
             var changes = SourceChanges()
             changes.streamEpochs[watcher.identifier] = watcher.checkpointEpoch
             for (index, path) in pathArray.prefix(count).enumerated() {
-                guard watcher.eventFilter?(path, flags[index]) != false else { continue }
-                changes.include(
-                    path: path, flags: flags[index], eventID: eventIDs[index],
-                    streamIdentifier: watcher.identifier, streamRoots: watcher.roots
-                )
+                watcher.includeEvent(path: path, flags: flags[index], eventID: eventIDs[index], in: &changes)
             }
-            watcher.checkpointEpoch = changes.streamEpochs[watcher.identifier] ?? watcher.checkpointEpoch
-            if !watcher.tracksWatermarks {
-                changes.streamEpochs = [:]
-                changes.watermarks = [:]
-                changes.streamRoots = [:]
-                changes.wrappedStreams = []
-            }
+            watcher.finishChanges(&changes)
             if changes.hasIndexWork, TraceTestHooks.isUITesting,
                let fragment = TraceTestHooks.environment["TRACE_TEST_GATE_FILESYSTEM_ROOT_CONTAINS"],
                watcher.roots.contains(where: { $0.contains(fragment) }),
@@ -278,6 +268,42 @@ public final class FSEventsWatcher: @unchecked Sendable {
         lock.unlock()
         if flushPending, remaining.hasIndexWork || !remaining.structuralPaths.isEmpty { callback(remaining) }
     }
+
+    private func includeEvent(path: String, flags: FSEventStreamEventFlags,
+                              eventID: FSEventStreamEventId, in changes: inout SourceChanges) {
+        let wrap = UInt32(kFSEventStreamEventFlagEventIdsWrapped)
+        if flags & wrap != 0 {
+            // Epoch and reconciliation control applies even if the content
+            // filter rejects the path carrying the marker.
+            changes.include(path: path, flags: wrap | UInt32(kFSEventStreamEventFlagItemIsDir),
+                eventID: eventID, streamIdentifier: identifier, streamRoots: roots)
+        }
+        guard eventFilter?(path, flags) != false else { return }
+        changes.include(path: path, flags: flags & ~wrap, eventID: eventID,
+            streamIdentifier: identifier, streamRoots: roots)
+    }
+
+    private func finishChanges(_ changes: inout SourceChanges) {
+        checkpointEpoch = changes.streamEpochs[identifier] ?? checkpointEpoch
+        if !tracksWatermarks {
+            changes.streamEpochs = [:]
+            changes.watermarks = [:]
+            changes.streamRoots = [:]
+            changes.wrappedStreams = []
+        }
+    }
+
+    #if DEBUG
+    func changesForTesting(_ events: [(path: String, flags: FSEventStreamEventFlags, eventID: FSEventStreamEventId)]) -> SourceChanges {
+        queue.sync {
+            var changes = SourceChanges()
+            changes.streamEpochs[identifier] = checkpointEpoch
+            for event in events { includeEvent(path: event.path, flags: event.flags, eventID: event.eventID, in: &changes) }
+            finishChanges(&changes)
+            return changes
+        }
+    }
+    #endif
 
     private func enqueue(_ changes: SourceChanges) {
         lock.lock()
