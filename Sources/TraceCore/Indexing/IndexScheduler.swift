@@ -315,12 +315,23 @@ public final class IndexCheckpointLedger: Sendable {
     }
 
     fileprivate func begin(_ entries: [Entry], owner: UUID) -> Coverage {
-        state.withLock { value in
-            let current: [Entry] = entries.compactMap { entry in
-                guard let stream = value.streams[entry.stream], stream.initialized,
-                      let record = stream.records[entry.id], record.entry.version == entry.version else { return nil }
-                value.streams[entry.stream]?.records[entry.id]?.owner = owner
-                return record.entry
+        let grouped = Dictionary(grouping: entries, by: \.stream)
+        // Keep one mutable owner per record dictionary instead of copying it
+        // for every nested lookup and writeback.
+        return state.withLock { value in
+            var current: [Entry] = []
+            current.reserveCapacity(entries.count)
+            for (name, entries) in grouped {
+                guard var stream = value.streams.removeValue(forKey: name) else { continue }
+                if stream.initialized {
+                    for entry in entries {
+                        guard var record = stream.records[entry.id], record.entry.version == entry.version else { continue }
+                        record.owner = owner
+                        stream.records[entry.id] = record
+                        current.append(record.entry)
+                    }
+                }
+                value.streams[name] = stream
             }
             value.mutation &+= 1
             return Coverage(entries: current, owner: owner, revision: value.revision)
@@ -335,51 +346,57 @@ public final class IndexCheckpointLedger: Sendable {
         let fileFailures = Set(failedPaths.map(TraceFileIO.canonicalPath))
         let reconciliationFailures = Set(failedReconciliationPaths.map(TraceFileIO.canonicalPath))
         let failures = fileFailures.union(reconciliationFailures)
+        let grouped = Dictionary(grouping: coverage.entries, by: \.stream)
         // Sorting and root containment run on scheduler execution, outside the
         // lock used by main-actor event ingress. A conflicting reservation wins.
         for _ in 0..<3 {
             var snapshot = state.withLock { $0 }
             let mutation = snapshot.mutation
             guard snapshot.revision == coverage.revision else { return [:] }
-            for entry in coverage.entries {
-                guard let stream = snapshot.streams[entry.stream], stream.initialized,
-                      stream.epoch == entry.epoch, var record = stream.records[entry.id],
-                      record.owner == coverage.owner, record.entry.version == entry.version else { continue }
-                let required = Self.requirement(record, stream: stream)
-                if required.covered(paths: changed, reconciliation: reconciled, fullScan: fullScan, failures: failures) {
-                    record.covered = true
-                } else if !record.covered {
-                    // A completed discovery can leave only individual failed
-                    // files unpaid. Remember that coverage before a file retry;
-                    // a reset failure never enters this accepted-result path.
-                    let attempted = required.paths.filter { input in
-                        fullScan || changed.contains(input) || reconciled.contains { $0.contains(input) }
-                    }
-                    let scanned = required.reconciliation.filter { input in
-                        fullScan || reconciled.contains { $0.contains(input) }
-                    }
-                    let coversWhole = fullScan || !scanned.isEmpty
-                    record.inputPaths.subtract(attempted.filter { input in !failures.contains { $0.intersects(input) } })
-                    record.inputReconciliationPaths.subtract(scanned.filter { input in
-                        !reconciliationFailures.contains { $0.intersects(input) }
-                    })
-                    if fullScan { record.requiresFullScan = false }
-                    if coversWhole {
-                        let scope = required.paths.union(required.reconciliation).union(required.roots)
-                        let relevant: (TraceFileIO.CanonicalPath) -> Bool = { failure in
-                            scope.isEmpty || scope.contains { $0.intersects(failure) }
+            for (name, entries) in grouped {
+                guard var stream = snapshot.streams.removeValue(forKey: name) else { continue }
+                if stream.initialized {
+                    for entry in entries {
+                        guard stream.epoch == entry.epoch, var record = stream.records[entry.id],
+                              record.owner == coverage.owner, record.entry.version == entry.version else { continue }
+                        let required = Self.requirement(record, stream: stream)
+                        if required.covered(paths: changed, reconciliation: reconciled, fullScan: fullScan, failures: failures) {
+                            record.covered = true
+                        } else if !record.covered {
+                            // A completed discovery can leave only individual failed
+                            // files unpaid. Remember that coverage before a file retry;
+                            // a reset failure never enters this accepted-result path.
+                            let attempted = required.paths.filter { input in
+                                fullScan || changed.contains(input) || reconciled.contains { $0.contains(input) }
+                            }
+                            let scanned = required.reconciliation.filter { input in
+                                fullScan || reconciled.contains { $0.contains(input) }
+                            }
+                            let coversWhole = fullScan || !scanned.isEmpty
+                            record.inputPaths.subtract(attempted.filter { input in !failures.contains { $0.intersects(input) } })
+                            record.inputReconciliationPaths.subtract(scanned.filter { input in
+                                !reconciliationFailures.contains { $0.intersects(input) }
+                            })
+                            if fullScan { record.requiresFullScan = false }
+                            if coversWhole {
+                                let scope = required.paths.union(required.reconciliation).union(required.roots)
+                                let relevant: (TraceFileIO.CanonicalPath) -> Bool = { failure in
+                                    scope.isEmpty || scope.contains { $0.intersects(failure) }
+                                }
+                                record.inputPaths.formUnion(fileFailures.filter(relevant))
+                                record.inputReconciliationPaths.formUnion(reconciliationFailures.filter(relevant))
+                                if !required.reconciliation.isEmpty && record.inputReconciliationPaths.isEmpty {
+                                    record.requiresReconciliation = false
+                                }
+                            }
+                            record.hasIndexWork = record.requiresFullScan || !record.inputPaths.isEmpty || !record.inputReconciliationPaths.isEmpty
+                            // Unattempted unknown work must never become metadata-only.
+                            if required.unknownWork && !fullScan && scanned.isEmpty { record.hasIndexWork = true }
                         }
-                        record.inputPaths.formUnion(fileFailures.filter(relevant))
-                        record.inputReconciliationPaths.formUnion(reconciliationFailures.filter(relevant))
-                        if !required.reconciliation.isEmpty && record.inputReconciliationPaths.isEmpty {
-                            record.requiresReconciliation = false
-                        }
+                        stream.records[entry.id] = record
                     }
-                    record.hasIndexWork = record.requiresFullScan || !record.inputPaths.isEmpty || !record.inputReconciliationPaths.isEmpty
-                    // Unattempted unknown work must never become metadata-only.
-                    if required.unknownWork && !fullScan && scanned.isEmpty { record.hasIndexWork = true }
                 }
-                snapshot.streams[entry.stream]?.records[entry.id] = record
+                snapshot.streams[name] = stream
             }
             var accepted: [String: IndexEventCheckpoint] = [:]
             for name in Set(coverage.entries.map(\.stream)) {
