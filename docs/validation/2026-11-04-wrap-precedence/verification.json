@@ -1,0 +1,355 @@
+{
+  "implementationCandidate": "05c0c2f2ce9d310a164aa4b7b57a151af11b1123",
+  "base": "7f827a770b61f9624dd82aec5246c9d33daba7b1",
+  "sourceHashes": "source-hashes.json",
+  "verifiedInputCount": 105,
+  "reviewComment": "https://github.com/hbmartin/Trace-Agent-Sessions/pull/86#discussion_r4469691454",
+  "beforeFix": {
+    "inputs": {
+      "reviewTarget": "f0ec90a4852c09f598966857e1184cecc26bc7db",
+      "base": "7f827a770b61f9624dd82aec5246c9d33daba7b1",
+      "sourceHashes": {
+        "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "e2467f9f0e190ea3102205408b3dfac73ab9b7099ecfbb26abd146ee83cfbaa6",
+        "Tests/TraceCoreTests/FSEventsWatcherTests.swift": "d64a5c6d858b6a92a3dcfb21e2f4940d38acadf9eb44c24cb71ec0bb76a7834f"
+      }
+    },
+    "run": {
+      "name": "regression-before-fix",
+      "command": [
+        "xcodebuild",
+        "test",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-resultBundlePath",
+        "build/wrap-precedence-before-fix.xcresult",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests/testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence"
+      ],
+      "exitCode": 65,
+      "elapsedSeconds": 88.38054420799017,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/regression-before-fix.log"
+    },
+    "failedTests": 1,
+    "assertionFailures": 24,
+    "expectedRegressionFailure": true
+  },
+  "focused": {
+    "run": {
+      "name": "focused",
+      "command": [
+        "xcodebuild",
+        "test",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-resultBundlePath",
+        "build/wrap-precedence-focused.xcresult",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests",
+        "-only-testing:TraceCoreTests/SessionMetadataTests",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 61.1432577080559,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/focused.log"
+    },
+    "passedTests": 245,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  "repeatRuns": [
+    {
+      "run": {
+        "name": "repeat-1",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/wrap-precedence-repeat-1.xcresult",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testFilteredWrapStillAdvancesChronologyAndReconciliation",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testAcceptedWrapAdvancesOnceAndUntrackedWrapKeepsReconciliation"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 5.516644666902721,
+        "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/repeat-1.log"
+      },
+      "passedTests": 3,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "repeat-2",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/wrap-precedence-repeat-2.xcresult",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testFilteredWrapStillAdvancesChronologyAndReconciliation",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testAcceptedWrapAdvancesOnceAndUntrackedWrapKeepsReconciliation"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 3.972780666081235,
+        "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/repeat-2.log"
+      },
+      "passedTests": 3,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "repeat-3",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/wrap-precedence-repeat-3.xcresult",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testFilteredWrapStillAdvancesChronologyAndReconciliation",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testAcceptedWrapAdvancesOnceAndUntrackedWrapKeepsReconciliation"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 4.153542000101879,
+        "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/repeat-3.log"
+      },
+      "passedTests": 3,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "repeat-4",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/wrap-precedence-repeat-4.xcresult",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testFilteredWrapStillAdvancesChronologyAndReconciliation",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testAcceptedWrapAdvancesOnceAndUntrackedWrapKeepsReconciliation"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 4.231083791935816,
+        "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/repeat-4.log"
+      },
+      "passedTests": 3,
+      "failedTests": 0
+    },
+    {
+      "run": {
+        "name": "repeat-5",
+        "command": [
+          "xcodebuild",
+          "test-without-building",
+          "-project",
+          "Trace.xcodeproj",
+          "-scheme",
+          "Trace",
+          "-configuration",
+          "Debug",
+          "-destination",
+          "platform=macOS,arch=arm64",
+          "-derivedDataPath",
+          "build/DerivedData",
+          "-parallel-testing-enabled",
+          "NO",
+          "-resultBundlePath",
+          "build/wrap-precedence-repeat-5.xcresult",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testFilteredWrapStillAdvancesChronologyAndReconciliation",
+          "-only-testing:TraceCoreTests/FSEventsWatcherTests/testAcceptedWrapAdvancesOnceAndUntrackedWrapKeepsReconciliation"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 4.21214949991554,
+        "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/repeat-5.log"
+      },
+      "passedTests": 3,
+      "failedTests": 0
+    }
+  ],
+  "regression": {
+    "method": "testCombinedWrapFlagsPreserveGlobalRecoveryPrecedence",
+    "methods": 1,
+    "internalScenarios": 56,
+    "countsAreXCTestMethodsNotInternalScenarios": true
+  },
+  "checks": [
+    {
+      "name": "debug-app",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 6.609922833042219,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/debug-app.log"
+    },
+    {
+      "name": "release-app",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 103.70924350013956,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/release-app.log"
+    },
+    {
+      "name": "external-client",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 31.881294999970123,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/external-client.log"
+    },
+    {
+      "name": "project-drift",
+      "command": [
+        "bash",
+        "Scripts/check-project-drift.sh"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.24633200000971556,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/project-drift.log"
+    },
+    {
+      "name": "signing",
+      "command": [
+        "bash",
+        "Scripts/check-signing-settings.sh"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 6.255105333169922,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/signing.log"
+    },
+    {
+      "name": "network",
+      "command": [
+        "bash",
+        "Scripts/check-network-surface.sh",
+        "build/DerivedData/Build/Products/Release/Trace.app"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.09775587497279048,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/network.log"
+    },
+    {
+      "name": "whitespace",
+      "command": [
+        "git",
+        "diff",
+        "origin/main",
+        "--check"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.0458514578640461,
+      "log": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup/whitespace.log"
+    }
+  ],
+  "limitations": [
+    "Complete suites and App test execution were not run.",
+    "UI automation and Release performance comparisons were not run.",
+    "No local 10% performance-acceptance claim; prior measurements are not reused."
+  ],
+  "rawPayloads": {
+    "root": "/Volumes/Pro2T/TraceValidation/wrapped-event-precedence-followup",
+    "availability": "Local-only, not downloadable repository or CI attachments.",
+    "resultBundles": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/wrap-precedence-*.xcresult"
+  }
+}

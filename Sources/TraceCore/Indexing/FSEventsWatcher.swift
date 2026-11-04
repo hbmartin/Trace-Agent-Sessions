@@ -272,15 +272,16 @@ public final class FSEventsWatcher: @unchecked Sendable {
     private func includeEvent(path: String, flags: FSEventStreamEventFlags,
                               eventID: FSEventStreamEventId, in changes: inout SourceChanges) {
         let wrap = UInt32(kFSEventStreamEventFlagEventIdsWrapped)
-        if flags & wrap != 0 {
-            // Epoch and reconciliation control applies even if the content
-            // filter rejects the path carrying the marker.
+        if eventFilter?(path, flags) != false {
+            // Include the complete event once, preserving global recovery
+            // precedence as well as its path, structural, and history metadata.
+            changes.include(path: path, flags: flags, eventID: eventID,
+                streamIdentifier: identifier, streamRoots: roots)
+        } else if flags & wrap != 0 {
+            // The content filter cannot suppress wrap control metadata.
             changes.include(path: path, flags: wrap | UInt32(kFSEventStreamEventFlagItemIsDir),
                 eventID: eventID, streamIdentifier: identifier, streamRoots: roots)
         }
-        guard eventFilter?(path, flags) != false else { return }
-        changes.include(path: path, flags: flags & ~wrap, eventID: eventID,
-            streamIdentifier: identifier, streamRoots: roots)
     }
 
     private func finishChanges(_ changes: inout SourceChanges) {
