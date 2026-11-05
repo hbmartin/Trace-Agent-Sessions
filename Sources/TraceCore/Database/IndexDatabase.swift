@@ -202,9 +202,7 @@ public actor IndexDatabase {
                 arguments: [UUID().uuidString + ":" + UUID().uuidString])
         }
         generationState = OSAllocatedUnfairLock(initialState: try pool.read { db in
-            let raw = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='index_scope'")
-            return CheckpointContext(generation: try Self.readContentGeneration(db),
-                scope: IndexScope(rawValue: Int(raw ?? "0") ?? 0) ?? .proseOnly)
+            CheckpointContext(generation: try Self.readContentGeneration(db), scope: try Self.readIndexScope(db))
         })
     }
 
@@ -624,10 +622,12 @@ public actor IndexDatabase {
             throw error
         }
         #endif
-        return try pool.read { db in
-            let raw = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='index_scope'")
-            return IndexScope(rawValue: Int(raw ?? "0") ?? 0) ?? .proseOnly
-        }
+        return try pool.read(Self.readIndexScope)
+    }
+
+    private nonisolated static func readIndexScope(_ db: Database) throws -> IndexScope {
+        let raw = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='index_scope'")
+        return IndexScope(rawValue: Int(raw ?? "0") ?? 0) ?? .proseOnly
     }
 
     public func setIndexScope(_ scope: IndexScope) throws {

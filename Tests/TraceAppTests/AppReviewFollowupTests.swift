@@ -12,6 +12,45 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testMailboxPreservesFirstPositionsAndEpochsBeforeCoalescing() async throws {
+        let gate = ReviewReadGate(), before = IndexEventStreamEpoch(), after = before.advanced()
+        var deliveries: [(SourceChanges, [String: SourceIngressMailbox.ReplayPosition])] = []
+        let mailbox = SourceIngressMailbox { changes, _, first in
+            deliveries.append((changes, first))
+            if deliveries.count == 1 { await gate.wait() }
+        }
+        var initial = SourceChanges(); initial.watermarks = ["a": 10]; initial.streamEpochs = ["a": before]
+        mailbox.enqueue(initial)
+        try await wait { deliveries.count == 1 }
+        for mark in 11...500 {
+            var changes = SourceChanges(); changes.watermarks = ["a": UInt64(mark), "b": UInt64(mark + 100)]
+            changes.streamEpochs = ["a": before]; mailbox.enqueue(changes)
+        }
+        var wrapped = SourceChanges(); wrapped.watermarks = ["a": 0]; wrapped.streamEpochs = ["a": after]; wrapped.wrappedStreams = ["a"]
+        mailbox.enqueue(wrapped)
+        await gate.open()
+        try await wait { deliveries.contains { $0.1["a"]?.epoch == after } }
+        XCTAssertEqual(deliveries.first?.1["a"]?.value, 10)
+        XCTAssertEqual(deliveries.dropFirst().first?.1["a"]?.value, 11)
+        XCTAssertEqual(deliveries.dropFirst().first?.1["b"]?.value, 111)
+        XCTAssertEqual(deliveries.last?.1["a"]?.value, 0)
+        XCTAssertEqual(deliveries.last?.0.watermarks["a"], 0)
+        mailbox.close()
+    }
+
+    func testNewIntentInOldGenerationDoesNotKeepObsoleteNumericBookmark() async throws {
+        let f = try await fixture(count: 3), session = try XCTUnwrap(f.model.sessions.first)
+        f.model.openSession(session); try await wait { !f.model.messages.isEmpty }
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: .init(messageID: message.id, offset: 19, index: 0))
+        let cleanup = f.model.capturedBookmarkCleanupForTesting(session.id)
+        try await f.database.clearIndex()
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: .init(messageID: message.id, offset: 77, index: 0))
+        cleanup()
+        XCTAssertNil(f.model.scrollPositions[session.id], "New intent in the retired generation cannot remain under a reusable numeric ID")
+        XCTAssertEqual(f.model.bookmarkIntentForTesting(session.navigationReference)?.offset, 77)
+    }
+
     func testReservationOnlyMetadataRoutesThroughSharedEnvelope() async throws {
         let f = try await fixture(count: 2), source = ClaudeCodeSource(roots: [f.root])
         f.model.settings.onboardingComplete = true

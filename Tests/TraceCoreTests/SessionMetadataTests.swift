@@ -215,6 +215,28 @@ final class SessionMetadataTests: XCTestCase {
         XCTAssertEqual(afterRename.map(\.id), originalMessages.map(\.id))
     }
 
+    func testSchedulerPreservesConfiguredSidecarIdentityAfterRetarget() async throws {
+        let root = try directory(), sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try write(codexRollout(id: "linked"), to: sessions.appendingPathComponent("rollout-linked.jsonl"))
+        let before = root.appendingPathComponent("before"), after = root.appendingPathComponent("after")
+        try write([["id": "linked", "thread_name": "Before retarget"]], to: before)
+        try write([["id": "linked", "thread_name": "After retarget"]], to: after)
+        let sidecar = root.appendingPathComponent("session_index.jsonl")
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: before)
+        let database = try IndexDatabase(url: root.appendingPathComponent("trace.sqlite"))
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [CodexSource(root: sessions)]), scope: .proseOnly, progress: { _ in })
+        await scheduler.request(reconcile: true); await scheduler.waitUntilIdle()
+        let initial = try await database.sessions().first?.title
+        XCTAssertEqual(initial, "Before retarget")
+        try FileManager.default.removeItem(at: sidecar)
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: after)
+        await scheduler.request(paths: [sidecar.path]); await scheduler.waitUntilIdle()
+        let updated = try await database.sessions().first?.title
+        XCTAssertEqual(updated, "After retarget")
+        await scheduler.stop()
+    }
+
     func testCodexSidecarPrecedenceAndTitleOnlyRefresh() async throws {
         let root = try directory()
         let sessions = root.appendingPathComponent("sessions")

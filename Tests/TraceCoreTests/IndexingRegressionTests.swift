@@ -8,6 +8,96 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testImplicitScopeResetPaysActualFullScanCoverage() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        try await database.setIndexScope(.proseOnly)
+        let ledger = IndexCheckpointLedger(), marks = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])]),
+            scope: .everything, progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { marks.withLock { $0.append(mark) } } })
+        await scheduler.request(paths: [file.path], watermarks: ["s": 100], streamRoots: ["s": [root.path]])
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(marks.withLock { $0 }, [100])
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+        await scheduler.stop()
+    }
+
+    func testUnrelatedReconciliationDoesNotAttachFailureToPathObligation() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), a = root.appendingPathComponent("a/file").path, b = root.appendingPathComponent("b/file").path
+        ledger.seed(stream: "s", checkpoint: nil)
+        let reservation = ledger.reserve(watermarks: ["s": 100], streamRoots: ["s": [root.path]], hasIndexWork: true, paths: [a])
+        let unrelated = ledger.prepareProofForTesting([reservation], reconciliation: [root.appendingPathComponent("b").path], failures: [b], content: database.contentGeneration)
+        ledger.retainProofForTesting(unrelated)
+        XCTAssertTrue(ledger.drainProofsForTesting(content: database.contentGeneration).isEmpty)
+        XCTAssertEqual(ledger.remainingPathsForTesting([reservation]), [TraceFileIO.canonicalPath(a).path])
+        let own = ledger.prepareProofForTesting([reservation], paths: [a], content: database.contentGeneration)
+        ledger.retainProofForTesting(own)
+        XCTAssertEqual(ledger.drainProofsForTesting(content: database.contentGeneration)["s"]?.value, 100)
+    }
+
+    func testFullScanFailureDoesNotContaminateSuccessfulPathObligation() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), a = root.appendingPathComponent("a").path, b = root.appendingPathComponent("b").path
+        ledger.seed(stream: "s", checkpoint: nil)
+        let reservation = ledger.reserve(watermarks: ["s": 100], streamRoots: ["s": [root.path]], hasIndexWork: true, paths: [a])
+        let proof = ledger.prepareProofForTesting([reservation], paths: [a, b], failures: [b], fullScan: true, content: database.contentGeneration)
+        ledger.retainProofForTesting(proof)
+        XCTAssertEqual(ledger.drainProofsForTesting(content: database.contentGeneration)["s"]?.value, 100)
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+    }
+
+    func testPaidRunAndPartialOutcomeHistoryRemainBounded() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let a = root.appendingPathComponent("a").path, b = root.appendingPathComponent("b").path
+        let ledger = IndexCheckpointLedger(); ledger.seed(stream: "s", checkpoint: nil)
+        let stuck = ledger.reserve(watermarks: ["s": 1], streamRoots: ["s": [root.path]], hasIndexWork: true, paths: [a, b])
+        let old = ledger.prepareProofForTesting([stuck], paths: [a, b], failures: [a, b], content: database.contentGeneration)
+        for mark in 2...2_000 {
+            let paid = ledger.reserve(watermarks: ["s": UInt64(mark)], streamRoots: ["s": [root.path]], hasIndexWork: true, paths: [a])
+            let proof = ledger.prepareProofForTesting([stuck, paid], paths: [a, b], failures: [b], content: database.contentGeneration)
+            ledger.retainProofForTesting(proof)
+            XCTAssertTrue(ledger.drainProofsForTesting(content: database.contentGeneration).isEmpty)
+        }
+        XCTAssertEqual(ledger.retainedRecordCount, 1)
+        XCTAssertLessThanOrEqual(ledger.paidBoundaryCountForTesting, 2)
+        XCTAssertLessThanOrEqual(ledger.retainedOutcomeCountForTesting, 2)
+        ledger.retainProofForTesting(old); _ = ledger.drainProofsForTesting(content: database.contentGeneration)
+        XCTAssertEqual(ledger.remainingPathsForTesting([stuck]), [TraceFileIO.canonicalPath(b).path])
+        let recovered = ledger.prepareProofForTesting([stuck], paths: [b], content: database.contentGeneration)
+        ledger.retainProofForTesting(recovered)
+        XCTAssertEqual(ledger.drainProofsForTesting(content: database.contentGeneration)["s"]?.value, 2_000)
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+    }
+
+    func testCompactedPaidRunRespectsLateOlderReservation() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), path = root.appendingPathComponent("a").path
+        ledger.seed(stream: "s", checkpoint: nil)
+        let barrier = ledger.reserve(watermarks: ["s": 1], streamRoots: [:], hasIndexWork: true, paths: [path])
+        for mark in [100, 200] { _ = ledger.reserve(watermarks: ["s": UInt64(mark)], streamRoots: [:], hasIndexWork: false) }
+        let late = ledger.reserve(watermarks: ["s": 150], streamRoots: [:], hasIndexWork: true, paths: [root.appendingPathComponent("b").path])
+        let first = ledger.prepareProofForTesting([barrier], paths: [path], content: database.contentGeneration)
+        ledger.retainProofForTesting(first)
+        XCTAssertEqual(ledger.drainProofsForTesting(content: database.contentGeneration)["s"]?.value, 100)
+        let second = ledger.prepareProofForTesting([late], paths: [root.appendingPathComponent("b").path], content: database.contentGeneration)
+        ledger.retainProofForTesting(second)
+        XCTAssertEqual(ledger.drainProofsForTesting(content: database.contentGeneration)["s"]?.value, 200)
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+    }
+
+    func testLargeUnpaidChainReleasesWithoutRecursiveDestruction() {
+        weak var released: IndexCheckpointLedger?
+        autoreleasepool {
+            let ledger = IndexCheckpointLedger(); released = ledger
+            for mark in 1...100_000 { _ = ledger.reserve(watermarks: ["s": UInt64(mark)], streamRoots: [:], hasIndexWork: true) }
+            XCTAssertEqual(ledger.retainedRecordCount, 100_000)
+        }
+        XCTAssertNil(released)
+    }
+
     func testCommittedResetRepublishesPreviouslyPaidCheckpointFloor() async throws {
         let root = try directory(), file = root.appendingPathComponent("session.jsonl")
         try Data(line(1).utf8).write(to: file)
@@ -140,7 +230,6 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertGreaterThan(ledger.retainedProofCountForTesting, 0)
         let next = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, checkpointLedger: ledger,
             didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { marks.withLock { $0.append(mark) } } })
-        await next.request()
         await next.waitUntilIdle()
         XCTAssertEqual(marks.withLock { $0 }, [100])
         XCTAssertEqual(ledger.retainedProofCountForTesting, 0)
@@ -424,7 +513,8 @@ final class IndexingRegressionTests: XCTestCase {
         await gate.open(); await stop.value
         await scheduler.waitUntilIdle()
         XCTAssertTrue(updates.withLock { $0.isEmpty })
-        XCTAssertEqual(ledger.retainedRecordCount, 1)
+        XCTAssertEqual(ledger.retainedRecordCount, 0, "Metadata needs only a compact checkpoint boundary")
+        XCTAssertEqual(ledger.paidBoundaryCountForTesting, 1)
     }
 
     func testCheckpointPersistenceRejectsResetDuringCallbackDelivery() async throws {
@@ -706,7 +796,8 @@ final class IndexingRegressionTests: XCTestCase {
         for value in 2...10_001 {
             _ = ledger.reserve(watermarks: ["stream": UInt64(value)], streamRoots: ["stream": ["/tmp/a"]], hasIndexWork: false)
         }
-        XCTAssertEqual(ledger.retainedRecordCount, 2)
+        XCTAssertEqual(ledger.retainedRecordCount, 1, "Only the unpaid indexing obligation retains a record")
+        XCTAssertEqual(ledger.paidBoundaryCountForTesting, 2, "One unpaid boundary and one compact paid run")
     }
 
     func testMoveAliasesSurviveReopeningAndContentReplacementRetiresThem() async throws {

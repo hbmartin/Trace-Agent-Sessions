@@ -478,15 +478,17 @@ public actor IndexCoordinator {
 
     /// Scheduler execution shares one permit and one reset-commit observer for
     /// every mode, including an implicit scope reset in an incremental pass.
-    func executeScheduled(paths: Set<String>, reconciliationPaths: Set<String>, fullScan: Bool,
+    func executeScheduled(paths: Set<String>, reconciliationPaths: Set<String>,
+                          canonicalPaths: Set<TraceFileIO.CanonicalPath>, canonicalReconciliation: Set<TraceFileIO.CanonicalPath>, fullScan: Bool,
                           rebuild: Bool, preservingCommittedScope: Bool, scope: IndexScope,
                           activity: IndexActivity, satisfiesSafetyReconciliation: Bool,
                           onRebuildReset: @escaping @Sendable () -> Void,
                           onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void,
                           progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         await gate.acquire()
-        let result = await run(scope: scope, paths: fullScan ? nil : paths,
-            reconciliationPaths: fullScan ? [] : reconciliationPaths, rebuild: rebuild,
+        let result = await run(scope: scope, paths: fullScan ? nil : Set(canonicalPaths.map(\.path)),
+            reconciliationPaths: fullScan ? [] : Set(canonicalReconciliation.map(\.path)), rebuild: rebuild,
+            metadataPaths: paths, metadataReconciliationPaths: reconciliationPaths, pathsAreCanonical: true,
             preservingCommittedScope: preservingCommittedScope, onRebuildReset: onRebuildReset,
             onIndexReset: onIndexReset, activity: activity,
             satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, progress: progress)
@@ -499,7 +501,8 @@ public actor IndexCoordinator {
     nonisolated var checkpointContext: (generation: IndexContentGeneration, scope: IndexScope) { database.checkpointContext }
 
     private func run(scope requestedScope: IndexScope, paths: Set<String>?, reconciliationPaths: Set<String>,
-                     rebuild: Bool, preservingCommittedScope: Bool = false, onRebuildReset: @escaping @Sendable () -> Void = {},
+                     rebuild: Bool, metadataPaths: Set<String>? = nil, metadataReconciliationPaths: Set<String>? = nil,
+                     pathsAreCanonical: Bool = false, preservingCommittedScope: Bool = false, onRebuildReset: @escaping @Sendable () -> Void = {},
                      onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void = { _ in }, activity: IndexActivity,
                      satisfiesSafetyReconciliation: Bool,
                      progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
@@ -607,7 +610,7 @@ public actor IndexCoordinator {
                 .flatMap(\.roots).map { Self.codexMetadataDirectory(for: $0) }
             let directoryPaths = metadataDirectories.map(\.path)
             let dependencyChanged = cachedSidecarMapping.map { cached in
-                (paths ?? []).contains { path in
+                (metadataPaths ?? paths ?? []).contains { path in
                     cached.mapping.isMetadataStructurePath(path)
                         || !cached.mapping.configuredRawChangePaths(for: path).isEmpty
                 } && cached.mapping.topologyHasChanged
@@ -616,7 +619,7 @@ public actor IndexCoordinator {
                 cachedSidecarMapping = (directoryPaths, CodexMetadataSidecarMapping(metadataDirectories: metadataDirectories))
             }
             let sidecarMapping = cachedSidecarMapping!.mapping
-            let metadataChangePaths = (paths ?? []).flatMap { path in
+            let metadataChangePaths = (metadataPaths ?? paths ?? []).flatMap { path in
                 [path] + sidecarMapping.configuredChangePaths(for: path)
             }
             let changedMetadataDirectories = Set(metadataChangePaths.compactMap { path -> String? in
@@ -639,7 +642,7 @@ public actor IndexCoordinator {
                             TraceFileIO.canonicalPath($0.path).comparisonKey
                         )
                     }
-                    let reconciled = reconciliationPaths.contains {
+                    let reconciled = (metadataReconciliationPaths ?? reconciliationPaths).contains {
                         root.reconciliationScope(
                             forRawPath: $0, in: mappingContexts[root.id] ?? root.mappingContext
                         ) != nil
@@ -761,7 +764,7 @@ public actor IndexCoordinator {
                 }
                 for path in (paths ?? []).sorted() {
                     try Task.checkCancellation()
-                    let url = URL(fileURLWithPath: TraceFileIO.canonicalPath(path).path)
+                    let url = URL(fileURLWithPath: pathsAreCanonical ? path : TraceFileIO.canonicalPath(path).path)
                     if !FileManager.default.fileExists(atPath: url.path) {
                         missingSources.formUnion(classifications(
                             url: url, mappingContexts: mappingContexts
