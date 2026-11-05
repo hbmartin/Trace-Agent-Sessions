@@ -175,7 +175,7 @@ private struct FaultSource: SessionSource {
         let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [FaultSource(base: ClaudeCodeSource(roots: [root]), failing: failing)]),
             scope: .proseOnly, progress: { _ in }, retryDelay: .seconds(3_600), checkpointLedger: ledger,
             didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { accepted.withLock { $0 = max($0, mark) } } })
-        let starting = footprint(), cpu = cpuSeconds(), start = ContinuousClock.now
+        let starting = footprint()
         let sampling = OSAllocatedUnfairLock(initialState: (done: false, peak: starting))
         let sampler = Task.detached {
             while !sampling.withLock({ $0.done }) {
@@ -184,11 +184,15 @@ private struct FaultSource: SessionSource {
             }
         }
         CheckpointAcceptanceBenchmark.reset()
+        var elapsed = 0.0, processCPU = 0.0
+        var start = ContinuousClock.now, cpu = cpuSeconds()
         await scheduler.request(reconcile: true); await scheduler.waitUntilIdle()
-        let initial = await scheduler.checkpointBenchmarkCounts()
+        elapsed += seconds(start.duration(to: .now)); processCPU += cpuSeconds() - cpu
+        let initial = await scheduler.checkpointBenchmarkCounts() // Export outside both measured slices.
+        start = .now; cpu = cpuSeconds()
         for _ in 0..<32 { await scheduler.request(paths: [good.path]); await scheduler.waitUntilIdle() }
+        elapsed += seconds(start.duration(to: .now)); processCPU += cpuSeconds() - cpu
         let stuck = await scheduler.checkpointBenchmarkCounts(), measurement = CheckpointAcceptanceBenchmark.snapshot()
-        let elapsed = seconds(start.duration(to: .now)), processCPU = cpuSeconds() - cpu
         guard accepted.withLock({ $0 }) == 0 else { throw NSError(domain: "CheckpointBenchmark.earlyBacklogCheckpoint", code: 1) }
         failing.withLock { $0 = false }
         await scheduler.request(paths: [bad.path]); await scheduler.waitUntilIdle()

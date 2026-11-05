@@ -71,6 +71,16 @@ fileprivate func accept(_ coverage: Coverage, ignored: Bool) {
         with self.assertRaisesRegex(ValueError, 'Missing unique existing'):
             MODULE.instrument(old.replace('defer { CheckpointAcceptanceBenchmark.end(measurement) }', ''), source, synchronize_existing=True)
 
+    def test_backlog_exports_are_outside_measured_slices(self):
+        source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()
+        workload = source[source.index('private static func measureBacklog'):source.index('private static func measureAcceptance')]
+        initial = workload.index('let initial = await scheduler.checkpointBenchmarkCounts()')
+        stopped = workload.index('elapsed += seconds(start.duration(to: .now)); processCPU += cpuSeconds() - cpu')
+        restarted = workload.index('start = .now; cpu = cpuSeconds()')
+        self.assertLess(stopped, initial)
+        self.assertLess(initial, restarted)
+        self.assertLess(workload.rindex('elapsed += seconds'), workload.index('let stuck = await'))
+
     def test_acceptance_cannot_be_rescued_by_a_cleanup_scan(self):
         source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()
         acceptance = source[source.index('private static func measureAcceptance'):]
