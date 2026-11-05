@@ -50,8 +50,33 @@ enum WatcherGroupingPolicy {
     }
 }
 
-/// Backing state is committed before either notification. Reentrant changes queue
-/// another delivery instead of allowing an older setter to overwrite them.
+/// Serial, owner-scoped handoff from watcher queues to the main actor.
+private final class SourceIngressMailbox: Sendable {
+    private struct State { var pending: SourceChanges?; var diagnostics: [String]?; var running = false; var closed = false }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let receive: @MainActor @Sendable (SourceChanges, [String]?) async -> Void
+    init(receive: @escaping @MainActor @Sendable (SourceChanges, [String]?) async -> Void) { self.receive = receive }
+    func enqueue(_ changes: SourceChanges, diagnostics: [String]? = nil) {
+        let start = state.withLock { value in
+            guard !value.closed else { return false }
+            if value.pending == nil { value.pending = changes } else { value.pending?.merge(changes) }
+            if let diagnostics { value.diagnostics = diagnostics }
+            guard !value.running else { return false }
+            value.running = true; return true
+        }
+        if start { Task { await drain() } }
+    }
+    private func drain() async {
+        while let next = state.withLock({ value -> (SourceChanges, [String]?)? in
+            guard !value.closed, let changes = value.pending else { value.running = false; return nil }
+            let diagnostics = value.diagnostics
+            value.pending = nil; value.diagnostics = nil
+            return (changes, diagnostics)
+        }) { await receive(next.0, next.1) }
+    }
+    func close() { state.withLock { $0.closed = true; $0.pending = nil; $0.diagnostics = nil } }
+}
+
 @MainActor
 enum ModelPublicationBatch {
     private static var depth = 0
@@ -517,9 +542,11 @@ final class TraceModel: ObservableObject {
         set { updateSidebar { $0.monitoringWarnings = newValue } }
     }
     private var metadataMonitoringWarnings: [String] = []
+    private var schedulerPausedCheckpointStreams: Set<String> = []
+    private var sourceIngressMailboxes: [SourceIngressMailbox] = []
     private var sourceMonitoringWarnings: [String] = []
     private var checkpointMonitoringWarnings: [String] {
-        checkpointReadFailures.isEmpty ? [] : ["Some source checkpoints could not be loaded. Live updates continue; checkpointing will resume after source monitoring restarts."]
+        (checkpointReadFailures.isEmpty && schedulerPausedCheckpointStreams.isEmpty) ? [] : ["Some source checkpoints could not be loaded. Live updates continue; checkpointing will resume after source monitoring restarts."]
     }
     var transcriptMessageRevision: Int { transcriptState.read(\.messageRevision) }
     var transcriptContentRevision: Int { transcriptState.read(\.contentRevision) }
@@ -663,10 +690,32 @@ final class TraceModel: ObservableObject {
     }
     private var pendingBookmarkResolver: UUID?
     private var pendingBookmarkUserDemand: UUID?
+    private var pendingBookmarkRefreshDemand: UUID?
+    private struct BookmarkSlot {
+        let generation: IndexContentGeneration
+        let reference: SessionNavigationReference?
+        let token = UUID()
+    }
+    private var bookmarkSlots: [Int64: BookmarkSlot] = [:]
+    private func storeBookmark(_ id: Int64, _ bookmark: TranscriptBookmark?, reference: SessionNavigationReference? = nil,
+                               generation: IndexContentGeneration? = nil) {
+        scrollPositions[id] = bookmark
+        if bookmark != nil, let generation = generation ?? database?.contentGeneration {
+            bookmarkSlots[id] = .init(generation: generation, reference: reference?.unanchored)
+        } else { bookmarkSlots[id] = nil }
+    }
+
     private var messageNavigationIdentities: [Int64: MessageNavigationIdentity] = [:]
     private var bookmarkRevision: UInt64 = 0
     private var bookmarkRevisions: [Int64: UInt64] = [:]
     private var bookmarkIntents: [SessionNavigationReference: SavedResetBookmark] = [:]
+
+    private func removeObsoleteBookmark(_ id: Int64, captured: BookmarkSlot?, database: IndexDatabase) {
+        guard let captured, captured.generation != database.contentGeneration,
+              let current = bookmarkSlots[id], current.token == captured.token,
+              current.reference == captured.reference else { return }
+        storeBookmark(id, nil)
+    }
 
     /// User writes (including clears) are distinct from ID remapping during reset.
     func updateTranscriptBookmark(sessionID: Int64, bookmark: TranscriptBookmark?) {
@@ -680,7 +729,7 @@ final class TraceModel: ObservableObject {
            previous?.index == bookmark?.index { return }
         bookmarkRevision &+= 1
         bookmarkRevisions[sessionID] = bookmarkRevision
-        scrollPositions[sessionID] = bookmark
+        storeBookmark(sessionID, bookmark, reference: source, generation: selectionSourceIdentity.flatMap { $0.sessionID == sessionID ? $0.generation : nil })
         guard var reference = source else { return }
         if let bookmark, let identity = messageNavigationIdentities[bookmark.messageID],
            selectedSessionID == sessionID { reference = reference.anchored(at: identity) }
@@ -695,7 +744,7 @@ final class TraceModel: ObservableObject {
     }
 
     private func schedulePendingBookmarkIntent() {
-        guard let pending = pendingResetBookmarks, pendingBookmarkUserDemand == pending.id,
+        guard let pending = pendingResetBookmarks, pendingBookmarkUserDemand == pending.id || pendingBookmarkRefreshDemand == pending.id,
               pendingBookmarkResolver != pending.id, !indexWorkflow.isActive, !terminating,
               database === pending.database else { return }
         let owner = SummaryRefreshOwner(database: pending.database, attachment: attachmentGeneration,
@@ -1279,6 +1328,7 @@ final class TraceModel: ObservableObject {
         // bookmarks are owned by stable references until their IDs are resolved.
         if let id = navigation.sessionID, let bookmark = navigation.bookmark { scrollPositions = [id: bookmark] }
         else { scrollPositions = [:] }
+        bookmarkSlots = bookmarkSlots.filter { scrollPositions[$0.key] != nil }
         let completion = pendingSelectionCompletion
         navigation.request = UUID()
         sessionRequestID = navigation.request
@@ -1330,9 +1380,10 @@ final class TraceModel: ObservableObject {
             #endif
         }
         do {
+            let oldBookmarkSlot = navigation.sessionID.flatMap { bookmarkSlots[$0] }
             var saved: [SavedResetBookmark] = []
             var mappedBookmarks: [SessionNavigationReference: (session: SessionSummary, anchorMessageID: Int64?, anchorMessageIndex: Int?)] = [:]
-            saved = mergedResetBookmarks([navigation.savedBookmarks])
+            saved = mergedResetBookmarks([navigation.reference.flatMap { reference in navigation.bookmark.map { [SavedResetBookmark(reference: reference, bookmark: $0)] } } ?? [], navigation.savedBookmarks])
             var references = Dictionary(saved.map { ($0.reference, $0.bookmark?.index) }, uniquingKeysWith: { _, last in last })
             if let reference = navigation.reference { references.updateValue(navigation.bookmark?.index, forKey: reference) }
             if let reference = navigation.searchReference { references.updateValue(nil, forKey: reference) }
@@ -1363,13 +1414,13 @@ final class TraceModel: ObservableObject {
                 }
             }
             if navigation.sessionID == nil {
-                for (id, bookmark) in bookmarks { scrollPositions[id] = bookmark }
+                for (id, bookmark) in bookmarks { storeBookmark(id, bookmark) }
                 automaticNavigation = nil
                 return
             }
             guard let oldSessionID = navigation.sessionID else { return }
             guard let resolved else {
-                for (id, bookmark) in bookmarks { scrollPositions[id] = bookmark }
+                for (id, bookmark) in bookmarks { storeBookmark(id, bookmark) }
                 updateTranscript {
                     $0.absence = .init(database: navigation.database, sessionID: oldSessionID,
                         requestID: navigation.request, paused: true)
@@ -1398,7 +1449,7 @@ final class TraceModel: ObservableObject {
             let rows = snapshot.messages ?? []
             // No suspension follows this snapshot of intent. Resolve the active
             // anchor against the accepted rows, not an older awaited bookmark.
-            saved = mergedResetBookmarks([navigation.savedBookmarks])
+            saved = mergedResetBookmarks([navigation.reference.flatMap { reference in navigation.bookmark.map { [SavedResetBookmark(reference: reference, bookmark: $0)] } } ?? [], navigation.savedBookmarks])
             let sources = Dictionary(mappedBookmarks.map { ($0.key.unanchored, $0.value) }, uniquingKeysWith: { _, last in last })
             bookmarks = [:]
             var clearedBookmarks: Set<Int64> = []
@@ -1430,9 +1481,9 @@ final class TraceModel: ObservableObject {
                         oldOrder: searchMessage.map { [$0] } ?? [])
                 }
                 hydrationEpoch = UUID(); hydratingMessageIDs.removeAll(); hydrationOrder.removeAll()
-                if oldSessionID != id { scrollPositions.removeValue(forKey: oldSessionID) }
-                for id in clearedBookmarks { scrollPositions.removeValue(forKey: id) }
-                for (id, bookmark) in bookmarks { scrollPositions[id] = bookmark }
+                if oldSessionID != id { removeObsoleteBookmark(oldSessionID, captured: oldBookmarkSlot, database: navigation.database) }
+                for id in clearedBookmarks { storeBookmark(id, nil) }
+                for (id, bookmark) in bookmarks { storeBookmark(id, bookmark) }
                 for entry in saved {
                     if let mapped = mappedBookmarks[entry.reference], entry.bookmark != nil { visitedNavigationReferences[mapped.session.id] = entry.reference }
                 }
@@ -1475,11 +1526,16 @@ final class TraceModel: ObservableObject {
     /// event can resolve them. A new user bookmark always takes precedence.
     private func restorePendingResetBookmarks(owner: SummaryRefreshOwner) async {
         guard !indexWorkflow.isActive, let pending = pendingResetBookmarks,
-              pending.database === owner.database, pendingBookmarkResolver != pending.id else { return }
+              pending.database === owner.database else { return }
+        if pendingBookmarkResolver == pending.id {
+            pendingBookmarkRefreshDemand = pending.id
+            return
+        }
         let resolver = pending.id, workflow = indexWorkflow.generation
         let content = owner.database.contentGeneration
         pendingBookmarkResolver = resolver
         if pendingBookmarkUserDemand == resolver { pendingBookmarkUserDemand = nil }
+        if pendingBookmarkRefreshDemand == resolver { pendingBookmarkRefreshDemand = nil }
         defer {
             if pendingBookmarkResolver == resolver { pendingBookmarkResolver = nil }
             schedulePendingBookmarkIntent()
@@ -1529,10 +1585,10 @@ final class TraceModel: ObservableObject {
                 if reference.unanchored == automaticNavigation?.reference?.unanchored { continue }
                 if let mapped = resolved[reference] {
                     if let bookmark = entry.bookmark, let message = mapped.anchorMessageID, let index = mapped.anchorMessageIndex {
-                        scrollPositions[mapped.session.id] = .init(messageID: message, offset: bookmark.offset, index: index)
+                        storeBookmark(mapped.session.id, .init(messageID: message, offset: bookmark.offset, index: index), reference: reference)
                         visitedNavigationReferences[mapped.session.id] = reference
                     } else {
-                        scrollPositions.removeValue(forKey: mapped.session.id)
+                        storeBookmark(mapped.session.id, nil)
                         visitedNavigationReferences.removeValue(forKey: mapped.session.id)
                     }
                     pendingResetBookmarks?.references.removeValue(forKey: reference.unanchored)
@@ -1542,7 +1598,9 @@ final class TraceModel: ObservableObject {
             guard isCurrent() else { return }
             recordSummaryReadFailure(error, operation: .restoration)
         }
-        if isCurrent(), pendingResetBookmarks?.references.isEmpty == true { pendingResetBookmarks = nil }
+        if isCurrent(), pendingResetBookmarks?.references.isEmpty == true {
+            pendingResetBookmarks = nil; pendingBookmarkRefreshDemand = nil; pendingBookmarkUserDemand = nil
+        }
     }
 
     private func rebuildDeferredCallback(_ claim: RebuildClaim) -> @Sendable () -> Void {
@@ -2457,6 +2515,16 @@ final class TraceModel: ObservableObject {
     }
     var checkpointReadGateForTesting: Task<Void, Never>?
     private(set) var checkpointReadWaitingForTesting = false
+    func capturedBookmarkCleanupForTesting(_ id: Int64) -> () -> Void {
+        let slot = bookmarkSlots[id], owner = database
+        return { [weak self] in
+            guard let self, let owner, self.database === owner, !self.terminating else { return }
+            self.removeObsoleteBookmark(id, captured: slot, database: owner)
+        }
+    }
+    func restoreBookmarkSlotForTesting(_ session: SessionSummary, bookmark: TranscriptBookmark) {
+        storeBookmark(session.id, bookmark, reference: session.navigationReference, generation: session.contentGeneration)
+    }
     var pendingBookmarkResolutionGateForTesting: Task<Void, Never>?
     private(set) var pendingBookmarkResolutionWaitingForTesting = false
     var pendingBookmarkCountForTesting: Int { pendingResetBookmarks?.references.count ?? 0 }
@@ -2824,8 +2892,19 @@ final class TraceModel: ObservableObject {
             checkpointLedger: checkpointLedger,
             didCompleteCheckpoints: { [weak self] updates in
                 await self?.completeQualifiedCheckpoint(updates, database: database)
+            },
+            didChangePausedCheckpointStreams: { [weak self] streams in
+                await self?.publishPausedCheckpointStreams(streams, database: database, generation: generation)
             }
         )
+    }
+
+    private func publishPausedCheckpointStreams(_ streams: Set<String>, database: IndexDatabase, generation: UUID) {
+        guard attachmentIsCurrent(database: database, generation: generation) else { return }
+        ModelPublicationBatch.perform {
+            schedulerPausedCheckpointStreams = streams
+            updateMonitoringWarnings()
+        }
     }
 
     private func attachmentIsCurrent(database: IndexDatabase, generation: UUID) -> Bool {
@@ -3089,7 +3168,7 @@ final class TraceModel: ObservableObject {
     private func receiveAdmittedProgress(_ update: IndexProgress) async {
         // Reentry may retire this callback after it records durable search demand.
         // Reconcile against the current model, even when the continuation is stale.
-        defer { reconcileAutomaticSearch() }
+        defer { reconcileAutomaticSearch(); schedulePendingBookmarkIntent() }
         let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
         let workflow = indexWorkflow.generation
         let disposition = indexWorkflow.receive(update)
@@ -4112,6 +4191,8 @@ final class TraceModel: ObservableObject {
         guard !terminating else { return false }
         automaticNavigation = nil
         pendingResetBookmarks = nil
+        pendingBookmarkRefreshDemand = nil
+        pendingBookmarkUserDemand = nil
         visitedNavigationReferences = [:]
         bookmarkIntents = [:]; bookmarkRevisions = [:]; bookmarkRevision = 0
         settings.pendingNavigationReference = nil
@@ -4147,6 +4228,7 @@ final class TraceModel: ObservableObject {
             cancelPendingSelectionTranscriptRead()
             settings.lastSessionID = nil
             scrollPositions = [:]
+            bookmarkSlots = [:]
             requestedMessageID = nil
             resetTranscriptValues()
             if let context {
@@ -5884,6 +5966,8 @@ final class TraceModel: ObservableObject {
         automaticNavigation = nil
         preparedResetNavigation = nil
         pendingResetBookmarks = nil
+        pendingBookmarkRefreshDemand = nil
+        pendingBookmarkUserDemand = nil
         resetCheckpointRecovery()
         discardStartupHandoffs()
         discardRebuildRequest()
@@ -5994,7 +6078,6 @@ final class TraceModel: ObservableObject {
 
     private func deferWatcherStartup(_ startup: WatcherStartup) -> WatcherStartOutcome {
         guard watcherStartupIsCurrent(startup), !settings.onboardingComplete else { return .superseded }
-        updateMonitoringWarnings()
         let generation = beginWatcherConfiguration()
         guard watcherOwnerIsCurrent(startup.owner), generation == watcherGeneration,
               !settings.onboardingComplete else { return .superseded }
@@ -6183,25 +6266,22 @@ final class TraceModel: ObservableObject {
         watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
         watcherStartupPending = true
         startupReconciliationPaths = reconciliationPaths
+        let transcriptIngress = SourceIngressMailbox { [weak self] changes, _ in
+            guard let self, self.settings.onboardingComplete, self.watcherGeneration == generation else { return }
+            #if DEBUG
+            if self.suppressLiveWatcherIngressForTesting { return }
+            #endif
+            for (identifier, eventID) in changes.watermarks where self.liveWatcherReplayStarts[identifier] == nil {
+                self.liveWatcherReplayStarts[identifier] = eventID
+            }
+            let (relevant, enrollment) = self.admitTranscriptChanges(changes)
+            if enrollment == nil { await self.routeSourceChanges(relevant, acceptsCheckpoints: true) }
+        }
+        sourceIngressMailboxes.append(transcriptIngress)
         let replacements = configurations.map { configuration in
-            (configuration, FSEventsWatcher(
-                roots: configuration.roots, identifier: configuration.id,
+            (configuration, FSEventsWatcher(roots: configuration.roots, identifier: configuration.id,
                 sinceWhen: configuration.checkpoint, tracksWatermarks: configuration.tracksWatermarks
-            ) { [weak self] changes in
-                Task { @MainActor [weak self] in
-                    guard let self, self.settings.onboardingComplete,
-                          self.watcherGeneration == generation else { return }
-                    #if DEBUG
-                    if self.suppressLiveWatcherIngressForTesting { return }
-                    #endif
-                    for (identifier, eventID) in changes.watermarks
-                        where self.liveWatcherReplayStarts[identifier] == nil {
-                        self.liveWatcherReplayStarts[identifier] = eventID
-                    }
-                    let (relevant, enrollment) = self.admitTranscriptChanges(changes)
-                    if enrollment == nil { await self.routeSourceChanges(relevant, acceptsCheckpoints: true) }
-                }
-            })
+            ) { changes in transcriptIngress.enqueue(changes) })
         }
         guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
         var started: [FSEventsWatcher] = []
@@ -6216,18 +6296,19 @@ final class TraceModel: ObservableObject {
             else { failedRoots += configuration.roots }
         }
         watchers = started
-        let metadataWatcher = CodexMetadataWatcher(metadataDirectories: metadataRoots, mapping: sidecarMapping) {
-            [weak self] changes, diagnostics in
-            Task { @MainActor [weak self] in
-                guard let self, self.watcherGeneration == generation else { return }
-                #if DEBUG
-                if self.suppressLiveWatcherIngressForTesting { return }
-                #endif
-                self.metadataMonitoringWarnings = diagnostics
-                self.updateMonitoringWarnings()
-                await self.routeLiveSourceChanges(changes, acceptsCheckpoints: false,
-                    recoveryEligible: changes.hasIndexWork)
-            }
+        let metadataIngress = SourceIngressMailbox { [weak self] changes, diagnostics in
+            guard let self, self.watcherGeneration == generation else { return }
+            #if DEBUG
+            if self.suppressLiveWatcherIngressForTesting { return }
+            #endif
+            self.metadataMonitoringWarnings = diagnostics ?? []
+            self.updateMonitoringWarnings()
+            guard self.watcherGeneration == generation else { return }
+            await self.routeLiveSourceChanges(changes, acceptsCheckpoints: false, recoveryEligible: changes.hasIndexWork)
+        }
+        sourceIngressMailboxes.append(metadataIngress)
+        let metadataWatcher = CodexMetadataWatcher(metadataDirectories: metadataRoots, mapping: sidecarMapping) { changes, diagnostics in
+            metadataIngress.enqueue(changes, diagnostics: diagnostics)
         }
         self.metadataWatcher = metadataWatcher
         TraceTestHooks.appendLine("enter,generation=\(generation),revision=\(sourceConfigurationRevision)", pathKey: "TRACE_TEST_METADATA_START_AUDIT_PATH")
@@ -6289,10 +6370,7 @@ final class TraceModel: ObservableObject {
                                     completion: (@Sendable () -> Void)? = nil,
                                     delivery: RecoveryEnrollment? = nil, safety: Bool = false) async {
         guard changes.hasIndexWork || (acceptsCheckpoints && !changes.watermarks.isEmpty)
-                || !changes.checkpointReservations.isEmpty || completion != nil || delivery != nil || safety else {
-            delivery?.retire()
-            return
-        }
+                || !changes.checkpointReservations.isEmpty || completion != nil || delivery != nil || safety else { return }
         let changes = reservingCheckpointWork(changes)
         let obligations: [BufferedOrdinaryWork]
         if completion != nil || delivery != nil || safety {
@@ -6348,6 +6426,7 @@ final class TraceModel: ObservableObject {
 
     private func beginWatcherConfiguration() -> UInt64 {
         retireCheckpointPreparation()
+        sourceIngressMailboxes.forEach { $0.close() }; sourceIngressMailboxes = []
         watcherStartup?.task?.cancel()
         watcherStartup = nil
         watcherGeneration &+= 1
@@ -6381,6 +6460,7 @@ final class TraceModel: ObservableObject {
         initializingCheckpointStreams = nil
         unavailableCheckpointStreams = []
         checkpointReadFailures = [:]
+        schedulerPausedCheckpointStreams = []
         updateMonitoringWarnings()
     }
 

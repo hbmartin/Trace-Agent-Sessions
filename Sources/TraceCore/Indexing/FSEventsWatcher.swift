@@ -43,14 +43,8 @@ public struct SourceChanges: Sendable {
         path: String, flags: FSEventStreamEventFlags, eventID: FSEventStreamEventId = 0,
         streamIdentifier: String = "host", streamRoots: [String] = []
     ) {
-        let wrappedID = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
-        if wrappedID {
-            wrappedStreams.insert(streamIdentifier)
-            streamEpochs[streamIdentifier] = (streamEpochs[streamIdentifier] ?? .init()).advanced()
-        }
-        watermarks[streamIdentifier] = wrappedID ? eventID : max(watermarks[streamIdentifier] ?? 0, eventID)
-        self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
-        if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
+        let globalRecovery = includeStreamControl(flags: flags, eventID: eventID,
+            streamIdentifier: streamIdentifier, streamRoots: streamRoots)
         let structuralFlags = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
             | kFSEventStreamEventFlagItemRenamed | kFSEventStreamEventFlagItemIsSymlink | kFSEventStreamEventFlagItemCloned)
         if flags & structuralFlags != 0 { structuralPaths.insert(path) }
@@ -58,12 +52,8 @@ public struct SourceChanges: Sendable {
         let directory = flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0
         let structural = flags & UInt32(kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed
             | kFSEventStreamEventFlagItemCloned) != 0
-        let dropped = flags & UInt32(kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0
-        let wrapped = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
-        if dropped || wrapped {
-            reconciliationPaths.formUnion(streamRoots)
-            if dropped { recoveryReasons.insert(.eventsDropped) }
-            if wrapped { recoveryReasons.insert(.eventIDsWrapped) }
+        if globalRecovery {
+            // Global control inclusion already enrolled every stream root.
         } else if flags & UInt32(kFSEventStreamEventFlagRootChanged) != 0 {
             reconciliationPaths.insert(canonical)
             recoveryReasons.insert(.rootChanged)
@@ -78,6 +68,28 @@ public struct SourceChanges: Sendable {
         }
     }
 
+    /// Stream-wide controls are independent of content-path filtering. This
+    /// path performs no filesystem lookup and advances chronology exactly once.
+    @discardableResult
+    fileprivate mutating func includeStreamControl(flags: FSEventStreamEventFlags, eventID: FSEventStreamEventId,
+                                                   streamIdentifier: String, streamRoots: [String]) -> Bool {
+        let wrappedID = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped) != 0
+        if wrappedID {
+            wrappedStreams.insert(streamIdentifier)
+            streamEpochs[streamIdentifier] = (streamEpochs[streamIdentifier] ?? .init()).advanced()
+        }
+        watermarks[streamIdentifier] = wrappedID ? eventID : max(watermarks[streamIdentifier] ?? 0, eventID)
+        self.streamRoots[streamIdentifier, default: []].formUnion(streamRoots)
+        if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { historyDone = true }
+        let dropped = flags & UInt32(kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0
+        if dropped || wrappedID {
+            reconciliationPaths.formUnion(streamRoots)
+            if dropped { recoveryReasons.insert(.eventsDropped) }
+            if wrappedID { recoveryReasons.insert(.eventIDsWrapped) }
+        }
+        return dropped || wrappedID
+    }
+
     public mutating func merge(_ other: SourceChanges) {
         checkpointReservations = IndexCheckpointReservation.coalesced(checkpointReservations + other.checkpointReservations)
         paths.formUnion(other.paths)
@@ -85,7 +97,6 @@ public struct SourceChanges: Sendable {
         structuralPaths.formUnion(other.structuralPaths)
         reconciliationPaths.formUnion(other.reconciliationPaths)
         recoveryReasons.formUnion(other.recoveryReasons)
-        let previouslyWrapped = wrappedStreams
         wrappedStreams.formUnion(other.wrappedStreams)
         historyDone = historyDone || other.historyDone
         for (identifier, eventID) in other.watermarks {
@@ -93,8 +104,8 @@ public struct SourceChanges: Sendable {
             if let existing, let incoming, existing.predecessors.contains(incoming.id) { continue }
             let newerEpoch = incoming.map { next in existing.map { next.predecessors.contains($0.id) } ?? false } ?? false
             let sameEpoch = existing != nil && existing == incoming
-            let firstWrap = other.wrappedStreams.contains(identifier) && !previouslyWrapped.contains(identifier)
-            watermarks[identifier] = newerEpoch || (firstWrap && !sameEpoch)
+            let startsInterval = other.wrappedStreams.contains(identifier) && !sameEpoch
+            watermarks[identifier] = newerEpoch || startsInterval
                 ? eventID : max(watermarks[identifier] ?? 0, eventID)
             if let incoming { streamEpochs[identifier] = incoming }
         }
@@ -271,16 +282,15 @@ public final class FSEventsWatcher: @unchecked Sendable {
 
     private func includeEvent(path: String, flags: FSEventStreamEventFlags,
                               eventID: FSEventStreamEventId, in changes: inout SourceChanges) {
-        let wrap = UInt32(kFSEventStreamEventFlagEventIdsWrapped)
         if eventFilter?(path, flags) != false {
-            // Include the complete event once, preserving global recovery
-            // precedence as well as its path, structural, and history metadata.
             changes.include(path: path, flags: flags, eventID: eventID,
                 streamIdentifier: identifier, streamRoots: roots)
-        } else if flags & wrap != 0 {
-            // The content filter cannot suppress wrap control metadata.
-            changes.include(path: path, flags: wrap | UInt32(kFSEventStreamEventFlagItemIsDir),
-                eventID: eventID, streamIdentifier: identifier, streamRoots: roots)
+        } else {
+            let controls = UInt32(kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagKernelDropped
+                | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagHistoryDone)
+            if flags & controls != 0 {
+                changes.includeStreamControl(flags: flags, eventID: eventID, streamIdentifier: identifier, streamRoots: roots)
+            }
         }
     }
 

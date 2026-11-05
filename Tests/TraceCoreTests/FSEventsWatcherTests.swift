@@ -30,8 +30,9 @@ final class FSEventsWatcherTests: XCTestCase {
                         expected.streamEpochs = before.streamEpochs
                         if accepted {
                             expected.include(path: path, flags: flags, eventID: 1, streamIdentifier: "stream", streamRoots: [root])
-                        } else if wrapped {
-                            expected.include(path: path, flags: wrap | UInt32(kFSEventStreamEventFlagItemIsDir),
+                        } else if flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagHistoryDone) != 0 {
+                            let controls = flags & UInt32(kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagHistoryDone)
+                            expected.include(path: path, flags: controls | UInt32(kFSEventStreamEventFlagItemIsDir),
                                 eventID: 1, streamIdentifier: "stream", streamRoots: [root])
                         }
                         if !tracked {
@@ -47,10 +48,18 @@ final class FSEventsWatcherTests: XCTestCase {
                         XCTAssertEqual(actual.watermarks, expected.watermarks, context)
                         XCTAssertEqual(actual.streamRoots, expected.streamRoots, context)
                         XCTAssertEqual(actual.wrappedStreams, expected.wrappedStreams, context)
-                        XCTAssertEqual(actual.historyDone, expected.historyDone, context)
+                        XCTAssertEqual(actual.historyDone, flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0, context)
+                        if wrapped {
+                            let dropped = flags & UInt32(kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagUserDropped) != 0
+                            XCTAssertEqual(actual.recoveryReasons, dropped ? [.eventIDsWrapped, .eventsDropped] : [.eventIDsWrapped], context)
+                            XCTAssertEqual(actual.reconciliationPaths, [root], context)
+                            XCTAssertFalse(actual.recoveryReasons.contains(.rootChanged), context)
+                            XCTAssertFalse(actual.recoveryReasons.contains(.subtreeInvalidated), context)
+                        }
                         if tracked && wrapped {
-                            let previous = try XCTUnwrap(before.streamEpochs["stream"])
-                            let current = try XCTUnwrap(actual.streamEpochs["stream"])
+                            guard let previous = before.streamEpochs["stream"], let current = actual.streamEpochs["stream"] else {
+                                XCTFail("Missing chronology: \(context)"); continue
+                            }
                             XCTAssertNotEqual(current.id, previous.id, context)
                             XCTAssertEqual(current.predecessors, [previous.id], context)
                         } else {
@@ -60,6 +69,33 @@ final class FSEventsWatcherTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testZeroIDRootChangeAndFilteredControlsKeepStreamSemantics() {
+        for accepted in [false, true] {
+            let watcher = FSEventsWatcher(roots: [URL(fileURLWithPath: "/tmp")], identifier: "s",
+                eventFilter: { _, _ in accepted }, onChange: { _ in })
+            let flags = UInt32(kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagRootChanged
+                | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagHistoryDone)
+            let wrapped = watcher.changesForTesting([("/tmp", flags, 0)])
+            XCTAssertEqual(wrapped.watermarks["s"], 0)
+            XCTAssertEqual(wrapped.recoveryReasons, [.eventIDsWrapped, .eventsDropped])
+            XCTAssertEqual(wrapped.reconciliationPaths, [TraceFileIO.canonicalPath("/tmp").path])
+            XCTAssertTrue(wrapped.historyDone)
+            XCTAssertFalse(wrapped.recoveryReasons.contains(.rootChanged))
+        }
+        var ordinary = SourceChanges()
+        ordinary.include(path: "/tmp", flags: 0, eventID: 100, streamIdentifier: "s")
+        ordinary.include(path: "/tmp", flags: UInt32(kFSEventStreamEventFlagRootChanged), eventID: 0, streamIdentifier: "s")
+        XCTAssertEqual(ordinary.watermarks["s"], 100)
+    }
+
+    func testEpochlessSecondWrapBeginsANewChronologicalInterval() {
+        var before = SourceChanges(), after = SourceChanges()
+        before.wrappedStreams = ["s"]; before.watermarks = ["s": 5_000, "healthy": 100]
+        after.wrappedStreams = ["s"]; after.watermarks = ["s": 3, "healthy": 110]
+        before.merge(after)
+        XCTAssertEqual(before.watermarks, ["s": 3, "healthy": 110])
     }
 
     func testFilteredWrapStillAdvancesChronologyAndReconciliation() {

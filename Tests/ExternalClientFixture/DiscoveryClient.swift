@@ -94,3 +94,9 @@ func compileReservedCheckpointClient(_ database: IndexDatabase, coordinator: Ind
     await scheduler.requestOrdinaryRecovery(paths: ["/tmp/external/session.jsonl"], checkpointReservations: [reservation])
     await scheduler.stop()
 }
+
+func compileCheckpointAvailabilityClient(_ coordinator: IndexCoordinator, ledger: IndexCheckpointLedger) async {
+    let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+        checkpointLedger: ledger, didChangePausedCheckpointStreams: { paused in _ = paused })
+    await scheduler.stop()
+}

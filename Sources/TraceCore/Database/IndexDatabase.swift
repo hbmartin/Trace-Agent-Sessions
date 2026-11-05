@@ -150,8 +150,13 @@ public actor IndexDatabase {
         )) AS had_recorded_error
         """
     public nonisolated let contentWasResetOnOpen: Bool
-    private nonisolated let generationState: OSAllocatedUnfairLock<IndexContentGeneration>
-    public nonisolated var contentGeneration: IndexContentGeneration { generationState.withLock { $0 } }
+    private struct CheckpointContext: Sendable { var generation: IndexContentGeneration; var scope: IndexScope }
+    private nonisolated let generationState: OSAllocatedUnfairLock<CheckpointContext>
+    public nonisolated var contentGeneration: IndexContentGeneration { generationState.withLock { $0.generation } }
+    nonisolated var checkpointScope: IndexScope { generationState.withLock { $0.scope } }
+    nonisolated var checkpointContext: (generation: IndexContentGeneration, scope: IndexScope) {
+        generationState.withLock { ($0.generation, $0.scope) }
+    }
     private let pool: DatabasePool
     private let url: URL
 
@@ -196,7 +201,11 @@ public actor IndexDatabase {
             try db.execute(sql: "INSERT OR IGNORE INTO trace_meta(key,value) VALUES ('content_generation', ?)",
                 arguments: [UUID().uuidString + ":" + UUID().uuidString])
         }
-        generationState = OSAllocatedUnfairLock(initialState: try pool.read(Self.readContentGeneration))
+        generationState = OSAllocatedUnfairLock(initialState: try pool.read { db in
+            let raw = try String.fetchOne(db, sql: "SELECT value FROM trace_meta WHERE key='index_scope'")
+            return CheckpointContext(generation: try Self.readContentGeneration(db),
+                scope: IndexScope(rawValue: Int(raw ?? "0") ?? 0) ?? .proseOnly)
+        })
     }
 
     private static func markRollupsDirty(_ db: Database) throws {
@@ -623,6 +632,7 @@ public actor IndexDatabase {
 
     public func setIndexScope(_ scope: IndexScope) throws {
         try pool.write { db in try Self.storeIndexScope(scope, in: db) }
+        generationState.withLock { $0.scope = scope }
     }
 
     private static func storeIndexScope(_ scope: IndexScope, in db: Database) throws {
@@ -653,7 +663,8 @@ public actor IndexDatabase {
         return try pool.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT event_id, epoch FROM fsevents_checkpoint WHERE volume_id=?", arguments: [volumeID]),
                   let value = UInt64(row["event_id"] as String) else { return nil }
-            return IndexEventCheckpoint(value: value, epoch: row["epoch"], replacingEpochs: [])
+            return IndexEventCheckpoint(value: value, epoch: row["epoch"], replacingEpochs: [],
+                contentGeneration: try Self.readContentGeneration(db))
         }
     }
 
@@ -676,8 +687,8 @@ public actor IndexDatabase {
                                                expectedGeneration: IndexContentGeneration? = nil) throws {
         guard !checkpoints.isEmpty else { return }
         try pool.write { db in
-            if let expectedGeneration, try Self.readContentGeneration(db) != expectedGeneration { return }
             let generation = try Self.readContentGeneration(db)
+            if let expectedGeneration, generation != expectedGeneration { return }
             for (stream, update) in checkpoints {
                 guard update.contentGeneration == nil || update.contentGeneration == generation else { continue }
                 try Self.saveCheckpoint(stream: stream, update: update, in: db)
@@ -764,7 +775,7 @@ public actor IndexDatabase {
             #if DEBUG
             committed.withLock { $0 = true }
             #endif
-            generationState.withLock { $0 = generation }
+            generationState.withLock { $0.generation = generation; if let scope { $0.scope = scope } }
             onCommitted()
             #if DEBUG
             if fault == .checkpoint { throw DatabaseError(resultCode: .SQLITE_BUSY) }
