@@ -114,6 +114,8 @@ private func cpuSeconds() -> Double {
             _ = ledger.reserve(watermarks: ["probe": UInt64(value)],
                 streamRoots: ["probe": [root]], hasIndexWork: false)
             latencies.append(seconds(start.duration(to: .now)))
+            // Reservation timing ended above. This handshake is outside both
+            // reservation and instrumented acceptance execution measurements.
             if value == 1 { await gate.release() }
             await Task.yield()
         }
@@ -164,16 +166,17 @@ private func cpuSeconds() -> Double {
                 try await Task.sleep(for: .milliseconds(50))
             }
         }
-        let cpu = cpuSeconds(), start = ContinuousClock.now
+        CheckpointAcceptanceBenchmark.reset()
         let probeCount = 1_000
         let latencies = await reserveIngress(ledger: ledger, gate: gate, root: root.path, count: probeCount)
         await scheduler.waitUntilIdle()
-        // Both revisions receive the same successor. It pays any acceptance
-        // deferred by concurrent ingress; do not hide that work outside timing.
-        await scheduler.request(reconcile: true, watermarks: ["probe": UInt64(probeCount)],
+        // Deliver only metadata qualification. This cannot rescue lost indexing
+        // coverage with another scan, and performs no coordinator pass.
+        await scheduler.request(watermarks: ["probe": UInt64(probeCount)],
             streamRoots: ["probe": [root.path]])
         await scheduler.waitUntilIdle()
-        let elapsed = seconds(start.duration(to: .now)), usedCPU = cpuSeconds() - cpu
+        let measurement = CheckpointAcceptanceBenchmark.snapshot()
+        let counts = await scheduler.checkpointBenchmarkCounts()
         let final = accepted.withLock { $0 }
         guard final["stream"] == UInt64(count), final["probe"] == UInt64(probeCount) else {
             throw NSError(domain: "CheckpointBenchmark.incompleteCoverage", code: 1,
@@ -189,7 +192,9 @@ private func cpuSeconds() -> Double {
         }
         let result: [String: Any] = ["events": count, "label": label, "mode": "acceptance",
             "probeCount": probeCount, "setupSeconds": setupSeconds,
-            "elapsedSeconds": elapsed, "cpuSeconds": usedCPU,
+            "elapsedSeconds": measurement["elapsedSeconds"]!, "cpuSeconds": measurement["cpuSeconds"]!,
+            "timingKind": "sum of instrumented acceptance execution intervals",
+            "acceptanceTurns": measurement["acceptanceTurns"]!, "retainedLedgerState": counts,
             "mainActorReservationSeconds": latencies,
             "mainActorReservationMedianSeconds": percentile(0.5),
             "mainActorReservationP95Seconds": percentile(0.95),

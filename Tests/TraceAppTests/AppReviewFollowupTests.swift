@@ -69,6 +69,38 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 19)
     }
 
+    func testObsoleteNumericBookmarkCleanupCannotRemoveRestoredSlot() async throws {
+        let f = try await fixture(count: 3)
+        let first = try XCTUnwrap(f.model.sessions.first)
+        f.model.openSession(first); try await wait { !f.model.messages.isEmpty }
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.updateTranscriptBookmark(sessionID: first.id, bookmark: .init(messageID: message.id, offset: 19, index: 0))
+        let cleanup = f.model.capturedBookmarkCleanupForTesting(first.id)
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let original = try String(contentsOf: file, encoding: .utf8)
+        try Data((original.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
+        try await f.database.clearIndex()
+        await f.model.coordinatorForTesting?.indexAll(scope: .proseOnly)
+        let current = try await f.database.sessions()
+        let reused = try XCTUnwrap(current.first { $0.id == first.id })
+        XCTAssertNotEqual(reused.title, first.title)
+        let rows = try await f.database.messages(sessionID: reused.id), restored = try XCTUnwrap(rows.first)
+        f.model.restoreBookmarkSlotForTesting(reused, bookmark: .init(messageID: restored.id, offset: 77, index: 0))
+        cleanup()
+        XCTAssertEqual(f.model.scrollPositions[reused.id]?.offset, 77)
+        XCTAssertEqual(f.model.scrollPositions[reused.id]?.messageID, restored.id)
+    }
+
+    func testFullRefreshDuringHeldBookmarkResolutionRetainsDemand() async throws {
+        let pending = try await heldPendingBookmarkResolution(), model = pending.fixture.model
+        await model.refreshSummariesForTesting(lightweight: false)
+        await pending.gate.open()
+        try await wait { model.pendingBookmarkCountForTesting == 0 }
+        XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 19)
+        await model.refreshSummariesForTesting(lightweight: false)
+        XCTAssertEqual(model.scrollPositions[pending.session.id]?.offset, 19)
+    }
+
     func testActiveBookmarkChangedDuringTranscriptReadWins() async throws {
         let f = try await deferredResetFixture()
         let file = f.root.appendingPathComponent("sessions.jsonl")

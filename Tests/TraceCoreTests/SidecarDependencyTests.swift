@@ -8,6 +8,20 @@ import XCTest
 
 @MainActor
 final class SidecarDependencyTests: XCTestCase {
+    func testCombinedWrapUsesGlobalMetadataRecoveryWithoutRootRestartReason() throws {
+        let root = try fixture(), sidecar = root.appendingPathComponent("session_index.jsonl")
+        try Data().write(to: sidecar)
+        let mapping = CodexMetadataSidecarMapping(metadataDirectories: [root])
+        let watcher = FSEventsWatcher(roots: [root], tracksWatermarks: false, onChange: { _ in })
+        let changes = watcher.changesForTesting([(root.path,
+            UInt32(kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagMustScanSubDirs), 0)])
+        let configured = CodexMetadataWatcher.configuredChanges(changes, mapping: mapping)
+        XCTAssertEqual(configured.recoveryReasons, [.eventIDsWrapped])
+        XCTAssertTrue(configured.paths.contains(sidecar.path))
+        XCTAssertFalse(configured.recoveryReasons.contains(.rootChanged), "receive() must not enroll an extra stream restart")
+        XCTAssertTrue(configured.watermarks.isEmpty)
+    }
+
     private func fixture() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceDependencies-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

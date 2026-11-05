@@ -80,6 +80,7 @@ public struct IndexProgress: Sendable {
     public var metadataWarning: String?
     public var rollupError: String?
     var checkpointContentGeneration: IndexContentGeneration?
+    var checkpointScope: IndexScope?
 
     public init(phase: Phase, agent: AgentKind? = nil, completedFiles: Int = 0,
                 totalFiles: Int = 0, currentPath: String? = nil, error: String? = nil) {
@@ -392,12 +393,13 @@ public actor IndexCoordinator {
     func indexAllResult(scope: IndexScope, rebuild: Bool, activity: IndexActivity?,
                         satisfiesSafetyReconciliation: Bool?,
                         onRebuildReset: @escaping @Sendable () -> Void,
+                        onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void = { _ in },
                         progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         await gate.acquire()
         let activity = activity ?? (rebuild ? .rebuild : .initialBuild)
         let result = await run(
             scope: scope, paths: nil, reconciliationPaths: [], rebuild: rebuild,
-            onRebuildReset: onRebuildReset, activity: activity,
+            onRebuildReset: onRebuildReset, onIndexReset: onIndexReset, activity: activity,
             satisfiesSafetyReconciliation: satisfiesSafetyReconciliation
                 ?? activity.satisfiesSafetyReconciliation,
             progress: progress
@@ -474,10 +476,31 @@ public actor IndexCoordinator {
         }
     }
 
-    var checkpointContentGeneration: IndexContentGeneration { database.contentGeneration }
+    /// Scheduler execution shares one permit and one reset-commit observer for
+    /// every mode, including an implicit scope reset in an incremental pass.
+    func executeScheduled(paths: Set<String>, reconciliationPaths: Set<String>, fullScan: Bool,
+                          rebuild: Bool, preservingCommittedScope: Bool, scope: IndexScope,
+                          activity: IndexActivity, satisfiesSafetyReconciliation: Bool,
+                          onRebuildReset: @escaping @Sendable () -> Void,
+                          onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void,
+                          progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
+        await gate.acquire()
+        let result = await run(scope: scope, paths: fullScan ? nil : paths,
+            reconciliationPaths: fullScan ? [] : reconciliationPaths, rebuild: rebuild,
+            preservingCommittedScope: preservingCommittedScope, onRebuildReset: onRebuildReset,
+            onIndexReset: onIndexReset, activity: activity,
+            satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, progress: progress)
+        await gate.release()
+        return result
+    }
+
+    nonisolated var checkpointContentGeneration: IndexContentGeneration { database.contentGeneration }
+    nonisolated var checkpointScope: IndexScope { database.checkpointScope }
+    nonisolated var checkpointContext: (generation: IndexContentGeneration, scope: IndexScope) { database.checkpointContext }
 
     private func run(scope requestedScope: IndexScope, paths: Set<String>?, reconciliationPaths: Set<String>,
-                     rebuild: Bool, preservingCommittedScope: Bool = false, onRebuildReset: @escaping @Sendable () -> Void = {}, activity: IndexActivity,
+                     rebuild: Bool, preservingCommittedScope: Bool = false, onRebuildReset: @escaping @Sendable () -> Void = {},
+                     onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void = { _ in }, activity: IndexActivity,
                      satisfiesSafetyReconciliation: Bool,
                      progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
         var status = IndexProgress(phase: .discovering)
@@ -510,6 +533,7 @@ public actor IndexCoordinator {
             try Task.checkCancellation()
             let oldScope = try await database.storedIndexScope()
             let scope = preservingCommittedScope ? (oldScope ?? requestedScope) : requestedScope
+            status.checkpointScope = scope
             try Task.checkCancellation()
             if rebuild || (!preservingCommittedScope && oldScope != scope) {
                 #if DEBUG
@@ -524,6 +548,7 @@ public actor IndexCoordinator {
                 do {
                     try await database.clearIndex(scope: scope, onCommitted: {
                         committed.withLock { $0 = true }
+                        onIndexReset(database.contentGeneration)
                         if rebuild { onRebuildReset() }
                     })
                 } catch { resetError = error }
