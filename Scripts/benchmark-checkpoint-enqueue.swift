@@ -37,17 +37,51 @@ private func cpuSeconds() -> Double {
         + Double(value.ru_utime.tv_usec + value.ru_stime.tv_usec) / 1_000_000
 }
 
+private struct FaultSource: SessionSource {
+    let base: ClaudeCodeSource
+    let failing: OSAllocatedUnfairLock<Bool>
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    func discover() throws -> [DiscoveredSourceFile] { try base.discover() }
+    func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] { try base.discover(scopedTo: paths) }
+    func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult { try base.discoverResult(scopedTo: paths) }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialContext: .init(fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialContext: .init(sessionID: initialSessionID, fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        if file.url.lastPathComponent == "bad.jsonl", failing.withLock({ $0 }) {
+            return AsyncThrowingStream { $0.finish(throwing: SessionSourceError.malformedRecord("benchmark fault")) }
+        }
+        return base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage { try base.hydrate(fileURL: fileURL, format: format, locator: locator) }
+}
+
 @main struct CheckpointEnqueueWorkload {
     static func main() async throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
         guard let count = Int(arguments.first ?? "1000"), count > 0,
               arguments.count <= 3,
-              arguments.count < 3 || ["enqueue", "acceptance"].contains(arguments[2]) else {
-            FileHandle.standardError.write(Data("Usage: checkpoint-enqueue [positive event count] [label] [enqueue|acceptance]\n".utf8))
+              arguments.count < 3 || ["enqueue", "acceptance", "backlog", "teardown"].contains(arguments[2]) else {
+            FileHandle.standardError.write(Data("Usage: checkpoint-enqueue [positive event count] [label] [enqueue|acceptance|backlog|teardown]\n".utf8))
             exit(2)
         }
         let label = arguments.dropFirst().first ?? "sample"
         let mode = arguments.dropFirst(2).first ?? "enqueue"
+        if mode == "teardown" {
+            let start = ContinuousClock.now, cpu = cpuSeconds()
+            autoreleasepool {
+                let ledger = IndexCheckpointLedger()
+                for mark in 1...count { _ = ledger.reserve(watermarks: ["s": UInt64(mark)], streamRoots: [:], hasIndexWork: true) }
+            }
+            print(String(decoding: try JSONSerialization.data(withJSONObject: ["mode": mode, "events": count, "label": label,
+                "elapsedSeconds": seconds(start.duration(to: .now)), "cpuSeconds": cpuSeconds() - cpu]), as: UTF8.self))
+            return
+        }
+        if mode == "backlog" { try await measureBacklog(count: count, label: label); return }
         if mode == "acceptance" {
             try await measureAcceptance(count: count, label: label)
             return
@@ -122,6 +156,59 @@ private func cpuSeconds() -> Double {
         return latencies
     }
 
+    private static func measureBacklog(count: Int, label: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceCheckpointBacklog-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let good = root.appendingPathComponent("good.jsonl"), bad = root.appendingPathComponent("bad.jsonl")
+        for (file, id) in [(good, "good"), (bad, "bad")] {
+            let row: [String: Any] = ["type": "user", "uuid": id, "sessionId": id, "cwd": "/tmp/CheckpointBenchmark", "timestamp": "2026-01-01T00:00:00Z", "message": ["content": id]]
+            try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(to: file)
+        }
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        try await database.setIndexScope(.proseOnly)
+        let ledger = IndexCheckpointLedger(), failing = OSAllocatedUnfairLock(initialState: true)
+        ledger.seed(stream: "s", checkpoint: nil)
+        _ = ledger.reserve(watermarks: ["s": 1], streamRoots: ["s": [root.path]], hasIndexWork: true, paths: [bad.path])
+        for mark in 2...(count + 1) { _ = ledger.reserve(watermarks: ["s": UInt64(mark)], streamRoots: ["s": [root.path]], hasIndexWork: true, paths: [good.path]) }
+        let accepted = OSAllocatedUnfairLock(initialState: UInt64(0))
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [FaultSource(base: ClaudeCodeSource(roots: [root]), failing: failing)]),
+            scope: .proseOnly, progress: { _ in }, retryDelay: .seconds(3_600), checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { accepted.withLock { $0 = max($0, mark) } } })
+        let starting = footprint()
+        let sampling = OSAllocatedUnfairLock(initialState: (done: false, peak: starting))
+        let sampler = Task.detached {
+            while !sampling.withLock({ $0.done }) {
+                let current = footprint(); sampling.withLock { $0.peak = max($0.peak, current) }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        CheckpointAcceptanceBenchmark.reset()
+        var elapsed = 0.0, processCPU = 0.0
+        var start = ContinuousClock.now, cpu = cpuSeconds()
+        await scheduler.request(reconcile: true); await scheduler.waitUntilIdle()
+        elapsed += seconds(start.duration(to: .now)); processCPU += cpuSeconds() - cpu
+        let initial = await scheduler.checkpointBenchmarkCounts() // Export outside both measured slices.
+        start = .now; cpu = cpuSeconds()
+        for _ in 0..<32 { await scheduler.request(paths: [good.path]); await scheduler.waitUntilIdle() }
+        elapsed += seconds(start.duration(to: .now)); processCPU += cpuSeconds() - cpu
+        let stuck = await scheduler.checkpointBenchmarkCounts(), measurement = CheckpointAcceptanceBenchmark.snapshot()
+        guard accepted.withLock({ $0 }) == 0 else { throw NSError(domain: "CheckpointBenchmark.earlyBacklogCheckpoint", code: 1) }
+        failing.withLock { $0 = false }
+        await scheduler.request(paths: [bad.path]); await scheduler.waitUntilIdle()
+        guard accepted.withLock({ $0 }) == UInt64(count + 1) else { throw NSError(domain: "CheckpointBenchmark.backlogCoverage", code: 1) }
+        try await Task.sleep(for: .seconds(2))
+        let retained = footprint(); sampling.withLock { $0.peak = max($0.peak, retained); $0.done = true }; try await sampler.value
+        let output: [String: Any] = ["mode": "backlog", "events": count, "label": label,
+            "elapsedSeconds": elapsed, "cpuSeconds": processCPU, "acceptanceThreadCPUSeconds": measurement["cpuSeconds"]!,
+            "processCPUSecondsDuringAcceptance": measurement["processCPUSecondsDuringAcceptance"]!,
+            "initialLedgerState": initial, "stuckLedgerState": stuck, "finalLedgerState": await scheduler.checkpointBenchmarkCounts(),
+            "acceptedWatermark": accepted.withLock { $0 }, "startingFootprintBytes": starting, "peakFootprintBytes": sampling.withLock { $0.peak }, "retainedFootprintBytes": retained,
+            "signedRetainedGrowthBytes": Int64(retained) - Int64(starting)]
+        await scheduler.stop()
+        print(String(decoding: try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), as: UTF8.self))
+    }
+
     private static func measureAcceptance(count: Int, label: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceCheckpointAcceptance-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -193,6 +280,8 @@ private func cpuSeconds() -> Double {
         let result: [String: Any] = ["events": count, "label": label, "mode": "acceptance",
             "probeCount": probeCount, "setupSeconds": setupSeconds,
             "elapsedSeconds": measurement["elapsedSeconds"]!, "cpuSeconds": measurement["cpuSeconds"]!,
+            "cpuKind": "acceptance thread CPU",
+            "processCPUSecondsDuringAcceptance": measurement["processCPUSecondsDuringAcceptance"]!,
             "timingKind": "sum of instrumented acceptance execution intervals",
             "acceptanceTurns": measurement["acceptanceTurns"]!, "retainedLedgerState": counts,
             "mainActorReservationSeconds": latencies,

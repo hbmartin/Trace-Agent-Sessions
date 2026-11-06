@@ -1,0 +1,11 @@
+{
+  "implementation": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+  "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+  "changedFiles": [
+    "Scripts/benchmark-checkpoint-enqueue.swift",
+    "Tests/Scripts/test_checkpoint_proof_benchmark.py"
+  ],
+  "productionAndXCTestInputsIdentical": true,
+  "scriptValidationMustUseCandidate": true,
+  "acceptedMeasurementsBeforeCorrection": 0
+}

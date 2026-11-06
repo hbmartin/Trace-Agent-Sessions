@@ -51,30 +51,58 @@ enum WatcherGroupingPolicy {
 }
 
 /// Serial, owner-scoped handoff from watcher queues to the main actor.
-private final class SourceIngressMailbox: Sendable {
-    private struct State { var pending: SourceChanges?; var diagnostics: [String]?; var running = false; var closed = false }
+final class SourceIngressMailbox: Sendable {
+    struct ReplayPosition: Sendable {
+        let value: UInt64
+        let epoch: IndexEventStreamEpoch?
+    }
+    private struct Chunk: Sendable { let changes: SourceChanges; let diagnostics: [String]? }
+    private struct State {
+        var pages: [UInt64: [Chunk]] = [:]
+        var head: UInt64 = 0, tail: UInt64 = 0
+        var running = false, closed = false
+    }
     private let state = OSAllocatedUnfairLock(initialState: State())
-    private let receive: @MainActor @Sendable (SourceChanges, [String]?) async -> Void
-    init(receive: @escaping @MainActor @Sendable (SourceChanges, [String]?) async -> Void) { self.receive = receive }
+    private let receive: @MainActor @Sendable (SourceChanges, [String]?, [String: ReplayPosition]) async -> Void
+    init(receive: @escaping @MainActor @Sendable (SourceChanges, [String]?, [String: ReplayPosition]) async -> Void) { self.receive = receive }
     func enqueue(_ changes: SourceChanges, diagnostics: [String]? = nil) {
         let start = state.withLock { value in
             guard !value.closed else { return false }
-            if value.pending == nil { value.pending = changes } else { value.pending?.merge(changes) }
-            if let diagnostics { value.diagnostics = diagnostics }
+            if value.pages[value.tail]?.count == 128 { value.tail &+= 1 }
+            value.pages[value.tail, default: []].append(.init(changes: changes, diagnostics: diagnostics))
             guard !value.running else { return false }
             value.running = true; return true
         }
-        if start { Task { await drain() } }
+        if start { Task.detached { await self.drain() } }
     }
     private func drain() async {
-        while let next = state.withLock({ value -> (SourceChanges, [String]?)? in
-            guard !value.closed, let changes = value.pending else { value.running = false; return nil }
-            let diagnostics = value.diagnostics
-            value.pending = nil; value.diagnostics = nil
-            return (changes, diagnostics)
-        }) { await receive(next.0, next.1) }
+        while let chunks = state.withLock({ value -> [Chunk]? in
+            guard !value.closed, let page = value.pages.removeValue(forKey: value.head) else { value.running = false; return nil }
+            if value.head == value.tail { value.tail &+= 1 }
+            value.head &+= 1
+            return page
+        }) {
+            var changes = SourceChanges(), diagnostics: [String]?, first: [String: ReplayPosition] = [:]
+            for chunk in chunks {
+                for (stream, mark) in chunk.changes.watermarks {
+                    let epoch = chunk.changes.streamEpochs[stream]
+                    if first[stream] == nil || first[stream]?.epoch != epoch {
+                        first[stream] = .init(value: mark, epoch: epoch)
+                    }
+                }
+                changes.merge(chunk.changes)
+                if let latest = chunk.diagnostics { diagnostics = latest }
+            }
+            guard state.withLock({ !$0.closed }) else { return }
+            await receive(changes, diagnostics, first)
+            await Task.yield()
+        }
     }
-    func close() { state.withLock { $0.closed = true; $0.pending = nil; $0.diagnostics = nil } }
+    func close() {
+        // Transfer destruction out of the ingress lock as well as set merging.
+        let retired = state.withLock { value in value.closed = true; let pages = value.pages; value.pages = [:]; return pages }
+        withExtendedLifetime(retired) {}
+    }
 }
 
 @MainActor
@@ -694,7 +722,6 @@ final class TraceModel: ObservableObject {
     private struct BookmarkSlot {
         let generation: IndexContentGeneration
         let reference: SessionNavigationReference?
-        let token = UUID()
     }
     private var bookmarkSlots: [Int64: BookmarkSlot] = [:]
     private func storeBookmark(_ id: Int64, _ bookmark: TranscriptBookmark?, reference: SessionNavigationReference? = nil,
@@ -712,7 +739,7 @@ final class TraceModel: ObservableObject {
 
     private func removeObsoleteBookmark(_ id: Int64, captured: BookmarkSlot?, database: IndexDatabase) {
         guard let captured, captured.generation != database.contentGeneration,
-              let current = bookmarkSlots[id], current.token == captured.token,
+              let current = bookmarkSlots[id], current.generation == captured.generation,
               current.reference == captured.reference else { return }
         storeBookmark(id, nil)
     }
@@ -1809,7 +1836,7 @@ final class TraceModel: ObservableObject {
     private var watcherGeneration: UInt64 = 0
     // The first delivered watermark is a conservative replay point while the
     // scheduler is still committing its persisted checkpoint.
-    private var liveWatcherReplayStarts: [String: UInt64] = [:]
+    private var liveWatcherReplayStarts: [String: SourceIngressMailbox.ReplayPosition] = [:]
     private var safetyVerificationTask: Task<Void, Never>?
     private var hydrationOrder: [Int64] = []
     private struct MessageIdentity: Equatable {
@@ -2521,6 +2548,9 @@ final class TraceModel: ObservableObject {
             guard let self, let owner, self.database === owner, !self.terminating else { return }
             self.removeObsoleteBookmark(id, captured: slot, database: owner)
         }
+    }
+    func bookmarkIntentForTesting(_ reference: SessionNavigationReference?) -> TranscriptBookmark? {
+        reference.flatMap { bookmarkIntents[$0.unanchored]?.bookmark }
     }
     func restoreBookmarkSlotForTesting(_ session: SessionSummary, bookmark: TranscriptBookmark) {
         storeBookmark(session.id, bookmark, reference: session.navigationReference, generation: session.contentGeneration)
@@ -6246,7 +6276,7 @@ final class TraceModel: ObservableObject {
                 persisted = nil; tracksWatermarks = false
             }
             let persistedCheckpoint = persisted?.value
-            let checkpoint = tracksWatermarks ? (persistedCheckpoint ?? liveWatcherReplayStarts[groupingID]) : nil
+            let checkpoint = tracksWatermarks ? (persistedCheckpoint ?? liveWatcherReplayStarts[groupingID]?.value) : nil
             guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
             if checkpoint == nil {
                 let sourcePaths = groupRoots.map { TraceFileIO.canonicalPath($0.path) }
@@ -6266,13 +6296,15 @@ final class TraceModel: ObservableObject {
         watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
         watcherStartupPending = true
         startupReconciliationPaths = reconciliationPaths
-        let transcriptIngress = SourceIngressMailbox { [weak self] changes, _ in
+        let transcriptIngress = SourceIngressMailbox { [weak self] changes, _, first in
             guard let self, self.settings.onboardingComplete, self.watcherGeneration == generation else { return }
             #if DEBUG
             if self.suppressLiveWatcherIngressForTesting { return }
             #endif
-            for (identifier, eventID) in changes.watermarks where self.liveWatcherReplayStarts[identifier] == nil {
-                self.liveWatcherReplayStarts[identifier] = eventID
+            for (identifier, position) in first {
+                if self.liveWatcherReplayStarts[identifier] == nil || self.liveWatcherReplayStarts[identifier]?.epoch != position.epoch {
+                    self.liveWatcherReplayStarts[identifier] = position
+                }
             }
             let (relevant, enrollment) = self.admitTranscriptChanges(changes)
             if enrollment == nil { await self.routeSourceChanges(relevant, acceptsCheckpoints: true) }
@@ -6296,7 +6328,7 @@ final class TraceModel: ObservableObject {
             else { failedRoots += configuration.roots }
         }
         watchers = started
-        let metadataIngress = SourceIngressMailbox { [weak self] changes, diagnostics in
+        let metadataIngress = SourceIngressMailbox { [weak self] changes, diagnostics, _ in
             guard let self, self.watcherGeneration == generation else { return }
             #if DEBUG
             if self.suppressLiveWatcherIngressForTesting { return }
