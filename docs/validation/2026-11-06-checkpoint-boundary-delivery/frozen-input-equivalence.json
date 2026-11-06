@@ -1,0 +1,10 @@
+{
+  "candidate": "709e65afe9955006ce2fef97a7262ea7eb4ac19a",
+  "productionAndXCTestValidatedAt": "bb1f924df2ddaddfbdb5de693e1f59c679dd5f5d",
+  "differentFiles": [
+    "Scripts/prepare-source-ingress-benchmark.py",
+    "Tests/Scripts/test_checkpoint_proof_benchmark.py"
+  ],
+  "productionXCTestProjectAndDependencyInputsIdentical": true,
+  "reason": "Only shared benchmark setup moves outside timing on both revisions, plus its script regression."
+}

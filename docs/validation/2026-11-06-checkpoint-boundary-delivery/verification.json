@@ -1,0 +1,130 @@
+{
+  "candidate": "709e65afe9955006ce2fef97a7262ea7eb4ac19a",
+  "productionAndXCTestValidatedAt": "bb1f924df2ddaddfbdb5de693e1f59c679dd5f5d",
+  "base": "a45cf45a296133a00d89896bc581656c2951e155",
+  "targetedBaseline": "3beaf0db721ad29a04de06d71a00e0f9a751d1ae",
+  "focused": {
+    "passed": 683,
+    "groups": {
+      "IndexingRegressionTests": 196,
+      "FSEventsWatcherTests": 13,
+      "SessionMetadataTests": 64,
+      "SidecarDependencyTests": 27,
+      "AppReviewFollowupTests": 383
+    },
+    "receipt": "accepted-focused.json",
+    "separatelyReproducedFailure": "known-transcript-classification.json"
+  },
+  "races": {
+    "cases": 37,
+    "repetitions": 5,
+    "passedExecutions": 185,
+    "receipts": [
+      "accepted-races-1.json",
+      "accepted-races-2.json",
+      "accepted-races-3.json",
+      "accepted-races-4.json",
+      "accepted-races-5.json"
+    ]
+  },
+  "scripts": {
+    "productionCandidatePassed": 69,
+    "finalCandidatePassed": 70,
+    "finalReceipt": "final-harness-all-scripts.json"
+  },
+  "compiledDiscovery": {
+    "identifiers": 923,
+    "raceSelectors": 37,
+    "uiSelectors": 12,
+    "missing": []
+  },
+  "checks": {
+    "accepted-focused": 0,
+    "accepted-races-1": 0,
+    "accepted-races-2": 0,
+    "accepted-races-3": 0,
+    "accepted-races-4": 0,
+    "accepted-races-5": 0,
+    "accepted-debug-build": 0,
+    "accepted-release-build": 0,
+    "accepted-external-client": 0,
+    "accepted-project-drift": 0,
+    "accepted-signing": 0,
+    "accepted-network": 0,
+    "accepted-whitespace": 0,
+    "accepted-scripts": 0,
+    "accepted-inputs": 0,
+    "final-harness-all-scripts": 0,
+    "final-harness-inputs": 0,
+    "final-harness-whitespace": 0
+  },
+  "optimizedPreparation": {
+    "frameworksAndCLIsCompiled": true,
+    "modes": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox"
+    ],
+    "initialSmokeObligations": 8,
+    "finalMailboxSmokeObligations": [
+      8,
+      257
+    ],
+    "correctnessOnly": true,
+    "receiptPrefix": "final-",
+    "mainActorBoundVerified": 128
+  },
+  "ui": {
+    "runs": [],
+    "accepted": false,
+    "required": true
+  },
+  "targetedMeasurements": {
+    "accepted": false,
+    "required": true,
+    "modes": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox"
+    ],
+    "counts": [
+      1000,
+      10000
+    ],
+    "warmupsPerWorkloadRevision": 1,
+    "recordedSamplesPerWorkloadRevision": 5,
+    "summary": null
+  },
+  "omittedByApprovedScope": [
+    "Complete test suites",
+    "Three full Release comparison pairs against 61c00de"
+  ],
+  "localTenPercentPerformanceAcceptanceClaim": false,
+  "sourceHashes": "source-hashes.json",
+  "inputEquivalence": "frozen-input-equivalence.json",
+  "publication": {
+    "recordedAt": "2026-11-06T23:57:54.923461+00:00",
+    "userRequest": "open ready PR",
+    "action": "Publish ready follow-up now with incomplete acceptance explicitly documented.",
+    "candidate": "709e65afe9955006ce2fef97a7262ea7eb4ac19a",
+    "ui": {
+      "status": "not run",
+      "accepted": false,
+      "freshDesktopIdleConfirmationReceived": false
+    },
+    "targetedMeasurements": {
+      "status": "not run",
+      "accepted": false,
+      "correctnessSmokesArePerformanceAcceptance": false
+    },
+    "coordination": "No authorization to interrupt or message competing native-check chat; no such message sent.",
+    "localTenPercentPerformanceAcceptanceClaim": false,
+    "omittedByApprovedScope": [
+      "Complete suites",
+      "Three full Release comparison pairs"
+    ]
+  },
+  "rawPayloadAvailability": "Local-only; not downloadable repository or CI attachments."
+}
