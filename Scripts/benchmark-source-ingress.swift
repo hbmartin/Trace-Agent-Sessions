@@ -106,9 +106,10 @@ private final class DeliveryCompletion {
             }
             return (start: start, enqueue: enqueue, end: WorkloadStamp())
         }
+        defer { producer.cancel() }
         await gate.open()
-        let result = await producer.value
         let delivered = try await completion.wait()
+        let result = await producer.value
         timeout.cancel()
         let end = delivered.time > result.end.time ? delivered : result.end
         let elapsed = seconds(result.start.time.duration(to: end.time)), cpu = end.cpu - result.start.cpu

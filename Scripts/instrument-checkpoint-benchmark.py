@@ -61,7 +61,11 @@ def instrument(source, probe_source, synchronize_existing=False):
     installed = BEGIN in source
     if installed:
         unique(source, [BEGIN, END, MEASURE, FINISH, IDLE, COUNTS], 'existing instrumentation boundary')
-        old = source[source.index(BEGIN):source.index(END) + len(END)]
+        existing_start = source.index(BEGIN)
+        existing_end = source.index(END)
+        if existing_end < existing_start:
+            raise ValueError('Invalid instrumentation boundary order')
+        old = source[existing_start:existing_end + len(END)]
         if old != probe and not synchronize_existing:
             raise ValueError('Different acceptance instrumentation is already installed')
         synchronized = source.replace(old, probe, 1)

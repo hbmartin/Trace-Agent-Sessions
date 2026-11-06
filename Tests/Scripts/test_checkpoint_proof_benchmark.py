@@ -74,6 +74,12 @@ fileprivate func accept(_ coverage: Coverage, ignored: Bool) {
         with self.assertRaisesRegex(ValueError, 'Missing unique existing'):
             MODULE.instrument(old.replace('defer { CheckpointAcceptanceBenchmark.end(measurement) }', ''), source, synchronize_existing=True)
 
+    def test_reversed_existing_probe_boundaries_are_rejected(self):
+        source = (ROOT / 'Sources/TraceCore/Indexing/IndexScheduler.swift').read_text()
+        reversed_source = source.replace(MODULE.BEGIN, '__END__').replace(MODULE.END, MODULE.BEGIN).replace('__END__', MODULE.END)
+        with self.assertRaisesRegex(ValueError, 'Invalid instrumentation boundary order'):
+            MODULE.instrument(reversed_source, source, synchronize_existing=True)
+
     def test_stamps_layout_counts_actual_prefix_storage(self):
         candidate = (ROOT / 'Sources/TraceCore/Indexing/IndexScheduler.swift').read_text()
         probe = candidate[candidate.index(MODULE.BEGIN):candidate.index(MODULE.END) + len(MODULE.END)]
@@ -120,6 +126,8 @@ defer { CheckpointAcceptanceBenchmark.end(measurement) }
         self.assertNotIn('while paths.count', source)
         self.assertNotIn('Task.yield()', source)
         self.assertIn('let delivered = try await completion.wait()', source)
+        self.assertLess(source.index('let delivered = try await completion.wait()'), source.index('let result = await producer.value'))
+        self.assertIn('defer { producer.cancel() }', source)
         self.assertIn('completion.finish(.success(WorkloadStamp()))', source)
         self.assertIn('try await Task.sleep(for: .seconds(30))', source)
         self.assertIn('final enqueue/delivery completion', source)
