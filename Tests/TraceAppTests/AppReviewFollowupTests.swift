@@ -124,6 +124,29 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(retired[0].watermarks, ["s": 100]); XCTAssertEqual(retired[0].checkpointReservations.count, 1)
     }
 
+    func testRejectedFirstFragmentCannotEnrollTheRemainder() async throws {
+        let ledger = IndexCheckpointLedger()
+        var calls = 0, retired = 0
+        let mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: true) }, receivePrepared: { delivery in
+            calls += 1
+            if calls == 1 { return false }
+            _ = delivery.enrolled(in: ledger)
+            return true
+        }, retire: { _ in retired += 1 })
+        defer { mailbox.close() }
+        var changes = SourceChanges(); changes.paths = Set((0..<300).map { "/tmp/rejected/\($0)" }); changes.watermarks = ["s": 100]
+        mailbox.enqueue(changes)
+        try await wait { calls > 0 }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while true {
+            let state = await mailbox.snapshotForTesting()
+            if !state.delivering, !state.pending, state.queued == 0 { break }
+            guard ContinuousClock.now < deadline else { throw CancellationError() }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(calls, 1); XCTAssertEqual(retired, 0); XCTAssertEqual(ledger.retainedRecordCount, 0)
+    }
+
     func testClosingMailboxRetiresQueuedWorkAndDoesNotRetainItsOwner() async throws {
         let gate = ReviewReadGate()
         var deliveries = 0

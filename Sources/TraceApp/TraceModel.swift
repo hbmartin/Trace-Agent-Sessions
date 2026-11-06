@@ -231,8 +231,10 @@ final class SourceIngressMailbox: Sendable {
                     var changes = group.value.changes
                     changes.paths = Set(paths[max(0, min(lower, paths.count))..<min(upper, paths.count)])
                     changes.reconciliationPaths = Set(roots[max(0, lower - paths.count)..<max(0, upper - paths.count)])
-                    accepted = await receive(.init(boundary: boundary, changes: changes,
-                        startsBoundary: index == 0, diagnostics: index == 0 ? group.diagnostics : nil)) && accepted
+                    guard await receive(.init(boundary: boundary, changes: changes,
+                        startsBoundary: index == 0, diagnostics: index == 0 ? group.diagnostics : nil)) else {
+                        accepted = false; break
+                    }
                     await Task.yield()
                 }
                 if !accepted, let changes = boundary.unpaidDelivery { await retire(changes) }
