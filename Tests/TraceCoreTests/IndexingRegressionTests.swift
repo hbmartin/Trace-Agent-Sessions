@@ -8,6 +8,116 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testScheduledResultReportsActualScanQualification() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        try await database.setIndexScope(.proseOnly)
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let canonical = Set([TraceFileIO.canonicalPath(file.path)])
+        let resets = OSAllocatedUnfairLock(initialState: 0)
+        let incremental = await coordinator.executeScheduled(paths: [file.path], reconciliationPaths: [],
+            canonicalPaths: canonical, canonicalReconciliation: [], fullScan: false, rebuild: false,
+            preservingCommittedScope: false, scope: .proseOnly, activity: .fileChanges,
+            satisfiesSafetyReconciliation: false, onRebuildReset: {}, onIndexReset: { _ in resets.withLock { $0 += 1 } }, progress: { _ in })
+        XCTAssertEqual(incremental.progress.phase, .complete); XCTAssertFalse(incremental.performedFullScan)
+        let implicit = await coordinator.executeScheduled(paths: [file.path], reconciliationPaths: [],
+            canonicalPaths: canonical, canonicalReconciliation: [], fullScan: false, rebuild: false,
+            preservingCommittedScope: false, scope: .everything, activity: .fileChanges,
+            satisfiesSafetyReconciliation: false, onRebuildReset: {}, onIndexReset: { _ in resets.withLock { $0 += 1 } }, progress: { _ in })
+        XCTAssertEqual(implicit.progress.phase, .complete); XCTAssertTrue(implicit.performedFullScan)
+        let full = await coordinator.executeScheduled(paths: [], reconciliationPaths: [],
+            canonicalPaths: [], canonicalReconciliation: [], fullScan: true, rebuild: false,
+            preservingCommittedScope: false, scope: .everything, activity: .initialBuild,
+            satisfiesSafetyReconciliation: false, onRebuildReset: {}, onIndexReset: { _ in resets.withLock { $0 += 1 } }, progress: { _ in })
+        XCTAssertEqual(full.progress.phase, .complete); XCTAssertTrue(full.performedFullScan)
+        XCTAssertEqual(resets.withLock { $0 }, 1, "Explicit full scans do not need a reset callback to report their coverage")
+    }
+
+    func testResetExpandedRootsRetainFailuresOutsideOriginalQualification() async throws {
+        let root = try directory(), a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
+        let good = a.appendingPathComponent("good.jsonl"), bad = b.appendingPathComponent("bad.jsonl")
+        try Data(line(1).utf8).write(to: good); try Data(line(2).utf8).write(to: bad)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        ledger.seed(stream: "s", checkpoint: nil)
+        let whole = ledger.reserve(watermarks: ["s": 100], streamRoots: ["s": [a.path]], hasIndexWork: true)
+        _ = ledger.reserve(watermarks: ["s": 200], streamRoots: ["s": [b.path]], hasIndexWork: false)
+        let failures = MutableFailureSelection(["bad.jsonl"]), clock = TestClock()
+        let source = MutableSelectiveReadFailureSource(base: ClaudeCodeSource(roots: [a, b]), failures: failures)
+        let accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [source]), scope: .proseOnly,
+            progress: { _ in }, clock: clock, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in
+                try? await database.saveQualifiedEventCheckpoints(updates)
+                if let mark = updates["s"]?.value { accepted.withLock { $0.append(mark) } }
+            })
+        await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: {},
+            onOrdinaryWorkCompleted: {}, checkpointReservations: [whole])
+        await scheduler.waitUntilIdle()
+        XCTAssertTrue(accepted.withLock { $0.isEmpty })
+        let persisted = try await database.eventCheckpoint(volumeID: "s")
+        XCTAssertNil(persisted)
+        XCTAssertEqual(ledger.remainingPathsForTesting([whole]), [TraceFileIO.canonicalPath(bad.path).path])
+        failures.replace(with: [])
+        await scheduler.request(paths: [bad.path]); await scheduler.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [200])
+        await scheduler.stop()
+    }
+
+    func testActivationPublishesPausedStreamsWithoutAnotherRequest() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), notices = OSAllocatedUnfairLock(initialState: [Set<String>]())
+        _ = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: false)
+        await database.failCheckpointReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY), stream: "s")
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didChangePausedCheckpointStreams: { streams in notices.withLock { $0.append(streams) } })
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(notices.withLock { $0 }, [["s"]])
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(notices.withLock { $0 }, [["s"]])
+        let reads = await database.checkpointReadCountForTesting(stream: "s")
+        XCTAssertEqual(reads, 1)
+        await scheduler.stop()
+    }
+
+    func testIdleWaitDoesNotActivateNewLedgerIngress() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { accepted.withLock { $0.append(mark) } } })
+        await scheduler.waitUntilIdle()
+        _ = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: false)
+        await scheduler.waitUntilIdle()
+        let before = await database.checkpointReadCountForTesting(stream: "s")
+        XCTAssertEqual(before, 0); XCTAssertTrue(accepted.withLock { $0.isEmpty })
+        await scheduler.request(); await scheduler.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [100])
+        await scheduler.stop()
+    }
+
+    func testStopBeforeActivationSettlesIdleWithoutReadOrPublication() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate()
+        defer { Task { await gate.open() } }
+        _ = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: false)
+        ledger.setActivationHookForTesting { await gate.wait() }
+        let callbacks = OSAllocatedUnfairLock(initialState: 0)
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { _ in callbacks.withLock { $0 += 1 } },
+            didChangePausedCheckpointStreams: { _ in callbacks.withLock { $0 += 1 } })
+        try await waitForCondition { await gate.entered }
+        let stopped = Task { await scheduler.stop() }
+        try await waitForCondition { await scheduler.stoppingForTesting }
+        await gate.open(); await stopped.value; await scheduler.waitUntilIdle()
+        let reads = await database.checkpointReadCountForTesting(stream: "s")
+        XCTAssertEqual(reads, 0); XCTAssertEqual(callbacks.withLock { $0 }, 0)
+    }
+
     func testImplicitScopeResetPaysActualFullScanCoverage() async throws {
         let root = try directory(), file = root.appendingPathComponent("session.jsonl")
         try Data(line(1).utf8).write(to: file)

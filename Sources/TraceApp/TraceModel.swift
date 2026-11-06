@@ -52,57 +52,131 @@ enum WatcherGroupingPolicy {
 
 /// Serial, owner-scoped handoff from watcher queues to the main actor.
 final class SourceIngressMailbox: Sendable {
-    struct ReplayPosition: Sendable {
-        let value: UInt64
-        let epoch: IndexEventStreamEpoch?
-    }
     private struct Chunk: Sendable { let changes: SourceChanges; let diagnostics: [String]? }
-    private struct State {
-        var pages: [UInt64: [Chunk]] = [:]
-        var head: UInt64 = 0, tail: UInt64 = 0
-        var running = false, closed = false
-    }
-    private let state = OSAllocatedUnfairLock(initialState: State())
-    private let receive: @MainActor @Sendable (SourceChanges, [String]?, [String: ReplayPosition]) async -> Void
-    init(receive: @escaping @MainActor @Sendable (SourceChanges, [String]?, [String: ReplayPosition]) async -> Void) { self.receive = receive }
-    func enqueue(_ changes: SourceChanges, diagnostics: [String]? = nil) {
-        let start = state.withLock { value in
-            guard !value.closed else { return false }
-            if value.pages[value.tail]?.count == 128 { value.tail &+= 1 }
-            value.pages[value.tail, default: []].append(.init(changes: changes, diagnostics: diagnostics))
-            guard !value.running else { return false }
-            value.running = true; return true
+    private final class Ingress: Sendable {
+        private struct State {
+            var pages: [UInt64: [Chunk]] = [:]
+            var head: UInt64 = 0, tail: UInt64 = 0
+            var running = false, closed = false
+            #if DEBUG
+            var aggregating = 0
+            #endif
         }
-        if start { Task.detached { await self.drain() } }
-    }
-    private func drain() async {
-        while let chunks = state.withLock({ value -> [Chunk]? in
-            guard !value.closed, let page = value.pages.removeValue(forKey: value.head) else { value.running = false; return nil }
-            if value.head == value.tail { value.tail &+= 1 }
-            value.head &+= 1
-            return page
-        }) {
-            var changes = SourceChanges(), diagnostics: [String]?, first: [String: ReplayPosition] = [:]
-            for chunk in chunks {
-                for (stream, mark) in chunk.changes.watermarks {
-                    let epoch = chunk.changes.streamEpochs[stream]
-                    if first[stream] == nil || first[stream]?.epoch != epoch {
-                        first[stream] = .init(value: mark, epoch: epoch)
-                    }
-                }
-                changes.merge(chunk.changes)
-                if let latest = chunk.diagnostics { diagnostics = latest }
+        private let state = OSAllocatedUnfairLock(initialState: State())
+        var isClosed: Bool { state.withLock { $0.closed } }
+        func append(_ changes: SourceChanges, diagnostics: [String]?) -> Bool {
+            state.withLock { value in
+                guard !value.closed else { return false }
+                if value.pages[value.tail]?.count == 128 { value.tail &+= 1 }
+                value.pages[value.tail, default: []].append(.init(changes: changes, diagnostics: diagnostics))
+                guard !value.running else { return false }
+                value.running = true; return true
             }
-            guard state.withLock({ !$0.closed }) else { return }
-            await receive(changes, diagnostics, first)
-            await Task.yield()
+        }
+        func take() -> [Chunk]? {
+            state.withLock { value in
+                guard !value.closed, let page = value.pages.removeValue(forKey: value.head) else {
+                    value.running = false; return nil
+                }
+                if value.head == value.tail { value.tail &+= 1 }
+                value.head &+= 1
+                #if DEBUG
+                value.aggregating = page.count
+                #endif
+                return page
+            }
+        }
+        #if DEBUG
+        func didAggregate() { state.withLock { $0.aggregating = 0 } }
+        #endif
+        func close() {
+            let retired = state.withLock { value in
+                value.closed = true
+                let pages = value.pages; value.pages = [:]; return pages
+            }
+            withExtendedLifetime(retired) {}
+        }
+        #if DEBUG
+        var queuedForTesting: Int { state.withLock { $0.aggregating + $0.pages.values.reduce(0) { $0 + $1.count } } }
+        #endif
+    }
+    /// This executor stays available while its delivery task awaits the main
+    /// actor. Only the aggregate and one immutable in-flight payload are held.
+    private actor Coalescer {
+        private struct Payload { var changes = SourceChanges(); var diagnostics: [String]? }
+        private var pending: Payload?
+        private var delivering = false
+        private let ingress: Ingress
+        private let receive: @MainActor @Sendable (SourceChanges, [String]?) async -> Void
+        init(ingress: Ingress, receive: @escaping @MainActor @Sendable (SourceChanges, [String]?) async -> Void) {
+            self.ingress = ingress; self.receive = receive
+        }
+        func include(_ chunks: [Chunk]) {
+            guard !ingress.isClosed else { return }
+            if pending == nil { pending = Payload() }
+            for chunk in chunks {
+                pending!.changes.merge(chunk.changes)
+                if let latest = chunk.diagnostics { pending!.diagnostics = latest }
+            }
+            if !delivering {
+                delivering = true
+                Task { await deliver() }
+            }
+        }
+        private func deliver() async {
+            defer { delivering = false }
+            while !ingress.isClosed, let payload = pending {
+                pending = nil
+                await receive(payload.changes, payload.diagnostics)
+            }
+            if ingress.isClosed { pending = nil }
+        }
+        func close() { pending = nil }
+        #if DEBUG
+        func snapshotForTesting() -> (queued: Int, pending: Bool, paths: Int, delivering: Bool) {
+            (ingress.queuedForTesting, pending != nil, pending?.changes.paths.count ?? 0, delivering)
+        }
+        #endif
+    }
+    private let ingress: Ingress
+    private let coalescer: Coalescer
+    init(receive: @escaping @MainActor @Sendable (SourceChanges, [String]?) async -> Void) {
+        let ingress = Ingress()
+        self.ingress = ingress
+        self.coalescer = Coalescer(ingress: ingress) { changes, diagnostics in
+            // Check closure on the delivery executor, after any main-actor wait.
+            guard !ingress.isClosed else { return }
+            await receive(changes, diagnostics)
+        }
+    }
+    func enqueue(_ changes: SourceChanges, diagnostics: [String]? = nil) {
+        guard ingress.append(changes, diagnostics: diagnostics) else { return }
+        let ingress = ingress, coalescer = coalescer
+        Task.detached {
+            while let chunks = ingress.take() {
+                await coalescer.include(chunks)
+                #if DEBUG
+                ingress.didAggregate()
+                #endif
+                await Task.yield()
+            }
         }
     }
     func close() {
-        // Transfer destruction out of the ingress lock as well as set merging.
-        let retired = state.withLock { value in value.closed = true; let pages = value.pages; value.pages = [:]; return pages }
-        withExtendedLifetime(retired) {}
+        ingress.close()
+        let coalescer = coalescer
+        Task { await coalescer.close() }
     }
+    deinit { close() }
+    #if DEBUG
+    func snapshotForTesting() async -> (queued: Int, pending: Bool, paths: Int, delivering: Bool) {
+        await coalescer.snapshotForTesting()
+    }
+    func observationForTesting() -> @Sendable () async -> (queued: Int, pending: Bool, paths: Int, delivering: Bool) {
+        let coalescer = coalescer
+        return { await coalescer.snapshotForTesting() }
+    }
+    #endif
 }
 
 @MainActor
@@ -1834,9 +1908,6 @@ final class TraceModel: ObservableObject {
     private var watcherRootsByAgent: [AgentKind: [TraceFileIO.CanonicalPath]] = [:]
     private var watchedSourceRoots: [URL] = []
     private var watcherGeneration: UInt64 = 0
-    // The first delivered watermark is a conservative replay point while the
-    // scheduler is still committing its persisted checkpoint.
-    private var liveWatcherReplayStarts: [String: SourceIngressMailbox.ReplayPosition] = [:]
     private var safetyVerificationTask: Task<Void, Never>?
     private var hydrationOrder: [Int64] = []
     private struct MessageIdentity: Equatable {
@@ -2664,12 +2735,12 @@ final class TraceModel: ObservableObject {
         }
         return invocation
     }
-    func restartWatchingForTesting(_ sources: [any SessionSource]) async -> Bool {
+    func restartWatchingForTesting(_ sources: [any SessionSource], force: Bool = true) async -> Bool {
         guard !terminating, let database else { return false }
-        guard settings.onboardingComplete else { return await startWatchingForTesting(sources, force: true) }
+        guard settings.onboardingComplete else { return await startWatchingForTesting(sources, force: force) }
         let outcome = await startReplacementWatchers(sources,
             owner: .init(database: database, attachment: attachmentGeneration, revision: sourceConfigurationRevision),
-            forceRootReconciliation: true)
+            forceRootReconciliation: force)
         guard case .started(let receipt) = outcome else { return false }
         return watcherReadyIsCurrent(receipt)
     }
@@ -6178,7 +6249,6 @@ final class TraceModel: ObservableObject {
         guard settings.onboardingComplete else {
             return await startWatching(sources, forceRootReconciliation: forceRootReconciliation)
         }
-        liveWatcherReplayStarts = [:]
         let startup = WatcherStartup(owner: owner, generation: beginWatcherConfiguration(),
                                      forceRootReconciliation: forceRootReconciliation)
         guard watcherOwnerIsCurrent(owner), startup.generation == watcherGeneration else { return .superseded }
@@ -6276,7 +6346,7 @@ final class TraceModel: ObservableObject {
                 persisted = nil; tracksWatermarks = false
             }
             let persistedCheckpoint = persisted?.value
-            let checkpoint = tracksWatermarks ? (persistedCheckpoint ?? liveWatcherReplayStarts[groupingID]?.value) : nil
+            let checkpoint = tracksWatermarks ? persistedCheckpoint : nil
             guard watcherStartupIsCurrent(startup), !Task.isCancelled else { return .superseded }
             if checkpoint == nil {
                 let sourcePaths = groupRoots.map { TraceFileIO.canonicalPath($0.path) }
@@ -6296,16 +6366,11 @@ final class TraceModel: ObservableObject {
         watchedSourceRoots = canonicalRoots.map { URL(fileURLWithPath: $0.path) }
         watcherStartupPending = true
         startupReconciliationPaths = reconciliationPaths
-        let transcriptIngress = SourceIngressMailbox { [weak self] changes, _, first in
+        let transcriptIngress = SourceIngressMailbox { [weak self] changes, _ in
             guard let self, self.settings.onboardingComplete, self.watcherGeneration == generation else { return }
             #if DEBUG
             if self.suppressLiveWatcherIngressForTesting { return }
             #endif
-            for (identifier, position) in first {
-                if self.liveWatcherReplayStarts[identifier] == nil || self.liveWatcherReplayStarts[identifier]?.epoch != position.epoch {
-                    self.liveWatcherReplayStarts[identifier] = position
-                }
-            }
             let (relevant, enrollment) = self.admitTranscriptChanges(changes)
             if enrollment == nil { await self.routeSourceChanges(relevant, acceptsCheckpoints: true) }
         }
@@ -6328,7 +6393,7 @@ final class TraceModel: ObservableObject {
             else { failedRoots += configuration.roots }
         }
         watchers = started
-        let metadataIngress = SourceIngressMailbox { [weak self] changes, diagnostics, _ in
+        let metadataIngress = SourceIngressMailbox { [weak self] changes, diagnostics in
             guard let self, self.watcherGeneration == generation else { return }
             #if DEBUG
             if self.suppressLiveWatcherIngressForTesting { return }
@@ -6506,7 +6571,6 @@ final class TraceModel: ObservableObject {
         _ = beginWatcherConfiguration()
         watchedSourceRoots = []
         watcherRootsByAgent = [:]
-        liveWatcherReplayStarts = [:]
         watcherStartupPending = true
     }
 

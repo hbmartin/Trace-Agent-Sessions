@@ -1,60 +1,87 @@
 #!/usr/bin/env python3
-"""Apply identical measurement boundaries to a pinned historical checkpoint build."""
+"""Apply synchronized timing and explicitly defined state counters to local builds."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 
+BEGIN = '// BEGIN CHECKPOINT ACCEPTANCE MEASUREMENT'
+END = '// END CHECKPOINT ACCEPTANCE MEASUREMENT'
+MEASURE = 'let measurement = CheckpointAcceptanceBenchmark.begin()'
+FINISH = 'defer { CheckpointAcceptanceBenchmark.end(measurement) }'
+IDLE = '    public func waitUntilIdle()'
+COUNTS = '    public var checkpointBenchmarkCounts: [String: Int] {'
+KIND = '    public var checkpointBenchmarkPrefixIndexEntryKind: String {'
+SCHEDULER_KIND = '    public func checkpointBenchmarkPrefixIndexEntryKind() -> String {'
+
+
+def unique(source, markers, label):
+    for marker in markers:
+        if source.count(marker) != 1:
+            raise ValueError('Missing unique ' + label + ': ' + marker)
+
+
+def block(source, marker):
+    """Return the complete body of a validated Swift declaration."""
+    start = source.index(marker)
+    opening = source.index('{', start)
+    depth = 1
+    position = opening + 1
+    while depth:
+        if position >= len(source):
+            raise ValueError('Unclosed instrumentation declaration: ' + marker)
+        depth += (source[position] == '{') - (source[position] == '}')
+        position += 1
+    return source[start:position]
+
+
+def counter_layout(source):
+    if 'var stamps: [Stamp]' in source:
+        return 'heap-mark', '$1.stamps.count', '$1.unpaid.values.count + $1.paid.values.count'
+    if 'class Frontier {' in source or 'struct Frontier {' in source:
+        return 'frontier-node', '$1.outcomes.paths.count + $1.outcomes.roots.count + ($1.outcomes.fullScan == 0 ? 0 : 1)', '$1.frontier.count'
+    return 'unavailable', None, None
+
+
+def counters(source):
+    kind, outcomes, prefix = counter_layout(source)
+    values = '["records": $0.streams.values.reduce(0) { $0 + $1.records.count }, "proofs": ' + ('$0.proofs.count' if kind != 'unavailable' else '0')
+    if outcomes is not None:
+        values += ', "outcomes": $0.streams.values.reduce(0) { total, stream in total + stream.records.values.reduce(0) { $0 + ' + outcomes + ' } }'
+        values += ', "prefixIndexEntries": $0.streams.values.reduce(0) { $0 + ' + prefix + ' }'
+    values += ']'
+    return COUNTS + '\n        state.withLock { ' + values + ' }\n    }'
+
 
 def instrument(source, probe_source, synchronize_existing=False):
-    start = probe_source.index('// BEGIN CHECKPOINT ACCEPTANCE MEASUREMENT')
-    end = probe_source.index('// END CHECKPOINT ACCEPTANCE MEASUREMENT', start) + len('// END CHECKPOINT ACCEPTANCE MEASUREMENT')
-    probe = probe_source[start:end] + '\n\n'
-    if '// BEGIN CHECKPOINT ACCEPTANCE MEASUREMENT' in source:
-        for marker in ['// BEGIN CHECKPOINT ACCEPTANCE MEASUREMENT', '// END CHECKPOINT ACCEPTANCE MEASUREMENT', 'let measurement = CheckpointAcceptanceBenchmark.begin()', 'defer { CheckpointAcceptanceBenchmark.end(measurement) }', '    public func waitUntilIdle()']:
-            if source.count(marker) != 1:
-                raise ValueError('Missing unique existing instrumentation boundary: ' + marker)
-        if probe.strip() in source:
-            return source
-        if not synchronize_existing:
+    unique(probe_source, [BEGIN, END], 'probe boundary')
+    start = probe_source.index(BEGIN)
+    end = probe_source.index(END, start) + len(END)
+    probe = probe_source[start:end]
+    installed = BEGIN in source
+    if installed:
+        unique(source, [BEGIN, END, MEASURE, FINISH, IDLE, COUNTS], 'existing instrumentation boundary')
+        old = source[source.index(BEGIN):source.index(END) + len(END)]
+        if old != probe and not synchronize_existing:
             raise ValueError('Different acceptance instrumentation is already installed')
-        for marker in ['// BEGIN CHECKPOINT ACCEPTANCE MEASUREMENT', '// END CHECKPOINT ACCEPTANCE MEASUREMENT', 'let measurement = CheckpointAcceptanceBenchmark.begin()', 'defer { CheckpointAcceptanceBenchmark.end(measurement) }']:
-            if source.count(marker) != 1:
-                raise ValueError('Missing unique existing instrumentation boundary: ' + marker)
-        existing_start = source.index('// BEGIN CHECKPOINT ACCEPTANCE MEASUREMENT')
-        existing_end = source.index('// END CHECKPOINT ACCEPTANCE MEASUREMENT', existing_start) + len('// END CHECKPOINT ACCEPTANCE MEASUREMENT')
-        synchronized = source[:existing_start] + probe.rstrip() + source[existing_end:]
-        if 'var stamps: [Stamp]' in source:
-            counts = 'state.withLock { ["records": $0.streams.values.reduce(0) { $0 + $1.records.count }, "proofs": $0.proofs.count] }'
-            if synchronized.count(counts) != 1:
-                raise ValueError('Missing unique historical count boundary')
-            synchronized = synchronized.replace(counts, 'state.withLock { ["records": $0.streams.values.reduce(0) { $0 + $1.records.count }, "proofs": $0.proofs.count, "outcomes": $0.streams.values.reduce(0) { total, stream in total + stream.records.values.reduce(0) { $0 + $1.stamps.count } }, "checkpointBoundaries": $0.streams.values.reduce(0) { $0 + $1.records.count }] }', 1)
-        return synchronized
-    marker = '/// Durable checkpoint value'
-    if marker not in source or 'fileprivate func accept(_ coverage: Coverage,' not in source:
-        raise ValueError('Unsupported baseline checkpoint implementation')
-    source = source.replace(marker, probe + marker, 1)
-    boundary = '        guard !coverage.entries.isEmpty else { return .committed([:]) }'
-    if source.count(boundary) != 1:
-        raise ValueError('Missing unique historical acceptance boundary')
-    source = source.replace(boundary, '''        #if TRACE_CHECKPOINT_BENCHMARK
-        let measurement = CheckpointAcceptanceBenchmark.begin()
-        defer { CheckpointAcceptanceBenchmark.end(measurement) }
-        #endif
-''' + boundary, 1)
-    ledger_end = '    #if DEBUG || TRACE_CHECKPOINT_BENCHMARK\n    var retainedRecordCount:'
-    if source.count(ledger_end) != 1:
-        raise ValueError('Missing unique historical ledger boundary')
-    idle = '    public func waitUntilIdle()'
-    if source.count(idle) != 1:
-        raise ValueError('Missing unique historical idle boundary')
-    source = source.replace(ledger_end, '''    #if TRACE_CHECKPOINT_BENCHMARK
-    public var checkpointBenchmarkCounts: [String: Int] {
-        state.withLock { ["records": $0.streams.values.reduce(0) { $0 + $1.records.count }, "proofs": 0] }
-    }
-    #endif
-''' + ledger_end, 1)
-    source = source.replace('    public func waitUntilIdle()', '''    #if TRACE_CHECKPOINT_BENCHMARK
+        synchronized = source.replace(old, probe, 1)
+        # Current builds share their DEBUG and benchmark count implementation.
+        if 'private struct RetainedCounts {' not in source:
+            old_counts = block(source, COUNTS)
+            new_counts = counters(source)
+            if old_counts != new_counts and not synchronize_existing and KIND not in source:
+                raise ValueError('Historical count instrumentation requires explicit synchronization')
+            synchronized = synchronized.replace(old_counts, new_counts, 1)
+    else:
+        if 'fileprivate func accept(_ coverage: Coverage,' not in source:
+            raise ValueError('Unsupported baseline checkpoint implementation')
+        boundary = '        guard !coverage.entries.isEmpty else { return .committed([:]) }'
+        ledger_end = '    #if DEBUG || TRACE_CHECKPOINT_BENCHMARK\n    var retainedRecordCount:'
+        unique(source, ['/// Durable checkpoint value', boundary, ledger_end, IDLE], 'historical boundary')
+        synchronized = source.replace('/// Durable checkpoint value', probe + '\n\n/// Durable checkpoint value', 1)
+        synchronized = synchronized.replace(boundary, '        #if TRACE_CHECKPOINT_BENCHMARK\n        ' + MEASURE + '\n        ' + FINISH + '\n        #endif\n' + boundary, 1)
+        synchronized = synchronized.replace(ledger_end, '    #if TRACE_CHECKPOINT_BENCHMARK\n' + counters(source) + '\n    #endif\n' + ledger_end, 1)
+        synchronized = synchronized.replace(IDLE, '''    #if TRACE_CHECKPOINT_BENCHMARK
     public func checkpointBenchmarkCounts() -> [String: Int] {
         var counts = checkpointLedger.checkpointBenchmarkCounts
         counts["proofs"] = pendingCheckpointAcceptances.count
@@ -62,15 +89,29 @@ def instrument(source, probe_source, synchronize_existing=False):
     }
     #endif
 
-    public func waitUntilIdle()''', 1)
-    return source
+''' + IDLE, 1)
+    kind = counter_layout(source)[0]
+    kind_declaration = KIND + ' "' + kind + '" }'
+    if KIND in synchronized:
+        unique(synchronized, [KIND], 'counter kind boundary')
+        synchronized = synchronized.replace(block(synchronized, KIND), kind_declaration, 1)
+    else:
+        declaration = block(synchronized, COUNTS)
+        synchronized = synchronized.replace(declaration, declaration + '\n' + kind_declaration, 1)
+    scheduler_kind = SCHEDULER_KIND + ' checkpointLedger.checkpointBenchmarkPrefixIndexEntryKind }'
+    if SCHEDULER_KIND in synchronized:
+        unique(synchronized, [SCHEDULER_KIND], 'scheduler counter kind boundary')
+        synchronized = synchronized.replace(block(synchronized, SCHEDULER_KIND), scheduler_kind, 1)
+    else:
+        synchronized = synchronized.replace(IDLE, '    #if TRACE_CHECKPOINT_BENCHMARK\n' + scheduler_kind + '\n    #endif\n\n' + IDLE, 1)
+    return synchronized
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--probe-source', type=Path, required=True)
-    parser.add_argument('--synchronize-existing', action='store_true', help='Explicitly replace validated historical measurement instrumentation')
+    parser.add_argument('--synchronize-existing', action='store_true', help='Explicitly replace historical timing and count instrumentation')
     args = parser.parse_args()
     path = args.root / 'Sources/TraceCore/Indexing/IndexScheduler.swift'
     original = path.read_text()

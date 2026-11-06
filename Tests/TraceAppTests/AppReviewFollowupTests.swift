@@ -12,30 +12,95 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
-    func testMailboxPreservesFirstPositionsAndEpochsBeforeCoalescing() async throws {
+    func testMailboxCoalescesWhileMainActorDeliveryIsHeld() async throws {
         let gate = ReviewReadGate(), before = IndexEventStreamEpoch(), after = before.advanced()
-        var deliveries: [(SourceChanges, [String: SourceIngressMailbox.ReplayPosition])] = []
-        let mailbox = SourceIngressMailbox { changes, _, first in
-            deliveries.append((changes, first))
+        var deliveries: [(SourceChanges, [String]?)] = []
+        let mailbox = SourceIngressMailbox { changes, diagnostics in
+            deliveries.append((changes, diagnostics))
             if deliveries.count == 1 { await gate.wait() }
         }
+        defer { mailbox.close(); Task { await gate.open() } }
         var initial = SourceChanges(); initial.watermarks = ["a": 10]; initial.streamEpochs = ["a": before]
         mailbox.enqueue(initial)
         try await wait { deliveries.count == 1 }
-        for mark in 11...500 {
+        let ledger = IndexCheckpointLedger()
+        let reserved = ledger.reserve(watermarks: ["a": 20], streamRoots: [:], hasIndexWork: true, paths: ["/tmp/a"])
+        for mark in 11...2_000 {
             var changes = SourceChanges(); changes.watermarks = ["a": UInt64(mark), "b": UInt64(mark + 100)]
-            changes.streamEpochs = ["a": before]; mailbox.enqueue(changes)
+            changes.paths = ["/tmp/repeated-\(mark % 3)"]
+            changes.streamEpochs = ["a": before]; changes.checkpointReservations = [reserved]
+            mailbox.enqueue(changes, diagnostics: ["older warning"])
         }
-        var wrapped = SourceChanges(); wrapped.watermarks = ["a": 0]; wrapped.streamEpochs = ["a": after]; wrapped.wrappedStreams = ["a"]
+        var wrapped = SourceChanges(); wrapped.watermarks = ["a": 0]; wrapped.streamEpochs = ["a": after]
+        wrapped.wrappedStreams = ["a"]; wrapped.recoveryReasons = [.eventIDsWrapped]
+        wrapped.reconciliationPaths = ["/tmp/a"]; wrapped.historyDone = true
         mailbox.enqueue(wrapped)
+        for mark in 1...200 {
+            var changes = SourceChanges(); changes.watermarks = ["a": UInt64(mark)]; changes.streamEpochs = ["a": after]
+            changes.paths = ["/tmp/unique-\(mark)"]; mailbox.enqueue(changes)
+        }
+        var stale = SourceChanges(); stale.watermarks = ["a": 9_000]; stale.streamEpochs = ["a": before]
+        mailbox.enqueue(stale, diagnostics: [])
+        let deadline = ContinuousClock.now + .seconds(5)
+        while true {
+            let state = await mailbox.snapshotForTesting()
+            if state.queued == 0, state.pending, state.paths == 203 { break }
+            guard ContinuousClock.now < deadline else { throw CancellationError() }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(deliveries.count, 1, "Aggregation must progress independently of held delivery")
         await gate.open()
-        try await wait { deliveries.contains { $0.1["a"]?.epoch == after } }
-        XCTAssertEqual(deliveries.first?.1["a"]?.value, 10)
-        XCTAssertEqual(deliveries.dropFirst().first?.1["a"]?.value, 11)
-        XCTAssertEqual(deliveries.dropFirst().first?.1["b"]?.value, 111)
-        XCTAssertEqual(deliveries.last?.1["a"]?.value, 0)
-        XCTAssertEqual(deliveries.last?.0.watermarks["a"], 0)
-        mailbox.close()
+        try await wait { deliveries.count == 2 }
+        let delivered = deliveries[1]
+        XCTAssertEqual(delivered.0.paths.count, 203)
+        XCTAssertEqual(delivered.0.watermarks, ["a": 200, "b": 2_100])
+        XCTAssertEqual(delivered.0.streamEpochs["a"], after)
+        XCTAssertEqual(delivered.0.wrappedStreams, ["a"])
+        XCTAssertEqual(delivered.0.recoveryReasons, [.eventIDsWrapped])
+        XCTAssertEqual(delivered.0.reconciliationPaths, ["/tmp/a"])
+        XCTAssertTrue(delivered.0.historyDone)
+        XCTAssertEqual(delivered.0.checkpointReservations.count, 1)
+        XCTAssertEqual(delivered.1, [])
+    }
+
+    func testClosingMailboxRetiresQueuedWorkAndDoesNotRetainItsOwner() async throws {
+        let gate = ReviewReadGate()
+        var deliveries = 0
+        var mailbox: SourceIngressMailbox? = SourceIngressMailbox { _, _ in
+            deliveries += 1; await gate.wait()
+        }
+        defer { mailbox?.close(); Task { await gate.open() } }
+        weak var released = mailbox
+        let observe = try XCTUnwrap(mailbox).observationForTesting()
+        var changes = SourceChanges(); changes.paths = ["/tmp/first"]
+        mailbox?.enqueue(changes)
+        try await wait { deliveries == 1 }
+        changes.paths = ["/tmp/second"]; mailbox?.enqueue(changes)
+        mailbox?.close(); mailbox?.enqueue(changes); mailbox = nil
+        XCTAssertNil(released)
+        await gate.open()
+        let deadline = ContinuousClock.now + .seconds(5)
+        while true {
+            let state = await observe()
+            if !state.delivering, !state.pending, state.queued == 0 { break }
+            guard ContinuousClock.now < deadline else { XCTFail("Mailbox did not retire"); return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(deliveries, 1)
+    }
+
+    func testWatcherRestartWithoutStoredCheckpointReconcilesRoots() async throws {
+        let f = try await fixture(count: 2, grouping: .byRoot), source = ClaudeCodeSource(roots: [f.root])
+        defer { Task { await f.model.prepareToTerminate() } }
+        f.model.settings.onboardingComplete = true
+        let first = await f.model.startWatchingForTesting([source])
+        XCTAssertTrue(first)
+        XCTAssertTrue(f.model.startupReconciliationPathsForTesting.contains(TraceFileIO.canonicalPath(f.root.path).path))
+        let generation = f.model.watcherGenerationForTesting
+        let restarted = await f.model.restartWatchingForTesting([source], force: false)
+        XCTAssertTrue(restarted)
+        XCTAssertGreaterThan(f.model.watcherGenerationForTesting, generation)
+        XCTAssertTrue(f.model.startupReconciliationPathsForTesting.contains(TraceFileIO.canonicalPath(f.root.path).path))
     }
 
     func testNewIntentInOldGenerationDoesNotKeepObsoleteNumericBookmark() async throws {
@@ -7524,6 +7589,14 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { model.progress.phase == .complete }
         let indexed = try await f.database.search(query: "StartupScopeNeedle", filters: .init(), sort: .relevance)
         XCTAssertEqual(indexed.results.count, 1)
+        // Terminal progress precedes the awaited navigation remap. Require its
+        // accepted identity, then check persistence without another refresh.
+        let expectedReference = try XCTUnwrap(saved.navigationReference).unanchored
+        try await wait {
+            model.selectedSession?.contentGeneration == f.database.contentGeneration
+                && model.selectedSession?.navigationReference?.unanchored == expectedReference
+                && !model.messages.isEmpty
+        }
         XCTAssertEqual(model.settings.lastSessionID, saved.id)
         XCTAssertEqual(model.selectedSessionID, saved.id)
         XCTAssertEqual(model.rebuildSubmissionCountForTesting, 0)
