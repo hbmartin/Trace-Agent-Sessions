@@ -196,12 +196,18 @@ final class SourceIngressMailbox: Sendable {
             guard !ingress.isClosed else { return }
             for chunk in chunks {
                 let value = prepare(chunk.changes)
-                if let last = groups[tail], last.callbacks < 128,
-                   last.inputCount + value.changes.paths.count + value.changes.reconciliationPaths.count <= 128 {
-                    groups[tail]!.value.changes.merge(value.changes)
-                    groups[tail]!.value.recoveryEligible = last.value.recoveryEligible || value.recoveryEligible
-                    groups[tail]!.callbacks += 1
-                    if let diagnostic = chunk.diagnostics { groups[tail]!.diagnostics = diagnostic }
+                let canMerge = groups[tail].map {
+                    $0.callbacks < 128 && $0.inputCount + value.changes.paths.count + value.changes.reconciliationPaths.count <= 128
+                } ?? false
+                if canMerge {
+                    // Detach before mutation so inspecting the budget cannot
+                    // keep a second owner of the group's copy-on-write sets.
+                    var group = groups.removeValue(forKey: tail)!
+                    group.value.changes.merge(value.changes)
+                    group.value.recoveryEligible = group.value.recoveryEligible || value.recoveryEligible
+                    group.callbacks += 1
+                    if let diagnostic = chunk.diagnostics { group.diagnostics = diagnostic }
+                    groups[tail] = group
                 } else {
                     if groups[tail] != nil { tail &+= 1 }
                     groups[tail] = .init(value: value, diagnostics: chunk.diagnostics)

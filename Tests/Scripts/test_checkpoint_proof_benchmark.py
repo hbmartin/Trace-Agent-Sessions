@@ -175,6 +175,10 @@ private func cpuSeconds() -> Double { 0 }
             do { _ = try await failed.wait(); fatalError("Late completion replaced deadline") }
             catch { precondition((error as NSError).domain == "MailboxBenchmark." + phase) }
         }
+        let producerAlreadyFinished = DeliveryCompletion()
+        await mailboxDeadline(producerAlreadyFinished, after: .milliseconds(1), phase: "producerTimeout", message: "ignored", unless: { true })
+        producerAlreadyFinished.finish(.success(WorkloadStamp()))
+        _ = try await producerAlreadyFinished.wait()
         let early = DeliveryCompletion()
         early.finish(.success(WorkloadStamp()))
         _ = try await early.wait()

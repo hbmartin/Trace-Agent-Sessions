@@ -59,9 +59,11 @@ private final class DeliveryCompletion {
 }
 @MainActor
 private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: Duration,
-                             phase: String, message: String) async {
+                             phase: String, message: String,
+                             unless completed: @Sendable () -> Bool = { false }) async {
     do { try await Task.sleep(for: duration) }
     catch { return }
+    guard !completed() else { return }
     completion.finish(.failure(NSError(domain: "MailboxBenchmark." + phase, code: 1,
         userInfo: [NSLocalizedDescriptionKey: message])))
 }
@@ -95,14 +97,16 @@ private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: D
             }
         }
         defer { mailbox.close(); sampler.cancel() }
+        let producerFinished = OSAllocatedUnfairLock(initialState: false)
         let timeout = Task {
             await mailboxDeadline(completion, after: .seconds(30), phase: "producerTimeout",
-                message: "Timed out while enqueueing mailbox events")
+                message: "Timed out while enqueueing mailbox events", unless: { producerFinished.withLock { $0 } })
         }
         defer { timeout.cancel() }
         let gate = StartGate()
         let producer = Task.detached {
             await gate.wait() // Control handshake completes before measurement.
+            defer { producerFinished.withLock { $0 = true } }
             let start = WorkloadStamp()
             var enqueue: [Double] = []
             for value in 1...count {
