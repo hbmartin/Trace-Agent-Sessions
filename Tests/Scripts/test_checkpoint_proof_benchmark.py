@@ -231,6 +231,24 @@ private func cpuSeconds() -> Double { 0 }
         with self.assertRaisesRegex(ValueError, 'Missing unique'):
             extraction.extract(source + 'final class SourceIngressMailbox: Sendable {')
 
+    def test_both_mailbox_layouts_prepare_shared_setup_before_enqueue(self):
+        spec = importlib.util.spec_from_file_location('ingress_setup', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
+        extraction = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(extraction)
+        current = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
+        historical = """final class SourceIngressMailbox: Sendable {}
+@MainActor
+enum ModelPublicationBatch {}
+    private func normalizeTranscriptChanges(_ changes: SourceChanges) -> (changes: SourceChanges, recoveryEligible: Bool) {
+        return (changes, false)
+    }
+"""
+        for source in [current, historical]:
+            generated = extraction.extract(source)
+            factory = generated[generated.index('@MainActor func makeBenchmarkMailbox'):]
+            self.assertLess(factory.index('IngressMeasurement.roots'), factory.index('return SourceIngressMailbox'))
+            self.assertLess(factory.index('IngressMeasurement.ledger'), factory.index('return SourceIngressMailbox'))
+
     def test_acceptance_cannot_be_rescued_by_a_cleanup_scan(self):
         source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()
         acceptance = source[source.index('private static func measureAcceptance'):]

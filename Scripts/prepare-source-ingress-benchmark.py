@@ -37,6 +37,7 @@ def extract(source):
         wrapper = r'''
 @MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void) -> SourceIngressMailbox {
     let roots = IngressMeasurement.roots
+    _ = IngressMeasurement.ledger
     return SourceIngressMailbox(prepare: {
         SourceIngressMailbox.normalizeTranscript($0, rootsByAgent: roots, unavailableStreams: [])
     }, receivePrepared: { delivery in
@@ -61,7 +62,9 @@ def extract(source):
         parameters = 'raw, _, _' if 'struct ReplayPosition:' in mailbox else 'raw, _'
         wrapper = normalize + r'''
 @MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void) -> SourceIngressMailbox {
-    SourceIngressMailbox { PARAMETERS in
+    _ = IngressMeasurement.roots
+    _ = IngressMeasurement.ledger
+    return SourceIngressMailbox { PARAMETERS in
         let start = ContinuousClock.now
         var changes = normalizeBenchmarkChanges(raw).changes
         changes.checkpointReservations = [IngressMeasurement.ledger.reserve(watermarks: changes.watermarks,
