@@ -1,0 +1,232 @@
+{
+  "recordedAtUTC": "2026-11-06T00:19:22.860249+00:00",
+  "base": "18a0ef1b00d93476ca47f70be3674cd2bf50b21b",
+  "implementationCandidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+  "productionImplementation": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+  "targetedBaseline": "0b22628e72eefc4ab8d6b39023ba917fd0603629",
+  "inputEquivalence": "frozen-input-equivalence.json",
+  "canonicalHashManifest": "source-hashes.json",
+  "verifiedSourceHashes": 325,
+  "affectedCoreApp": {
+    "passed": 668,
+    "suites": {
+      "FSEventsWatcherTests": 13,
+      "IndexingRegressionTests": 186,
+      "SessionMetadataTests": 64,
+      "SidecarDependencyTests": 27,
+      "AppReviewFollowupTests": 378
+    },
+    "receipt": "frozen-focused.json",
+    "testedCommit": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+    "inputsIdenticalAtCandidate": true
+  },
+  "races": {
+    "cases": 21,
+    "repetitions": 5,
+    "passedExecutions": 105,
+    "selectors": "selected-races.json"
+  },
+  "scriptTests": {
+    "passed": 62,
+    "testedCommit": "ded65dd9673a45a8a23133509456b7a247883dc5",
+    "receipt": "final-script-tests.json"
+  },
+  "successfulChecks": {
+    "frozen-focused": {
+      "receipt": "frozen-focused.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-races-1": {
+      "receipt": "frozen-races-1.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-races-2": {
+      "receipt": "frozen-races-2.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-races-3": {
+      "receipt": "frozen-races-3.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-races-4": {
+      "receipt": "frozen-races-4.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-races-5": {
+      "receipt": "frozen-races-5.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-debug-build": {
+      "receipt": "frozen-debug-build.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-release-build": {
+      "receipt": "frozen-release-build.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-external-client": {
+      "receipt": "frozen-external-client.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-project-drift": {
+      "receipt": "frozen-project-drift.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-signing": {
+      "receipt": "frozen-signing.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-network": {
+      "receipt": "frozen-network.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "frozen-whitespace": {
+      "receipt": "frozen-whitespace.json",
+      "candidate": "06ec908967ea01f14b1d5fef92a7beca0cc4281c",
+      "exitCode": 0
+    },
+    "final-script-tests": {
+      "receipt": "final-script-tests.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "candidate-build-inputs-final": {
+      "receipt": "candidate-build-inputs-final.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-targeted-baseline-build": {
+      "receipt": "frozen-targeted-baseline-build.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-targeted-candidate-build": {
+      "receipt": "frozen-targeted-candidate-build.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-baseline-enqueue-smoke": {
+      "receipt": "frozen-baseline-enqueue-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-baseline-acceptance-smoke": {
+      "receipt": "frozen-baseline-acceptance-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-baseline-backlog-smoke": {
+      "receipt": "frozen-baseline-backlog-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-baseline-mailbox-smoke": {
+      "receipt": "frozen-baseline-mailbox-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-candidate-enqueue-smoke": {
+      "receipt": "frozen-candidate-enqueue-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-candidate-acceptance-smoke": {
+      "receipt": "frozen-candidate-acceptance-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-candidate-backlog-smoke": {
+      "receipt": "frozen-candidate-backlog-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    },
+    "frozen-candidate-mailbox-smoke": {
+      "receipt": "frozen-candidate-mailbox-smoke.json",
+      "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+      "exitCode": 0
+    }
+  },
+  "knownFailure": {
+    "test": "TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+    "candidateFailedTests": 1,
+    "candidateAssertionFailures": 2,
+    "baselineFailedTests": 1,
+    "baselineAssertionFailures": 2,
+    "symptoms": [
+      "Timed out waiting for app state",
+      "CancellationError()"
+    ],
+    "candidateReceipt": "frozen-known-transcript-check.json",
+    "baselineReceipt": "baseline-known-transcript-check.json",
+    "baselineTreeEqualsExactMergedBase": true,
+    "classification": "Pre-existing, reproduced on exact base tree; excluded only from affected selection."
+  },
+  "ui": {
+    "selected": 12,
+    "validatedThroughCompiledDiscovery": true,
+    "selectors": "selected-ui-tests.json",
+    "discovery": "discovery-validation.json",
+    "attempt": "selected-ui.json",
+    "exitCode": 75,
+    "accepted": false,
+    "status": "Cancelled after protected macOS dialog blocked app launch; no accepted UI cases.",
+    "manualDialogHandlingRequired": true,
+    "competingNativeObservations": 2,
+    "rawHostEvidence": [
+      "selected-ui-host-monitor.json",
+      "selected-ui-host-observations.json",
+      "ui-dialog-pause.json",
+      "ui-blocked-attempt-cancellation.json"
+    ]
+  },
+  "targetedMeasurements": {
+    "status": "Not run",
+    "acceptedSamples": 0,
+    "pending": true,
+    "baseline": "0b22628e72eefc4ab8d6b39023ba917fd0603629",
+    "candidate": "ded65dd9673a45a8a23133509456b7a247883dc5",
+    "instrumentedReleaseBuildsPassed": true,
+    "correctnessOnlySmokes": {
+      "count": 8,
+      "revisions": [
+        "baseline",
+        "candidate"
+      ],
+      "modes": [
+        "enqueue",
+        "acceptance",
+        "backlog",
+        "mailbox"
+      ],
+      "allPassed": true,
+      "performanceAcceptance": false
+    },
+    "requiredOutstanding": "Paired 1000/10000 workloads, one warm-up and five recorded samples per revision/workload."
+  },
+  "omittedBySelectedPlan": [
+    "complete test suites",
+    "three full Release comparison pairs"
+  ],
+  "local10PercentAcceptanceClaim": false,
+  "publication": "Ready PR requested before outstanding UI and targeted performance acceptance; no acceptance waiver inferred.",
+  "rawAvailability": "Local-only; not downloadable repository or CI attachments.",
+  "diagnosticAndInputNotes": [
+    "Exploratory compilation, count-assertion failures, and blocked UI attempt remain in attempts.json and local raw payloads.",
+    "The first two count-assertion failures were updated to verify compact frontier boundaries as well as no unearned checkpoint.",
+    "The 100000-record teardown run is exploratory pre-freeze evidence, not a frozen-candidate performance sample.",
+    "Input validation initially rejected reviews_triage/pr-88-probe.swift. A per-command external core.excludesFile excludes only untracked reviews_triage/ outside configured source roots; repository ignore files, tracked inputs, and vendor inputs are unchanged.",
+    "Vendor dependency overlays and synchronized baseline instrumentation have separate raw provenance."
+  ]
+}

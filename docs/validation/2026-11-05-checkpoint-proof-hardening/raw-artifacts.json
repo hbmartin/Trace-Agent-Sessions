@@ -1,0 +1,476 @@
+{
+  "root": "/Volumes/Pro2T/TraceValidation/checkpoint-proof-hardening-followup",
+  "availability": "Local-only; not downloadable repository or CI attachments.",
+  "selection": "Regular, non-symlink top-level .json/.log files and immediate targeted-release .json/.swift/.py files, captured at publication. Builds, binaries, and XCTest bundles remain at their recorded local paths.",
+  "hashing": "Individual lowercase hexadecimal SHA-256 over exact file bytes; decimal byte counts; POSIX paths relative to root. No composite tree digest is claimed.",
+  "files": {
+    "baseline-known-transcript-check.json": {
+      "bytes": 1197,
+      "sha256": "a2b6ac2a6f9b9307c87d7c2e01616ecea5982ef671b0adf89b52c52ad8eecdfd"
+    },
+    "baseline-known-transcript-check.log": {
+      "bytes": 1203952,
+      "sha256": "133f39b9c550eda045559eace95300578aa12a9759de663147ee9fc1ee4f1eb0"
+    },
+    "candidate-build-inputs-final.json": {
+      "bytes": 740,
+      "sha256": "b4521a823c422bb86643b972c847d1159ce12668f0f89fefbe61651f7b521ce5"
+    },
+    "candidate-build-inputs-final.log": {
+      "bytes": 4638,
+      "sha256": "44b5297d97c08110071a7b8290ff008515f886bdfaf65fd8283d2451fddcd30d"
+    },
+    "candidate-checkpoint-cli-1.json": {
+      "bytes": 1008,
+      "sha256": "5d6b0361012ef32f01a4cc62f31e9deec7ab1a54bb97a8acf81e10b69292a211"
+    },
+    "candidate-checkpoint-cli-1.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "candidate-mailbox-cli-1.json": {
+      "bytes": 1109,
+      "sha256": "ef939c7739405821d99df2e2b9d587099fd19d332a731dedaa117bcfa2edce80"
+    },
+    "candidate-mailbox-cli-1.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "compile-1.json": {
+      "bytes": 665,
+      "sha256": "3ce803ffdec088b814deb156156fcbe188e1d217dea4520e35d070eee6b9f2d9"
+    },
+    "compile-1.log": {
+      "bytes": 717325,
+      "sha256": "ea48c0a1b945063fe69b86612fc6dada2b795191a29447f0e1ae4fdcb3e18cc7"
+    },
+    "compile-2.json": {
+      "bytes": 665,
+      "sha256": "4c2119c2f0008dcf7bfeb9434cb700c9ed8be1db425bd5998d12f3a810f0b1e7"
+    },
+    "compile-2.log": {
+      "bytes": 324432,
+      "sha256": "c6a760025ef2d48d83a86346a031dded9f5aa8b1b872ea5a00fb829f7bd7776d"
+    },
+    "compile-3.json": {
+      "bytes": 666,
+      "sha256": "3ecc62ee8a28c8930d91aded82567bb0dd213c04311dcd183e20dd8e16647878"
+    },
+    "compile-3.log": {
+      "bytes": 235257,
+      "sha256": "84b32fd55d736ecd263c8d0c79757cb6b954ba46bc2fb2955e3407449b10a5f0"
+    },
+    "compiled-discovery.json": {
+      "bytes": 130550,
+      "sha256": "85bbb37f91420c1cdbb0dd160363105e8dde907b1b7423ec2f1e67041a37f808"
+    },
+    "correctness-mailbox-smoke.json": {
+      "bytes": 560,
+      "sha256": "f6298dcd48ff5c412864476ef4a79dd4ad54dd915af5807e43c01f4a6080a7a3"
+    },
+    "correctness-mailbox-smoke.log": {
+      "bytes": 646,
+      "sha256": "618e58c08a22b78a856da96bf8314239f7cada252f6fb0001e3b95b457852467"
+    },
+    "correctness-release-smoke.json": {
+      "bytes": 577,
+      "sha256": "351261d3a781190cf6f7adfdc7a7543a072c239586b4449f3c13d56d28225c7e"
+    },
+    "correctness-release-smoke.log": {
+      "bytes": 642,
+      "sha256": "e075db9d6c6a09c4b04fae7691d9f57240f6874be31eeaffb55ee5ca630cd1b4"
+    },
+    "desktop-readiness.json": {
+      "bytes": 265,
+      "sha256": "580f7e2a8e42d079295b683c75e342286db02338bcf778704f79f47c682d5641"
+    },
+    "discovery-validation.json": {
+      "bytes": 127,
+      "sha256": "75e521c0f10579d87a435229669704bf67d953d719c3e2200892e31a3ed91d6b"
+    },
+    "final-script-tests.json": {
+      "bytes": 579,
+      "sha256": "4686d03b5457e38374a62be8ca69f4b1d23ae0a9faecda078c3fd1297dcbf652"
+    },
+    "final-script-tests.log": {
+      "bytes": 3530,
+      "sha256": "373e478f4418a091b9535b1f305896547f5215783502e52b05e62c6366c48c1c"
+    },
+    "focused-1.json": {
+      "bytes": 1151,
+      "sha256": "1926600e71a19f0c64da41d434bc5fef3c5aebb7b58c1be40f3d800b86b6d652"
+    },
+    "focused-1.log": {
+      "bytes": 230059,
+      "sha256": "20bc283193dde6c59bec374002d0ebb8e798b023252d913a5b89b2a46e949807"
+    },
+    "focused-2.json": {
+      "bytes": 1149,
+      "sha256": "fdd92f8dedf7b5a0bf3cb04e6bebd79550154f289b551c89f65fb386b55ed853"
+    },
+    "focused-2.log": {
+      "bytes": 229631,
+      "sha256": "f529706c4785819e3b8ac41b5057f99a7d93b0c1ec151a18477d1bac9fe0ef28"
+    },
+    "frozen-baseline-acceptance-smoke.json": {
+      "bytes": 662,
+      "sha256": "59d681e03b185430891ac7a96c06d549cd6eb94ddd0b865cde6c87a8cb4390ab"
+    },
+    "frozen-baseline-acceptance-smoke.log": {
+      "bytes": 21078,
+      "sha256": "4e8acd35589416fd501d8cc44fb229c7110fab0fba934defacaa2526a063bb80"
+    },
+    "frozen-baseline-backlog-smoke.json": {
+      "bytes": 653,
+      "sha256": "4c5ee12fd2fef2ec4937ebf88fb0fcb54aa60c8e1000139979fafd3fc87b977a"
+    },
+    "frozen-baseline-backlog-smoke.log": {
+      "bytes": 643,
+      "sha256": "27bd8f7e33a4b22830ea9dadf9f3eb992a531f1cc7a9301d3cf8c01908ec0256"
+    },
+    "frozen-baseline-checkpoint-cli.json": {
+      "bytes": 1282,
+      "sha256": "290ed7776be55f23e1539e8a2b796bb9e8c12b7b8fd0b130ca7cb36f0f25945e"
+    },
+    "frozen-baseline-checkpoint-cli.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "frozen-baseline-enqueue-smoke.json": {
+      "bytes": 652,
+      "sha256": "913f59b029ad22a2ba59b4cfedcb0530d05282c1adfcd9b4f33e3e1e4bc34d59"
+    },
+    "frozen-baseline-enqueue-smoke.log": {
+      "bytes": 261,
+      "sha256": "bb961d265ef922e162b159b292185937756dbe3151e3c362803cdf590ed7af8c"
+    },
+    "frozen-baseline-mailbox-cli.json": {
+      "bytes": 1382,
+      "sha256": "c329d00b2e7ab1cd83fc8a7d016c0697ba66b0f36f6f7024ec4148e6ce0bb43d"
+    },
+    "frozen-baseline-mailbox-cli.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "frozen-baseline-mailbox-smoke.json": {
+      "bytes": 634,
+      "sha256": "3af365f387e06526f350e92322770c17184941950f5ea777e0fb049772689c6b"
+    },
+    "frozen-baseline-mailbox-smoke.log": {
+      "bytes": 621,
+      "sha256": "5a59fb890802c9d944109fa6c0c195d39b8bf42244a315936737557a61133254"
+    },
+    "frozen-candidate-acceptance-smoke.json": {
+      "bytes": 665,
+      "sha256": "330c8d4ecda19b0348212d00bbe1becc2161b655c7c15b9119f5238ca69dd4b2"
+    },
+    "frozen-candidate-acceptance-smoke.log": {
+      "bytes": 22067,
+      "sha256": "2e28d435090318b14235098c39312dbde4a7d41edb02b33b51d4a4c4ed2f544a"
+    },
+    "frozen-candidate-backlog-smoke.json": {
+      "bytes": 653,
+      "sha256": "38c0c454eee306a65943cb95ef7b40efdf62a9f0299fba424c5965d8158c0e2d"
+    },
+    "frozen-candidate-backlog-smoke.log": {
+      "bytes": 641,
+      "sha256": "8909629bb72d8cd90d023cc3d8629e82782cf39f6c1d85e86ff75496db9f3d5f"
+    },
+    "frozen-candidate-checkpoint-cli.json": {
+      "bytes": 1189,
+      "sha256": "35a3e1257dae816c79a4654064bb7ae015c55489bfc368c79760ce8e8b1e1c6c"
+    },
+    "frozen-candidate-checkpoint-cli.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "frozen-candidate-enqueue-smoke.json": {
+      "bytes": 656,
+      "sha256": "1585153c83b81a061653c11ec1e8ce74b7c637382845512f7230734e08571943"
+    },
+    "frozen-candidate-enqueue-smoke.log": {
+      "bytes": 262,
+      "sha256": "be42ae239497be515c31b038133497333819a4068f4919057f9e71487ca90b92"
+    },
+    "frozen-candidate-mailbox-cli.json": {
+      "bytes": 1290,
+      "sha256": "717dbdcd3d51ba9d03d2a490d0fba7c6a882c96396642768f06d89775ecc2d0d"
+    },
+    "frozen-candidate-mailbox-cli.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "frozen-candidate-mailbox-smoke.json": {
+      "bytes": 637,
+      "sha256": "cc9863386338016f88f099c5c9ffdacdc398eaca48ef5bc8cad75400096aa539"
+    },
+    "frozen-candidate-mailbox-smoke.log": {
+      "bytes": 620,
+      "sha256": "03c653d74e32baff107f758c209f14a1374aadc4203a119b96a5ec77bba7946c"
+    },
+    "frozen-debug-build.json": {
+      "bytes": 741,
+      "sha256": "c8c92a8e88455ec89fadf55a56680ddce7876c291beba99fcb530f18287a5cc1"
+    },
+    "frozen-debug-build.log": {
+      "bytes": 165763,
+      "sha256": "0f34832def6c3ea194ca9b0d7bc50e6d46e2ec3eacdba55499f532e50b56bdea"
+    },
+    "frozen-discovery.json": {
+      "bytes": 999,
+      "sha256": "0c0653b3ef3847314ba5da75ee26205e5bb33ab509ecac28cfcea56efda53d3e"
+    },
+    "frozen-discovery.log": {
+      "bytes": 5119,
+      "sha256": "e11d94d3da449f0ea6ac95705ecf6d69475750c048a98f1f7503e815effef99f"
+    },
+    "frozen-external-client.json": {
+      "bytes": 758,
+      "sha256": "3387d5605cf11bd62d3c33a1d5c0639aa68cb696d5da67b2e9654ba0ce1a064a"
+    },
+    "frozen-external-client.log": {
+      "bytes": 526655,
+      "sha256": "d910c3577024aeced7a28a3c21b91b93fe99ca846aa3cadade5c692540ef0edc"
+    },
+    "frozen-focused.json": {
+      "bytes": 1148,
+      "sha256": "19600c69e06408ec9d7392a6cc29f266d42809dc9d64dfd49d978433c38441a3"
+    },
+    "frozen-focused.log": {
+      "bytes": 746478,
+      "sha256": "b64114f2d2c7911911ca97a2d6e12d77d65878c3752d73bacf50347965db4e1b"
+    },
+    "frozen-input-equivalence.json": {
+      "bytes": 391,
+      "sha256": "23c3804176fae077f37dc8eb365f7c76953ee72fb9a43c7632c3655f2063d22f"
+    },
+    "frozen-known-transcript-check.json": {
+      "bytes": 977,
+      "sha256": "92057ee5fa6f8c039dcac8b496bb5ed32403fe2addf9442f6c80829b046ceaa8"
+    },
+    "frozen-known-transcript-check.log": {
+      "bytes": 5193,
+      "sha256": "26c2bdbb058a4709f03fa02e82e796456e801da9ea7f4f7a015175496416ea05"
+    },
+    "frozen-network.json": {
+      "bytes": 575,
+      "sha256": "0260fda3de8ff5808f5ba00de6063dfa4f00eec305a3220845a03fc6714fbe09"
+    },
+    "frozen-network.log": {
+      "bytes": 184,
+      "sha256": "14049ca81b79c0368f464ce6d46ea990d4a2c1f3cdc96117f8840eb87d307424"
+    },
+    "frozen-project-drift.json": {
+      "bytes": 518,
+      "sha256": "3bcb9863ae3c86897b3412f58d5c183e72cefa402e0838cc91dbeacf4c6f55e2"
+    },
+    "frozen-project-drift.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "frozen-races-1.json": {
+      "bytes": 3263,
+      "sha256": "74162c13da245ebc74114f62fbdab005e792a02a65dba1f4d12fcc6a46f0846b"
+    },
+    "frozen-races-1.log": {
+      "bytes": 15227,
+      "sha256": "a6f0ad7d33f53d322a87d9026ef3306f303ef6a9b5692a376a1d3ca3bc424ccf"
+    },
+    "frozen-races-2.json": {
+      "bytes": 3262,
+      "sha256": "fe381b661b949d004f0d2b15e960aeff012d45d48b58fd33bde3d5734450534c"
+    },
+    "frozen-races-2.log": {
+      "bytes": 15226,
+      "sha256": "251cecee68716d8e87ab0db44f341c419fe4994c71083e8e2a2ead38a80d4503"
+    },
+    "frozen-races-3.json": {
+      "bytes": 3263,
+      "sha256": "b38da568ddbefe209093842f563c57a906024c6b0c0561a5d4c1fb79ebe60c63"
+    },
+    "frozen-races-3.log": {
+      "bytes": 15227,
+      "sha256": "2764b9fc15ee9bb967456cfb7df15d37546192231f2935ec088f54d0e476e381"
+    },
+    "frozen-races-4.json": {
+      "bytes": 3263,
+      "sha256": "e8cf4dc2ecbd55d5fd2e0c07c8e038497eb4c65efd584a15076e7da76dc0d66d"
+    },
+    "frozen-races-4.log": {
+      "bytes": 15226,
+      "sha256": "c3d39ced69b5518e55e7bda881d8b8c1d83d28cdad25de0adfc72019a39fe4e2"
+    },
+    "frozen-races-5.json": {
+      "bytes": 3263,
+      "sha256": "b8d1c56e94364e50e2cedb9d424ff486eafb7b628f6c516db38f98d3481fd85b"
+    },
+    "frozen-races-5.log": {
+      "bytes": 15226,
+      "sha256": "b07aae27d919c40d0250ec5a0d4041888fa699a9cb299224e4bd612495ec898d"
+    },
+    "frozen-release-build.json": {
+      "bytes": 713,
+      "sha256": "13280d250148870d0da7b0a0eaf897bab6ac0844733f4dd96bf96bdd3795c7e0"
+    },
+    "frozen-release-build.log": {
+      "bytes": 899582,
+      "sha256": "263242bd9de6149252039fc0c2312508a37e2734a78462189c33d74f9c2838b2"
+    },
+    "frozen-scripts.json": {
+      "bytes": 571,
+      "sha256": "177ab348c8c992c2b3fc6e21d08b96f7f1b0f5c0be2065cb4c70650e03774478"
+    },
+    "frozen-scripts.log": {
+      "bytes": 3529,
+      "sha256": "8f52fafe19a6677a621023e32ed06a77ad338d31860b26bdb91bf393c9723461"
+    },
+    "frozen-signing.json": {
+      "bytes": 508,
+      "sha256": "52ae995bcd2abe86623a684ca368adc47bba2b34f557d204003485acb5bf422e"
+    },
+    "frozen-signing.log": {
+      "bytes": 61,
+      "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+    },
+    "frozen-targeted-baseline-build.json": {
+      "bytes": 987,
+      "sha256": "80cba554492b35e006a59bae6fc7940a5b10679b2ba6324ffdcc653eeb98be25"
+    },
+    "frozen-targeted-baseline-build.log": {
+      "bytes": 889854,
+      "sha256": "36ab63d1bb24b8de13e54c6de4117abf85d71635fbf028409761daf5453bdf8f"
+    },
+    "frozen-targeted-candidate-build.json": {
+      "bytes": 802,
+      "sha256": "011619e8a8d0a06074de6ef0d35e83ef08b12a90cd1f14bf9f3ff9270ba08051"
+    },
+    "frozen-targeted-candidate-build.log": {
+      "bytes": 381860,
+      "sha256": "a3127effae66e9f7b0ad4c121c5a88c832d2427143d80f6ec9d8fb93e245205d"
+    },
+    "frozen-whitespace.json": {
+      "bytes": 559,
+      "sha256": "d113098680e31bdcbb8917e0fb0a41c6c4d137631b27a782b8c9f25d6bb30482"
+    },
+    "frozen-whitespace.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "hash-verification.json": {
+      "bytes": 165,
+      "sha256": "30faf829099499176df8aaaedbdfb9baf116cd0c709fb3ee9790869b6aba48cd"
+    },
+    "known-transcript-classification.json": {
+      "bytes": 261,
+      "sha256": "84044aff6c0e9e5766da0570ba76862befd32059c3882612e4ec534e118114b4"
+    },
+    "pre-ui-complete.json": {
+      "bytes": 112,
+      "sha256": "6af3d620d28433bcf82a49ba4e4cf7b4327eea990f8740b52f25c1027ec5088c"
+    },
+    "release-instrumented-1.json": {
+      "bytes": 715,
+      "sha256": "40f7c4fcc89e4c1723ea602b2431751b0ce5ef9d2dc6fc0ddfa5a59e7a6f6ad1"
+    },
+    "release-instrumented-1.log": {
+      "bytes": 780157,
+      "sha256": "e7ff903623fcf121606c1b5c36b8cb26f04e60540d8d17a389a65e84f6f55b56"
+    },
+    "resume.json": {
+      "bytes": 2319,
+      "sha256": "0bc1984daa1f932740b36ede6574723773666eab4c33dcc5d26c9b680bd3c103"
+    },
+    "scripts-1.json": {
+      "bytes": 491,
+      "sha256": "17d9b716d3b95bd84f738f4e650df740e74c1da23a31692f5a84afb9982f715c"
+    },
+    "scripts-1.log": {
+      "bytes": 3529,
+      "sha256": "661556a56568bc4407935fb0510bc1a3aa990449f10212f63ebc869fbb9aa96b"
+    },
+    "selected-races.json": {
+      "bytes": 2116,
+      "sha256": "afc147d6ab5e1b5f70e4e6668885dbb976dde3492f27ccf4bb3a128c08ed20e7"
+    },
+    "selected-ui-host-monitor.json": {
+      "bytes": 219177,
+      "sha256": "1c8d1ed74cf16d61a8c521611382439ab0d9acfd15fd9c2e1bb2c18bea5aa4c4"
+    },
+    "selected-ui-host-observations.json": {
+      "bytes": 3,
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    },
+    "selected-ui-tests.json": {
+      "bytes": 1075,
+      "sha256": "59ec8fd7a930626b0128f573114c5dd7b8a2602c7202f590eba31a5b0565a4d0"
+    },
+    "selected-ui.json": {
+      "bytes": 2076,
+      "sha256": "4e11645c69380740a78e5b0a8554b1f901ffae1ff00e3c77bfa78010a959e21a"
+    },
+    "selected-ui.log": {
+      "bytes": 71281,
+      "sha256": "a4e4dc28ab9a4df3356935df4273e0ee84ff82d15b882f79efd241cc36e7fe0f"
+    },
+    "source-hashes.json": {
+      "bytes": 43713,
+      "sha256": "a5040786a0bbc458d521f60815af2e9c4e258b04c4e49f0c4e0e861bd48d1d13"
+    },
+    "targeted-baseline-prepare.json": {
+      "bytes": 683,
+      "sha256": "037fefd81b0a5e32bdc8acfbe71e2f2f24049526f49ed4286428a1f4cd43c70b"
+    },
+    "targeted-baseline-prepare.log": {
+      "bytes": 5416,
+      "sha256": "2015ede08027fc6f1f5c1b0c121aa6fef5b0140168a44417553b5c884ea1ff16"
+    },
+    "targeted-release/baseline-checkout.preparing-zq4d9edt.json": {
+      "bytes": 438,
+      "sha256": "f877730ad288287697a9bf4c25c008b604d975b97320b0121f6d07f30265421f"
+    },
+    "targeted-release/baseline-mailbox.swift": {
+      "bytes": 1707,
+      "sha256": "6ba5d614bf2c1a8b443f49b5e77ffcc5680b0cb98b371262bc3a2499feef449d"
+    },
+    "targeted-release/baseline-measurement-overlay.json": {
+      "bytes": 338,
+      "sha256": "db7476f11828afc7a60f7b52c033f31ff5c555e05bb3493465bab60b08c69751"
+    },
+    "targeted-release/candidate-inputs-final.json": {
+      "bytes": 4638,
+      "sha256": "44b5297d97c08110071a7b8290ff008515f886bdfaf65fd8283d2451fddcd30d"
+    },
+    "targeted-release/candidate-inputs.json": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "targeted-release/candidate-mailbox.swift": {
+      "bytes": 2914,
+      "sha256": "365b7cc3849e0802d7abf9a4db43b81fd66353752b842fe3f7e9031368411b43"
+    },
+    "targeted-release/local-triage-exclusion.json": {
+      "bytes": 458,
+      "sha256": "d7380d9894e3e86f27915c895f83f16eef7ebd87c898e720df2087404581d316"
+    },
+    "targeted-release/run-targeted.py": {
+      "bytes": 6056,
+      "sha256": "d0d836d3bec2b70bca0f91b40584d11ee983f8ea7074de74534e877b990ca123"
+    },
+    "teardown-subprocess.json": {
+      "bytes": 572,
+      "sha256": "e97d596d8a594dd9827fe97b50f0c216499f09848f49280fdfefd40ae09ab839"
+    },
+    "teardown-subprocess.log": {
+      "bytes": 133,
+      "sha256": "e15579cabb12b141219d98370c64b6a9d3897f34abe128216f39c923873f0237"
+    },
+    "ui-blocked-attempt-cancellation.json": {
+      "bytes": 1769,
+      "sha256": "9558c97fb6bf4535c12076a70307e1c16ab1cb1782c1c3735eeb2fff086dc905"
+    },
+    "ui-dialog-pause.json": {
+      "bytes": 373,
+      "sha256": "b8ae42e9235c711a61394dcb238d38d9441c0b372a346c7ee327429e3046cb60"
+    }
+  }
+}
