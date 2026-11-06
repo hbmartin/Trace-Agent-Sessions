@@ -100,3 +100,11 @@ func compileCheckpointAvailabilityClient(_ coordinator: IndexCoordinator, ledger
         checkpointLedger: ledger, didChangePausedCheckpointStreams: { paused in _ = paused })
     await scheduler.stop()
 }
+
+// Prepared inputs are additive; the existing reservation signatures stay usable.
+func compilePreparedCheckpointClient(_ ledger: IndexCheckpointLedger, changes: SourceChanges) {
+    let prepared = IndexCheckpointInputs(watermarks: changes.watermarks, streamRoots: changes.streamRoots,
+        hasIndexWork: changes.hasIndexWork, wrappedStreams: changes.wrappedStreams,
+        paths: changes.paths, reconciliationPaths: changes.reconciliationPaths, streamEpochs: changes.streamEpochs)
+    _ = ledger.reserve(prepared)
+}

@@ -104,6 +104,27 @@ defer { CheckpointAcceptanceBenchmark.end(measurement) }
                 with self.assertRaisesRegex(ValueError, 'Missing unique existing'):
                     MODULE.instrument(original.replace(anchor, replacement), candidate, synchronize_existing=True)
 
+    def test_kind_marker_cannot_authorize_count_or_kind_replacement(self):
+        source = (ROOT / 'Sources/TraceCore/Indexing/IndexScheduler.swift').read_text()
+        probe = source[source.index(MODULE.BEGIN):source.index(MODULE.END) + len(MODULE.END)]
+        historical = probe + """
+private struct Frontier {}
+    public var checkpointBenchmarkCounts: [String: Int] {
+        state.withLock { ["records": 999, "proofs": 0] }
+    }
+    public var checkpointBenchmarkPrefixIndexEntryKind: String { "frontier-node" }
+let measurement = CheckpointAcceptanceBenchmark.begin()
+defer { CheckpointAcceptanceBenchmark.end(measurement) }
+    public func waitUntilIdle() async {}
+"""
+        with self.assertRaisesRegex(ValueError, 'explicit synchronization'):
+            MODULE.instrument(historical, source)
+        synchronized = MODULE.instrument(historical, source, synchronize_existing=True)
+        self.assertEqual(MODULE.instrument(synchronized, source), synchronized)
+        wrong_kind = synchronized.replace('"frontier-node"', '"wrong-kind"')
+        with self.assertRaisesRegex(ValueError, 'explicit synchronization'):
+            MODULE.instrument(wrong_kind, source)
+
     def test_same_probe_still_synchronizes_historical_counts(self):
         source = (ROOT / 'Sources/TraceCore/Indexing/IndexScheduler.swift').read_text()
         probe = source[source.index(MODULE.BEGIN):source.index(MODULE.END) + len(MODULE.END)]
@@ -126,10 +147,12 @@ defer { CheckpointAcceptanceBenchmark.end(measurement) }
         self.assertNotIn('while paths.count', source)
         self.assertNotIn('Task.yield()', source)
         self.assertIn('let delivered = try await completion.wait()', source)
-        self.assertLess(source.index('let delivered = try await completion.wait()'), source.index('let result = await producer.value'))
-        self.assertIn('defer { producer.cancel() }', source)
+        self.assertLess(source.index('let delivered = try await completion.wait()'), source.index('let result = try await producer.value'))
+        self.assertIn('defer { producer.cancel(); deliveryDeadline.cancel() }', source)
+        self.assertIn('phase: "producerTimeout"', source)
+        self.assertIn('after enqueueing', source)
         self.assertIn('completion.finish(.success(WorkloadStamp()))', source)
-        self.assertIn('try await Task.sleep(for: .seconds(30))', source)
+        self.assertEqual(source.count('after: .seconds(30)'), 2)
         self.assertIn('final enqueue/delivery completion', source)
 
     @unittest.skipUnless(shutil.which('xcrun'), 'Requires the macOS Swift toolchain')
@@ -142,6 +165,16 @@ private func cpuSeconds() -> Double { 0 }
 """ + helper + """
 @main struct CompletionChecks {
     @MainActor static func main() async throws {
+        for phase in ["producerTimeout", "incompleteDelivery"] {
+            let failed = DeliveryCompletion()
+            let deadline = Task { await mailboxDeadline(failed, after: .milliseconds(10), phase: phase, message: phase) }
+            do { _ = try await failed.wait(); fatalError("Deadline ignored") }
+            catch { precondition((error as NSError).domain == "MailboxBenchmark." + phase) }
+            await deadline.value
+            failed.finish(.success(WorkloadStamp()))
+            do { _ = try await failed.wait(); fatalError("Late completion replaced deadline") }
+            catch { precondition((error as NSError).domain == "MailboxBenchmark." + phase) }
+        }
         let early = DeliveryCompletion()
         early.finish(.success(WorkloadStamp()))
         _ = try await early.wait()
@@ -181,6 +214,18 @@ private func cpuSeconds() -> Double { 0 }
         self.assertLess(stopped, initial)
         self.assertLess(initial, restarted)
         self.assertLess(workload.rindex('elapsed += seconds'), workload.index('let stuck = await'))
+
+    def test_mailbox_extraction_includes_actual_normalization_and_enrollment(self):
+        spec = importlib.util.spec_from_file_location('ingress_extraction', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
+        extraction = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(extraction)
+        source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
+        generated = extraction.extract(source)
+        self.assertIn('SourceIngressMailbox.normalizeTranscript', generated)
+        self.assertIn('delivery.enrolled(in:', generated)
+        self.assertIn('mainActorPreparationElapsedSeconds', generated)
+        with self.assertRaisesRegex(ValueError, 'Missing unique'):
+            extraction.extract(source + 'final class SourceIngressMailbox: Sendable {')
 
     def test_acceptance_cannot_be_rescued_by_a_cleanup_scan(self):
         source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()

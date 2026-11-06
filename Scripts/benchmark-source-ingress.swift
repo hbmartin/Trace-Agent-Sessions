@@ -33,6 +33,8 @@ private struct WorkloadStamp: Sendable {
     let time = ContinuousClock.now
     let cpu = cpuSeconds()
 }
+/// One workload owns this completion. Cancellation terminates the entire
+/// workload; this is not an independent multi-waiter promise.
 @MainActor
 private final class DeliveryCompletion {
     private var result: Result<WorkloadStamp, Error>?
@@ -54,6 +56,14 @@ private final class DeliveryCompletion {
             Task { @MainActor [weak self] in self?.finish(.failure(CancellationError())) }
         }
     }
+}
+@MainActor
+private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: Duration,
+                             phase: String, message: String) async {
+    do { try await Task.sleep(for: duration) }
+    catch { return }
+    completion.finish(.failure(NSError(domain: "MailboxBenchmark." + phase, code: 1,
+        userInfo: [NSLocalizedDescriptionKey: message])))
 }
 @main struct SourceIngressWorkload {
     @MainActor static func main() async throws {
@@ -86,9 +96,8 @@ private final class DeliveryCompletion {
         }
         defer { mailbox.close(); sampler.cancel() }
         let timeout = Task {
-            do { try await Task.sleep(for: .seconds(30)) }
-            catch { return }
-            completion.finish(.failure(NSError(domain: "MailboxBenchmark.incompleteDelivery", code: 1)))
+            await mailboxDeadline(completion, after: .seconds(30), phase: "producerTimeout",
+                message: "Timed out while enqueueing mailbox events")
         }
         defer { timeout.cancel() }
         let gate = StartGate()
@@ -97,19 +106,29 @@ private final class DeliveryCompletion {
             let start = WorkloadStamp()
             var enqueue: [Double] = []
             for value in 1...count {
+                if value % 128 == 1 { try Task.checkCancellation() }
                 var changes = SourceChanges()
-                changes.paths = ["/tmp/mailbox/item-\(value)-\(DispatchTime.now().uptimeNanoseconds)"]
-                changes.watermarks = [value.isMultiple(of: 2) ? "a" : "b": UInt64(value)]
+                let stream = value.isMultiple(of: 2) ? "a" : "b"
+                changes.paths = ["/tmp/mailbox/\(stream)/item-\(value)-\(DispatchTime.now().uptimeNanoseconds)"]
+                changes.watermarks = [stream: UInt64(value)]
+                changes.streamRoots = [stream: ["/tmp/mailbox/\(stream)"]]
                 let call = ContinuousClock.now
                 mailbox.enqueue(changes)
                 enqueue.append(seconds(call.duration(to: .now)))
             }
             return (start: start, enqueue: enqueue, end: WorkloadStamp())
         }
-        defer { producer.cancel() }
+        let deliveryDeadline = Task {
+            do { _ = try await producer.value }
+            catch { completion.finish(.failure(error)); return }
+            timeout.cancel()
+            await mailboxDeadline(completion, after: .seconds(30), phase: "incompleteDelivery",
+                message: "Timed out waiting for final mailbox delivery after enqueueing")
+        }
+        defer { producer.cancel(); deliveryDeadline.cancel() }
         await gate.open()
         let delivered = try await completion.wait()
-        let result = await producer.value
+        let result = try await producer.value
         timeout.cancel()
         let end = delivered.time > result.end.time ? delivered : result.end
         let elapsed = seconds(result.start.time.duration(to: end.time)), cpu = end.cpu - result.start.cpu
@@ -122,13 +141,14 @@ private final class DeliveryCompletion {
         mailbox.close()
         let enqueue = result.enqueue.sorted(), delivery = latencies.sorted()
         func percentile(_ values: [Double], _ p: Double) -> Double { values[min(values.count - 1, Int(Double(values.count - 1) * p))] }
-        let output: [String: Any] = ["mode": "mailbox", "events": count, "label": label, "deliveredPaths": paths.count,
+        var output: [String: Any] = ["mode": "mailbox", "events": count, "label": label, "deliveredPaths": paths.count,
             "elapsedSeconds": elapsed, "enqueueElapsedSeconds": seconds(result.start.time.duration(to: result.end.time)),
             "cpuSeconds": cpu, "cpuKind": "process CPU from first enqueue through final enqueue/delivery completion",
             "enqueueMedianSeconds": percentile(enqueue, 0.5), "enqueueP95Seconds": percentile(enqueue, 0.95), "enqueueMaxSeconds": enqueue.last!,
             "deliveryMedianSeconds": percentile(delivery, 0.5), "deliveryP95Seconds": percentile(delivery, 0.95), "deliveryMaxSeconds": delivery.last!,
             "startingFootprintBytes": starting, "peakFootprintBytes": sampling.withLock { $0.peak }, "retainedFootprintBytes": retained,
             "signedRetainedGrowthBytes": Int64(retained) - Int64(starting)]
+        output.merge(benchmarkIngressMetrics(), uniquingKeysWith: { _, last in last })
         print(String(decoding: try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), as: UTF8.self))
     }
 }

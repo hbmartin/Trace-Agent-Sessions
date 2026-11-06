@@ -8,6 +8,107 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testRootlessResetRetainsUnrelatedFullScanFailure() async throws {
+        let root = try directory(), good = root.appendingPathComponent("x.jsonl"), bad = root.appendingPathComponent("y.jsonl")
+        try Data(line(1).utf8).write(to: good); try Data(line(2).utf8).write(to: bad)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        ledger.seed(stream: "s", checkpoint: nil)
+        let reservation = ledger.reserve(.init(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: true, paths: [good.path]))
+        let failures = MutableFailureSelection(["y.jsonl"])
+        let source = MutableSelectiveReadFailureSource(base: ClaudeCodeSource(roots: [root]), failures: failures)
+        let accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: [source]), scope: .proseOnly,
+            progress: { _ in }, clock: TestClock(), checkpointLedger: ledger,
+            didCompleteCheckpoints: { if let mark = $0["s"]?.value { accepted.withLock { $0.append(mark) } } })
+        await scheduler.request(rebuild: true, onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [reservation])
+        await scheduler.waitUntilIdle()
+        XCTAssertTrue(accepted.withLock { $0.isEmpty })
+        XCTAssertEqual(ledger.remainingPathsForTesting([reservation]), [TraceFileIO.canonicalPath(bad.path).path])
+        XCTAssertTrue(ledger.outcomeCountsAreConsistentForTesting)
+        failures.replace(with: [])
+        await scheduler.request(paths: [bad.path]); await scheduler.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [100])
+        XCTAssertTrue(ledger.outcomeCountsAreConsistentForTesting)
+        await scheduler.stop()
+    }
+
+    func testLateSeedWakesRegisteredSchedulerWithoutAnIndexRequest() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        let passes = OSAllocatedUnfairLock(initialState: 0)
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in passes.withLock { $0 += 1 } }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { if let mark = $0["s"]?.value { accepted.withLock { $0.append(mark) } } })
+        await scheduler.waitUntilIdle()
+        _ = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: false)
+        await scheduler.waitUntilIdle()
+        XCTAssertTrue(accepted.withLock { $0.isEmpty })
+        ledger.seed(stream: "s", checkpoint: nil)
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [100]); XCTAssertEqual(passes.withLock { $0 }, 0)
+        ledger.seed(stream: "s", checkpoint: nil); await scheduler.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [100])
+        await scheduler.stop()
+        _ = ledger.reserve(watermarks: ["s": 200], streamRoots: [:], hasIndexWork: false)
+        ledger.seed(stream: "other", checkpoint: nil); await scheduler.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [100])
+    }
+
+    func testLateCompletedProofWakesRegisteredSchedulerAndReleasesOwner() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), accepted = OSAllocatedUnfairLock(initialState: [UInt64]())
+        ledger.seed(stream: "s", checkpoint: nil)
+        var scheduler: IndexScheduler? = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { if let mark = $0["s"]?.value { accepted.withLock { $0.append(mark) } } })
+        await scheduler?.waitUntilIdle()
+        let path = root.appendingPathComponent("file").path
+        let reserved = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: true, paths: [path])
+        let proof = ledger.prepareProofForTesting([reserved], paths: [path], content: database.contentGeneration)
+        ledger.retainProofForTesting(proof)
+        await scheduler?.waitUntilIdle()
+        XCTAssertEqual(accepted.withLock { $0 }, [100])
+        weak var released = scheduler
+        await scheduler?.stop(); scheduler = nil
+        try await waitForCondition { released == nil }
+    }
+
+    func testMaintainedOutcomeTotalsSurviveProofOrderingWrapAndReset() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), path = root.appendingPathComponent("x").path
+        ledger.seed(stream: "s", checkpoint: nil)
+        _ = ledger.drainProofsForTesting(content: database.contentGeneration)
+        let work = ledger.reserve(watermarks: ["s": 100], streamRoots: ["s": [root.path]], hasIndexWork: true, paths: [path])
+        let older = ledger.prepareProofForTesting([work], paths: [path], content: database.contentGeneration)
+        let newer = ledger.prepareProofForTesting([work], paths: [path], failures: [path], content: database.contentGeneration)
+        ledger.retainProofForTesting(newer); _ = ledger.drainProofsForTesting(content: database.contentGeneration)
+        XCTAssertGreaterThan(ledger.retainedOutcomeCountForTesting, 0)
+        XCTAssertTrue(ledger.outcomeCountsAreConsistentForTesting)
+        ledger.retainProofForTesting(older); _ = ledger.drainProofsForTesting(content: database.contentGeneration)
+        XCTAssertEqual(ledger.remainingPathsForTesting([work]), [TraceFileIO.canonicalPath(path).path])
+        XCTAssertTrue(ledger.outcomeCountsAreConsistentForTesting)
+        _ = ledger.reserve(watermarks: ["s": 1], streamRoots: ["s": [root.path]], hasIndexWork: true, wrappedStreams: ["s"])
+        XCTAssertEqual(ledger.retainedOutcomeCountForTesting, 0)
+        XCTAssertTrue(ledger.outcomeCountsAreConsistentForTesting)
+        try await database.clearIndex()
+        _ = ledger.drainProofsForTesting(content: database.contentGeneration)
+        XCTAssertTrue(ledger.outcomeCountsAreConsistentForTesting)
+    }
+
+    func testPreparedReservationKeepsCanonicalIdentityWithoutEnrollingEarly() async throws {
+        let root = try directory(), a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b"), link = root.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: a)
+        let ledger = IndexCheckpointLedger()
+        let prepared = IndexCheckpointInputs(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: true, paths: [link.appendingPathComponent("file").path])
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: b)
+        let reservation = ledger.reserve(prepared)
+        XCTAssertEqual(ledger.remainingPathsForTesting([reservation]), [a.appendingPathComponent("file").path])
+    }
+
     func testScheduledResultReportsActualScanQualification() async throws {
         let root = try directory(), file = root.appendingPathComponent("session.jsonl")
         try Data(line(1).utf8).write(to: file)

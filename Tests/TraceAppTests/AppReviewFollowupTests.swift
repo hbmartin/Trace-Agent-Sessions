@@ -44,14 +44,21 @@ final class AppReviewFollowupTests: XCTestCase {
         let deadline = ContinuousClock.now + .seconds(5)
         while true {
             let state = await mailbox.snapshotForTesting()
-            if state.queued == 0, state.pending, state.paths == 203 { break }
+            if state.queued == 0, state.pending, state.paths >= 203 {
+                XCTAssertLessThan(state.paths, 512); break
+            }
             guard ContinuousClock.now < deadline else { throw CancellationError() }
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(deliveries.count, 1, "Aggregation must progress independently of held delivery")
         await gate.open()
-        try await wait { deliveries.count == 2 }
-        let delivered = deliveries[1]
+        try await wait { deliveries.last?.1 == [] && deliveries.last?.0.watermarks["a"] == 200 }
+        var combined = SourceChanges()
+        for delivery in deliveries.dropFirst() {
+            XCTAssertLessThanOrEqual(delivery.0.paths.count + delivery.0.reconciliationPaths.count, 128)
+            combined.merge(delivery.0)
+        }
+        let delivered = (combined, deliveries.last!.1)
         XCTAssertEqual(delivered.0.paths.count, 203)
         XCTAssertEqual(delivered.0.watermarks, ["a": 200, "b": 2_100])
         XCTAssertEqual(delivered.0.streamEpochs["a"], after)
@@ -61,6 +68,60 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertTrue(delivered.0.historyDone)
         XCTAssertEqual(delivered.0.checkpointReservations.count, 1)
         XCTAssertEqual(delivered.1, [])
+    }
+
+    func testOversizedMailboxBoundaryStaysUnpaidUntilEveryFragmentIsCovered() async throws {
+        let f = try await fixture(count: 1), ledger = IndexCheckpointLedger()
+        ledger.seed(stream: "s", checkpoint: nil)
+        _ = ledger.drainProofsForTesting(content: f.database.contentGeneration)
+        var accepted: [UInt64] = [], starts = 0, deliveries = 0
+        let mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: true) }, receivePrepared: { delivery in
+            let changes = delivery.enrolled(in: ledger)
+            XCTAssertLessThanOrEqual(changes.paths.count + changes.reconciliationPaths.count, 128)
+            if delivery.startsBoundary { starts += 1 }
+            let proof = ledger.prepareProofForTesting(changes.checkpointReservations, paths: changes.paths,
+                failures: changes.watermarks["s"] == 200 ? changes.paths : [], content: f.database.contentGeneration)
+            ledger.retainProofForTesting(proof)
+            let updates = ledger.drainProofsForTesting(content: f.database.contentGeneration)
+            if let mark = updates["s"]?.value { accepted.append(mark) }
+            deliveries += 1
+            if deliveries < 3 { XCTAssertTrue(accepted.isEmpty) }
+            return true
+        })
+        defer { mailbox.close(); Task { await f.model.prepareToTerminate() } }
+        var first = SourceChanges(); first.paths = Set((0..<300).map { "/tmp/oversized/\($0)" }); first.watermarks = ["s": 100]
+        mailbox.enqueue(first)
+        try await wait { deliveries >= 3 }
+        XCTAssertEqual(starts, 1); XCTAssertEqual(accepted, [100])
+        var later = SourceChanges(); later.paths = ["/tmp/later-fails"]; later.watermarks = ["s": 200]
+        mailbox.enqueue(later)
+        try await wait { deliveries == 4 }
+        XCTAssertEqual(accepted, [100]); XCTAssertEqual(starts, 2)
+        XCTAssertTrue(ledger.outcomeCountsAreConsistentForTesting)
+    }
+
+    func testClosingPartlyDeliveredBoundaryRetainsItsWholeObligationOnce() async throws {
+        let f = try await fixture(count: 1), ledger = IndexCheckpointLedger(), gate = ReviewReadGate()
+        var entered = false, retired: [SourceChanges] = []
+        let mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: true) }, receivePrepared: { delivery in
+            _ = delivery.enrolled(in: ledger)
+            entered = true; await gate.wait(); return false
+        }, retire: { retired.append($0) })
+        defer { mailbox.close(); Task { await gate.open(); await f.model.prepareToTerminate() } }
+        var changes = SourceChanges(); changes.paths = Set((0..<300).map { "/tmp/partial/\($0)" }); changes.watermarks = ["s": 100]
+        mailbox.enqueue(changes)
+        try await wait { entered }
+        mailbox.close()
+        try await wait { retired.count == 1 }
+        await gate.open()
+        let observe = mailbox.observationForTesting()
+        let deadline = ContinuousClock.now + .seconds(5)
+        while await observe().delivering {
+            guard ContinuousClock.now < deadline else { throw CancellationError() }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(retired.count, 1); XCTAssertEqual(retired[0].paths, changes.paths)
+        XCTAssertEqual(retired[0].watermarks, ["s": 100]); XCTAssertEqual(retired[0].checkpointReservations.count, 1)
     }
 
     func testClosingMailboxRetiresQueuedWorkAndDoesNotRetainItsOwner() async throws {
