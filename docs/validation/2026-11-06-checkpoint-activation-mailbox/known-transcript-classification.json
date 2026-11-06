@@ -1,0 +1,16 @@
+{
+  "test": "TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+  "candidate": "81c7baee3c5d964e9d9c002f2a18191aff3a4ed5",
+  "baseline": "264cb95bb5328c57618b24f564d82ec44f3fd522",
+  "classification": "Reproduced on the unchanged pinned #89 baseline before measurement instrumentation.",
+  "candidateReceipt": "frozen-known-transcript.json",
+  "baselineReceipt": "baseline-known-transcript.json",
+  "failedTestsPerRun": 1,
+  "assertionFailuresPerRun": 2,
+  "symptoms": [
+    "Timed out waiting for app state",
+    "caught CancellationError()"
+  ],
+  "candidateResultBundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/activation-known-transcript.xcresult",
+  "baselineResultBundle": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/activation-baseline-known-transcript.xcresult"
+}

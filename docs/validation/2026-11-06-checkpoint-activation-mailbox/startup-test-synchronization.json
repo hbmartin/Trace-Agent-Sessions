@@ -1,0 +1,21 @@
+{
+  "test": "TraceAppTests/AppReviewFollowupTests/testRebuildBeforeInitialAttachmentPreservesRestorationAndUsesLatestScope",
+  "exploratoryFailure": "lastSessionID was nil immediately after terminal progress; selectedSessionID assertion passed.",
+  "candidateIsolatedRepetitions": 5,
+  "candidateIsolatedFailures": 0,
+  "unchangedBaselineRepetitions": 20,
+  "unchangedBaselineFailures": 0,
+  "classification": "Not classified as a reproduced baseline failure. The test waited for terminal progress before asynchronous navigation remapping had accepted current identity.",
+  "correction": "Wait for current content generation, matching stable source identity, and accepted message rows before the original persistence assertions. No additional summary refresh.",
+  "evidence": [
+    "exploratory-affected-1.json",
+    "exploratory-startup-restoration-1.json",
+    "baseline-startup-restoration-1.json",
+    "frozen-focused.json",
+    "frozen-races-1.json",
+    "frozen-races-2.json",
+    "frozen-races-3.json",
+    "frozen-races-4.json",
+    "frozen-races-5.json"
+  ]
+}

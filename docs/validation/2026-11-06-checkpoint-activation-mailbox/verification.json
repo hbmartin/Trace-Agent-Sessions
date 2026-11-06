@@ -1,0 +1,108 @@
+{
+  "candidate": "92008f7b64482c688784f13ea6ea2fd1b733d6a5",
+  "productionAndXCTestValidatedAt": "81c7baee3c5d964e9d9c002f2a18191aff3a4ed5",
+  "base": "28888a0a35152df33d144053a025d3528babba06",
+  "targetedBaseline": "264cb95bb5328c57618b24f564d82ec44f3fd522",
+  "focused": {
+    "receipt": "frozen-focused.json",
+    "passed": 675,
+    "failed": 0,
+    "groups": {
+      "IndexingRegressionTests": 191,
+      "FSEventsWatcherTests": 13,
+      "SessionMetadataTests": 64,
+      "SidecarDependencyTests": 27,
+      "AppReviewFollowupTests": 380
+    },
+    "separatelyReproducedFailure": "known-transcript-classification.json"
+  },
+  "races": {
+    "selectors": "selected-races.json",
+    "casesPerRepetition": 29,
+    "repetitions": 5,
+    "passedExecutions": 145,
+    "failed": 0,
+    "receipts": [
+      "frozen-races-1.json",
+      "frozen-races-2.json",
+      "frozen-races-3.json",
+      "frozen-races-4.json",
+      "frozen-races-5.json"
+    ]
+  },
+  "scripts": {
+    "atProductionCandidate": {
+      "receipt": "frozen-scripts.json",
+      "passed": 66
+    },
+    "atFinalCandidate": {
+      "receipt": "final-scripts.json",
+      "passed": 67
+    }
+  },
+  "discovery": {
+    "discovered": 915,
+    "raceSelectors": 29,
+    "uiSelectors": 12,
+    "missing": [],
+    "receipt": "discovery-validation.json"
+  },
+  "checks": {
+    "frozen-debug-build": 0,
+    "frozen-release-build": 0,
+    "frozen-external-client": 0,
+    "frozen-project-drift": 0,
+    "frozen-signing": 0,
+    "frozen-network": 0,
+    "frozen-inputs": 0,
+    "frozen-whitespace": 0,
+    "final-inputs": 0,
+    "final-whitespace": 0
+  },
+  "optimizedToolPreparation": {
+    "baselineAndCandidateReleaseBuilds": true,
+    "checkpointAndMailboxCLIsCompiled": true,
+    "correctnessSmokeObligations": 8,
+    "modes": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox"
+    ],
+    "finalMailboxHarnessRecompiledAndSmokedForBothRevisions": true,
+    "performanceAcceptance": false
+  },
+  "ui": {
+    "selectorsValidated": true,
+    "runs": [],
+    "accepted": false,
+    "status": "Not run; ready publication requested before fresh idle confirmation and quiet-host execution."
+  },
+  "targetedPerformance": {
+    "pinnedBaseline": "264cb95bb5328c57618b24f564d82ec44f3fd522",
+    "requiredCounts": [
+      1000,
+      10000
+    ],
+    "warmupsPerWorkloadRevision": 1,
+    "recordedSamplesPerWorkloadRevision": 5,
+    "modes": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox"
+    ],
+    "runs": [],
+    "accepted": false,
+    "status": "Not run; correctness smokes and compilation do not validate performance."
+  },
+  "omittedByApprovedScope": [
+    "Complete test suites",
+    "Three full Release comparison pairs against 61c00de"
+  ],
+  "localTenPercentPerformanceAccepted": false,
+  "rawPayloadAvailability": "Local-only; not attached as downloadable repository or CI artifacts.",
+  "canonicalHashManifest": "source-hashes.json",
+  "hashVerification": "hash-verification.json",
+  "inputEquivalence": "frozen-input-equivalence.json"
+}
