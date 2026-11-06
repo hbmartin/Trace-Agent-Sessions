@@ -203,6 +203,7 @@ private struct FaultSource: SessionSource {
             "elapsedSeconds": elapsed, "cpuSeconds": processCPU, "acceptanceThreadCPUSeconds": measurement["cpuSeconds"]!,
             "processCPUSecondsDuringAcceptance": measurement["processCPUSecondsDuringAcceptance"]!,
             "initialLedgerState": initial, "stuckLedgerState": stuck, "finalLedgerState": await scheduler.checkpointBenchmarkCounts(),
+            "prefixIndexEntryKind": await scheduler.checkpointBenchmarkPrefixIndexEntryKind(),
             "acceptedWatermark": accepted.withLock { $0 }, "startingFootprintBytes": starting, "peakFootprintBytes": sampling.withLock { $0.peak }, "retainedFootprintBytes": retained,
             "signedRetainedGrowthBytes": Int64(retained) - Int64(starting)]
         await scheduler.stop()
@@ -284,6 +285,7 @@ private struct FaultSource: SessionSource {
             "processCPUSecondsDuringAcceptance": measurement["processCPUSecondsDuringAcceptance"]!,
             "timingKind": "sum of instrumented acceptance execution intervals",
             "acceptanceTurns": measurement["acceptanceTurns"]!, "retainedLedgerState": counts,
+            "prefixIndexEntryKind": await scheduler.checkpointBenchmarkPrefixIndexEntryKind(),
             "mainActorReservationSeconds": latencies,
             "mainActorReservationMedianSeconds": percentile(0.5),
             "mainActorReservationP95Seconds": percentile(0.95),

@@ -29,6 +29,32 @@ private actor StartGate {
     func wait() async { if !released { await withCheckedContinuation { continuation = $0 } } }
     func open() { released = true; continuation?.resume(); continuation = nil }
 }
+private struct WorkloadStamp: Sendable {
+    let time = ContinuousClock.now
+    let cpu = cpuSeconds()
+}
+@MainActor
+private final class DeliveryCompletion {
+    private var result: Result<WorkloadStamp, Error>?
+    private var waiters: [CheckedContinuation<WorkloadStamp, Error>] = []
+    func finish(_ result: Result<WorkloadStamp, Error>) {
+        guard self.result == nil else { return }
+        self.result = result
+        let waiters = self.waiters; self.waiters = []
+        for waiter in waiters { waiter.resume(with: result) }
+    }
+    func wait() async throws -> WorkloadStamp {
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                if let result { continuation.resume(with: result) }
+                else { waiters.append(continuation) }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.finish(.failure(CancellationError())) }
+        }
+    }
+}
 @main struct SourceIngressWorkload {
     @MainActor static func main() async throws {
         let args = Array(CommandLine.arguments.dropFirst())
@@ -36,6 +62,7 @@ private actor StartGate {
             FileHandle.standardError.write(Data("Usage: source-ingress [positive event count] [label]\n".utf8)); exit(2)
         }
         let label = args.dropFirst().first ?? "sample"
+        let completion = DeliveryCompletion()
         var paths: Set<String> = [], latencies: [Double] = [], marks: [String: UInt64] = [:]
         let mailbox = makeBenchmarkMailbox { changes in
             let now = DispatchTime.now().uptimeNanoseconds
@@ -45,6 +72,10 @@ private actor StartGate {
             }
             paths.formUnion(changes.paths)
             for (stream, mark) in changes.watermarks { marks[stream] = max(marks[stream] ?? 0, mark) }
+            if paths.count == count {
+                // Capture the boundary before waking the waiting harness.
+                completion.finish(.success(WorkloadStamp()))
+            }
         }
         let starting = footprint(), sampling = OSAllocatedUnfairLock(initialState: (done: false, peak: starting))
         let sampler = Task.detached {
@@ -53,10 +84,17 @@ private actor StartGate {
                 try await Task.sleep(for: .milliseconds(50))
             }
         }
+        defer { mailbox.close(); sampler.cancel() }
+        let timeout = Task {
+            do { try await Task.sleep(for: .seconds(30)) }
+            catch { return }
+            completion.finish(.failure(NSError(domain: "MailboxBenchmark.incompleteDelivery", code: 1)))
+        }
+        defer { timeout.cancel() }
         let gate = StartGate()
         let producer = Task.detached {
             await gate.wait() // Control handshake completes before measurement.
-            let start = ContinuousClock.now, cpu = cpuSeconds()
+            let start = WorkloadStamp()
             var enqueue: [Double] = []
             for value in 1...count {
                 var changes = SourceChanges()
@@ -66,16 +104,15 @@ private actor StartGate {
                 mailbox.enqueue(changes)
                 enqueue.append(seconds(call.duration(to: .now)))
             }
-            return (start, cpu, enqueue, seconds(start.duration(to: .now)))
+            return (start: start, enqueue: enqueue, end: WorkloadStamp())
         }
+        defer { producer.cancel() }
         await gate.open()
+        let delivered = try await completion.wait()
         let result = await producer.value
-        let deadline = ContinuousClock.now + .seconds(30)
-        while paths.count != count {
-            guard ContinuousClock.now < deadline else { throw NSError(domain: "MailboxBenchmark.incompleteDelivery", code: 1) }
-            await Task.yield()
-        }
-        let elapsed = seconds(result.0.duration(to: .now)), cpu = cpuSeconds() - result.1
+        timeout.cancel()
+        let end = delivered.time > result.end.time ? delivered : result.end
+        let elapsed = seconds(result.start.time.duration(to: end.time)), cpu = end.cpu - result.start.cpu
         let expectedA = count.isMultiple(of: 2) ? count : count - 1
         guard marks["b"] == UInt64(count.isMultiple(of: 2) ? count - 1 : count), expectedA == 0 || marks["a"] == UInt64(expectedA) else {
             throw NSError(domain: "MailboxBenchmark.lostWatermarks", code: 1)
@@ -83,10 +120,11 @@ private actor StartGate {
         try await Task.sleep(for: .seconds(2))
         let retained = footprint(); sampling.withLock { $0.peak = max($0.peak, retained); $0.done = true }; try await sampler.value
         mailbox.close()
-        let enqueue = result.2.sorted(), delivery = latencies.sorted()
+        let enqueue = result.enqueue.sorted(), delivery = latencies.sorted()
         func percentile(_ values: [Double], _ p: Double) -> Double { values[min(values.count - 1, Int(Double(values.count - 1) * p))] }
         let output: [String: Any] = ["mode": "mailbox", "events": count, "label": label, "deliveredPaths": paths.count,
-            "elapsedSeconds": elapsed, "enqueueElapsedSeconds": result.3, "cpuSeconds": cpu, "cpuKind": "process CPU during enqueue and drain",
+            "elapsedSeconds": elapsed, "enqueueElapsedSeconds": seconds(result.start.time.duration(to: result.end.time)),
+            "cpuSeconds": cpu, "cpuKind": "process CPU from first enqueue through final enqueue/delivery completion",
             "enqueueMedianSeconds": percentile(enqueue, 0.5), "enqueueP95Seconds": percentile(enqueue, 0.95), "enqueueMaxSeconds": enqueue.last!,
             "deliveryMedianSeconds": percentile(delivery, 0.5), "deliveryP95Seconds": percentile(delivery, 0.95), "deliveryMaxSeconds": delivery.last!,
             "startingFootprintBytes": starting, "peakFootprintBytes": sampling.withLock { $0.peak }, "retainedFootprintBytes": retained,

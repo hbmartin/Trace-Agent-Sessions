@@ -405,7 +405,7 @@ public actor IndexCoordinator {
             progress: progress
         )
         await gate.release()
-        return result
+        return result.progress
     }
 
     public func refresh(paths: Set<String>, scope: IndexScope,
@@ -432,7 +432,7 @@ public actor IndexCoordinator {
             progress: progress
         )
         await gate.release()
-        return result
+        return result.progress
     }
 
     @discardableResult
@@ -449,7 +449,7 @@ public actor IndexCoordinator {
             progress: progress
         )
         await gate.release()
-        return result
+        return result.progress
     }
 
     /// Ordinary work accompanying an unfulfilled reset updates the committed
@@ -462,7 +462,7 @@ public actor IndexCoordinator {
             rebuild: false, preservingCommittedScope: true, activity: activity,
             satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, progress: progress)
         await gate.release()
-        return result
+        return result.progress
     }
 
     func checkpointRecord(stream: String) async throws -> IndexEventCheckpoint? {
@@ -476,6 +476,11 @@ public actor IndexCoordinator {
         }
     }
 
+    struct ScheduledExecutionResult: Sendable {
+        let progress: IndexProgress
+        let performedFullScan: Bool
+    }
+
     /// Scheduler execution shares one permit and one reset-commit observer for
     /// every mode, including an implicit scope reset in an incremental pass.
     func executeScheduled(paths: Set<String>, reconciliationPaths: Set<String>,
@@ -484,7 +489,7 @@ public actor IndexCoordinator {
                           activity: IndexActivity, satisfiesSafetyReconciliation: Bool,
                           onRebuildReset: @escaping @Sendable () -> Void,
                           onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void,
-                          progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
+                          progress: @escaping @Sendable (IndexProgress) async -> Void) async -> ScheduledExecutionResult {
         await gate.acquire()
         let result = await run(scope: scope, paths: fullScan ? nil : Set(canonicalPaths.map(\.path)),
             reconciliationPaths: fullScan ? [] : Set(canonicalReconciliation.map(\.path)), rebuild: rebuild,
@@ -505,7 +510,8 @@ public actor IndexCoordinator {
                      pathsAreCanonical: Bool = false, preservingCommittedScope: Bool = false, onRebuildReset: @escaping @Sendable () -> Void = {},
                      onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void = { _ in }, activity: IndexActivity,
                      satisfiesSafetyReconciliation: Bool,
-                     progress: @escaping @Sendable (IndexProgress) async -> Void) async -> IndexProgress {
+                     progress: @escaping @Sendable (IndexProgress) async -> Void) async -> ScheduledExecutionResult {
+        var performedFullScan = false
         var status = IndexProgress(phase: .discovering)
         status.checkpointContentGeneration = database.contentGeneration
         status.activity = activity
@@ -605,6 +611,7 @@ public actor IndexCoordinator {
             }
             var allFiles: [DiscoveredSourceFile] = []
             let fullScan = (paths == nil && reconciliationPaths.isEmpty) || oldScope != scope || rebuild
+            performedFullScan = fullScan
             if oldScope != scope && !rebuild { status.activity = .scopeChange }
             let metadataDirectories = sources.filter { $0.agent == .codex }
                 .flatMap(\.roots).map { Self.codexMetadataDirectory(for: $0) }
@@ -1100,7 +1107,7 @@ public actor IndexCoordinator {
             }
         }
         await progress(status)
-        return status
+        return .init(progress: status, performedFullScan: performedFullScan)
     }
 
     private func safeIndexDescription(_ error: Error, operation: String, fallback: String) -> String {

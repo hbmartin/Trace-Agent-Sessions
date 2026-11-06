@@ -1,6 +1,9 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import shutil
+import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('checkpoint_instrumentation', ROOT / 'Scripts/instrument-checkpoint-benchmark.py')
@@ -70,6 +73,104 @@ fileprivate func accept(_ coverage: Coverage, ignored: Bool) {
         self.assertEqual(MODULE.instrument(old, source, synchronize_existing=True), source)
         with self.assertRaisesRegex(ValueError, 'Missing unique existing'):
             MODULE.instrument(old.replace('defer { CheckpointAcceptanceBenchmark.end(measurement) }', ''), source, synchronize_existing=True)
+
+    def test_reversed_existing_probe_boundaries_are_rejected(self):
+        source = (ROOT / 'Sources/TraceCore/Indexing/IndexScheduler.swift').read_text()
+        reversed_source = source.replace(MODULE.BEGIN, '__END__').replace(MODULE.END, MODULE.BEGIN).replace('__END__', MODULE.END)
+        with self.assertRaisesRegex(ValueError, 'Invalid instrumentation boundary order'):
+            MODULE.instrument(reversed_source, source, synchronize_existing=True)
+
+    def test_stamps_layout_counts_actual_prefix_storage(self):
+        candidate = (ROOT / 'Sources/TraceCore/Indexing/IndexScheduler.swift').read_text()
+        probe = candidate[candidate.index(MODULE.BEGIN):candidate.index(MODULE.END) + len(MODULE.END)]
+        original = probe.replace('Control handshakes', 'Historical handshakes') + """
+var stamps: [Stamp] = []
+    public var checkpointBenchmarkCounts: [String: Int] {
+        state.withLock { ["records": $0.streams.values.reduce(0) { $0 + $1.records.count }, "proofs": $0.proofs.count] }
+    }
+let measurement = CheckpointAcceptanceBenchmark.begin()
+defer { CheckpointAcceptanceBenchmark.end(measurement) }
+    public func waitUntilIdle() async {}
+"""
+        result = MODULE.instrument(original, candidate, synchronize_existing=True)
+        self.assertIn('$1.unpaid.values.count + $1.paid.values.count', result)
+        self.assertIn('"prefixIndexEntries"', result)
+        self.assertIn('"heap-mark"', result)
+        self.assertNotIn('"checkpointBoundaries"', result)
+        self.assertEqual(MODULE.instrument(result, candidate, synchronize_existing=True), result)
+        anchor = MODULE.COUNTS
+        for replacement in ['', anchor + anchor]:
+            with self.subTest(replacement=replacement):
+                with self.assertRaisesRegex(ValueError, 'Missing unique existing'):
+                    MODULE.instrument(original.replace(anchor, replacement), candidate, synchronize_existing=True)
+
+    def test_same_probe_still_synchronizes_historical_counts(self):
+        source = (ROOT / 'Sources/TraceCore/Indexing/IndexScheduler.swift').read_text()
+        probe = source[source.index(MODULE.BEGIN):source.index(MODULE.END) + len(MODULE.END)]
+        original = probe + """
+private struct Frontier {}
+    public var checkpointBenchmarkCounts: [String: Int] {
+        state.withLock { ["records": $0.streams.values.reduce(0) { $0 + $1.records.count }, "proofs": $0.proofs.count, "checkpointBoundaries": 0] }
+    }
+let measurement = CheckpointAcceptanceBenchmark.begin()
+defer { CheckpointAcceptanceBenchmark.end(measurement) }
+    public func waitUntilIdle() async {}
+"""
+        result = MODULE.instrument(original, source, synchronize_existing=True)
+        self.assertNotIn('"checkpointBoundaries"', result)
+        self.assertIn('$1.frontier.count', result)
+        self.assertIn('"frontier-node"', result)
+
+    def test_mailbox_measurement_uses_delivery_completion_without_polling(self):
+        source = (ROOT / 'Scripts/benchmark-source-ingress.swift').read_text()
+        self.assertNotIn('while paths.count', source)
+        self.assertNotIn('Task.yield()', source)
+        self.assertIn('let delivered = try await completion.wait()', source)
+        self.assertLess(source.index('let delivered = try await completion.wait()'), source.index('let result = await producer.value'))
+        self.assertIn('defer { producer.cancel() }', source)
+        self.assertIn('completion.finish(.success(WorkloadStamp()))', source)
+        self.assertIn('try await Task.sleep(for: .seconds(30))', source)
+        self.assertIn('final enqueue/delivery completion', source)
+
+    @unittest.skipUnless(shutil.which('xcrun'), 'Requires the macOS Swift toolchain')
+    def test_mailbox_completion_success_timeout_and_cancellation(self):
+        source = (ROOT / 'Scripts/benchmark-source-ingress.swift').read_text()
+        helper = source[source.index('private struct WorkloadStamp:'):source.index('@main struct SourceIngressWorkload')]
+        harness = """
+import Foundation
+private func cpuSeconds() -> Double { 0 }
+""" + helper + """
+@main struct CompletionChecks {
+    @MainActor static func main() async throws {
+        let early = DeliveryCompletion()
+        early.finish(.success(WorkloadStamp()))
+        _ = try await early.wait()
+        early.finish(.failure(CancellationError()))
+        _ = try await early.wait()
+        let cancelled = DeliveryCompletion()
+        let waiting = Task { try await cancelled.wait() }
+        waiting.cancel()
+        do { _ = try await waiting.value; fatalError("Cancellation ignored") }
+        catch is CancellationError {} catch { fatalError("Wrong cancellation") }
+        let timeout = DeliveryCompletion()
+        let timer = Task {
+            try await Task.sleep(for: .milliseconds(10))
+            timeout.finish(.failure(NSError(domain: "ExpectedTimeout", code: 7)))
+        }
+        do { _ = try await timeout.wait(); fatalError("Timeout ignored") }
+        catch { precondition((error as NSError).domain == "ExpectedTimeout") }
+        _ = try await timer.value
+        timeout.finish(.success(WorkloadStamp()))
+        do { _ = try await timeout.wait(); fatalError("Late success replaced timeout") }
+        catch { precondition((error as NSError).domain == "ExpectedTimeout") }
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / 'checks.swift').write_text(harness)
+            subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6', str(path / 'checks.swift'), '-o', str(path / 'checks')], check=True, capture_output=True, text=True, timeout=60)
+            subprocess.run([str(path / 'checks')], check=True, capture_output=True, text=True, timeout=10)
 
     def test_backlog_exports_are_outside_measured_slices(self):
         source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()

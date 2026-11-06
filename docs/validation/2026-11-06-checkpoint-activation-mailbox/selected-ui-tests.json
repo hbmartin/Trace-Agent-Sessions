@@ -1,0 +1,14 @@
+[
+  "TraceUITests/TraceUITests/testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart",
+  "TraceUITests/TraceUITests/testLatestScrollWhileAutomaticResetPreparesSurvivesCommit",
+  "TraceUITests/TraceUITests/testNativeRestorationPredicateRejectsCachedAndUnrelatedReceipts",
+  "TraceUITests/TraceUITests/testAutomaticResetCommitRestoresReaderAndBookmark",
+  "TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart",
+  "TraceUITests/TraceUITests/testPendingLaunchRestorationResumesWithoutUserIntent",
+  "TraceUITests/TraceUITests/testRebuildShowsPreparationBeforeClearingIndex",
+  "TraceUITests/TraceUITests/testQueuedSidebarRetryBecomesUsableAfterRebuildReset",
+  "TraceUITests/TraceUITests/testRebuildDuringHeldRetryKeepsResumingFeedbackUntilWatcherStartupCompletes",
+  "TraceUITests/TraceUITests/testFailedRebuildRetainsAndUnblocksGlobalProjectFilter",
+  "TraceUITests/TraceUITests/testCachedCostsFailureShowsSafeTextAndProductionRetryRecoversWithoutFileChanges",
+  "TraceUITests/TraceUITests/testPaginationFailureShowsSafeTextAndRetryRecovers"
+]

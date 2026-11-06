@@ -1,0 +1,11 @@
+{
+  "candidate": "92008f7b64482c688784f13ea6ea2fd1b733d6a5",
+  "testedProductionCommit": "81c7baee3c5d964e9d9c002f2a18191aff3a4ed5",
+  "differentFiles": [
+    "Scripts/benchmark-source-ingress.swift",
+    "Scripts/instrument-checkpoint-benchmark.py",
+    "Tests/Scripts/test_checkpoint_proof_benchmark.py"
+  ],
+  "productionXCTestProjectAndDependencyInputsIdentical": true,
+  "reason": "Final changes only strengthen standalone benchmark timeout ordering, malformed-anchor rejection, and their script tests."
+}

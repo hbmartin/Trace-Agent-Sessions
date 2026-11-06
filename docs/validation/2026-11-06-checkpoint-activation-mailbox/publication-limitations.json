@@ -1,0 +1,9 @@
+{
+  "decision": "Publish a ready follow-up PR with UI and targeted performance acceptance explicitly incomplete.",
+  "latestUserInstruction": "open ready PR",
+  "uiStarted": false,
+  "targetedAcceptanceStarted": false,
+  "freshDesktopIdleConfirmationForThisFollowup": false,
+  "context": "Competing native work remained active. No permission to message or interrupt the other chat was inferred from the publication request.",
+  "noLocalTenPercentPerformanceAcceptanceClaim": true
+}
