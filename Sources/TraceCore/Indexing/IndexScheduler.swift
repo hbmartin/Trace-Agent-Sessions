@@ -588,7 +588,10 @@ public final class IndexCheckpointLedger: Sendable {
         state.withLock { value in entries.compactMap { value.streams[$0.stream]?.records[$0.id]?.remaining } }
     }
     fileprivate func fenceReset(_ token: UUID) { state.withLock { $0.fences.insert(token) } }
-    fileprivate func releaseReset(_ token: UUID) { state.withLock { _ = $0.fences.remove(token) } }
+    fileprivate func releaseReset(_ token: UUID) {
+        let removed = state.withLock { $0.fences.remove(token) != nil }
+        if removed, !isDrainOwner(token) { signalReadiness() }
+    }
     /// Called synchronously from the database's committed-reset callback.
     fileprivate func committedReset(content: IndexContentGeneration, extending coverage: Coverage) -> Coverage {
         state.withLock { value in

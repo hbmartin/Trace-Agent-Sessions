@@ -66,6 +66,31 @@ final class IndexingRegressionTests: XCTestCase {
         await old.stop(); await successor.stop()
     }
 
+    func testRetiredResetFenceWakesSuccessorWithoutAnotherRequest() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        let gate = CheckpointFailureGate(), held = Task { await gate.wait() }, marks = OSAllocatedUnfairLock(initialState: [UInt64]())
+        defer { held.cancel(); Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        let coordinator = IndexCoordinator(database: database, sources: [])
+        let old = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { _ in XCTFail("Displaced scheduler published") })
+        await old.waitUntilIdle(); await coordinator.gatePreparationForTesting(held)
+        await old.request(rebuild: true)
+        try await waitForCondition { await coordinator.preparationWaitingForTesting }
+        let successor = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { marks.withLock { $0.append(mark) } } })
+        let path = root.appendingPathComponent("x").path
+        let reservation = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: true, paths: [path])
+        ledger.retainProofForTesting(ledger.prepareProofForTesting([reservation], paths: [path], content: database.contentGeneration))
+        await successor.waitUntilIdle(); XCTAssertTrue(marks.withLock { $0.isEmpty })
+        let stop = Task { await old.stop() }
+        try await waitForCondition { await old.stoppingForTesting }
+        await gate.open(); await stop.value; await successor.waitUntilIdle()
+        XCTAssertEqual(marks.withLock { $0 }, [100])
+        await successor.stop()
+    }
+
     func testStopJoinsHeldReadinessListener() async throws {
         let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
         let gate = CheckpointFailureGate(), finished = OSAllocatedUnfairLock(initialState: false)
