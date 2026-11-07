@@ -1,0 +1,8 @@
+{
+  "confirmedAtUTC": "2026-11-07T14:54:35.331416+00:00",
+  "source": "Human reply in this chat",
+  "answer": "Mac unlocked; windows minimized; desktop idle",
+  "scope": "Selected serial UI tests and paired targeted Release workloads for the PR #91 follow-up",
+  "protectedDialogs": "Manual handling required",
+  "competingChecks": "Must be checked before execution"
+}

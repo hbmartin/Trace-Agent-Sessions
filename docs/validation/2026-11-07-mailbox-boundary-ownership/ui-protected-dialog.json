@@ -1,0 +1,10 @@
+{
+  "observedAtUTC": "2026-11-07T15:28:37.348375+00:00",
+  "windowOwner": "UserNotificationCenter",
+  "ownerPID": 1780,
+  "layer": 8,
+  "test": "testAutomaticResetCommitRestoresReaderAndBookmark",
+  "state": "Application launch stalled with a visible protected macOS window",
+  "action": "Requested manual handling; interrupting only the owned UI attempt and retaining its evidence.",
+  "xcodebuildPID": 22542
+}

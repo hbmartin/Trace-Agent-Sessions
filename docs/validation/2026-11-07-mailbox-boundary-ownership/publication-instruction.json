@@ -1,0 +1,6 @@
+{
+  "instruction": "open ready PR",
+  "context": "User requested publication after the assistant disclosed another protected-dialog blocker, an unclassified UI restoration failure, and pending measurements.",
+  "action": "Publish a ready PR now with incomplete validation explicit; do not classify the UI failure as unrelated or claim performance acceptance.",
+  "recordedAtUTC": "2026-11-07T15:49:07.409464+00:00"
+}

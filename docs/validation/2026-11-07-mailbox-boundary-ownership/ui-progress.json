@@ -1,0 +1,27 @@
+{
+  "atUTC": "2026-11-07T15:45:58.467307+00:00",
+  "candidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+  "testCount": 12,
+  "passedTests": [
+    "testCachedCostsFailureShowsSafeTextAndProductionRetryRecoversWithoutFileChanges",
+    "testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart",
+    "testFailedRebuildRetainsAndUnblocksGlobalProjectFilter",
+    "testLatestScrollWhileAutomaticResetPreparesSurvivesCommit",
+    "testNativeRestorationPredicateRejectsCachedAndUnrelatedReceipts",
+    "testPaginationFailureShowsSafeTextAndRetryRecovers",
+    "testPendingLaunchRestorationResumesWithoutUserIntent",
+    "testQueuedSidebarRetryBecomesUsableAfterRebuildReset",
+    "testRebuildDuringHeldRetryKeepsResumingFeedbackUntilWatcherStartupCompletes",
+    "testRebuildShowsPreparationBeforeClearingIndex",
+    "testSessionNavigationScrollRestorationAndRestart"
+  ],
+  "failedTests": [
+    "testAutomaticResetCommitRestoresReaderAndBookmark"
+  ],
+  "reportedFailureIssues": 170,
+  "firstIssue": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/TraceUITests/TraceUITests.swift:1890: error: -[TraceUITests.TraceUITests testAutomaticResetCommitRestoresReaderAndBookmark] : XCTAssertEqualWithAccuracy failed: (\"0.0\") is not equal to (\"-40.0\") +/- (\"8.0\") - committed automatic reset: the first completed native offset must match the bookmark",
+  "quietHostAccepted": false,
+  "classification": "Unclassified; baseline application launch was blocked by a new protected macOS dialog. No unrelated-failure claim.",
+  "blockedBaselineAttempt": "baseline-ui-anchor-1.json",
+  "status": "Waiting for manual dialog handling; no optimized measurements started."
+}

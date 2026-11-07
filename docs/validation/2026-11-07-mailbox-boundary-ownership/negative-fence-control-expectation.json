@@ -1,0 +1,5 @@
+{
+  "expected": "One failed regression when successor wakeup is removed.",
+  "exitCode": 65,
+  "productionSourceRestored": true
+}

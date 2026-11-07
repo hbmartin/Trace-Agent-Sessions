@@ -1,0 +1,11 @@
+{
+  "attempt": "baseline-ui-anchor-1",
+  "atUTC": "2026-11-07T15:43:59.043272+00:00",
+  "visibleWindow": {
+    "owner": "UserNotificationCenter",
+    "pid": 1780,
+    "layer": 8
+  },
+  "action": "SIGINT only owned baseline xcodebuild process group; no protected UI interaction",
+  "pid": 42809
+}
