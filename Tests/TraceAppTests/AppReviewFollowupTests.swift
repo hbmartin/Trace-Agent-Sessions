@@ -136,7 +136,8 @@ final class AppReviewFollowupTests: XCTestCase {
                 await gate.open(); await replacing.value
                 XCTAssertTrue(f.model.databaseForTesting === other.database)
                 await f.model.refreshSummariesForTesting(lightweight: false)
-                XCTAssertEqual(f.model.sessions.first?.navigationReference?.unanchored, other.model.sessions.first?.navigationReference?.unanchored)
+                XCTAssertNil(f.model.selectedSessionID, "The retired database's selected source must not reopen in its replacement")
+                XCTAssertNil(f.model.selectedSession)
             } else {
                 let stopping = Task { await f.model.prepareToTerminate() }
                 try await wait { f.model.terminationStartedForTesting }
