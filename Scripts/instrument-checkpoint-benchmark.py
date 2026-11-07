@@ -73,7 +73,7 @@ def instrument(source, probe_source, synchronize_existing=False):
         if 'private struct RetainedCounts {' not in source:
             old_counts = block(source, COUNTS)
             new_counts = counters(source)
-            if old_counts != new_counts and not synchronize_existing and KIND not in source:
+            if old_counts != new_counts and not synchronize_existing:
                 raise ValueError('Historical count instrumentation requires explicit synchronization')
             synchronized = synchronized.replace(old_counts, new_counts, 1)
     else:
@@ -98,7 +98,10 @@ def instrument(source, probe_source, synchronize_existing=False):
     kind_declaration = KIND + ' "' + kind + '" }'
     if KIND in synchronized:
         unique(synchronized, [KIND], 'counter kind boundary')
-        synchronized = synchronized.replace(block(synchronized, KIND), kind_declaration, 1)
+        existing_kind = block(synchronized, KIND)
+        if existing_kind != kind_declaration and not synchronize_existing:
+            raise ValueError('Different counter kind requires explicit synchronization')
+        synchronized = synchronized.replace(existing_kind, kind_declaration, 1)
     else:
         declaration = block(synchronized, COUNTS)
         synchronized = synchronized.replace(declaration, declaration + '\n' + kind_declaration, 1)

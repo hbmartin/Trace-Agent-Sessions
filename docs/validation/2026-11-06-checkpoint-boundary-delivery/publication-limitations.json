@@ -1,0 +1,22 @@
+{
+  "recordedAt": "2026-11-06T23:57:54.923461+00:00",
+  "userRequest": "open ready PR",
+  "action": "Publish ready follow-up now with incomplete acceptance explicitly documented.",
+  "candidate": "709e65afe9955006ce2fef97a7262ea7eb4ac19a",
+  "ui": {
+    "status": "not run",
+    "accepted": false,
+    "freshDesktopIdleConfirmationReceived": false
+  },
+  "targetedMeasurements": {
+    "status": "not run",
+    "accepted": false,
+    "correctnessSmokesArePerformanceAcceptance": false
+  },
+  "coordination": "No authorization to interrupt or message competing native-check chat; no such message sent.",
+  "localTenPercentPerformanceAcceptanceClaim": false,
+  "omittedByApprovedScope": [
+    "Complete suites",
+    "Three full Release comparison pairs"
+  ]
+}

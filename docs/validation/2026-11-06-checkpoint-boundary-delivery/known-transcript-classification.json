@@ -1,0 +1,18 @@
+{
+  "test": "TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+  "candidate": "bb1f924df2ddaddfbdb5de693e1f59c679dd5f5d",
+  "baseline": "3beaf0db721ad29a04de06d71a00e0f9a751d1ae",
+  "candidateReceipt": "accepted-known-transcript.json",
+  "baselineReceipt": "final-baseline-known-transcript.json",
+  "failedTestsPerRun": 1,
+  "assertionFailuresPerRun": 2,
+  "symptoms": [
+    "Timed out waiting for app state",
+    "caught CancellationError()"
+  ],
+  "classification": "Same failure reproduced against unchanged pinned #90 source before measurement instrumentation; excluded from the 683 passing selected cases.",
+  "resultBundles": [
+    "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/boundary-accepted-known-transcript.xcresult",
+    "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/boundary-final-baseline-known-transcript.xcresult"
+  ]
+}

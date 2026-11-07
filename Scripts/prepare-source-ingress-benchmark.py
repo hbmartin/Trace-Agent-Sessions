@@ -12,10 +12,72 @@ def extract(source):
     start = source.index(marker)
     end = source.index(end_marker, start)
     mailbox = source[start:end]
-    parameters = 'changes, _, _' if 'struct ReplayPosition:' in mailbox else 'changes, _'
-    return ('import Foundation\nimport os\nimport TraceCore\n\n' + mailbox + '\n'
-        'func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void) -> SourceIngressMailbox {\n'
-        '    SourceIngressMailbox { ' + parameters + ' in await receive(changes) }\n}\n')
+    common = r'''
+@MainActor private enum IngressMeasurement {
+    static let ledger = IndexCheckpointLedger()
+    static let roots: [AgentKind: [TraceFileIO.CanonicalPath]] = [.claudeCode: [TraceFileIO.canonicalPath("/tmp/mailbox")]]
+    static var preparationSeconds = 0.0, turns = 0, maxInputs = 0, enrollmentCalls = 0
+    static func record(_ start: ContinuousClock.Instant, changes: SourceChanges) {
+        let duration = start.duration(to: .now).components
+        preparationSeconds += Double(duration.seconds) + Double(duration.attoseconds) / 1e18
+        turns += 1; maxInputs = max(maxInputs, changes.paths.count + changes.reconciliationPaths.count)
+        enrollmentCalls += changes.checkpointReservations.count
+    }
+}
+@MainActor func benchmarkIngressMetrics() -> [String: Any] {
+    ["mainActorPreparationElapsedSeconds": IngressMeasurement.preparationSeconds,
+     "mainActorDeliveryTurns": IngressMeasurement.turns, "mainActorDeliveryMaxInputs": IngressMeasurement.maxInputs,
+     "reservationDeliveryReferences": IngressMeasurement.enrollmentCalls,
+     "ledgerState": IngressMeasurement.ledger.checkpointBenchmarkCounts,
+     "prefixIndexEntryKind": IngressMeasurement.ledger.checkpointBenchmarkPrefixIndexEntryKind]
+}
+'''
+    header = 'import Foundation\nimport os\nimport TraceCore\n\n' + mailbox + '\n' + common
+    if 'struct Prepared: Sendable' in mailbox:
+        wrapper = r'''
+@MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void) -> SourceIngressMailbox {
+    let roots = IngressMeasurement.roots
+    _ = IngressMeasurement.ledger
+    return SourceIngressMailbox(prepare: {
+        SourceIngressMailbox.normalizeTranscript($0, rootsByAgent: roots, unavailableStreams: [])
+    }, receivePrepared: { delivery in
+        let start = ContinuousClock.now
+        let changes = delivery.enrolled(in: IngressMeasurement.ledger)
+        IngressMeasurement.record(start, changes: changes)
+        await receive(changes); return true
+    })
+}
+'''
+    else:
+        marker = '    private func normalizeTranscriptChanges('
+        if source.count(marker) != 1:
+            raise ValueError('Missing unique historical normalization boundary')
+        opening = source.index('{', source.index(marker)); depth = 1; closing = opening + 1
+        while depth:
+            if closing == len(source):
+                raise ValueError('Unclosed historical normalization boundary')
+            depth += (source[closing] == '{') - (source[closing] == '}'); closing += 1
+        body = source[opening + 1:closing - 1]
+        normalize = '\n@MainActor private func normalizeBenchmarkChanges(_ changes: SourceChanges) -> (changes: SourceChanges, recoveryEligible: Bool) {\n    let watcherRootsByAgent = IngressMeasurement.roots\n' + body + '\n}\n'
+        parameters = 'raw, _, _' if 'struct ReplayPosition:' in mailbox else 'raw, _'
+        wrapper = normalize + r'''
+@MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void) -> SourceIngressMailbox {
+    _ = IngressMeasurement.roots
+    _ = IngressMeasurement.ledger
+    return SourceIngressMailbox { PARAMETERS in
+        let start = ContinuousClock.now
+        var changes = normalizeBenchmarkChanges(raw).changes
+        changes.checkpointReservations = [IngressMeasurement.ledger.reserve(watermarks: changes.watermarks,
+            streamRoots: changes.streamRoots, hasIndexWork: changes.hasIndexWork,
+            wrappedStreams: changes.wrappedStreams, paths: changes.paths,
+            reconciliationPaths: changes.reconciliationPaths, streamEpochs: changes.streamEpochs)]
+        IngressMeasurement.record(start, changes: changes)
+        await receive(changes)
+    }
+}
+'''.replace('PARAMETERS', parameters)
+    return header + wrapper
+
 
 
 def main():
