@@ -393,6 +393,9 @@ public final class IndexCheckpointLedger: Sendable {
     }
     private struct State: @unchecked Sendable {
         var streams: [String: Stream] = [:]
+        var pausedStreams: Set<String> = []
+        var uninitializedStreams: Set<String> = []
+        var pausedRevision: UInt64 = 0
         var listeners: [UUID: Registration] = [:]
         var registrationSequence: UInt64 = 0
         var drainOwner: UUID?
@@ -477,24 +480,48 @@ public final class IndexCheckpointLedger: Sendable {
             if value.content == nil { value.content = checkpoint?.contentGeneration }
             if sameStoredEpoch, let mark = checkpoint?.value { stream.highestQualification = max(stream.highestQualification ?? 0, mark) }
             stream.initialized = true; stream.initializationFailed = false
+            value.uninitializedStreams.remove(name)
+            if value.pausedStreams.remove(name) != nil { value.pausedRevision &+= 1 }
             value.streams[name] = stream
             value.prefixStreams.insert(name)
             return true
         }
         if changed { signalReadiness() }
     }
-    fileprivate var uninitializedStreams: Set<String> {
-        state.withLock { Set($0.streams.filter { !$0.value.initialized && !$0.value.initializationFailed }.keys) }
+    fileprivate var uninitializedStreams: Set<String> { state.withLock { $0.uninitializedStreams } }
+    fileprivate var needsInitialization: Bool { state.withLock { !$0.uninitializedStreams.isEmpty } }
+    fileprivate var pausedStatus: (revision: UInt64, isEmpty: Bool) {
+        state.withLock { ($0.pausedRevision, $0.pausedStreams.isEmpty) }
     }
-    fileprivate var pausedStreams: Set<String> { state.withLock { Set($0.streams.filter { $0.value.initializationFailed }.keys) } }
+    fileprivate var pausedSnapshot: (revision: UInt64, streams: Set<String>) {
+        state.withLock { ($0.pausedRevision, $0.pausedStreams) }
+    }
     fileprivate func resumeInitialization(owner: UUID) {
         state.withLock { value in
             guard value.drainOwner == owner else { return }
             for stream in value.streams.values { stream.initializationFailed = false }
+            value.uninitializedStreams = Set(value.streams.filter { !$0.value.initialized }.keys)
+            if !value.pausedStreams.isEmpty {
+                value.pausedStreams = []; value.pausedRevision &+= 1
+            }
         }
     }
-    fileprivate func pauseInitialization(_ stream: String) { state.withLock { $0.streams[stream]?.initializationFailed = true } }
+    fileprivate func pauseInitialization(_ name: String) {
+        state.withLock { value in
+            guard let stream = value.streams[name] else { return }
+            stream.initializationFailed = true
+            value.uninitializedStreams.remove(name)
+            if value.pausedStreams.insert(name).inserted { value.pausedRevision &+= 1 }
+        }
+    }
     #if DEBUG
+    var pausedStateIsConsistentForTesting: Bool {
+        state.withLock { value in
+            value.pausedStreams == Set(value.streams.filter { $0.value.initializationFailed }.keys)
+                && value.uninitializedStreams == Set(value.streams.filter { !$0.value.initialized && !$0.value.initializationFailed }.keys)
+        }
+    }
+    var pausedRevisionForTesting: UInt64 { pausedStatus.revision }
     func initializationForTesting(stream: String) -> (initialized: Bool, epoch: String?, floor: UInt64?) {
         state.withLock { let item = $0.streams[stream]; return (item?.initialized == true, item?.initialized == true ? item?.epoch : nil, item?.floor) }
     }
@@ -552,6 +579,7 @@ public final class IndexCheckpointLedger: Sendable {
                 let mark = input.mark
                 let stream = value.streams[name] ?? Stream()
                 value.streams[name] = stream
+                if !stream.initialized && !stream.initializationFailed { value.uninitializedStreams.insert(name) }
                 let incoming = input.epoch
                 if let incoming, stream.ingressEpoch?.predecessors.contains(incoming.id) == true { continue }
                 let same = incoming != nil && incoming == stream.ingressEpoch
@@ -735,7 +763,8 @@ public final class IndexCheckpointLedger: Sendable {
         let accepted = state.withLock { value in
             var accepted = false
             for (stream, update) in publication.updates where value.streams[stream]?.epoch == update.epoch
-                && (update.contentGeneration == nil || update.contentGeneration == value.content) {
+                && (update.contentGeneration == nil || update.contentGeneration == value.content)
+                && (value.streams[stream]?.floor.map { update.value >= $0 } ?? true) {
                 if value.updates[stream].map({ $0.value <= update.value }) ?? true {
                     value.updates[stream] = update; accepted = true
                 }
@@ -960,7 +989,7 @@ public actor IndexScheduler {
     private let readiness = IndexCheckpointLedger.Readiness()
     private let readinessTask = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     private let pausedCheckpointStreamsChanged: (@Sendable (Set<String>) async -> Void)?
-    private var publishedPausedCheckpointStreams: Set<String>?
+    private var publishedPausedCheckpointState: (revision: UInt64, streams: Set<String>)?
 
     private struct Batch: Sendable {
         // A reset forces a full scan; preserve independently requested scans if
@@ -1131,17 +1160,18 @@ public actor IndexScheduler {
 
     deinit {
         checkpointLedger.unregisterReadiness(installationID)
+        checkpointLedger.releaseReset(installationID)
         readinessTask.withLock { $0?.cancel() }
     }
 
     private var hasPendingPausedCheckpointNotice: Bool {
-        let paused = checkpointLedger.pausedStreams
-        return publishedPausedCheckpointStreams.map { $0 != paused } ?? !paused.isEmpty
+        let status = checkpointLedger.pausedStatus
+        return publishedPausedCheckpointState.map { $0.revision != status.revision } ?? !status.isEmpty
     }
 
     private func resumeCompletedProofs() {
         guard !stopping, checkpointLedger.isDrainOwner(installationID), worker == nil,
-              checkpointLedger.hasReadyProofs || !checkpointLedger.uninitializedStreams.isEmpty || hasPendingPausedCheckpointNotice else { return }
+              checkpointLedger.hasReadyProofs || checkpointLedger.needsInitialization || hasPendingPausedCheckpointNotice else { return }
         worker = Task { await drain() }
     }
 
@@ -1357,7 +1387,7 @@ public actor IndexScheduler {
 
     private func drain() async {
         defer { worker = nil }
-        while !stopping && (hasPendingWork || !pendingOrdinaryReceipts.isEmpty || (checkpointLedger.isDrainOwner(installationID) && !checkpointLedger.uninitializedStreams.isEmpty) || ordinaryRecovery != nil || readyRetryIndex != nil
+        while !stopping && (hasPendingWork || !pendingOrdinaryReceipts.isEmpty || (checkpointLedger.isDrainOwner(installationID) && checkpointLedger.needsInitialization) || ordinaryRecovery != nil || readyRetryIndex != nil
             || (checkpointLedger.isDrainOwner(installationID) && (checkpointLedger.hasReadyProofs || hasPendingPausedCheckpointNotice))) {
             await drainCheckpointProofs()
             guard !stopping else { return }
@@ -1373,11 +1403,17 @@ public actor IndexScheduler {
                 }
             }
             guard !stopping else { return }
-            let paused = checkpointLedger.pausedStreams
-            if checkpointLedger.isDrainOwner(installationID), publishedPausedCheckpointStreams != paused {
-                publishedPausedCheckpointStreams = paused
-                await pausedCheckpointStreamsChanged?(paused)
-                guard !stopping else { return }
+            if checkpointLedger.isDrainOwner(installationID) {
+                let status = checkpointLedger.pausedStatus
+                if publishedPausedCheckpointState?.revision != status.revision {
+                    let snapshot = checkpointLedger.pausedSnapshot
+                    let changed = publishedPausedCheckpointState?.streams != snapshot.streams
+                    publishedPausedCheckpointState = snapshot
+                    if changed {
+                        await pausedCheckpointStreamsChanged?(snapshot.streams)
+                        guard !stopping else { return }
+                    }
+                }
             }
             // Fresh work always wins over a delayed retry, so a bad source cannot
             // starve later filesystem events.
