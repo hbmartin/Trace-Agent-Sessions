@@ -1,0 +1,9 @@
+{
+  "candidate": "4cb278ec38a53677b630f85a8e195d3ba6dcfced",
+  "validatedImplementationCandidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+  "verifiedGitAndWorktreeEntries": 325,
+  "changedSinceExecution": [
+    "AGENTS.md"
+  ],
+  "allOtherInputsUnchanged": true
+}

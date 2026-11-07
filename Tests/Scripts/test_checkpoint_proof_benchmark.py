@@ -249,6 +249,24 @@ enum ModelPublicationBatch {}
             self.assertLess(factory.index('IngressMeasurement.roots'), factory.index('return SourceIngressMailbox'))
             self.assertLess(factory.index('IngressMeasurement.ledger'), factory.index('return SourceIngressMailbox'))
 
+    def test_mailbox_variants_wait_for_all_path_roles(self):
+        source = (ROOT / 'Scripts/benchmark-source-ingress.swift').read_text()
+        self.assertIn('["plain", "oversized", "structural"]', source)
+        self.assertIn('lexical.count == auxiliaryCount && structural.count == auxiliaryCount', source)
+        self.assertIn('"deliveredLexicalPaths": lexical.count', source)
+        self.assertIn('"deliveredStructuralPaths": structural.count', source)
+        self.assertIn('mailbox.enqueue(oversized)', source)
+
+    def test_mailbox_adapter_supports_pinned_boolean_and_transfer_receivers(self):
+        spec = importlib.util.spec_from_file_location('ingress_transfer', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
+        extraction = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(extraction)
+        source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
+        self.assertIn('return .ordinaryTransferred', extraction.extract(source))
+        self.assertIn('retire: { _ in preconditionFailure', extraction.extract(source))
+        historical = source.replace('enum Transfer:', 'enum HistoricalTransfer:')
+        self.assertIn('return true', extraction.extract(historical))
+
     def test_acceptance_cannot_be_rescued_by_a_cleanup_scan(self):
         source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()
         acceptance = source[source.index('private static func measureAcceptance'):]

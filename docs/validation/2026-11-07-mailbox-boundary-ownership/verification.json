@@ -1,0 +1,2284 @@
+{
+  "candidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+  "base": "2c6e38c261a97629cfa4f3e82ae4c7bae5b57dfc",
+  "targetedBaseline": "160f1662030ee01756345a6f3666c9546968d726",
+  "focused": {
+    "passed": 695,
+    "groups": {
+      "IndexingRegressionTests": 201,
+      "FSEventsWatcherTests": 13,
+      "SessionMetadataTests": 64,
+      "SidecarDependencyTests": 27,
+      "AppReviewFollowupTests": 390
+    }
+  },
+  "races": {
+    "cases": 49,
+    "repetitions": 5,
+    "passedExecutions": 245
+  },
+  "scripts": {
+    "passed": 72
+  },
+  "checks": {
+    "accepted-focused": 0,
+    "accepted-discovery": 0,
+    "accepted-races-1": 0,
+    "accepted-races-2": 0,
+    "accepted-races-3": 0,
+    "accepted-races-4": 0,
+    "accepted-races-5": 0,
+    "accepted-debug-build": 0,
+    "accepted-release-build": 0,
+    "accepted-external-client": 0,
+    "accepted-project-drift": 0,
+    "accepted-signing": 0,
+    "accepted-network": 0,
+    "accepted-whitespace": 0,
+    "accepted-scripts": 0,
+    "accepted-inputs": 0,
+    "baseline-prepare": 0,
+    "baseline-instrumentation": 0,
+    "targeted-baseline-build": 0,
+    "targeted-candidate-build": 0
+  },
+  "ui": {
+    "accepted": false,
+    "selected": 12,
+    "passedInNonacceptedRun": 11,
+    "failedTests": [
+      "testAutomaticResetCommitRestoresReaderAndBookmark"
+    ],
+    "reportedFailureIssues": 170,
+    "classification": "Unclassified; no completed baseline comparison. A competing native check also contaminated the run.",
+    "runs": [
+      {
+        "candidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+        "attempt": "selected-ui-1",
+        "selectedTests": 12,
+        "resultBundle": "build/mailbox-selected-ui-1.xcresult",
+        "checks": 429,
+        "competingObservations": [
+          {
+            "time": 1794065100.6058419,
+            "sessions": [
+              {
+                "pid": 23304,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065101.792928,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065102.393076,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065103.026059,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065103.64946,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065104.668642,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065105.513651,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065106.119277,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065106.712068,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065107.310196,
+            "sessions": [
+              {
+                "pid": 23442,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065108.492088,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065109.091115,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065109.7646458,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065110.358918,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065111.138992,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065111.7344398,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065112.329243,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065112.9195771,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065113.509758,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065114.10228,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065114.690227,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065115.277683,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065115.8694131,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065116.4757628,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065117.0679638,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065117.6631942,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065118.268505,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065118.8634229,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065119.454376,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065120.046898,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065120.643723,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065121.237744,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065121.83691,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065122.438508,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065123.0363362,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065123.63314,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065124.234476,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065124.840729,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065125.437333,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065126.13141,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065126.7826629,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065127.418684,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065128.091064,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065128.711073,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065129.326963,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065129.924088,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065130.5377018,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065131.151196,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065131.7796328,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065132.3763661,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065132.9941041,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065133.5982761,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065134.1941462,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065134.83064,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065135.510633,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065136.2307332,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065136.902234,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065137.58642,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065138.2993011,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065138.998475,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065139.6848729,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065140.338322,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065140.977547,
+            "sessions": [
+              {
+                "pid": 23711,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065141.6306062,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065142.279945,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065142.975285,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065143.611556,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065144.306583,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065144.9445472,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065145.6030478,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065146.276499,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065146.91815,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065147.6004639,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065148.2490802,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065148.886192,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065149.520465,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065150.1932511,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065150.910683,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065151.541187,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065152.215443,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065152.890183,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065153.552706,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065154.2250729,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065154.9137652,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065155.560946,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065156.2355719,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065156.8541539,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065157.466061,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065158.062537,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065158.6582038,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065159.252922,
+            "sessions": [
+              {
+                "pid": 25587,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065162.244004,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065162.837586,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065163.430685,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065164.0929751,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065164.700323,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065165.354366,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065165.949518,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065166.547734,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065167.142921,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065167.7310321,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065168.325015,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065168.9147189,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065169.505483,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065170.091619,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065170.6805708,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065171.269532,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065171.8557792,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065172.4740632,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065173.0789912,
+            "sessions": [
+              {
+                "pid": 27341,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065175.4237561,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065176.0121758,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065176.6397882,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065177.276999,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065177.9019468,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065178.4971619,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065179.084832,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065179.6777909,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065180.296463,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065180.878319,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065181.466131,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065182.051927,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065182.647242,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065183.274901,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065183.871904,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065184.4626298,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065185.0560482,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065185.646501,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065186.2398589,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065186.8288481,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065187.417173,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065188.013494,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065188.610486,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065189.218134,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065189.83435,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065190.4346051,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065191.029233,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065191.623323,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065192.3637838,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065193.009598,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065193.61969,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065194.226315,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065194.813914,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065195.415788,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065196.0046778,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065196.599891,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065197.202118,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065197.794095,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065198.388171,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065198.992799,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065199.58541,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065200.1840482,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065200.7770472,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065201.379623,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065201.975283,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065202.570091,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065203.173601,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065203.77132,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065204.361654,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065204.9837599,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065205.597697,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065206.198857,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065206.7882109,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065207.392454,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065208.011221,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065208.62431,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065209.230746,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065209.820117,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065210.4220421,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065211.027282,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065211.627727,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065212.23155,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065212.8260102,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065213.429656,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065214.022024,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065214.6169379,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065215.210443,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065215.841366,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065216.435392,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065217.0459561,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065217.638575,
+            "sessions": [
+              {
+                "pid": 27569,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065238.795207,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065239.385349,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065239.9796932,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065240.570185,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065241.157258,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065241.749575,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065242.338869,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065242.924777,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065243.5213199,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065244.1112761,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065244.7020202,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065245.293207,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065245.882082,
+            "sessions": [
+              {
+                "pid": 29036,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          }
+        ],
+        "exitCode": 75,
+        "accepted": false
+      },
+      {
+        "candidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+        "attempt": "selected-ui-2",
+        "selectedTests": 12,
+        "resultBundle": "build/mailbox-selected-ui-2.xcresult",
+        "checks": 449,
+        "competingObservations": [
+          {
+            "time": 1794065753.325932,
+            "sessions": [
+              {
+                "pid": 35785,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065754.05758,
+            "sessions": [
+              {
+                "pid": 35785,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065898.788337,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065899.3802218,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065899.976279,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065900.5669491,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065901.17314,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065901.765474,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065902.376897,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065902.9741619,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065903.5643148,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065904.156595,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065904.750659,
+            "sessions": [
+              {
+                "pid": 38011,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065929.04471,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065929.6411362,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065930.231436,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065930.824764,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065931.4136598,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065932.005607,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065932.592565,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065933.177859,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065933.7691672,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065934.358058,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065934.951533,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065935.541701,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065936.1297112,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065936.709864,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065937.295358,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065937.8764632,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065938.4650571,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065939.05202,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065939.638561,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065940.2181,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065940.8006809,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065941.383307,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065941.967398,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065942.548374,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065943.131201,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065943.715741,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065944.30197,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065944.888269,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065945.590116,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065946.179786,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065946.783287,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065947.437721,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          },
+          {
+            "time": 1794065948.0354528,
+            "sessions": [
+              {
+                "pid": 38791,
+                "reason": "other-build-or-test-session"
+              }
+            ]
+          }
+        ],
+        "exitCode": 65,
+        "accepted": false
+      }
+    ],
+    "baselineAttempt": "baseline-ui-anchor-1.json",
+    "baselineOutcome": "Blocked at launch by a protected dialog; interrupted without a completed test."
+  },
+  "targetedMeasurements": {
+    "accepted": false,
+    "status": "Paired measurements not run; both optimized revisions compiled and correctness smokes passed.",
+    "plannedWorkloads": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox",
+      "mailbox-oversized",
+      "mailbox-structural"
+    ],
+    "plannedCounts": [
+      1000,
+      10000
+    ],
+    "recordedPairs": 0
+  },
+  "negativeControl": {
+    "failedTests": 1,
+    "reportedFailureIssues": 1,
+    "expectedFailure": true,
+    "sourceRestoredAndVerifiedAt": "1770130548077c805ad9c67cba8975351d9d2afe"
+  },
+  "publication": "Ready PR requested after disclosure; validation remains incomplete.",
+  "omittedByOriginalScope": [
+    "Complete suites",
+    "Three full Release comparison pairs against 61c00de"
+  ],
+  "localTenPercentPerformanceAcceptanceClaim": false,
+  "rawPayloadAvailability": "Local-only; not downloadable repository/CI attachments.",
+  "publicationCandidate": "4cb278ec38a53677b630f85a8e195d3ba6dcfced",
+  "policyOnlyChangeAfterTests": {
+    "instruction": "change AGENTS.md to always allow disk and other permissions dialogs",
+    "policyCandidate": "4cb278ec38a53677b630f85a8e195d3ba6dcfced",
+    "validatedImplementationCandidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+    "changedInput": "AGENTS.md",
+    "previousSHA256": "31137468fb7725d27d061d22a72ea40c601dd8962761907cebfb63ecdbfcf13d",
+    "currentSHA256": "9bfda44c32a28a09bf83322f8c616745f231be192a9ed5326663bd07af27a0d2",
+    "unchangedOtherInputs": 324,
+    "newRule": "Always approve disk-access and other macOS permission dialogs needed for repository validation.",
+    "validationImpact": "Policy-only change after test execution; no production or test implementation changed. Existing UI failure and unrun measurements remain disclosed.",
+    "recordedAtUTC": "2026-11-07T15:52:33.322170+00:00"
+  }
+}

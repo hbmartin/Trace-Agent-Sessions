@@ -52,38 +52,62 @@ enum WatcherGroupingPolicy {
 
 /// Serial, owner-scoped handoff from watcher queues to the main actor.
 final class SourceIngressMailbox: Sendable {
+    enum Transfer: Sendable, Equatable {
+        case rejected, ordinaryTransferred, recoveryTransferred, retired
+    }
     struct Prepared: Sendable {
         var changes: SourceChanges
         var recoveryEligible: Bool
+        private var canonicalPaths: Set<TraceFileIO.CanonicalPath>
+        private var canonicalReconciliation: Set<TraceFileIO.CanonicalPath>
+        private var canonicalRoots: [String: Set<TraceFileIO.CanonicalPath>]
+        init(changes: SourceChanges, recoveryEligible: Bool,
+             canonicalPaths: Set<TraceFileIO.CanonicalPath>? = nil,
+             canonicalReconciliation: Set<TraceFileIO.CanonicalPath>? = nil,
+             canonicalRoots: [String: Set<TraceFileIO.CanonicalPath>]? = nil) {
+            self.changes = changes; self.recoveryEligible = recoveryEligible
+            let needsInputs = !changes.watermarks.isEmpty && changes.checkpointReservations.isEmpty
+            self.canonicalPaths = needsInputs ? (canonicalPaths ?? Set(changes.paths.map(TraceFileIO.canonicalPath))) : []
+            self.canonicalReconciliation = needsInputs ? (canonicalReconciliation ?? Set(changes.reconciliationPaths.map(TraceFileIO.canonicalPath))) : []
+            self.canonicalRoots = needsInputs ? (canonicalRoots ?? changes.streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) }) : [:]
+        }
+        mutating func merge(_ other: Self) {
+            changes.merge(other.changes)
+            recoveryEligible = recoveryEligible || other.recoveryEligible
+            canonicalPaths.formUnion(other.canonicalPaths)
+            canonicalReconciliation.formUnion(other.canonicalReconciliation)
+            for (stream, roots) in other.canonicalRoots { canonicalRoots[stream, default: []].formUnion(roots) }
+        }
+        var checkpointInputs: IndexCheckpointInputs? {
+            guard !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty else { return nil }
+            return .init(watermarks: changes.watermarks, canonicalStreamRoots: canonicalRoots,
+                hasIndexWork: changes.hasIndexWork, wrappedStreams: changes.wrappedStreams,
+                canonicalPaths: canonicalPaths, canonicalReconciliationPaths: canonicalReconciliation,
+                streamEpochs: changes.streamEpochs)
+        }
     }
     final class Boundary: Sendable {
         let value: Prepared
-        let inputs: IndexCheckpointInputs
+        private let inputs: IndexCheckpointInputs?
         private struct Enrollment { var reservations: [IndexCheckpointReservation]?; var retired = false }
         private let enrollment = OSAllocatedUnfairLock(initialState: Enrollment())
-        init(_ value: Prepared) {
-            self.value = value
-            let changes = value.changes
-            inputs = .init(watermarks: changes.watermarks, streamRoots: changes.streamRoots,
-                hasIndexWork: changes.hasIndexWork, wrappedStreams: changes.wrappedStreams,
-                paths: changes.paths, reconciliationPaths: changes.reconciliationPaths, streamEpochs: changes.streamEpochs)
-        }
-        @MainActor func enrolled(in ledger: IndexCheckpointLedger) -> SourceChanges {
-            var changes = value.changes
-            let existing = changes.checkpointReservations
-            changes.checkpointReservations = enrollment.withLock { state in
+        init(_ value: Prepared) { self.value = value; inputs = value.checkpointInputs }
+        @MainActor func reservations(in ledger: IndexCheckpointLedger, acceptsCheckpoints: Bool = true) -> [IndexCheckpointReservation] {
+            enrollment.withLock { state in
                 if state.reservations == nil {
-                    state.reservations = existing.isEmpty ? [ledger.reserve(inputs)] : existing
+                    state.reservations = !acceptsCheckpoints ? [] : !value.changes.checkpointReservations.isEmpty
+                        ? value.changes.checkpointReservations : inputs.map { [ledger.reserve($0)] } ?? []
                 }
                 return state.reservations!
             }
-            return changes
         }
-        var unpaidDelivery: SourceChanges? {
+        /// Only the undelivered suffix is taken. Delivered coverage may remain
+        /// unpaid in the ledger without becoming delivery debt again.
+        func takeUndelivered(_ suffix: SourceChanges) -> SourceChanges? {
             enrollment.withLock { state in
                 guard !state.retired, let reserved = state.reservations else { return nil }
                 state.retired = true
-                var changes = value.changes; changes.checkpointReservations = reserved; return changes
+                var changes = suffix; changes.checkpointReservations = reserved; return changes
             }
         }
     }
@@ -91,40 +115,50 @@ final class SourceIngressMailbox: Sendable {
         let boundary: Boundary
         var changes: SourceChanges
         let startsBoundary: Bool
+        let endsBoundary: Bool
         let diagnostics: [String]?
         @MainActor func enrolled(in ledger: IndexCheckpointLedger) -> SourceChanges {
             var changes = changes
-            changes.checkpointReservations = boundary.enrolled(in: ledger).checkpointReservations
+            changes.checkpointReservations = boundary.reservations(in: ledger)
             return changes
         }
     }
-    /// Pure preparation runs on the background coalescer with immutable watcher
-    /// configuration. Enrollment remains owned by the accepting main actor.
+    static func checkpointable(_ changes: SourceChanges, excluding unavailable: Set<String>) -> SourceChanges {
+        var changes = changes
+        changes.watermarks = changes.watermarks.filter { !unavailable.contains($0.key) }
+        changes.streamRoots = changes.streamRoots.filter { !unavailable.contains($0.key) }
+        changes.wrappedStreams.subtract(unavailable)
+        return changes
+    }
+    /// Content preparation and reservation qualification share canonical values.
     static func normalizeTranscript(_ changes: SourceChanges,
                                     rootsByAgent: [AgentKind: [TraceFileIO.CanonicalPath]],
                                     unavailableStreams: Set<String>) -> Prepared {
         let roots = rootsByAgent.values.flatMap { $0 }
         var relevant = changes, eligible = false
-        relevant.paths = Set(changes.paths.compactMap { path in
+        var paths: Set<TraceFileIO.CanonicalPath> = [], reconciliation: Set<TraceFileIO.CanonicalPath> = []
+        for path in changes.paths {
             let canonical = TraceFileIO.canonicalPath(path)
-            guard roots.contains(where: { $0.contains(canonical) }) else { return nil }
+            guard roots.contains(where: { $0.contains(canonical) }) else { continue }
             if rootsByAgent.contains(where: { agent, roots in
                 TraceFileIO.isSessionTranscript(URL(fileURLWithPath: canonical.path), agent: agent)
                     && roots.contains { $0.contains(canonical) }
             }) { eligible = true }
-            return canonical.path
-        })
-        relevant.reconciliationPaths = []
+            paths.insert(canonical)
+        }
         for path in changes.reconciliationPaths {
             let canonical = TraceFileIO.canonicalPath(path)
             for root in roots where root.intersects(canonical) {
-                relevant.reconciliationPaths.insert(canonical.contains(root) ? root.path : canonical.path)
+                reconciliation.insert(canonical.contains(root) ? root : canonical)
             }
         }
-        relevant.watermarks = relevant.watermarks.filter { !unavailableStreams.contains($0.key) }
-        relevant.streamRoots = relevant.streamRoots.filter { !unavailableStreams.contains($0.key) }
-        relevant.wrappedStreams.subtract(unavailableStreams)
-        return .init(changes: relevant, recoveryEligible: eligible || !relevant.reconciliationPaths.isEmpty)
+        relevant.paths = Set(paths.map(\.path)); relevant.reconciliationPaths = Set(reconciliation.map(\.path))
+        relevant = checkpointable(relevant, excluding: unavailableStreams)
+        let known = Dictionary(roots.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        let canonicalRoots = relevant.watermarks.isEmpty || !relevant.checkpointReservations.isEmpty ? [:]
+            : relevant.streamRoots.mapValues { Set($0.map { known[$0] ?? TraceFileIO.canonicalPath($0) }) }
+        return .init(changes: relevant, recoveryEligible: eligible || !reconciliation.isEmpty,
+            canonicalPaths: paths, canonicalReconciliation: reconciliation, canonicalRoots: canonicalRoots)
     }
     private struct Chunk: Sendable { let changes: SourceChanges; let diagnostics: [String]? }
     private final class Ingress: Sendable {
@@ -177,18 +211,49 @@ final class SourceIngressMailbox: Sendable {
             var value: Prepared
             var callbacks = 1
             var diagnostics: [String]?
-            var inputCount: Int { value.changes.paths.count + value.changes.reconciliationPaths.count }
+            var inputCount: Int { Self.count(value.changes) }
+            static func count(_ changes: SourceChanges) -> Int {
+                changes.paths.count + changes.reconciliationPaths.count + changes.lexicalPaths.count + changes.structuralPaths.count
+            }
+        }
+        /// Partition all path roles; controls and the complete obligation remain
+        /// boundary-owned and never acquire invented intermediate watermarks.
+        private struct Fragments {
+            let original: SourceChanges
+            let values: [String]
+            let ends: [Int]
+            let count: Int
+            init(_ changes: SourceChanges) {
+                original = changes
+                if Group.count(changes) <= 128 { values = []; ends = []; count = 1; return }
+                let sets = [changes.paths, changes.reconciliationPaths, changes.lexicalPaths, changes.structuralPaths]
+                var values: [String] = [], ends: [Int] = []
+                for set in sets { values.append(contentsOf: set); ends.append(values.count) }
+                self.values = values; self.ends = ends; count = (values.count + 127) / 128
+            }
+            func value(from index: Int, suffix: Bool = false) -> SourceChanges {
+                guard !values.isEmpty else { return original }
+                let lower = index * 128, upper = suffix ? values.count : min(lower + 128, values.count)
+                var changes = original
+                func part(_ role: Int) -> Set<String> {
+                    let start = role == 0 ? 0 : ends[role - 1]
+                    let from = min(ends[role], max(start, lower)), through = max(from, min(ends[role], upper))
+                    return Set(values[from..<through])
+                }
+                changes.paths = part(0); changes.reconciliationPaths = part(1)
+                changes.lexicalPaths = part(2); changes.structuralPaths = part(3)
+                return changes
+            }
         }
         private var groups: [UInt64: Group] = [:]
         private var head: UInt64 = 0, tail: UInt64 = 0
-        private var delivering = false
-        private var inFlight: Boundary?
+        private var deliveryTask: Task<Void, Never>?
         private let ingress: Ingress
         private let prepare: @Sendable (SourceChanges) -> Prepared
-        private let receive: @MainActor @Sendable (Delivery) async -> Bool
+        private let receive: @MainActor @Sendable (Delivery) async -> Transfer
         private let retire: @MainActor @Sendable (SourceChanges) async -> Void
         init(ingress: Ingress, prepare: @escaping @Sendable (SourceChanges) -> Prepared,
-             receive: @escaping @MainActor @Sendable (Delivery) async -> Bool,
+             receive: @escaping @MainActor @Sendable (Delivery) async -> Transfer,
              retire: @escaping @MainActor @Sendable (SourceChanges) async -> Void) {
             self.ingress = ingress; self.prepare = prepare; self.receive = receive; self.retire = retire
         }
@@ -196,16 +261,10 @@ final class SourceIngressMailbox: Sendable {
             guard !ingress.isClosed else { return }
             for chunk in chunks {
                 let value = prepare(chunk.changes)
-                let canMerge = groups[tail].map {
-                    $0.callbacks < 128 && $0.inputCount + value.changes.paths.count + value.changes.reconciliationPaths.count <= 128
-                } ?? false
+                let canMerge = groups[tail].map { $0.callbacks < 128 && $0.value.changes.checkpointReservations.isEmpty == value.changes.checkpointReservations.isEmpty && $0.inputCount + Group.count(value.changes) <= 128 } ?? false
                 if canMerge {
-                    // Detach before mutation so inspecting the budget cannot
-                    // keep a second owner of the group's copy-on-write sets.
                     var group = groups.removeValue(forKey: tail)!
-                    group.value.changes.merge(value.changes)
-                    group.value.recoveryEligible = group.value.recoveryEligible || value.recoveryEligible
-                    group.callbacks += 1
+                    group.value.merge(value); group.callbacks += 1
                     if let diagnostic = chunk.diagnostics { group.diagnostics = diagnostic }
                     groups[tail] = group
                 } else {
@@ -213,60 +272,55 @@ final class SourceIngressMailbox: Sendable {
                     groups[tail] = .init(value: value, diagnostics: chunk.diagnostics)
                 }
             }
-            if !delivering { delivering = true; Task { await deliver() } }
+            if deliveryTask == nil { deliveryTask = Task { await deliver() } }
         }
         private func deliver() async {
-            defer { delivering = false }
+            defer { deliveryTask = nil }
             while !ingress.isClosed, let group = groups.removeValue(forKey: head) {
                 if head == tail { tail &+= 1 }
                 head &+= 1
-                let boundary = Boundary(group.value)
-                inFlight = boundary
-                let paths = Array(group.value.changes.paths), roots = Array(group.value.changes.reconciliationPaths)
-                let count = max(1, (paths.count + roots.count + 127) / 128)
-                var accepted = true
-                for index in 0..<count {
-                    guard !ingress.isClosed else { accepted = false; break }
-                    let lower = index * 128, upper = min(lower + 128, paths.count + roots.count)
-                    var changes = group.value.changes
-                    changes.paths = Set(paths[max(0, min(lower, paths.count))..<min(upper, paths.count)])
-                    changes.reconciliationPaths = Set(roots[max(0, lower - paths.count)..<max(0, upper - paths.count)])
-                    guard await receive(.init(boundary: boundary, changes: changes,
-                        startsBoundary: index == 0, diagnostics: index == 0 ? group.diagnostics : nil)) else {
-                        accepted = false; break
+                let boundary = Boundary(group.value), fragments = Fragments(group.value.changes)
+                var next = 0
+                while next < fragments.count, !ingress.isClosed {
+                    let outcome = await receive(.init(boundary: boundary, changes: fragments.value(from: next),
+                        startsBoundary: next == 0, endsBoundary: next == fragments.count - 1,
+                        diagnostics: next == 0 ? group.diagnostics : nil))
+                    switch outcome {
+                    case .rejected: break
+                    case .ordinaryTransferred: next += 1
+                    case .recoveryTransferred, .retired: next = fragments.count
                     }
-                    await Task.yield()
+                    if case .rejected = outcome { break }
+                    // Complete transfer is recorded before any suspension.
+                    if next < fragments.count { await Task.yield() }
                 }
-                if !accepted, let changes = boundary.unpaidDelivery { await retire(changes) }
-                inFlight = nil
+                if next < fragments.count, let remainder = boundary.takeUndelivered(fragments.value(from: next, suffix: true)) {
+                    await retire(remainder)
+                }
             }
             if ingress.isClosed { groups.removeAll() }
         }
         func close() async {
+            // The receiver owns its in-flight transfer until it returns. Closure
+            // cannot guess that outcome or re-send accepted work.
+            await deliveryTask?.value
             groups.removeAll()
-            if let changes = inFlight?.unpaidDelivery { await retire(changes) }
-            inFlight = nil
         }
         #if DEBUG
         func snapshotForTesting() -> (queued: Int, pending: Bool, paths: Int, delivering: Bool) {
-            (ingress.queuedForTesting, !groups.isEmpty, groups.values.reduce(0) { $0 + $1.value.changes.paths.count }, delivering)
+            (ingress.queuedForTesting, !groups.isEmpty, groups.values.reduce(0) { $0 + $1.value.changes.paths.count }, deliveryTask != nil)
         }
         #endif
     }
     private let ingress: Ingress
     private let coalescer: Coalescer
-    convenience init(receive: @escaping @MainActor @Sendable (SourceChanges, [String]?) async -> Void) {
-        self.init(prepare: { .init(changes: $0, recoveryEligible: $0.hasIndexWork) }, receivePrepared: { delivery in
-            await receive(delivery.changes, delivery.diagnostics); return true
-        })
-    }
     init(prepare: @escaping @Sendable (SourceChanges) -> Prepared,
-         receivePrepared: @escaping @MainActor @Sendable (Delivery) async -> Bool,
-         retire: @escaping @MainActor @Sendable (SourceChanges) async -> Void = { _ in }) {
+         receivePrepared: @escaping @MainActor @Sendable (Delivery) async -> Transfer,
+         retire: @escaping @MainActor @Sendable (SourceChanges) async -> Void) {
         let ingress = Ingress()
         self.ingress = ingress
         coalescer = Coalescer(ingress: ingress, prepare: prepare, receive: { delivery in
-            guard !ingress.isClosed else { return false }
+            guard !ingress.isClosed else { return .rejected }
             return await receivePrepared(delivery)
         }, retire: retire)
     }
@@ -1349,18 +1403,9 @@ final class TraceModel: ObservableObject {
         return enrollment
     }
 
-    private func normalizeTranscriptChanges(_ changes: SourceChanges) -> (changes: SourceChanges, recoveryEligible: Bool) {
-        let value = SourceIngressMailbox.normalizeTranscript(changes, rootsByAgent: watcherRootsByAgent,
-            unavailableStreams: unavailableCheckpointStreams)
-        return (value.changes, value.recoveryEligible)
-    }
-
     private func reservingCheckpointWork(_ changes: SourceChanges) -> SourceChanges {
         guard !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty else { return changes }
-        var enrolled = changes
-        enrolled.watermarks = changes.watermarks.filter { !unavailableCheckpointStreams.contains($0.key) }
-        enrolled.streamRoots = changes.streamRoots.filter { !unavailableCheckpointStreams.contains($0.key) }
-        enrolled.wrappedStreams.subtract(unavailableCheckpointStreams)
+        var enrolled = SourceIngressMailbox.checkpointable(changes, excluding: unavailableCheckpointStreams)
         guard !enrolled.watermarks.isEmpty else { return enrolled }
         enrolled.checkpointReservations = [checkpointLedger.reserve(watermarks: enrolled.watermarks,
             streamRoots: enrolled.streamRoots, hasIndexWork: enrolled.hasIndexWork,
@@ -1368,15 +1413,6 @@ final class TraceModel: ObservableObject {
             paths: enrolled.paths, reconciliationPaths: enrolled.reconciliationPaths,
             streamEpochs: enrolled.streamEpochs)]
         return enrolled
-    }
-
-    @discardableResult
-    private func admitTranscriptChanges(_ changes: SourceChanges, safety: Bool = false) -> (SourceChanges, RecoveryEnrollment?) {
-        var normalized = normalizeTranscriptChanges(changes)
-        normalized.changes = reservingCheckpointWork(normalized.changes)
-        let enrollment = (safety || normalized.recoveryEligible)
-            ? enrollDeferredRebuildRecovery(changes: normalized.changes, safety: safety) : nil
-        return (normalized.changes, enrollment)
     }
 
     /// Callers normalize/filter live input before this common routing boundary.
@@ -2749,13 +2785,41 @@ final class TraceModel: ObservableObject {
     var rebuildRequestIDForTesting: UUID? { rebuildRequest?.id }
     var rebuildAcceptedForTesting: Bool { rebuildAcceptedByCurrentScheduler }
     var bufferedStartupInputsForTesting: SourceChanges { bufferedSourceChanges }
+    var sourceChangeSubmissionCountForTesting: Int?
+    var rebuildRecoveryPathsForTesting: Set<String> { rebuildRequest?.recoveryInputs.changes.paths ?? [] }
+    func closedSourceIngressObservationForTesting(database: IndexDatabase) -> @Sendable () async -> (queued: Int, pending: Bool, paths: Int, delivering: Bool) {
+        let mailbox = makeSourceIngress(database: database, generation: watcherGeneration,
+            kind: .metadata, rootsByAgent: [:], unavailableStreams: [])
+        let observe = mailbox.observationForTesting(); mailbox.close(); return observe
+    }
+    var sourceIngressAfterTransferGateForTesting: Task<Void, Never>?
+    private(set) var sourceIngressAfterTransferWaitingForTesting = false
+    var sourceIngressTransfersForTesting: [SourceIngressMailbox.Transfer]?
     @discardableResult
-    func recoverDeferredRebuildForTesting(_ changes: SourceChanges, safety: Bool = false) -> Bool {
-        let (relevant, enrollment) = admitTranscriptChanges(changes, safety: safety)
-        if enrollment == nil {
-            Task { await routeSourceChanges(relevant, acceptsCheckpoints: true, safety: safety) }
+    func recoverDeferredRebuildForTesting(_ changes: SourceChanges, safety: Bool = false) async -> Bool {
+        guard let database else { return false }
+        if sourceIngressTransfersForTesting == nil { sourceIngressTransfersForTesting = [] }
+        var result: Bool?
+        let mailbox = makeSourceIngress(database: database, generation: watcherGeneration,
+            kind: .transcript(safety: safety), rootsByAgent: watcherRootsByAgent,
+            unavailableStreams: unavailableCheckpointStreams, observe: { delivery, outcome in
+                switch outcome {
+                case .recoveryTransferred: result = true
+                case .retired, .rejected: result = false
+                case .ordinaryTransferred: if delivery.endsBoundary { result = false }
+                }
+            })
+        sourceIngressMailboxes.append(mailbox)
+        defer { mailbox.close(); sourceIngressMailboxes.removeAll { $0 === mailbox } }
+        mailbox.enqueue(changes)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while result == nil {
+            let state = await mailbox.snapshotForTesting()
+            if !state.delivering, !state.pending, state.queued == 0 { return false }
+            guard !Task.isCancelled, ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(5))
         }
-        return enrollment != nil
+        return result == true
     }
 
     var explicitRebuildGateOpenForTesting: Bool? { rebuildRequest?.explicitGate?.open }
@@ -6471,23 +6535,8 @@ final class TraceModel: ObservableObject {
         watcherStartupPending = true
         startupReconciliationPaths = reconciliationPaths
         let unavailable = unavailableCheckpointStreams
-        let transcriptIngress = SourceIngressMailbox(prepare: { changes in
-            SourceIngressMailbox.normalizeTranscript(changes, rootsByAgent: rootsByAgent, unavailableStreams: unavailable)
-        }, receivePrepared: { [weak self] delivery in
-            guard let self, self.settings.onboardingComplete, self.watcherGeneration == generation,
-                  self.database === database, !self.terminating else { return false }
-            #if DEBUG
-            if self.suppressLiveWatcherIngressForTesting { return false }
-            #endif
-            let changes = delivery.enrolled(in: self.checkpointLedger)
-            let enrollment = delivery.startsBoundary && delivery.boundary.value.recoveryEligible
-                ? self.enrollDeferredRebuildRecovery(changes: delivery.boundary.enrolled(in: self.checkpointLedger), safety: false) : nil
-            if enrollment == nil { await self.routeSourceChanges(changes, acceptsCheckpoints: true) }
-            return self.database === database && !self.terminating && self.watcherGeneration == generation
-        }, retire: { [weak self] changes in
-            guard let self, self.database === database, !self.terminating else { return }
-            await self.routeBufferedSourceWork(.init(database: database, changes: changes, obligations: []))
-        })
+        let transcriptIngress = makeSourceIngress(database: database, generation: generation,
+            kind: .transcript(safety: false), rootsByAgent: rootsByAgent, unavailableStreams: unavailable)
         sourceIngressMailboxes.append(transcriptIngress)
         let replacements = configurations.map { configuration in
             (configuration, FSEventsWatcher(roots: configuration.roots, identifier: configuration.id,
@@ -6507,22 +6556,8 @@ final class TraceModel: ObservableObject {
             else { failedRoots += configuration.roots }
         }
         watchers = started
-        let metadataIngress = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: $0.hasIndexWork) },
-            receivePrepared: { [weak self] delivery in
-            guard let self, self.watcherGeneration == generation, self.database === database, !self.terminating else { return false }
-            #if DEBUG
-            if self.suppressLiveWatcherIngressForTesting { return false }
-            #endif
-            if let diagnostics = delivery.diagnostics {
-                self.metadataMonitoringWarnings = diagnostics
-                self.updateMonitoringWarnings()
-            }
-            guard self.watcherGeneration == generation else { return false }
-            let enrollment = delivery.startsBoundary && delivery.boundary.value.recoveryEligible
-                ? self.enrollDeferredRebuildRecovery(changes: delivery.boundary.value.changes, safety: false) : nil
-            if enrollment == nil { await self.routeSourceChanges(delivery.changes, acceptsCheckpoints: false) }
-            return self.watcherGeneration == generation && !self.terminating
-        })
+        let metadataIngress = makeSourceIngress(database: database, generation: generation,
+            kind: .metadata, rootsByAgent: [:], unavailableStreams: [])
         sourceIngressMailboxes.append(metadataIngress)
         let metadataWatcher = CodexMetadataWatcher(metadataDirectories: metadataRoots, mapping: sidecarMapping) { changes, diagnostics in
             metadataIngress.enqueue(changes, diagnostics: diagnostics)
@@ -6583,6 +6618,74 @@ final class TraceModel: ObservableObject {
         return includesRoot ? .rootRecovery : .subtreeRecovery
     }
 
+    private enum SourceIngressKind: Sendable { case transcript(safety: Bool), metadata }
+
+    private func makeSourceIngress(database: IndexDatabase, generation: UInt64, kind: SourceIngressKind,
+                                   rootsByAgent: [AgentKind: [TraceFileIO.CanonicalPath]],
+                                   unavailableStreams: Set<String>,
+                                   observe: (@MainActor @Sendable (SourceIngressMailbox.Delivery, SourceIngressMailbox.Transfer) -> Void)? = nil) -> SourceIngressMailbox {
+        let transcript: Bool
+        switch kind { case .transcript: transcript = true; case .metadata: transcript = false }
+        return SourceIngressMailbox(prepare: { changes in
+            transcript ? SourceIngressMailbox.normalizeTranscript(changes, rootsByAgent: rootsByAgent, unavailableStreams: unavailableStreams)
+                : .init(changes: changes, recoveryEligible: changes.hasIndexWork)
+        }, receivePrepared: { [weak self, weak database] delivery in
+            guard let self, let database else { return .retired }
+            let outcome = await self.receiveSourceIngress(delivery, database: database, generation: generation, kind: kind, testingInjection: observe != nil)
+            observe?(delivery, outcome)
+            return outcome
+        }, retire: { [weak self, weak database] changes in
+            guard let self, let database, self.database === database, !self.terminating else { return }
+            await self.routeBufferedSourceWork(.init(database: database, changes: changes, obligations: []))
+        })
+    }
+
+    private func receiveSourceIngress(_ delivery: SourceIngressMailbox.Delivery, database: IndexDatabase,
+                                      generation: UInt64, kind: SourceIngressKind, testingInjection: Bool = false) async -> SourceIngressMailbox.Transfer {
+        guard self.database === database, !terminating else { return .retired }
+        guard watcherGeneration == generation else { return .rejected }
+        let acceptsCheckpoints: Bool, safety: Bool
+        switch kind {
+        case .transcript(let isSafety):
+            guard settings.onboardingComplete else { return .rejected }
+            acceptsCheckpoints = true; safety = isSafety
+        case .metadata:
+            acceptsCheckpoints = false; safety = false
+            if let diagnostics = delivery.diagnostics {
+                metadataMonitoringWarnings = diagnostics; updateMonitoringWarnings()
+            }
+        }
+        guard self.database === database, !terminating else { return .retired }
+        guard watcherGeneration == generation else { return .rejected }
+        #if DEBUG
+        if suppressLiveWatcherIngressForTesting && !testingInjection { return .rejected }
+        #endif
+        let reservations = delivery.boundary.reservations(in: checkpointLedger, acceptsCheckpoints: acceptsCheckpoints)
+        if delivery.startsBoundary, delivery.boundary.value.recoveryEligible || safety {
+            var complete = delivery.boundary.value.changes; complete.checkpointReservations = reservations
+            if enrollDeferredRebuildRecovery(changes: complete, safety: safety) != nil {
+                #if DEBUG
+                sourceIngressTransfersForTesting?.append(.recoveryTransferred)
+                #endif
+                return .recoveryTransferred
+            }
+        }
+        var changes = delivery.changes; changes.checkpointReservations = reservations
+        await routeSourceChanges(changes, acceptsCheckpoints: acceptsCheckpoints, safety: safety)
+        #if DEBUG
+        if let gate = sourceIngressAfterTransferGateForTesting {
+            sourceIngressAfterTransferGateForTesting = nil
+            sourceIngressAfterTransferWaitingForTesting = true
+            await gate.value
+            sourceIngressAfterTransferWaitingForTesting = false
+        }
+        sourceIngressTransfersForTesting?.append(.ordinaryTransferred)
+        #endif
+        // Delivery has transferred to the scheduler or same-database buffer.
+        // Later watcher freshness cannot turn that fact into rejection.
+        return self.database === database && !terminating ? .ordinaryTransferred : .retired
+    }
+
     private func routeSourceChanges(_ changes: SourceChanges, acceptsCheckpoints: Bool,
                                     completion: (@Sendable () -> Void)? = nil,
                                     delivery: RecoveryEnrollment? = nil, safety: Bool = false) async {
@@ -6600,6 +6703,9 @@ final class TraceModel: ObservableObject {
     private func submitSourceChanges(_ changes: SourceChanges,
                                      completion: (@Sendable () -> Void)? = nil, safety: Bool = false) async {
         guard let scheduler else { return }
+        #if DEBUG
+        if let count = sourceChangeSubmissionCountForTesting { sourceChangeSubmissionCountForTesting = count + 1 }
+        #endif
         TraceTestHooks.appendLine(
             "paths=\(changes.paths.sorted()),reconcile=\(changes.reconciliationPaths.sorted()),reasons=\(changes.recoveryReasons.map(\.rawValue).sorted())",
             pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"

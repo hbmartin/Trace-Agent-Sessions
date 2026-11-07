@@ -20,7 +20,7 @@ def extract(source):
     static func record(_ start: ContinuousClock.Instant, changes: SourceChanges) {
         let duration = start.duration(to: .now).components
         preparationSeconds += Double(duration.seconds) + Double(duration.attoseconds) / 1e18
-        turns += 1; maxInputs = max(maxInputs, changes.paths.count + changes.reconciliationPaths.count)
+        turns += 1; maxInputs = max(maxInputs, changes.paths.count + changes.reconciliationPaths.count + changes.lexicalPaths.count + changes.structuralPaths.count)
         enrollmentCalls += changes.checkpointReservations.count
     }
 }
@@ -44,10 +44,10 @@ def extract(source):
         let start = ContinuousClock.now
         let changes = delivery.enrolled(in: IngressMeasurement.ledger)
         IngressMeasurement.record(start, changes: changes)
-        await receive(changes); return true
-    })
+        await receive(changes); return TRANSFER
+    }, retire: { _ in preconditionFailure("Untransferred benchmark boundary") })
 }
-'''
+'''.replace('TRANSFER', '.ordinaryTransferred' if 'enum Transfer:' in mailbox else 'true')
     else:
         marker = '    private func normalizeTranscriptChanges('
         if source.count(marker) != 1:

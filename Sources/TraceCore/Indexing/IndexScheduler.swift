@@ -96,9 +96,20 @@ public struct IndexCheckpointInputs: Sendable {
                 hasIndexWork: Bool, wrappedStreams: Set<String> = [],
                 paths: Set<String> = [], reconciliationPaths: Set<String> = [],
                 streamEpochs: [String: IndexEventStreamEpoch] = [:]) {
-        let inputs = Set(paths.map(TraceFileIO.canonicalPath))
-        let reconciliation = Set(reconciliationPaths.map(TraceFileIO.canonicalPath))
-        let roots = streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) }
+        self.init(watermarks: watermarks,
+            canonicalStreamRoots: watermarks.isEmpty ? [:] : streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) },
+            hasIndexWork: hasIndexWork, wrappedStreams: wrappedStreams,
+            canonicalPaths: watermarks.isEmpty ? [] : Set(paths.map(TraceFileIO.canonicalPath)),
+            canonicalReconciliationPaths: watermarks.isEmpty ? [] : Set(reconciliationPaths.map(TraceFileIO.canonicalPath)),
+            streamEpochs: streamEpochs)
+    }
+    /// Reuse immutable canonical identities from background content preparation.
+    /// This overload performs no filesystem resolution and enrolls no work.
+    public init(watermarks: [String: UInt64], canonicalStreamRoots roots: [String: Set<TraceFileIO.CanonicalPath>],
+                hasIndexWork: Bool, wrappedStreams: Set<String> = [],
+                canonicalPaths inputs: Set<TraceFileIO.CanonicalPath> = [],
+                canonicalReconciliationPaths reconciliation: Set<TraceFileIO.CanonicalPath> = [],
+                streamEpochs: [String: IndexEventStreamEpoch] = [:]) {
         var streams: [String: Stream] = [:]
         for (name, mark) in watermarks {
             let scope = roots[name] ?? []
@@ -374,6 +385,7 @@ public final class IndexCheckpointLedger: Sendable {
     private struct State: @unchecked Sendable {
         var streams: [String: Stream] = [:]
         var listeners: [UUID: Readiness] = [:]
+        var drainOwner: UUID?
         var revision: UInt64 = 0
         var sequence: UInt64 = 0
         var proofs: [ProofCursor] = []
@@ -404,15 +416,24 @@ public final class IndexCheckpointLedger: Sendable {
     private let state = OSAllocatedUnfairLock(initialState: State())
     public init() {}
     fileprivate func registerReadiness(_ listener: Readiness, owner: UUID) {
-        state.withLock { $0.listeners[owner] = listener }
+        let displaced = state.withLock { value in
+            let previous = value.drainOwner.flatMap { value.listeners[$0] }
+            value.listeners[owner] = listener; value.drainOwner = owner
+            return previous
+        }
+        displaced?.close()
     }
     fileprivate func unregisterReadiness(_ owner: UUID) {
-        let listener = state.withLock { $0.listeners.removeValue(forKey: owner) }
+        let listener = state.withLock { value in
+            if value.drainOwner == owner { value.drainOwner = nil }
+            return value.listeners.removeValue(forKey: owner)
+        }
         listener?.close()
     }
+    fileprivate func isDrainOwner(_ owner: UUID) -> Bool { state.withLock { $0.drainOwner == owner } }
     private func signalReadiness() {
-        let listeners = state.withLock { Array($0.listeners.values) }
-        listeners.forEach { $0.request() }
+        let listener = state.withLock { value in value.drainOwner.flatMap { value.listeners[$0] } }
+        listener?.request()
     }
     deinit {
         // Every node is still retained by a dictionary/retirement array while
@@ -450,7 +471,12 @@ public final class IndexCheckpointLedger: Sendable {
         state.withLock { Set($0.streams.filter { !$0.value.initialized && !$0.value.initializationFailed }.keys) }
     }
     fileprivate var pausedStreams: Set<String> { state.withLock { Set($0.streams.filter { $0.value.initializationFailed }.keys) } }
-    fileprivate func resumeInitialization() { state.withLock { value in for stream in value.streams.values { stream.initializationFailed = false } } }
+    fileprivate func resumeInitialization(owner: UUID) {
+        state.withLock { value in
+            guard value.drainOwner == owner else { return }
+            for stream in value.streams.values { stream.initializationFailed = false }
+        }
+    }
     fileprivate func pauseInitialization(_ stream: String) { state.withLock { $0.streams[stream]?.initializationFailed = true } }
     #if DEBUG
     func initializationForTesting(stream: String) -> (initialized: Bool, epoch: String?, floor: UInt64?) {
@@ -562,7 +588,10 @@ public final class IndexCheckpointLedger: Sendable {
         state.withLock { value in entries.compactMap { value.streams[$0.stream]?.records[$0.id]?.remaining } }
     }
     fileprivate func fenceReset(_ token: UUID) { state.withLock { $0.fences.insert(token) } }
-    fileprivate func releaseReset(_ token: UUID) { state.withLock { _ = $0.fences.remove(token) } }
+    fileprivate func releaseReset(_ token: UUID) {
+        let removed = state.withLock { $0.fences.remove(token) != nil }
+        if removed, !isDrainOwner(token) { signalReadiness() }
+    }
     /// Called synchronously from the database's committed-reset callback.
     fileprivate func committedReset(content: IndexContentGeneration, extending coverage: Coverage) -> Coverage {
         state.withLock { value in
@@ -603,8 +632,9 @@ public final class IndexCheckpointLedger: Sendable {
             value.prefixStreams.insert(name)
         }
     }
-    fileprivate func synchronizeContext(content: IndexContentGeneration) {
+    fileprivate func synchronizeContext(content: IndexContentGeneration, owner: UUID? = nil) {
         state.withLock { value in
+            guard owner == nil || value.drainOwner == owner else { return }
             if let prior = value.content, prior != content { Self.resetRecords(content: content, state: &value) }
             else { value.content = content }
         }
@@ -682,24 +712,35 @@ public final class IndexCheckpointLedger: Sendable {
         }
         if retained { signalReadiness() }
     }
+    fileprivate func returnUnpublished(_ updates: [String: IndexEventCheckpoint]) {
+        guard !updates.isEmpty else { return }
+        state.withLock { value in
+            for (stream, update) in updates where value.streams[stream]?.epoch == update.epoch
+                && (update.contentGeneration == nil || update.contentGeneration == value.content) {
+                if value.updates[stream].map({ $0.value < update.value }) ?? true { value.updates[stream] = update }
+            }
+        }
+        signalReadiness()
+    }
     fileprivate var lastPublicationActivity: IndexActivity { state.withLock { $0.lastPublicationActivity } }
     fileprivate var hasCompletedProofs: Bool { state.withLock { !$0.proofs.isEmpty } }
     fileprivate var hasReadyProofs: Bool {
         state.withLock { value in
-            !value.proofs.isEmpty || (value.fences.isEmpty && (!value.updates.isEmpty || value.prefixStreams.contains { value.streams[$0]?.initialized == true }))
+            !value.processing && (!value.proofs.isEmpty || (value.fences.isEmpty && (!value.updates.isEmpty || value.prefixStreams.contains { value.streams[$0]?.initialized == true })))
         }
     }
     /// One bounded worker turn. Reentrant ingress never invalidates unrelated
     /// computation. Only reset/epoch retirement can discard the captured records.
-    fileprivate func drainProofs(scope: IndexScope, content: IndexContentGeneration) -> [String: IndexEventCheckpoint] {
-        synchronizeContext(content: content)
+    fileprivate func drainProofs(scope: IndexScope, content: IndexContentGeneration, owner: UUID? = nil) -> [String: IndexEventCheckpoint] {
+        synchronizeContext(content: content, owner: owner)
         #if TRACE_CHECKPOINT_BENCHMARK
         let measurement = CheckpointAcceptanceBenchmark.begin()
         defer { CheckpointAcceptanceBenchmark.end(measurement) }
         #endif
         struct Item { let entry: Entry; let remaining: IndexWorkRequirement; let outcomes: Outcomes }
         let work: (ExecutionProof, [Item])? = state.withLock { value in
-            guard !value.processing, let cursor = value.proofs.first else { return nil }
+            guard owner == nil || value.drainOwner == owner,
+                  !value.processing, let cursor = value.proofs.first else { return nil }
             let proof = cursor.proof
             guard proof.coverage.revision == value.revision, proof.scope == scope,
                   proof.content == nil || proof.content == content else {
@@ -775,8 +816,10 @@ public final class IndexCheckpointLedger: Sendable {
                 }
             }
         }
+        if work != nil, let owner, !isDrainOwner(owner) { signalReadiness() }
         return state.withLock { value in
-            guard value.fences.isEmpty else { return [:] }
+            guard owner == nil || value.drainOwner == owner,
+                  !value.processing, value.fences.isEmpty else { return [:] }
             var budget = 128
             for name in Array(value.prefixStreams) where budget > 0 {
                 guard let stream = value.streams[name], stream.initialized else { continue }
@@ -1022,8 +1065,6 @@ public actor IndexScheduler {
                  didCompleteCheckpoints: (@Sendable ([String: IndexEventCheckpoint]) async -> Void)?,
                  pausedStreamsChanged: (@Sendable (Set<String>) async -> Void)?) {
         self.checkpointLedger = checkpointLedger
-        checkpointLedger.synchronizeContext(content: coordinator.checkpointContentGeneration)
-        checkpointLedger.resumeInitialization()
         self.qualifiedCompletion = didCompleteCheckpoints
         self.coordinator = coordinator
         self.scope = scope
@@ -1035,6 +1076,8 @@ public actor IndexScheduler {
         self.pausedCheckpointStreamsChanged = pausedStreamsChanged
         let readiness = readiness, taskHolder = readinessTask
         checkpointLedger.registerReadiness(readiness, owner: installationID)
+        checkpointLedger.synchronizeContext(content: coordinator.checkpointContentGeneration, owner: installationID)
+        checkpointLedger.resumeInitialization(owner: installationID)
         readiness.request()
         #if DEBUG
         let activationHook = checkpointLedger.takeActivationHookForTesting()
@@ -1057,7 +1100,7 @@ public actor IndexScheduler {
     }
 
     private func resumeCompletedProofs() {
-        guard !stopping, worker == nil,
+        guard !stopping, checkpointLedger.isDrainOwner(installationID), worker == nil,
               checkpointLedger.hasReadyProofs || !checkpointLedger.uninitializedStreams.isEmpty else { return }
         worker = Task { await drain() }
     }
@@ -1274,18 +1317,19 @@ public actor IndexScheduler {
 
     private func drain() async {
         defer { worker = nil }
-        while !stopping && (hasPendingWork || !pendingOrdinaryReceipts.isEmpty || !checkpointLedger.uninitializedStreams.isEmpty || ordinaryRecovery != nil || readyRetryIndex != nil
-            || checkpointLedger.hasReadyProofs) {
+        while !stopping && (hasPendingWork || !pendingOrdinaryReceipts.isEmpty || (checkpointLedger.isDrainOwner(installationID) && !checkpointLedger.uninitializedStreams.isEmpty) || ordinaryRecovery != nil || readyRetryIndex != nil
+            || (checkpointLedger.isDrainOwner(installationID) && checkpointLedger.hasReadyProofs)) {
             await drainCheckpointProofs()
             guard !stopping else { return }
-            for stream in checkpointLedger.uninitializedStreams.sorted() {
+            for stream in checkpointLedger.uninitializedStreams.sorted() where checkpointLedger.isDrainOwner(installationID) {
                 do {
                     let record = try await coordinator.checkpointRecord(stream: stream)
                     guard !stopping else { return }
+                    guard checkpointLedger.isDrainOwner(installationID) else { break }
                     checkpointLedger.seed(stream: stream, checkpoint: record)
                 } catch {
                     guard !stopping else { return }
-                    checkpointLedger.pauseInitialization(stream)
+                    if checkpointLedger.isDrainOwner(installationID) { checkpointLedger.pauseInitialization(stream) }
                 }
             }
             guard !stopping else { return }
@@ -1655,13 +1699,13 @@ public actor IndexScheduler {
     }
 
     private func drainCheckpointProofs() async {
-        while !stopping && checkpointLedger.hasReadyProofs {
+        while !stopping && checkpointLedger.isDrainOwner(installationID) && checkpointLedger.hasReadyProofs {
             #if DEBUG
             if checkpointLedger.hasCompletedProofs { await deferredCheckpointAcceptanceHookForTesting?() }
             guard !stopping else { return }
             #endif
             let context = coordinator.checkpointContext
-            let updates = checkpointLedger.drainProofs(scope: context.scope, content: context.generation)
+            let updates = checkpointLedger.drainProofs(scope: context.scope, content: context.generation, owner: installationID)
             guard !stopping else { return }
             await publishCheckpoints(updates, activity: checkpointLedger.lastPublicationActivity)
             await Task.yield()
@@ -1669,7 +1713,10 @@ public actor IndexScheduler {
     }
 
     private func publishCheckpoints(_ updates: [String: IndexEventCheckpoint], activity: IndexActivity) async {
-        guard !updates.isEmpty else { return }
+        guard !stopping, checkpointLedger.isDrainOwner(installationID), !updates.isEmpty else {
+            checkpointLedger.returnUnpublished(updates)
+            return
+        }
         if let qualifiedCompletion { await qualifiedCompletion(updates) }
         else { await didComplete(activity, updates.mapValues(\.value)) }
     }
@@ -1804,7 +1851,8 @@ public actor IndexScheduler {
         ordinaryRecovery = nil
         cancelScheduledRetry()
         operation?.cancel()
-        await readiness.wait()
+        if let task = readinessTask.withLock({ $0 }) { await task.value }
+        readinessTask.withLock { $0 = nil }
         await worker?.value
         checkpointLedger.releaseReset(installationID)
     }

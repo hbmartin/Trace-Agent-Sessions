@@ -1,0 +1,9 @@
+{
+  "candidate": "9aefd23804e7a746d1bedaa1a8a550a926fdef99",
+  "completed": "frozen-focused: 694 passing cases",
+  "heldWithoutExecution": [
+    "frozen-known-transcript",
+    "frozen-discovery"
+  ],
+  "reason": "Verify reset-fence release wakes retained successor coverage before final acceptance."
+}

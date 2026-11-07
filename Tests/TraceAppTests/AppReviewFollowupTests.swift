@@ -12,13 +12,147 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testRecoveryOwnsAllThreeFragmentsWithoutOrdinarySubmission() async throws {
+        let f = try await deferredResetFixture(), gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open(); await f.model.prepareToTerminate() } }
+        f.model.rebuildSubmissionGateForTesting = held
+        f.model.sourceChangeSubmissionCountForTesting = 0
+        var changes = SourceChanges()
+        changes.paths = Set((0..<300).map { f.root.appendingPathComponent("event-\($0).jsonl").path })
+        changes.watermarks = ["manual-stream": 100]; changes.streamRoots = ["manual-stream": [f.root.path]]
+        let enrolled = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(enrolled)
+        try await wait { f.model.rebuildSubmissionWaitingForTesting }
+        XCTAssertEqual(f.model.sourceIngressTransfersForTesting, [.recoveryTransferred])
+        XCTAssertEqual(f.model.sourceChangeSubmissionCountForTesting, 0)
+        XCTAssertEqual(f.model.rebuildRecoveryPathsForTesting, changes.paths)
+        await gate.open()
+        await f.model.schedulerForTesting?.waitUntilIdle()
+    }
+
+    func testWatcherReplacementCannotRejectAnAlreadyTransferredFragment() async throws {
+        let f = try await fixture(count: 2), source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open(); await f.model.prepareToTerminate() } }
+        f.model.suppressLiveWatcherIngressForTesting = true
+        f.model.sourceIngressAfterTransferGateForTesting = held
+        f.model.sourceChangeSubmissionCountForTesting = 0
+        var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        let delivery = Task { await f.model.recoverDeferredRebuildForTesting(changes) }
+        try await wait { f.model.sourceIngressAfterTransferWaitingForTesting }
+        let restarted = await f.model.restartWatchingForTesting([source]); XCTAssertTrue(restarted)
+        await gate.open()
+        let recovery = await delivery.value; XCTAssertFalse(recovery)
+        XCTAssertEqual(f.model.sourceIngressTransfersForTesting, [.ordinaryTransferred])
+        XCTAssertEqual(f.model.sourceChangeSubmissionCountForTesting, 1)
+        XCTAssertTrue(f.model.bufferedStartupInputsForTesting.paths.isDisjoint(with: changes.paths))
+    }
+
+    func testClosingAfterFinalTransferDoesNotReplayUnpaidCoverage() async throws {
+        let ledger = IndexCheckpointLedger()
+        var mailbox: SourceIngressMailbox?, deliveries = 0, retired = 0
+        mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: false) }, receivePrepared: { delivery in
+            _ = delivery.enrolled(in: ledger); deliveries += 1
+            if delivery.endsBoundary { mailbox?.close() }
+            return .ordinaryTransferred
+        }, retire: { _ in retired += 1 })
+        defer { mailbox?.close() }
+        var changes = SourceChanges(); changes.paths = Set((0..<300).map { "/tmp/final/\($0)" }); changes.watermarks = ["s": 100]
+        mailbox?.enqueue(changes)
+        let observe = try XCTUnwrap(mailbox).observationForTesting()
+        try await wait { deliveries == 3 }
+        try await wait { !(await observe().delivering) }
+        XCTAssertEqual(retired, 0)
+        XCTAssertEqual(ledger.retainedRecordCount, 1, "Unpaid coverage remains ledger-owned after delivery completes")
+    }
+
+    func testCloseRetainsOnlyTheUntransferredSuffix() async throws {
+        let ledger = IndexCheckpointLedger()
+        var mailbox: SourceIngressMailbox?, deliveries = 0, transferred: Set<String> = [], retired: [SourceChanges] = []
+        mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: false) }, receivePrepared: { delivery in
+            let changes = delivery.enrolled(in: ledger)
+            transferred.formUnion(changes.paths); deliveries += 1
+            mailbox?.close()
+            return .ordinaryTransferred
+        }, retire: { retired.append($0) })
+        defer { mailbox?.close() }
+        var changes = SourceChanges(); changes.paths = Set((0..<300).map { "/tmp/suffix/\($0)" }); changes.watermarks = ["s": 100]
+        mailbox?.enqueue(changes)
+        try await wait { retired.count == 1 }
+        XCTAssertEqual(deliveries, 1); XCTAssertEqual(transferred.count, 128)
+        XCTAssertEqual(retired[0].paths.count, 172)
+        XCTAssertTrue(retired[0].paths.isDisjoint(with: transferred))
+        XCTAssertEqual(retired[0].paths.union(transferred), changes.paths)
+        XCTAssertEqual(retired[0].checkpointReservations.count, 1)
+    }
+
+    func testMailboxBoundsEveryPathRoleAndAppliesDiagnosticsOnce() async throws {
+        let ledger = IndexCheckpointLedger()
+        var combined = SourceChanges(), diagnostics: [[String]] = [], deliveries = 0
+        let mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: false) }, receivePrepared: { delivery in
+            let changes = delivery.enrolled(in: ledger)
+            XCTAssertLessThanOrEqual(changes.paths.count + changes.reconciliationPaths.count + changes.lexicalPaths.count + changes.structuralPaths.count, 128)
+            combined.merge(changes); deliveries += 1
+            if let update = delivery.diagnostics { diagnostics.append(update) }
+            return .ordinaryTransferred
+        }, retire: { _ in XCTFail("Accepted work must not be replayed") })
+        defer { mailbox.close() }
+        var changes = SourceChanges()
+        changes.paths = Set((0..<300).map { "/tmp/roles/path-\($0)" })
+        changes.reconciliationPaths = Set((0..<200).map { "/tmp/roles/root-\($0)" })
+        changes.lexicalPaths = Set((0..<10_000).map { "/tmp/roles/link-\($0)" })
+        changes.structuralPaths = Set((0..<10_000).map { "/tmp/roles/create-\($0)" })
+        changes.watermarks = ["s": 100]; changes.streamRoots = ["s": ["/tmp/roles"]]
+        mailbox.enqueue(changes, diagnostics: ["warning"])
+        try await wait { deliveries == 161 }
+        XCTAssertEqual(combined.paths, changes.paths); XCTAssertEqual(combined.reconciliationPaths, changes.reconciliationPaths)
+        XCTAssertEqual(combined.lexicalPaths, changes.lexicalPaths); XCTAssertEqual(combined.structuralPaths, changes.structuralPaths)
+        XCTAssertEqual(combined.watermarks, ["s": 100]); XCTAssertEqual(combined.checkpointReservations.count, 1)
+        XCTAssertEqual(diagnostics, [["warning"]])
+    }
+
+    func testHistoryWithoutWatermarksHasNoReservationOrSchedulerRequest() async throws {
+        let f = try await fixture(count: 1), source = ClaudeCodeSource(roots: [f.root])
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [source])
+        f.model.startReadyStartupForTesting(sources: [source])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        f.model.suppressLiveWatcherIngressForTesting = true
+        f.model.sourceChangeSubmissionCountForTesting = 0
+        let ledger = IndexCheckpointLedger()
+        var history = SourceChanges(); history.historyDone = true
+        let boundary = SourceIngressMailbox.Boundary(.init(changes: history, recoveryEligible: false))
+        XCTAssertTrue(boundary.reservations(in: ledger).isEmpty)
+        let admitted = await f.model.recoverDeferredRebuildForTesting(history)
+        XCTAssertFalse(admitted); XCTAssertEqual(f.model.sourceChangeSubmissionCountForTesting, 0)
+        XCTAssertEqual(ledger.retainedRecordCount, 0)
+    }
+
+    func testClosedMailboxObservationDoesNotRetainItsDatabase() async throws {
+        let f = try await fixture(count: 1)
+        var obsolete: IndexDatabase? = try IndexDatabase(url: f.root.appendingPathComponent("obsolete.sqlite"))
+        weak var released = obsolete
+        let observe = f.model.closedSourceIngressObservationForTesting(database: try XCTUnwrap(obsolete))
+        obsolete = nil
+        try await wait { released == nil }
+        let state = await observe()
+        XCTAssertFalse(state.delivering); XCTAssertFalse(state.pending)
+    }
+
     func testMailboxCoalescesWhileMainActorDeliveryIsHeld() async throws {
         let gate = ReviewReadGate(), before = IndexEventStreamEpoch(), after = before.advanced()
         var deliveries: [(SourceChanges, [String]?)] = []
-        let mailbox = SourceIngressMailbox { changes, diagnostics in
-            deliveries.append((changes, diagnostics))
+        let mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: false) }, receivePrepared: { delivery in
+            deliveries.append((delivery.changes, delivery.diagnostics))
             if deliveries.count == 1 { await gate.wait() }
-        }
+            return .ordinaryTransferred
+        }, retire: { _ in })
         defer { mailbox.close(); Task { await gate.open() } }
         var initial = SourceChanges(); initial.watermarks = ["a": 10]; initial.streamEpochs = ["a": before]
         mailbox.enqueue(initial)
@@ -86,8 +220,8 @@ final class AppReviewFollowupTests: XCTestCase {
             if let mark = updates["s"]?.value { accepted.append(mark) }
             deliveries += 1
             if deliveries < 3 { XCTAssertTrue(accepted.isEmpty) }
-            return true
-        })
+            return .ordinaryTransferred
+        }, retire: { _ in XCTFail("Accepted boundary must not retire") })
         defer { mailbox.close(); Task { await f.model.prepareToTerminate() } }
         var first = SourceChanges(); first.paths = Set((0..<300).map { "/tmp/oversized/\($0)" }); first.watermarks = ["s": 100]
         mailbox.enqueue(first)
@@ -105,15 +239,16 @@ final class AppReviewFollowupTests: XCTestCase {
         var entered = false, retired: [SourceChanges] = []
         let mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: true) }, receivePrepared: { delivery in
             _ = delivery.enrolled(in: ledger)
-            entered = true; await gate.wait(); return false
+            entered = true; await gate.wait(); return .rejected
         }, retire: { retired.append($0) })
         defer { mailbox.close(); Task { await gate.open(); await f.model.prepareToTerminate() } }
         var changes = SourceChanges(); changes.paths = Set((0..<300).map { "/tmp/partial/\($0)" }); changes.watermarks = ["s": 100]
         mailbox.enqueue(changes)
         try await wait { entered }
         mailbox.close()
-        try await wait { retired.count == 1 }
+        XCTAssertTrue(retired.isEmpty, "Closure must await the in-flight transfer outcome")
         await gate.open()
+        try await wait { retired.count == 1 }
         let observe = mailbox.observationForTesting()
         let deadline = ContinuousClock.now + .seconds(5)
         while await observe().delivering {
@@ -129,9 +264,9 @@ final class AppReviewFollowupTests: XCTestCase {
         var calls = 0, retired = 0
         let mailbox = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: true) }, receivePrepared: { delivery in
             calls += 1
-            if calls == 1 { return false }
+            if calls == 1 { return .rejected }
             _ = delivery.enrolled(in: ledger)
-            return true
+            return .ordinaryTransferred
         }, retire: { _ in retired += 1 })
         defer { mailbox.close() }
         var changes = SourceChanges(); changes.paths = Set((0..<300).map { "/tmp/rejected/\($0)" }); changes.watermarks = ["s": 100]
@@ -150,9 +285,9 @@ final class AppReviewFollowupTests: XCTestCase {
     func testClosingMailboxRetiresQueuedWorkAndDoesNotRetainItsOwner() async throws {
         let gate = ReviewReadGate()
         var deliveries = 0
-        var mailbox: SourceIngressMailbox? = SourceIngressMailbox { _, _ in
-            deliveries += 1; await gate.wait()
-        }
+        var mailbox: SourceIngressMailbox? = SourceIngressMailbox(prepare: { .init(changes: $0, recoveryEligible: false) }, receivePrepared: { _ in
+            deliveries += 1; await gate.wait(); return .ordinaryTransferred
+        }, retire: { _ in })
         defer { mailbox?.close(); Task { await gate.open() } }
         weak var released = mailbox
         let observe = try XCTUnwrap(mailbox).observationForTesting()
@@ -308,7 +443,8 @@ final class AppReviewFollowupTests: XCTestCase {
         defer { held.cancel(); Task { await gate.open() } }
         f.model.automaticNavigationTranscriptGateForTesting = held
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress1 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress1)
         try await wait { f.model.automaticNavigationTranscriptWaitingForTesting }
         f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: .init(messageID: last.id, offset: 94, index: 1))
         await gate.open()
@@ -462,7 +598,8 @@ final class AppReviewFollowupTests: XCTestCase {
         addTeardownBlock { held.cancel(); await gate.open() }
         f.model.pendingBookmarkResolutionGateForTesting = held
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress2 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress2)
         try await wait { f.model.pendingBookmarkResolutionWaitingForTesting }
         let current = try await f.database.sessions()
         return (f, try XCTUnwrap(current.first { $0.title == a.title }), gate)
@@ -551,7 +688,8 @@ final class AppReviewFollowupTests: XCTestCase {
             defer { held.cancel(); Task { await gate.open() } }
             await f.model.coordinatorForTesting?.gatePreparationForTesting(held)
             var changes = SourceChanges(); changes.paths = [file.path]
-            XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+            let admittedIngress3 = await f.model.recoverDeferredRebuildForTesting(changes)
+            XCTAssertTrue(admittedIngress3)
             try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
             f.model.openSession(a); try await wait { f.model.selectedSessionID == a.id && f.model.messages.count == 2 }
             f.model.updateTranscriptBookmark(sessionID: a.id, bookmark: clear ? nil : .init(messageID: second.id, offset: 77, index: 1))
@@ -581,7 +719,8 @@ final class AppReviewFollowupTests: XCTestCase {
         defer { held.cancel(); Task { await gate.open() } }
         await f.model.coordinatorForTesting?.gatePreparationForTesting(held)
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress4 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress4)
         try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
         XCTAssertNil(f.model.settings.pendingNavigationReference)
         XCTAssertNil(f.model.settings.preparedNavigationRecovery?.reference)
@@ -688,7 +827,8 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.coordinatorForTesting?.gatePreparationForTesting(held)
         let file = f.root.appendingPathComponent("sessions.jsonl")
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress5 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress5)
         try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
         let latest = try XCTUnwrap(sessions.last)
         f.model.openSession(latest); try await wait { f.model.selectedSession?.id == latest.id && !f.model.messages.isEmpty }
@@ -719,7 +859,8 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertNil(f.model.scrollPositions[result.sessionID])
         let oldGeneration = f.database.contentGeneration
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress6 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress6)
         try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 2
             && f.database.contentGeneration != oldGeneration
             && f.model.selectedSession?.contentGeneration == f.database.contentGeneration }
@@ -824,7 +965,8 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.selectSession(target.id)
         try await wait { f.model.selectionTranscriptWaitingForTesting }
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress7 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress7)
         try await wait { !f.model.pendingRebuildForTesting && f.model.selectedSession?.title == target.title && !f.model.messages.isEmpty }
         await gate.open()
         XCTAssertEqual(f.model.settings.lastSessionID, f.model.selectedSessionID)
@@ -864,7 +1006,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let before = f.model.automaticNavigationRestoreCompletionsForTesting
         await f.database.cancelNavigationResolutionOnceForTesting()
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress8 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress8)
         try await wait { f.model.automaticNavigationRestoreCompletionsForTesting > before }
         XCTAssertFalse(showedError)
         XCTAssertEqual(f.model.messages.map(\.prefix), originalMessages)
@@ -902,7 +1045,8 @@ final class AppReviewFollowupTests: XCTestCase {
             defer { held.cancel(); Task { await gate.open() } }
             await f.model.coordinatorForTesting?.gatePreparationForTesting(held)
             var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-            XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+            let admittedIngress9 = await f.model.recoverDeferredRebuildForTesting(changes)
+            XCTAssertTrue(admittedIngress9)
             try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
             if clearsSelection { f.model.returnFromSession() }
             else { f.model.openSession(second); try await wait { f.model.selectedSession?.title == second.title } }
@@ -940,7 +1084,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let text = try String(contentsOf: file, encoding: .utf8)
         try Data((text.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress10 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress10)
         try await wait {
             let waiting = await f.model.coordinatorForTesting?.postResetWaitingForTesting
             return f.model.rebuildResetDeliveryWaitingForTesting && waiting == true
@@ -999,7 +1144,8 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.selectedSessionID, session.id, "keep cached navigation until the admitted reset reconciles it")
         let before = await f.database.committedResetCountForTesting
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress11 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress11)
         try await wait { !f.model.pendingRebuildForTesting && f.model.selectedSessionID == nil }
         let after = await f.database.committedResetCountForTesting
         XCTAssertEqual(after, before + 1)
@@ -1147,11 +1293,13 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(raw.count, 1)
         XCTAssertFalse(try XCTUnwrap(raw.first).rebuild)
         var watermarks = SourceChanges(); watermarks.watermarks = ["watermark-only": 5]
-        XCTAssertFalse(f.model.recoverDeferredRebuildForTesting(watermarks))
+        let admittedIngress12 = await f.model.recoverDeferredRebuildForTesting(watermarks)
+        XCTAssertFalse(admittedIngress12)
         await f.model.bufferSourceChangesForTesting(watermarks)
         var irrelevant = SourceChanges()
         irrelevant.paths = [f.root.appendingPathComponent("index.sqlite-wal").path, f.root.appendingPathComponent("diagnostics.json").path]
-        XCTAssertFalse(f.model.recoverDeferredRebuildForTesting(irrelevant), "Trace's own writes cannot admit a reset")
+        let admittedIngress13 = await f.model.recoverDeferredRebuildForTesting(irrelevant)
+        XCTAssertFalse(admittedIngress13, "Trace's own writes cannot admit a reset")
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
         await f.model.bufferSourceChangesForTesting(changes)
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -1160,7 +1308,8 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(before, 0)
         let beforeRecoveryPass = f.model.progress.passID
         await f.database.setResetFaultForTesting(.rollback)
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress14 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress14)
         try await wait { f.model.progress.passID != beforeRecoveryPass
             && f.model.isRebuildPendingRecovery && !f.model.rebuildClaimedForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -1170,7 +1319,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let afterDelay = await f.database.resetAttemptCountForTesting
         XCTAssertEqual(afterDelay, failedAttempts, "ordinary live passes may run, but reset recovery cannot get a timer retry")
         XCTAssertEqual(f.model.rebuildRequestIDForTesting, request)
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes, safety: true))
+        let admittedIngress15 = await f.model.recoverDeferredRebuildForTesting(changes, safety: true)
+        XCTAssertTrue(admittedIngress15)
         try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
         await f.model.schedulerForTesting?.waitUntilIdle()
         XCTAssertFalse(f.model.isRebuildPendingRecovery)
@@ -1217,7 +1367,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let handle = try FileHandle(forWritingTo: file)
         try handle.seekToEnd(); try handle.write(contentsOf: line(99)); try handle.close()
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress16 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress16)
         try await wait { await f.model.coordinatorForTesting?.preparationWaitingForTesting == true }
         XCTAssertEqual(f.model.selectedSessionID, id); XCTAssertEqual(f.model.selectedSession?.title, title)
         XCTAssertEqual(f.model.settings.lastSessionID, id); XCTAssertEqual(f.model.scrollPositions[id]?.offset, 29)
@@ -1247,7 +1398,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let data = try String(contentsOf: file, encoding: .utf8)
         try Data((data.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress17 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress17)
         try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete
             && f.model.selectedSession?.title == selected.title && !f.model.isLoadingSessions }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -1268,7 +1420,8 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.selectSession(session.id); try await wait { !f.model.messages.isEmpty }
         await f.database.setResetFaultForTesting(.checkpoint)
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress18 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress18)
         try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .failed }
         await f.model.schedulerForTesting?.waitUntilIdle()
         let unrelated = f.root.appendingPathComponent("unrelated.jsonl")
@@ -1294,7 +1447,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let file = f.root.appendingPathComponent("sessions.jsonl")
         try remaining.write(to: file)
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress19 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress19)
         try await wait { !f.model.pendingRebuildForTesting && f.model.selectedSessionID == nil }
         XCTAssertNil(f.model.settings.lastSessionID)
         XCTAssertNil(f.model.settings.pendingNavigationReference)
@@ -1313,7 +1467,8 @@ final class AppReviewFollowupTests: XCTestCase {
                 : f.model.objectWillChange.sink { observe() }
             defer { subscription.cancel() }
             var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-            XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+            let admittedIngress20 = await f.model.recoverDeferredRebuildForTesting(changes)
+            XCTAssertTrue(admittedIngress20)
             try await wait { deferred && !f.model.isPreparingRebuild && f.model.rebuildAdmissionIDForTesting == nil }
             XCTAssertTrue(f.model.pendingRebuildForTesting)
             await f.model.schedulerForTesting?.waitUntilIdle()
@@ -1352,7 +1507,8 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.automaticNavigationCaptureGateForTesting = held
         let before = await f.database.resetAttemptCountForTesting
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress21 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress21)
         try await wait { f.model.automaticNavigationCaptureWaitingForTesting }
         f.model.selectSession(second.id)
         try await wait { f.model.selectedSession?.id == second.id }
@@ -1378,7 +1534,8 @@ final class AppReviewFollowupTests: XCTestCase {
             message: "private-navigation-sentinel", sql: "SELECT private_navigation_sql", arguments: ["private-argument"]))
         let before = await f.database.resetAttemptCountForTesting
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress22 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress22)
         try await wait { !f.model.rebuildClaimedForTesting && !f.model.isPreparingRebuild }
         await f.model.schedulerForTesting?.waitUntilIdle()
         let rows = try await f.database.sessions(limit: 50), after = await f.database.resetAttemptCountForTesting
@@ -1398,7 +1555,8 @@ final class AppReviewFollowupTests: XCTestCase {
         defer { held.cancel(); Task { await gate.open() } }
         f.model.automaticNavigationRestoreGateForTesting = held
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress23 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress23)
         try await wait { f.model.automaticNavigationRestoreWaitingForTesting }
         let rows = try await f.database.sessions(limit: 50)
         let other = try XCTUnwrap(rows.first { $0.title != session.title })
@@ -1420,7 +1578,8 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY,
             message: "private-resolution-sentinel", sql: "SELECT private_sql", arguments: ["private-argument"]))
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress24 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress24)
         try await wait { !f.model.pendingRebuildForTesting && f.model.transcriptBanner?.feedback == .readError }
         await f.model.schedulerForTesting?.waitUntilIdle()
         XCTAssertNotNil(f.model.settings.pendingNavigationReference, "the same terminal summary tail cannot retry the failed resolution")
@@ -1442,7 +1601,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let data = try String(contentsOf: file, encoding: .utf8)
         try Data((data.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress25 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress25)
         try await wait { f.model.automaticNavigationRestoreWaitingForTesting }
         let stopping = Task { await f.model.prepareToTerminate() }
         try await wait { f.model.terminationStartedForTesting }
@@ -1471,7 +1631,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let data = try String(contentsOf: file, encoding: .utf8)
         try Data((data.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress26 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress26)
         try await wait { !f.model.pendingRebuildForTesting && f.model.selectedSession?.title == originalTitle
             && f.model.selectedSessionID != result.sessionID }
         XCTAssertTrue(f.model.hasSearchReturnContext)
@@ -1503,7 +1664,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
         await coordinator.gatePostResetForTesting(held)
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress27 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress27)
         try await wait { await coordinator.postResetWaitingForTesting }
         try await wait { f.model.sessionCursorIDForTesting == nil }
         XCTAssertEqual(f.model.requestedPageDepthForTesting, 2)
@@ -1531,7 +1693,8 @@ final class AppReviewFollowupTests: XCTestCase {
         let data = try String(contentsOf: file, encoding: .utf8)
         try Data((data.split(separator: "\n").reversed().joined(separator: "\n") + "\n").utf8).write(to: file)
         var changes = SourceChanges(); changes.paths = [file.path]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress28 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress28)
         try await wait { !f.model.pendingRebuildForTesting && f.model.selectedSession?.title == second.title
             && f.model.selectedSessionID != second.id }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -1586,10 +1749,14 @@ final class AppReviewFollowupTests: XCTestCase {
         first.watermarks = ["coalesced-first": 41]; first.streamRoots = ["coalesced-first": [f.root.path]]
         var second = first
         second.watermarks = ["coalesced-second": 52]; second.streamRoots = ["coalesced-second": [f.root.path]]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(first))
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(second))
+        // Watcher/coalescer aggregation precedes admission. Do not depend on
+        // two independently awaited injections beating the claim task.
+        var combined = first; combined.merge(second)
+        let admittedIngress29 = await f.model.recoverDeferredRebuildForTesting(combined)
+        XCTAssertTrue(admittedIngress29)
         try await wait { await coordinator.preparationWaitingForTesting }
-        XCTAssertFalse(f.model.recoverDeferredRebuildForTesting(first), "an active attempt cannot enroll its successor")
+        let admittedIngress31 = await f.model.recoverDeferredRebuildForTesting(first)
+        XCTAssertFalse(admittedIngress31, "an active attempt cannot enroll its successor")
         await gate.open()
         try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -1637,7 +1804,8 @@ final class AppReviewFollowupTests: XCTestCase {
         changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
         changes.watermarks = ["retained-reset-volume": 42]
         changes.streamRoots = ["retained-reset-volume": [f.root.path]]
-        XCTAssertTrue(f.model.recoverDeferredRebuildForTesting(changes))
+        let admittedIngress32 = await f.model.recoverDeferredRebuildForTesting(changes)
+        XCTAssertTrue(admittedIngress32)
         try await wait { await coordinator.preparationWaitingForTesting }
         try await wait { f.model.rebuildAcceptedForTesting && !f.model.rebuildClaimedForTesting }
         f.model.reloadSourcesAndRebuild()
