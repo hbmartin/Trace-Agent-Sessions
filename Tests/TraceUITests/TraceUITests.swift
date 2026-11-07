@@ -4734,7 +4734,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
         let saved = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
         XCTAssertNotEqual(saved, 25)
+        app.buttons["backToProject"].click()
         let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10))
         query.click(); query.typeText("\"Pending anchor reader message 25\"")
         let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Pending anchor reader message 25")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
