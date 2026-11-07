@@ -68,7 +68,37 @@ private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: D
         userInfo: [NSLocalizedDescriptionKey: message])))
 }
 @main struct SourceIngressWorkload {
-    @MainActor static func main() async throws {
+/// Construct every payload before timing. One oversized callback has one real
+/// submission timestamp, shared by all of its paths; no synthetic event marks.
+private static func workloadInputs(count: Int, variant: String) -> [SourceChanges] {
+    var result: [SourceChanges] = [], oversized = SourceChanges()
+    for value in 1...count {
+        let stream = value.isMultiple(of: 2) ? "a" : "b"
+        let path = "/tmp/mailbox/\(stream)/item-\(value)"
+        var changes = SourceChanges()
+        changes.paths = [path]
+        if variant != "plain" { changes.lexicalPaths = [path + "-link"]; changes.structuralPaths = [path + "-created"] }
+        changes.watermarks = [stream: UInt64(value)]
+        changes.streamRoots = [stream: ["/tmp/mailbox/\(stream)"]]
+        if variant == "oversized" { oversized.merge(changes) }
+        else { result.append(changes) }
+    }
+    return variant == "oversized" ? [oversized] : result
+}
+
+
+    @MainActor static func main() async {
+        do { try await run() }
+        catch {
+            let error = error as NSError
+            let failure: [String: Any] = ["status": "failed", "domain": error.domain,
+                "code": error.code, "message": error.localizedDescription]
+            let data = try! JSONSerialization.data(withJSONObject: failure, options: [.sortedKeys])
+            FileHandle.standardError.write(data + Data([10]))
+            exit(1)
+        }
+    }
+    @MainActor private static func run() async throws {
         let args = Array(CommandLine.arguments.dropFirst())
         guard args.count <= 3, let count = Int(args.first ?? "1000"), count > 0 else {
             FileHandle.standardError.write(Data("Usage: source-ingress [positive event count] [label] [plain|oversized|structural]\n".utf8)); exit(2)
@@ -78,23 +108,33 @@ private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: D
         guard ["plain", "oversized", "structural"].contains(variant) else {
             FileHandle.standardError.write(Data("Unknown mailbox workload variant: \(variant)\n".utf8)); exit(2)
         }
-        let auxiliaryCount = variant == "plain" ? 0 : count
+        let inputs = workloadInputs(count: count, variant: variant)
+        let submitted = OSAllocatedUnfairLock(initialState: Array(repeating: UInt64(0), count: inputs.count))
+        let auxiliaryCount = variant == "plain" ? 0 : benchmarkIngressExpectedAuxiliaryCount(count)
         let completion = DeliveryCompletion()
         var paths: Set<String> = [], lexical: Set<String> = [], structural: Set<String> = []
         var latencies: [Double] = [], marks: [String: UInt64] = [:]
-        let mailbox = makeBenchmarkMailbox { changes in
+        let mailbox = makeBenchmarkMailbox({ changes in
             let now = DispatchTime.now().uptimeNanoseconds
             for path in changes.paths {
-                let stamp = UInt64(path.split(separator: "-").last!)!
+                guard let input = Int(path.split(separator: "-").last!), input > 0, input <= count else {
+                    completion.finish(.failure(NSError(domain: "MailboxBenchmark.invalidDeliveredPath", code: 1))); return
+                }
+                let stamp = submitted.withLock { $0[variant == "oversized" ? 0 : input - 1] }
+                guard stamp > 0 else {
+                    completion.finish(.failure(NSError(domain: "MailboxBenchmark.missingSubmissionStamp", code: 1))); return
+                }
                 latencies.append(Double(now - stamp) / 1e9)
             }
             paths.formUnion(changes.paths); lexical.formUnion(changes.lexicalPaths); structural.formUnion(changes.structuralPaths)
             for (stream, mark) in changes.watermarks { marks[stream] = max(marks[stream] ?? 0, mark) }
             if paths.count == count && lexical.count == auxiliaryCount && structural.count == auxiliaryCount {
-                // Capture the boundary before waking the waiting harness.
                 completion.finish(.success(WorkloadStamp()))
             }
-        }
+        }, retired: {
+            completion.finish(.failure(NSError(domain: "MailboxBenchmark.untransferredBoundary", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Mailbox retired an untransferred boundary"])))
+        })
         let starting = footprint(), sampling = OSAllocatedUnfairLock(initialState: (done: false, peak: starting))
         let sampler = Task.detached {
             while !sampling.withLock({ $0.done }) {
@@ -113,27 +153,14 @@ private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: D
         let producer = Task.detached {
             await gate.wait() // Control handshake completes before measurement.
             defer { producerFinished.withLock { $0 = true } }
-            let start = WorkloadStamp()
             var enqueue: [Double] = []
-            var oversized = SourceChanges()
-            for value in 1...count {
-                if value % 128 == 1 { try Task.checkCancellation() }
-                var changes = SourceChanges()
-                let stream = value.isMultiple(of: 2) ? "a" : "b"
-                let path = "/tmp/mailbox/\(stream)/item-\(value)-\(DispatchTime.now().uptimeNanoseconds)"
-                changes.paths = [path]
-                if variant != "plain" { changes.lexicalPaths = [path + "-link"]; changes.structuralPaths = [path + "-created"] }
-                changes.watermarks = [stream: UInt64(value)]
-                changes.streamRoots = [stream: ["/tmp/mailbox/\(stream)"]]
-                if variant == "oversized" { oversized.merge(changes) }
-                else {
-                    let call = ContinuousClock.now
-                    mailbox.enqueue(changes)
-                    enqueue.append(seconds(call.duration(to: .now)))
-                }
-            }
-            if variant == "oversized" {
-                let call = ContinuousClock.now; mailbox.enqueue(oversized)
+            enqueue.reserveCapacity(inputs.count)
+            let start = WorkloadStamp()
+            for (index, changes) in inputs.enumerated() {
+                if index % 128 == 0 { try Task.checkCancellation() }
+                submitted.withLock { $0[index] = DispatchTime.now().uptimeNanoseconds }
+                let call = ContinuousClock.now
+                mailbox.enqueue(changes)
                 enqueue.append(seconds(call.duration(to: .now)))
             }
             return (start: start, enqueue: enqueue, end: WorkloadStamp())
@@ -163,8 +190,9 @@ private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: D
         func percentile(_ values: [Double], _ p: Double) -> Double { values[min(values.count - 1, Int(Double(values.count - 1) * p))] }
         var output: [String: Any] = ["mode": "mailbox", "variant": variant, "events": count, "label": label, "deliveredPaths": paths.count,
             "deliveredLexicalPaths": lexical.count, "deliveredStructuralPaths": structural.count,
+            "expectedAuxiliaryPaths": auxiliaryCount, "preparedCallbacks": inputs.count,
             "elapsedSeconds": elapsed, "enqueueElapsedSeconds": seconds(result.start.time.duration(to: result.end.time)),
-            "cpuSeconds": cpu, "cpuKind": "process CPU from first enqueue through final enqueue/delivery completion",
+            "cpuSeconds": cpu, "cpuKind": "process CPU from first enqueue through final enqueue/delivery completion; prebuilt payload setup excluded",
             "enqueueMedianSeconds": percentile(enqueue, 0.5), "enqueueP95Seconds": percentile(enqueue, 0.95), "enqueueMaxSeconds": enqueue.last!,
             "deliveryMedianSeconds": percentile(delivery, 0.5), "deliveryP95Seconds": percentile(delivery, 0.95), "deliveryMaxSeconds": delivery.last!,
             "startingFootprintBytes": starting, "peakFootprintBytes": sampling.withLock { $0.peak }, "retainedFootprintBytes": retained,

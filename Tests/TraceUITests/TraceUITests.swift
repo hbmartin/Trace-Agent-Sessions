@@ -4791,6 +4791,21 @@ final class TraceUITests: XCTestCase {
         let bookmark = directory.appendingPathComponent("reader-bookmark")
         let idle = directory.appendingPathComponent("reader-idle")
         let database = directory.appendingPathComponent("index.sqlite")
+        let restoration = directory.appendingPathComponent("reader-native-restoration")
+        let geometry = directory.appendingPathComponent("reader-restore-geometry")
+        let hydration = directory.appendingPathComponent("reader-restore-hydration")
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = restoration.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_AUDIT_PATH"] = geometry.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_HYDRATION_RESTORE_AUDIT_PATH"] = hydration.path
+        addTeardownBlock {
+            for file in [restoration, geometry, hydration, bookmark, directory.appendingPathComponent("native-anchor-samples")] {
+                if let data = try? Data(contentsOf: file) {
+                    let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.plain-text")
+                    attachment.name = file.lastPathComponent; attachment.lifetime = .keepAlways
+                    self.add(attachment)
+                }
+            }
+        }
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
         app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = failRecoveryFirst ? "3" : "2"
@@ -4812,6 +4827,7 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
         let index = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
         let y = try XCTUnwrap(savedAnchorY(index: index, in: scroll, timeout: 10))
+        let priorRestores = Set(nativeRestorationRecords(in: restoration).map(\.invocation))
         try addLongSession("Live recovery input", project: "LiveAfterResetFailure", directory: directory,
                            count: 1, contentRepeats: 0)
         if failRecoveryFirst {
@@ -4829,6 +4845,12 @@ final class TraceUITests: XCTestCase {
         XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
         XCTAssertTrue(app.windows[name].exists)
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+        let generation = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
+        let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Recovery reader';")
+        let completion = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: restoration).first {
+            $0.matches(generation: generation, sessionID: selected, bookmark: index, excluding: priorRestores)
+        } })
+        XCTAssertEqual(completion.bookmarkOffset, Double(y), accuracy: 8)
         assertSavedAnchorOnScreen(index: index, in: scroll, expectedY: y, stage: "committed automatic reset")
         XCTAssertTrue(app.descendants(matching: .any)["transcriptMetadataHeader"].firstMatch.exists)
         XCTAssertTrue(app.descendants(matching: .any)["rebuildPreparationProgress"].firstMatch.waitForNonExistence(timeout: 10))

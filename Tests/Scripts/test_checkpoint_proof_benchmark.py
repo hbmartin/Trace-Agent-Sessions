@@ -175,6 +175,16 @@ private func cpuSeconds() -> Double { 0 }
             do { _ = try await failed.wait(); fatalError("Late completion replaced deadline") }
             catch { precondition((error as NSError).domain == "MailboxBenchmark." + phase) }
         }
+        let originalFailure = DeliveryCompletion()
+        originalFailure.finish(.failure(NSError(domain: "OriginalFailure", code: 42)))
+        originalFailure.finish(.failure(NSError(domain: "MailboxBenchmark.untransferredBoundary", code: 1)))
+        do { _ = try await originalFailure.wait(); fatalError("Original failure ignored") }
+        catch { precondition((error as NSError).domain == "OriginalFailure" && (error as NSError).code == 42) }
+        let retired = DeliveryCompletion()
+        retired.finish(.failure(NSError(domain: "MailboxBenchmark.untransferredBoundary", code: 1)))
+        retired.finish(.success(WorkloadStamp()))
+        do { _ = try await retired.wait(); fatalError("Retirement ignored") }
+        catch { precondition((error as NSError).domain == "MailboxBenchmark.untransferredBoundary") }
         let producerAlreadyFinished = DeliveryCompletion()
         await mailboxDeadline(producerAlreadyFinished, after: .milliseconds(1), phase: "producerTimeout", message: "ignored", unless: { true })
         producerAlreadyFinished.finish(.success(WorkloadStamp()))
@@ -255,7 +265,11 @@ enum ModelPublicationBatch {}
         self.assertIn('lexical.count == auxiliaryCount && structural.count == auxiliaryCount', source)
         self.assertIn('"deliveredLexicalPaths": lexical.count', source)
         self.assertIn('"deliveredStructuralPaths": structural.count', source)
-        self.assertIn('mailbox.enqueue(oversized)', source)
+        self.assertIn('let inputs = workloadInputs(count: count, variant: variant)', source)
+        timed = source[source.index('let start = WorkloadStamp()', source.index('let producer = Task.detached')):source.index('let deliveryDeadline = Task')]
+        self.assertNotIn('oversized.merge', timed)
+        self.assertNotIn('var changes = SourceChanges()', timed)
+        self.assertIn('submitted.withLock', timed)
 
     def test_mailbox_adapter_supports_pinned_boolean_and_transfer_receivers(self):
         spec = importlib.util.spec_from_file_location('ingress_transfer', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
@@ -263,9 +277,22 @@ enum ModelPublicationBatch {}
         spec.loader.exec_module(extraction)
         source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
         self.assertIn('return .ordinaryTransferred', extraction.extract(source))
-        self.assertIn('retire: { _ in preconditionFailure', extraction.extract(source))
+        self.assertIn('retire: { _ in retired() }', extraction.extract(source))
+        self.assertNotIn('preconditionFailure', extraction.extract(source))
         historical = source.replace('enum Transfer:', 'enum HistoricalTransfer:')
         self.assertIn('return true', extraction.extract(historical))
+
+    def test_mailbox_adapter_declares_auxiliary_output_contract(self):
+        spec = importlib.util.spec_from_file_location('ingress_auxiliary', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
+        extraction = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(extraction)
+        source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
+        candidate = extraction.extract(source)
+        self.assertIn('benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { 0 }', candidate)
+        marker = 'relevant.lexicalPaths = []; relevant.structuralPaths = []'
+        # Metadata preparation must not determine the transcript contract.
+        baseline = extraction.extract(source.replace(marker, '', 1))
+        self.assertIn('benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { count }', baseline)
 
     def test_acceptance_cannot_be_rescued_by_a_cleanup_scan(self):
         source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()
