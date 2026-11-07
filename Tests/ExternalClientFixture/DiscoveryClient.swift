@@ -108,3 +108,13 @@ func compilePreparedCheckpointClient(_ ledger: IndexCheckpointLedger, changes: S
         paths: changes.paths, reconciliationPaths: changes.reconciliationPaths, streamEpochs: changes.streamEpochs)
     _ = ledger.reserve(prepared)
 }
+
+func compileCanonicalCheckpointClient(_ ledger: IndexCheckpointLedger, changes: SourceChanges) {
+    let prepared = IndexCheckpointInputs(watermarks: changes.watermarks,
+        canonicalStreamRoots: changes.streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) },
+        hasIndexWork: changes.hasIndexWork, wrappedStreams: changes.wrappedStreams,
+        canonicalPaths: Set(changes.paths.map(TraceFileIO.canonicalPath)),
+        canonicalReconciliationPaths: Set(changes.reconciliationPaths.map(TraceFileIO.canonicalPath)),
+        streamEpochs: changes.streamEpochs)
+    _ = ledger.reserve(prepared)
+}

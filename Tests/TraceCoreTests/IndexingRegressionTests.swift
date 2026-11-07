@@ -8,6 +8,90 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testSuccessorDrainsProofWhileObsoleteSchedulerIsStillRegistered() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        let gate = CheckpointFailureGate(), oldMarks = OSAllocatedUnfairLock(initialState: [UInt64]()), newMarks = OSAllocatedUnfairLock(initialState: [UInt64]())
+        defer { Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        let old = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { oldMarks.withLock { $0.append(mark) } } })
+        await old.waitUntilIdle()
+        await old.setDeferredCheckpointAcceptanceHookForTesting { await gate.wait() }
+        let path = root.appendingPathComponent("x").path
+        let reservation = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: true, paths: [path])
+        ledger.retainProofForTesting(ledger.prepareProofForTesting([reservation], paths: [path], content: database.contentGeneration))
+        try await waitForCondition { await gate.entered }
+        let successor = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { newMarks.withLock { $0.append(mark) } } })
+        await successor.waitUntilIdle()
+        XCTAssertEqual(newMarks.withLock { $0 }, [100]); XCTAssertTrue(oldMarks.withLock { $0.isEmpty })
+        await gate.open(); await old.waitUntilIdle(); await old.stop()
+        _ = ledger.reserve(watermarks: ["s": 200], streamRoots: [:], hasIndexWork: false)
+        ledger.seed(stream: "wake", checkpoint: nil)
+        await successor.waitUntilIdle()
+        XCTAssertEqual(newMarks.withLock { $0 }, [100, 200]); XCTAssertTrue(oldMarks.withLock { $0.isEmpty })
+        XCTAssertEqual(ledger.retainedProofCountForTesting, 0)
+        await successor.stop()
+    }
+
+    func testOwnershipChangeDuringProofCommitPreservesSuccessorPublication() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        let release = DispatchSemaphore(value: 0), entered = OSAllocatedUnfairLock(initialState: false)
+        defer { release.signal(); ledger.setAcceptanceCommitHookForTesting(nil) }
+        let oldMarks = OSAllocatedUnfairLock(initialState: [UInt64]()), newMarks = OSAllocatedUnfairLock(initialState: [UInt64]())
+        ledger.seed(stream: "s", checkpoint: nil)
+        let old = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { oldMarks.withLock { $0.append(mark) } } })
+        await old.waitUntilIdle()
+        let path = root.appendingPathComponent("x").path
+        let reservation = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: true, paths: [path])
+        ledger.setAcceptanceCommitHookForTesting {
+            entered.withLock { $0 = true }
+            XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+        }
+        ledger.retainProofForTesting(ledger.prepareProofForTesting([reservation], paths: [path], content: database.contentGeneration))
+        try await waitForCondition { entered.withLock { $0 } }
+        ledger.setAcceptanceCommitHookForTesting(nil)
+        let successor = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger,
+            didCompleteCheckpoints: { updates in if let mark = updates["s"]?.value { newMarks.withLock { $0.append(mark) } } })
+        await successor.waitUntilIdle()
+        XCTAssertTrue(newMarks.withLock { $0.isEmpty })
+        release.signal(); await old.waitUntilIdle(); await successor.waitUntilIdle()
+        XCTAssertTrue(oldMarks.withLock { $0.isEmpty }); XCTAssertEqual(newMarks.withLock { $0 }, [100])
+        XCTAssertEqual(ledger.retainedProofCountForTesting, 0)
+        await old.stop(); await successor.stop()
+    }
+
+    func testStopJoinsHeldReadinessListener() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        let gate = CheckpointFailureGate(), finished = OSAllocatedUnfairLock(initialState: false)
+        defer { Task { await gate.open() } }
+        ledger.setActivationHookForTesting { await gate.wait() }
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly, progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { _ in XCTFail("Stopped listener published") })
+        try await waitForCondition { await gate.entered }
+        let stop = Task { await scheduler.stop(); finished.withLock { $0 = true } }
+        try await waitForCondition { await scheduler.stoppingForTesting }
+        XCTAssertFalse(finished.withLock { $0 }, "Closure of readiness tickets is not listener-task completion")
+        await gate.open(); await stop.value
+        XCTAssertTrue(finished.withLock { $0 }); await scheduler.waitUntilIdle()
+    }
+
+    func testCanonicalInputOverloadKeepsPreparedIdentityAcrossRetarget() async throws {
+        let root = try directory(), a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b"), link = root.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: a)
+        let canonical = TraceFileIO.canonicalPath(link.appendingPathComponent("file").path)
+        try FileManager.default.removeItem(at: link); try FileManager.default.createSymbolicLink(at: link, withDestinationURL: b)
+        let prepared = IndexCheckpointInputs(watermarks: ["s": 100], canonicalStreamRoots: [:], hasIndexWork: true, canonicalPaths: [canonical])
+        let ledger = IndexCheckpointLedger(), reservation = ledger.reserve(prepared)
+        XCTAssertEqual(ledger.remainingPathsForTesting([reservation]), [a.appendingPathComponent("file").path])
+    }
+
     func testRootlessResetRetainsUnrelatedFullScanFailure() async throws {
         let root = try directory(), good = root.appendingPathComponent("x.jsonl"), bad = root.appendingPathComponent("y.jsonl")
         try Data(line(1).utf8).write(to: good); try Data(line(2).utf8).write(to: bad)
