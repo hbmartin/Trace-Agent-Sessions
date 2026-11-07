@@ -1,0 +1,207 @@
+{
+  "candidate": "24ab4b2d48539e6ba99f0ce2ad8338af1c3cba0a",
+  "base": "9de536b4e918f0177c88c0d805170608de1e6bd8",
+  "pinnedBaseline": "4b1daa6449ddbe4f40bc852dc7d15d1ce00ee706",
+  "state": "User requested ready publication after disclosure of unrun UI and paired measurements.",
+  "focused": {
+    "passed": 717,
+    "groups": {
+      "IndexingRegressionTests": 210,
+      "FSEventsWatcherTests": 13,
+      "SessionMetadataTests": 64,
+      "SidecarDependencyTests": 27,
+      "AppReviewFollowupTests": 403
+    },
+    "receipt": "final-accepted-focused-2.json"
+  },
+  "races": {
+    "cases": 71,
+    "repetitions": 5,
+    "passedExecutions": 355
+  },
+  "scripts": {
+    "passed": 75
+  },
+  "checks": {
+    "final-accepted-focused-2": 0,
+    "final-accepted-discovery-2": 0,
+    "final-accepted-races-1": 0,
+    "final-accepted-races-2": 0,
+    "final-accepted-races-3": 0,
+    "final-accepted-races-4": 0,
+    "final-accepted-races-5": 0,
+    "final-accepted-debug-build": 0,
+    "final-accepted-release-build": 0,
+    "final-accepted-external-client": 0,
+    "final-accepted-project-drift": 0,
+    "final-accepted-signing": 0,
+    "final-accepted-network": 0,
+    "final-accepted-whitespace": 0,
+    "final-accepted-scripts": 0,
+    "final-accepted-inputs": 0
+  },
+  "hashesVerified": 325,
+  "discovery": {
+    "candidate": "24ab4b2d48539e6ba99f0ce2ad8338af1c3cba0a",
+    "discovered": 958,
+    "races": 71,
+    "ui": 13,
+    "missing": []
+  },
+  "newProductRegressionsOnPinnedBaseline": {
+    "productionUnchanged": true,
+    "testOnlyOverlay": true,
+    "failedTests": 2,
+    "reportedFailureIssues": 4,
+    "receipt": "baseline-negative.json",
+    "callbackOrderingFailure": "Callbacks [200, 100] rather than [200]; persisted checkpoint remained 200.",
+    "searchIntentFailure": "Bookmark message chosen instead of distinct pending search target; three assertions."
+  },
+  "harnessNegativeControls": {
+    "retirement": {
+      "expectedExit": 1,
+      "domain": "MailboxBenchmark.untransferredBoundary"
+    },
+    "fixtureRetention": {
+      "expectedExit": 1,
+      "domain": "MailboxBenchmark.retainedFixture"
+    },
+    "productionMailboxChanged": false
+  },
+  "optimizedCorrectnessSmokes": [
+    {
+      "receipt": "final-baseline-enqueue-smoke.json",
+      "role": "baseline",
+      "workload": "enqueue",
+      "inputs": 8,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-baseline-acceptance-smoke.json",
+      "role": "baseline",
+      "workload": "acceptance",
+      "inputs": 8,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-baseline-backlog-smoke.json",
+      "role": "baseline",
+      "workload": "backlog",
+      "inputs": 8,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-baseline-mailbox-plain-smoke.json",
+      "role": "baseline",
+      "workload": "mailbox-plain",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-baseline-mailbox-oversized-smoke.json",
+      "role": "baseline",
+      "workload": "mailbox-oversized",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-baseline-mailbox-structural-smoke.json",
+      "role": "baseline",
+      "workload": "mailbox-structural",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-baseline-mailbox-mixed-smoke.json",
+      "role": "baseline",
+      "workload": "mailbox-mixed",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-candidate-enqueue-smoke.json",
+      "role": "candidate",
+      "workload": "enqueue",
+      "inputs": 8,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-candidate-acceptance-smoke.json",
+      "role": "candidate",
+      "workload": "acceptance",
+      "inputs": 8,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-candidate-backlog-smoke.json",
+      "role": "candidate",
+      "workload": "backlog",
+      "inputs": 8,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-candidate-mailbox-plain-smoke.json",
+      "role": "candidate",
+      "workload": "mailbox-plain",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-candidate-mailbox-oversized-smoke.json",
+      "role": "candidate",
+      "workload": "mailbox-oversized",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-candidate-mailbox-structural-smoke.json",
+      "role": "candidate",
+      "workload": "mailbox-structural",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    },
+    {
+      "receipt": "final-candidate-mailbox-mixed-smoke.json",
+      "role": "candidate",
+      "workload": "mailbox-mixed",
+      "inputs": 257,
+      "purpose": "Correctness-only smoke; not paired performance acceptance."
+    }
+  ],
+  "ui": {
+    "selected": 13,
+    "identifiersVerifiedAgainstCompiledDiscovery": true,
+    "executed": false,
+    "accepted": false,
+    "runs": [],
+    "status": "Unrun at publication; user requested open ready PR after the omissions were disclosed."
+  },
+  "targetedMeasurements": {
+    "executed": false,
+    "accepted": false,
+    "recordedPairs": 0,
+    "plannedWorkloads": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox",
+      "mailbox-oversized",
+      "mailbox-structural",
+      "mailbox-mixed"
+    ],
+    "plannedCounts": [
+      1000,
+      10000
+    ],
+    "warmupsPerWorkloadCountRevision": 1,
+    "recordedSamplesPerWorkloadCountRevision": 5,
+    "status": "Unrun at publication; user requested open ready PR after the omissions were disclosed."
+  },
+  "omittedByOriginalScope": [
+    "Complete suites",
+    "Three full Release comparison pairs against 61c00de"
+  ],
+  "localTenPercentPerformanceAcceptanceClaim": false,
+  "rawPayloadAvailability": "Local-only; not downloadable repository/CI attachments.",
+  "publicationInstruction": "publication-instruction.json"
+}

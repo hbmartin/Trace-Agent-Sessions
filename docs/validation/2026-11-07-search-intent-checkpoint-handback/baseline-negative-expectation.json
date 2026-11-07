@@ -1,0 +1,6 @@
+{
+  "baseline": "4b1daa6449ddbe4f40bc852dc7d15d1ce00ee706",
+  "expectedFailure": true,
+  "exitCode": 65,
+  "scope": "Unchanged production source; only the new regression tests/helper overlaid. Inspect XCTest failure counts and symptoms before classifying."
+}

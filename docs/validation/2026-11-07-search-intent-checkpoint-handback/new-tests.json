@@ -1,0 +1,11 @@
+[
+  "TraceCoreTests/IndexingRegressionTests/testPausedCacheTracksFailureSeedRestartAndHandback",
+  "TraceCoreTests/IndexingRegressionTests/testRealResetWorkerRetainsSchedulerUntilFenceRetires",
+  "TraceCoreTests/IndexingRegressionTests/testReturnedOlderPublicationCannotFollowNewerFrontier",
+  "TraceAppTests/AppReviewFollowupTests/testConsumedOrNewerScrollSupersedesCapturedSearchIntent",
+  "TraceAppTests/AppReviewFollowupTests/testMissingAuthoritativeSearchTargetUsesSavedBookmark",
+  "TraceAppTests/AppReviewFollowupTests/testPendingSearchRejectsNavigationReplacementAndTermination",
+  "TraceAppTests/AppReviewFollowupTests/testPendingSearchSurvivesReadFailureUntilDistinctCoverage",
+  "TraceAppTests/AppReviewFollowupTests/testPendingSearchTargetAndSavedBookmarkRestoreIndependently",
+  "TraceAppTests/AppReviewFollowupTests/testRecordedIngressTerminalWinsLaterCancellationAndTimeout"
+]

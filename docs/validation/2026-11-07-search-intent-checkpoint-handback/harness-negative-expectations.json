@@ -1,0 +1,11 @@
+{
+  "retirement": {
+    "expectedExitCode": 1,
+    "structuredDomain": "MailboxBenchmark.untransferredBoundary"
+  },
+  "fixtureRetention": {
+    "expectedExitCode": 1,
+    "structuredDomain": "MailboxBenchmark.retainedFixture"
+  },
+  "productionMailboxChanged": false
+}
