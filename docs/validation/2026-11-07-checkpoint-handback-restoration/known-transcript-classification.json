@@ -1,0 +1,14 @@
+{
+  "test": "TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+  "candidate": "9db1b4fdf2f6dc2d1ce586853df061cc2badbdff",
+  "baseline": "8706c87e3e33b9ac38ddc4a2492fbc5ae060af34",
+  "failedTestsPerRun": 1,
+  "reportedFailureIssuesPerRun": 2,
+  "symptoms": [
+    "Timed out waiting for app state",
+    "caught CancellationError()"
+  ],
+  "candidateReceipt": "accepted-known-transcript.json",
+  "baselineReceipt": "baseline-known-transcript.json",
+  "classification": "Same failure observed on candidate and unchanged pinned #92 production source. Excluded from the 708 passing cases; no new root-cause claim."
+}

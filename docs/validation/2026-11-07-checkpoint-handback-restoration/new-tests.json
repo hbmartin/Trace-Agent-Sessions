@@ -1,0 +1,15 @@
+[
+  "TraceCoreTests/IndexingRegressionTests/testHandbackRejectsRegistrationFromAnotherDatabaseFamily",
+  "TraceCoreTests/IndexingRegressionTests/testHandbackReportsPausedStreamsWithoutRetryingInitialization",
+  "TraceCoreTests/IndexingRegressionTests/testNewestSchedulerDeallocationHandsDrainingBack",
+  "TraceCoreTests/IndexingRegressionTests/testNewestSchedulerStopHandsDrainingBackToLiveOwner",
+  "TraceCoreTests/IndexingRegressionTests/testReturnedPublicationCannotCrossEpochOrCommittedGeneration",
+  "TraceCoreTests/IndexingRegressionTests/testReturnedPublicationRetainsActivityThroughStopAndTakeover",
+  "TraceAppTests/AppReviewFollowupTests/testAppIngressDropsConsumedAuxiliaryFieldsBeforeFragmenting",
+  "TraceAppTests/AppReviewFollowupTests/testAutomaticBookmarkRestorationDoesNotBecomeZeroOffsetSearch",
+  "TraceAppTests/AppReviewFollowupTests/testIngressReceiptMatchesRetirementAfterTransfer",
+  "TraceAppTests/AppReviewFollowupTests/testIngressTimeoutAndCancellationCannotLookLikeOrdinaryDelivery",
+  "TraceAppTests/AppReviewFollowupTests/testSuppressedMetadataCannotPublishDiagnosticsOrTransferWork",
+  "TraceAppTests/AppReviewFollowupTests/testTrackedAndWatermarklessGroupsKeepCompleteQualification",
+  "TraceAppTests/AppReviewFollowupTests/testUnenrolledBoundaryDoesNotClaimRetirement"
+]
