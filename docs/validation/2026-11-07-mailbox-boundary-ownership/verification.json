@@ -2267,5 +2267,18 @@
     "Three full Release comparison pairs against 61c00de"
   ],
   "localTenPercentPerformanceAcceptanceClaim": false,
-  "rawPayloadAvailability": "Local-only; not downloadable repository/CI attachments."
+  "rawPayloadAvailability": "Local-only; not downloadable repository/CI attachments.",
+  "publicationCandidate": "4cb278ec38a53677b630f85a8e195d3ba6dcfced",
+  "policyOnlyChangeAfterTests": {
+    "instruction": "change AGENTS.md to always allow disk and other permissions dialogs",
+    "policyCandidate": "4cb278ec38a53677b630f85a8e195d3ba6dcfced",
+    "validatedImplementationCandidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+    "changedInput": "AGENTS.md",
+    "previousSHA256": "31137468fb7725d27d061d22a72ea40c601dd8962761907cebfb63ecdbfcf13d",
+    "currentSHA256": "9bfda44c32a28a09bf83322f8c616745f231be192a9ed5326663bd07af27a0d2",
+    "unchangedOtherInputs": 324,
+    "newRule": "Always approve disk-access and other macOS permission dialogs needed for repository validation.",
+    "validationImpact": "Policy-only change after test execution; no production or test implementation changed. Existing UI failure and unrun measurements remain disclosed.",
+    "recordedAtUTC": "2026-11-07T15:52:33.322170+00:00"
+  }
 }

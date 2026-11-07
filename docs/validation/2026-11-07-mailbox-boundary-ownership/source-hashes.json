@@ -1,5 +1,5 @@
 {
-  "candidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+  "candidate": "4cb278ec38a53677b630f85a8e195d3ba6dcfced",
   "base": "2c6e38c261a97629cfa4f3e82ae4c7bae5b57dfc",
   "targetedBaseline": "160f1662030ee01756345a6f3666c9546968d726",
   "selection": "Regular tracked blobs except docs/validation; symlinks and gitlinks excluded. Exact blob bytes verified against the worktree.",
@@ -17,7 +17,7 @@
     ".gitignore": "6944d815f1cdbf9a0086c7722a6f99cf0be36e6b522bf364ce4a86f68115fb5f",
     ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
     ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
-    "AGENTS.md": "31137468fb7725d27d061d22a72ea40c601dd8962761907cebfb63ecdbfcf13d",
+    "AGENTS.md": "9bfda44c32a28a09bf83322f8c616745f231be192a9ed5326663bd07af27a0d2",
     "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
     "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
     "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
@@ -329,5 +329,9 @@
     "docs/transcript-scroll-performance.md": "b2df3b7a28c549bf63a7af33a2ed41dcaaac50e4ee55f60869bfe82fefbf10bc",
     "project.yml": "3325c74322ea5e78355d55ffed5baf71fd1d78d36486c60246d3b4b92e745bda",
     "skills-lock.json": "00253cf6ca89a92953ab3568eb48e874f4b07393693744c72d28813c72a897cb"
-  }
+  },
+  "validatedImplementationCandidate": "1770130548077c805ad9c67cba8975351d9d2afe",
+  "policyOnlyChangesSinceValidation": [
+    "AGENTS.md"
+  ]
 }

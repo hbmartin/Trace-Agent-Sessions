@@ -2,7 +2,8 @@
 
 Follow-up to merged [PR #91](https://github.com/hbmartin/Trace-Agent-Sessions/pull/91).
 
-Frozen implementation and harness: `1770130548077c805ad9c67cba8975351d9d2afe`.
+Tested implementation and harness: `1770130548077c805ad9c67cba8975351d9d2afe`.
+Publication candidate: `4cb278ec38a53677b630f85a8e195d3ba6dcfced` (later AGENTS.md policy change only; production/test inputs are unchanged).
 Fresh base: `2c6e38c261a97629cfa4f3e82ae4c7bae5b57dfc`.
 Pinned baseline: `160f1662030ee01756345a6f3666c9546968d726`.
 
@@ -35,7 +36,7 @@ The separately isolated terminal-reread test fails on both candidate and unchang
 
 ## Evidence
 
-[verification.json](verification.json) records completed and incomplete checks. [source-hashes.json](source-hashes.json) is the single canonical map for the 325 regular implementation/harness blobs at the frozen candidate. Every entry was checked against its Git blob and current worktree bytes; validation documentation is excluded to avoid self-reference. The final documentation commit changes no implementation input.
+[verification.json](verification.json) records completed and incomplete checks. [source-hashes.json](source-hashes.json) is the single canonical map for the 325 regular tracked input blobs at the publication candidate. [validated-source-hashes-1770130.json](validated-source-hashes-1770130.json) preserves the historical map for the tested candidate; only AGENTS.md differs. Every entry was checked against its Git blob and current worktree bytes; validation documentation is excluded to avoid self-reference. The final documentation commits change no implementation input. The later user-requested AGENTS.md change authorizes automatic approval of disk-access and other macOS permission dialogs needed for repository validation. It does not change the recorded test outcomes or complete the pending checks.
 
 [Command receipts](attempts.json) retain actual commands, commits, timestamps, exit codes and dirty input hashes. Earlier 693/694-case runs, an extra-live-callback harness failure, the intentional command hold, the negative control, protected-dialog attempts and the nonaccepted UI run remain preserved. Held commands were not executed. Historical reports and original hash maps are unchanged.
 

@@ -420,6 +420,10 @@
       "bytes": 235809,
       "sha256": "f06bf2c32423d19ab982ab157f6c81661fef295c5e56aefb29b2fcbab1b2266d"
     },
+    "policy-change.json": {
+      "bytes": 815,
+      "sha256": "3bdec106d909fc4b727d34d88755b286f60026d67c32d39e2a79cd73c3327d91"
+    },
     "post-ui-block-source-verification.json": {
       "bytes": 206,
       "sha256": "ea1e330030d3e48b296aa6a3cd8c1876fafa39171c8c7ff29d217e0709f30c02"
@@ -427,6 +431,10 @@
     "publication-instruction.json": {
       "bytes": 417,
       "sha256": "d2dab6bc8c0b42fa79556b6ff9f34a68e7f14636c4022a542292a0e2b40257f4"
+    },
+    "publication-source-hashes.json": {
+      "bytes": 43696,
+      "sha256": "a4bbc97fd5fc173edd1314f8e760f1716dc189a5f36abba13bb28f8cde8b9896"
     },
     "review-hold.json": {
       "bytes": 302,
@@ -559,6 +567,10 @@
     "validation-tools/pr92-negative-fence.py": {
       "bytes": 1931,
       "sha256": "a201686555ce3eee7533d0d2eaf1ca37170e7f124ffb968ee175e0e65e2ed87a"
+    },
+    "validation-tools/pr92-policy-evidence.py": {
+      "bytes": 4581,
+      "sha256": "f06898b031153f703e325c4b9cbc754cd6b409f811bd9861880e52cf54220175"
     },
     "validation-tools/pr92-publish-evidence.py": {
       "bytes": 12509,
