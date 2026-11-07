@@ -377,6 +377,15 @@ public final class IndexCheckpointLedger: Sendable {
         let scope: IndexScope
         var activity: IndexActivity = .fileChanges
     }
+    fileprivate struct Publication: Sendable {
+        var updates: [String: IndexEventCheckpoint] = [:]
+        var activity: IndexActivity = .fileChanges
+    }
+    private struct Registration {
+        let listener: Readiness
+        let order: UInt64
+        let family: String
+    }
     private final class ProofCursor {
         let proof: ExecutionProof
         var offset = 0
@@ -384,7 +393,8 @@ public final class IndexCheckpointLedger: Sendable {
     }
     private struct State: @unchecked Sendable {
         var streams: [String: Stream] = [:]
-        var listeners: [UUID: Readiness] = [:]
+        var listeners: [UUID: Registration] = [:]
+        var registrationSequence: UInt64 = 0
         var drainOwner: UUID?
         var revision: UInt64 = 0
         var sequence: UInt64 = 0
@@ -398,7 +408,6 @@ public final class IndexCheckpointLedger: Sendable {
         var updates: [String: IndexEventCheckpoint] = [:]
         var content: IndexContentGeneration?
         var publicationActivity: IndexActivity = .fileChanges
-        var lastPublicationActivity: IndexActivity = .fileChanges
         var prefixStreams: Set<String> = []
         var head: Record?
         var tail: Record?
@@ -415,24 +424,31 @@ public final class IndexCheckpointLedger: Sendable {
     private let id = UUID()
     private let state = OSAllocatedUnfairLock(initialState: State())
     public init() {}
-    fileprivate func registerReadiness(_ listener: Readiness, owner: UUID) {
-        let displaced = state.withLock { value in
-            let previous = value.drainOwner.flatMap { value.listeners[$0] }
-            value.listeners[owner] = listener; value.drainOwner = owner
-            return previous
+    fileprivate func registerReadiness(_ listener: Readiness, owner: UUID, content: IndexContentGeneration) {
+        state.withLock { value in
+            value.registrationSequence &+= 1
+            value.listeners[owner] = .init(listener: listener, order: value.registrationSequence,
+                                           family: content.databaseFamily)
+            value.drainOwner = owner
         }
-        displaced?.close()
     }
     fileprivate func unregisterReadiness(_ owner: UUID) {
-        let listener = state.withLock { value in
-            if value.drainOwner == owner { value.drainOwner = nil }
-            return value.listeners.removeValue(forKey: owner)
+        let retired = state.withLock { value -> (Readiness?, Readiness?) in
+            let listener = value.listeners.removeValue(forKey: owner)?.listener
+            guard value.drainOwner == owner else { return (listener, nil) }
+            let next = value.listeners.filter { value.content == nil || $0.value.family == value.content?.databaseFamily }
+                .max { $0.value.order < $1.value.order }
+            value.drainOwner = next?.key
+            return (listener, next?.value.listener)
         }
-        listener?.close()
+        retired.0?.close()
+        // Displaced listeners remain dormant and weakly reference their scheduler.
+        // Handback is a registered wakeup; idle waiting never initiates this work.
+        retired.1?.request()
     }
     fileprivate func isDrainOwner(_ owner: UUID) -> Bool { state.withLock { $0.drainOwner == owner } }
     private func signalReadiness() {
-        let listener = state.withLock { value in value.drainOwner.flatMap { value.listeners[$0] } }
+        let listener = state.withLock { value in value.drainOwner.flatMap { value.listeners[$0]?.listener } }
         listener?.request()
     }
     deinit {
@@ -485,18 +501,20 @@ public final class IndexCheckpointLedger: Sendable {
     struct ProofForTesting: Sendable { fileprivate let value: ExecutionProof }
     func prepareProofForTesting(_ reservations: [IndexCheckpointReservation], paths: Set<String> = [],
                                reconciliation: Set<String> = [], failures: Set<String> = [],
-                               fullScan: Bool = false, content: IndexContentGeneration) -> ProofForTesting {
-        .init(value: .init(coverage: begin(entries(reservations), owner: UUID()),
+                               fullScan: Bool = false, content: IndexContentGeneration, activity: IndexActivity = .fileChanges,
+                               allCoverable: Bool = false) -> ProofForTesting {
+        let selected = allCoverable ? coverableEntries(paths: [], reconciliationPaths: [], fullScan: fullScan) : entries(reservations)
+        return .init(value: .init(coverage: begin(selected, owner: UUID()),
             paths: Set(paths.map(TraceFileIO.canonicalPath)), reconciliation: Set(reconciliation.map(TraceFileIO.canonicalPath)),
             failures: Set(failures.map(TraceFileIO.canonicalPath)), reconciliationFailures: [], fullScan: fullScan,
-            content: content, scope: .proseOnly))
+            content: content, scope: .proseOnly, activity: activity))
     }
     func retainProofForTesting(_ proof: ProofForTesting) { retain(proof.value) }
     func drainProofsForTesting(content: IndexContentGeneration) -> [String: IndexEventCheckpoint] {
         var updates: [String: IndexEventCheckpoint] = [:]
         for _ in 0..<1_000 {
             if !hasReadyProofs { break }
-            updates.merge(drainProofs(scope: .proseOnly, content: content), uniquingKeysWith: { _, last in last })
+            updates.merge(drainProofs(scope: .proseOnly, content: content).updates, uniquingKeysWith: { _, last in last })
         }
         return updates
     }
@@ -712,17 +730,21 @@ public final class IndexCheckpointLedger: Sendable {
         }
         if retained { signalReadiness() }
     }
-    fileprivate func returnUnpublished(_ updates: [String: IndexEventCheckpoint]) {
-        guard !updates.isEmpty else { return }
-        state.withLock { value in
-            for (stream, update) in updates where value.streams[stream]?.epoch == update.epoch
+    fileprivate func returnUnpublished(_ publication: Publication) {
+        guard !publication.updates.isEmpty else { return }
+        let accepted = state.withLock { value in
+            var accepted = false
+            for (stream, update) in publication.updates where value.streams[stream]?.epoch == update.epoch
                 && (update.contentGeneration == nil || update.contentGeneration == value.content) {
-                if value.updates[stream].map({ $0.value < update.value }) ?? true { value.updates[stream] = update }
+                if value.updates[stream].map({ $0.value <= update.value }) ?? true {
+                    value.updates[stream] = update; accepted = true
+                }
             }
+            if accepted { value.publicationActivity = IndexActivity.moreSignificant(value.publicationActivity, publication.activity) }
+            return accepted
         }
-        signalReadiness()
+        if accepted { signalReadiness() }
     }
-    fileprivate var lastPublicationActivity: IndexActivity { state.withLock { $0.lastPublicationActivity } }
     fileprivate var hasCompletedProofs: Bool { state.withLock { !$0.proofs.isEmpty } }
     fileprivate var hasReadyProofs: Bool {
         state.withLock { value in
@@ -731,7 +753,7 @@ public final class IndexCheckpointLedger: Sendable {
     }
     /// One bounded worker turn. Reentrant ingress never invalidates unrelated
     /// computation. Only reset/epoch retirement can discard the captured records.
-    fileprivate func drainProofs(scope: IndexScope, content: IndexContentGeneration, owner: UUID? = nil) -> [String: IndexEventCheckpoint] {
+    fileprivate func drainProofs(scope: IndexScope, content: IndexContentGeneration, owner: UUID? = nil) -> Publication {
         synchronizeContext(content: content, owner: owner)
         #if TRACE_CHECKPOINT_BENCHMARK
         let measurement = CheckpointAcceptanceBenchmark.begin()
@@ -819,7 +841,7 @@ public final class IndexCheckpointLedger: Sendable {
         if work != nil, let owner, !isDrainOwner(owner) { signalReadiness() }
         return state.withLock { value in
             guard owner == nil || value.drainOwner == owner,
-                  !value.processing, value.fences.isEmpty else { return [:] }
+                  !value.processing, value.fences.isEmpty else { return .init() }
             var budget = 128
             for name in Array(value.prefixStreams) where budget > 0 {
                 guard let stream = value.streams[name], stream.initialized else { continue }
@@ -834,11 +856,10 @@ public final class IndexCheckpointLedger: Sendable {
                 if budget > 0 { value.prefixStreams.remove(name) }
             }
             guard value.fences.isEmpty, value.proofs.isEmpty,
-                  !value.prefixStreams.contains(where: { value.streams[$0]?.initialized == true }) else { return [:] }
-            let updates = value.updates; value.updates = [:]
-            value.lastPublicationActivity = value.publicationActivity
-            value.publicationActivity = .fileChanges
-            return updates
+                  !value.prefixStreams.contains(where: { value.streams[$0]?.initialized == true }) else { return .init() }
+            let publication = Publication(updates: value.updates, activity: value.publicationActivity)
+            value.updates = [:]; value.publicationActivity = .fileChanges
+            return publication
         }
     }
     private static func outcomeCount(_ outcomes: Outcomes) -> Int {
@@ -1001,9 +1022,23 @@ public actor IndexScheduler {
     private var preservingDeferredScope = false
     private var pendingUsesCommittedScope = false
     #if DEBUG
+    private var checkpointPublicationHookForTesting: (@Sendable () async -> Void)?
+    func setCheckpointPublicationHookForTesting(_ hook: (@Sendable () async -> Void)?) { checkpointPublicationHookForTesting = hook }
     private var deferredCheckpointAcceptanceHookForTesting: (@Sendable () async -> Void)?
     func setDeferredCheckpointAcceptanceHookForTesting(_ hook: (@Sendable () async -> Void)?) {
         deferredCheckpointAcceptanceHookForTesting = hook
+    }
+    /// Execute the synchronous acceptance boundary on a dedicated test queue,
+    /// so a deliberately blocked commit never occupies the cooperative pool.
+    nonisolated func drainCheckpointProofOnQueueForTesting() async {
+        let ledger = checkpointLedger, owner = installationID, context = coordinator.checkpointContext
+        await withCheckedContinuation { continuation in
+            DispatchQueue(label: "Trace.checkpoint-test-acceptance").async {
+                let publication = ledger.drainProofs(scope: context.scope, content: context.generation, owner: owner)
+                ledger.returnUnpublished(publication)
+                continuation.resume()
+            }
+        }
     }
     var generationForTesting: UInt64 { configurationGeneration }
     var stoppingForTesting: Bool { stopping }
@@ -1075,7 +1110,7 @@ public actor IndexScheduler {
         self.didSatisfySafetyReconciliation = didSatisfySafetyReconciliation
         self.pausedCheckpointStreamsChanged = pausedStreamsChanged
         let readiness = readiness, taskHolder = readinessTask
-        checkpointLedger.registerReadiness(readiness, owner: installationID)
+        checkpointLedger.registerReadiness(readiness, owner: installationID, content: coordinator.checkpointContentGeneration)
         checkpointLedger.synchronizeContext(content: coordinator.checkpointContentGeneration, owner: installationID)
         checkpointLedger.resumeInitialization(owner: installationID)
         readiness.request()
@@ -1099,9 +1134,14 @@ public actor IndexScheduler {
         readinessTask.withLock { $0?.cancel() }
     }
 
+    private var hasPendingPausedCheckpointNotice: Bool {
+        let paused = checkpointLedger.pausedStreams
+        return publishedPausedCheckpointStreams.map { $0 != paused } ?? !paused.isEmpty
+    }
+
     private func resumeCompletedProofs() {
         guard !stopping, checkpointLedger.isDrainOwner(installationID), worker == nil,
-              checkpointLedger.hasReadyProofs || !checkpointLedger.uninitializedStreams.isEmpty else { return }
+              checkpointLedger.hasReadyProofs || !checkpointLedger.uninitializedStreams.isEmpty || hasPendingPausedCheckpointNotice else { return }
         worker = Task { await drain() }
     }
 
@@ -1318,7 +1358,7 @@ public actor IndexScheduler {
     private func drain() async {
         defer { worker = nil }
         while !stopping && (hasPendingWork || !pendingOrdinaryReceipts.isEmpty || (checkpointLedger.isDrainOwner(installationID) && !checkpointLedger.uninitializedStreams.isEmpty) || ordinaryRecovery != nil || readyRetryIndex != nil
-            || (checkpointLedger.isDrainOwner(installationID) && checkpointLedger.hasReadyProofs)) {
+            || (checkpointLedger.isDrainOwner(installationID) && (checkpointLedger.hasReadyProofs || hasPendingPausedCheckpointNotice))) {
             await drainCheckpointProofs()
             guard !stopping else { return }
             for stream in checkpointLedger.uninitializedStreams.sorted() where checkpointLedger.isDrainOwner(installationID) {
@@ -1334,7 +1374,7 @@ public actor IndexScheduler {
             }
             guard !stopping else { return }
             let paused = checkpointLedger.pausedStreams
-            if publishedPausedCheckpointStreams != paused {
+            if checkpointLedger.isDrainOwner(installationID), publishedPausedCheckpointStreams != paused {
                 publishedPausedCheckpointStreams = paused
                 await pausedCheckpointStreamsChanged?(paused)
                 guard !stopping else { return }
@@ -1705,20 +1745,22 @@ public actor IndexScheduler {
             guard !stopping else { return }
             #endif
             let context = coordinator.checkpointContext
-            let updates = checkpointLedger.drainProofs(scope: context.scope, content: context.generation, owner: installationID)
-            guard !stopping else { return }
-            await publishCheckpoints(updates, activity: checkpointLedger.lastPublicationActivity)
+            let publication = checkpointLedger.drainProofs(scope: context.scope, content: context.generation, owner: installationID)
+            #if DEBUG
+            if !publication.updates.isEmpty { await checkpointPublicationHookForTesting?() }
+            #endif
+            await publishCheckpoints(publication)
             await Task.yield()
         }
     }
 
-    private func publishCheckpoints(_ updates: [String: IndexEventCheckpoint], activity: IndexActivity) async {
-        guard !stopping, checkpointLedger.isDrainOwner(installationID), !updates.isEmpty else {
-            checkpointLedger.returnUnpublished(updates)
+    private func publishCheckpoints(_ publication: IndexCheckpointLedger.Publication) async {
+        guard !stopping, checkpointLedger.isDrainOwner(installationID), !publication.updates.isEmpty else {
+            checkpointLedger.returnUnpublished(publication)
             return
         }
-        if let qualifiedCompletion { await qualifiedCompletion(updates) }
-        else { await didComplete(activity, updates.mapValues(\.value)) }
+        if let qualifiedCompletion { await qualifiedCompletion(publication.updates) }
+        else { await didComplete(publication.activity, publication.updates.mapValues(\.value)) }
     }
 
     private func uniqueCheckpoints(_ receipts: [CheckpointReceipt]) -> [CheckpointReceipt] {

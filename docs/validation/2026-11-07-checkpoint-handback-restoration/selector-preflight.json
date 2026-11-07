@@ -1,0 +1,4 @@
+{
+  "notExecuted": "Initial selector validation rejected nonexistent testAcceptedFragmentIsNotReplayedAfterWatcherReplacement before any XCTest run.",
+  "corrected": "testWatcherReplacementCannotRejectAnAlreadyTransferredFragment"
+}

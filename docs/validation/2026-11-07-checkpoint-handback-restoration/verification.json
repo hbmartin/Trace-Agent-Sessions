@@ -1,0 +1,104 @@
+{
+  "candidate": "9db1b4fdf2f6dc2d1ce586853df061cc2badbdff",
+  "base": "06aa5598a16239446073e786f714fec653c2432e",
+  "pinnedBaseline": "8706c87e3e33b9ac38ddc4a2492fbc5ae060af34",
+  "focused": {
+    "passed": 708,
+    "groups": {
+      "FSEventsWatcherTests": 13,
+      "SidecarDependencyTests": 27,
+      "IndexingRegressionTests": 207,
+      "SessionMetadataTests": 64,
+      "AppReviewFollowupTests": 397
+    }
+  },
+  "races": {
+    "cases": 62,
+    "repetitions": 5,
+    "passedExecutions": 310
+  },
+  "scripts": {
+    "passed": 73
+  },
+  "checks": {
+    "accepted-focused": 0,
+    "accepted-discovery": 0,
+    "accepted-races-1": 0,
+    "accepted-races-2": 0,
+    "accepted-races-3": 0,
+    "accepted-races-4": 0,
+    "accepted-races-5": 0,
+    "accepted-debug-build": 0,
+    "accepted-release-build": 0,
+    "accepted-external-client": 0,
+    "accepted-project-drift": 0,
+    "accepted-signing": 0,
+    "accepted-network": 0,
+    "accepted-whitespace": 0,
+    "accepted-scripts": 0,
+    "accepted-inputs": 0,
+    "baseline-prepare": 0,
+    "baseline-debug-build": 0,
+    "baseline-debug-build-2": 0,
+    "baseline-ready": 0
+  },
+  "negativeRestorationControl": {
+    "expectedFailure": true,
+    "failedTests": 1,
+    "reportedFailureIssues": 2,
+    "passingAfterFix": true,
+    "scope": "Model-level regression; no native UI run."
+  },
+  "baselineReproducedFailure": {
+    "test": "TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+    "candidate": "9db1b4fdf2f6dc2d1ce586853df061cc2badbdff",
+    "baseline": "8706c87e3e33b9ac38ddc4a2492fbc5ae060af34",
+    "failedTestsPerRun": 1,
+    "reportedFailureIssuesPerRun": 2,
+    "symptoms": [
+      "Timed out waiting for app state",
+      "caught CancellationError()"
+    ],
+    "candidateReceipt": "accepted-known-transcript.json",
+    "baselineReceipt": "baseline-known-transcript.json",
+    "classification": "Same failure observed on candidate and unchanged pinned #92 production source. Excluded from the 708 passing cases; no new root-cause claim."
+  },
+  "ui": {
+    "accepted": false,
+    "status": "Skipped by explicit user instruction before any UI execution in this follow-up.",
+    "selected": 12,
+    "identifiersVerifiedAgainstCompiledDiscovery": true,
+    "runs": [],
+    "nativeRestorationVerified": false,
+    "baselineNativeOffsetDiagnosisComplete": false
+  },
+  "targetedMeasurements": {
+    "accepted": false,
+    "status": "Skipped by explicit user instruction; no paired runs or optimized workload smokes executed.",
+    "recordedPairs": 0,
+    "plannedWorkloads": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox",
+      "mailbox-oversized",
+      "mailbox-structural"
+    ],
+    "plannedCounts": [
+      1000,
+      10000
+    ]
+  },
+  "controllerStop": {
+    "intentional": true,
+    "after": "baseline-known-transcript",
+    "before": "baseline-instrumentation",
+    "reason": "User waived UI and measurements. Recorder hold prevented instrumentation command; outer pipeline exited after the hold."
+  },
+  "omittedByOriginalScope": [
+    "Complete suites",
+    "Three full Release comparison pairs against 61c00de"
+  ],
+  "localTenPercentPerformanceAcceptanceClaim": false,
+  "rawPayloadAvailability": "Local-only; not downloadable repository/CI attachments."
+}

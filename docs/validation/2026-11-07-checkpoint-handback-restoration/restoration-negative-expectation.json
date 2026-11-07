@@ -1,0 +1,7 @@
+{
+  "expectedFailure": true,
+  "failedTests": 1,
+  "reportedIssues": 2,
+  "sourceFixAppliedAfterRun": true,
+  "rootCause": "Bookmark anchor was set as requestedMessageID, selecting the native search route with zero offset; no bookmark-scroll request was issued."
+}

@@ -1,0 +1,8 @@
+{
+  "candidate": "9db1b4fdf2f6dc2d1ce586853df061cc2badbdff",
+  "baseline": "8706c87e3e33b9ac38ddc4a2492fbc5ae060af34",
+  "candidateReceipt": "accepted-known-transcript.json",
+  "baselineReceipt": "baseline-known-transcript.json",
+  "candidateFailed": true,
+  "baselineFailed": true
+}

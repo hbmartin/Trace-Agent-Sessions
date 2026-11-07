@@ -4,6 +4,19 @@ import argparse
 from pathlib import Path
 
 
+def swift_body(source, marker):
+    if source.count(marker) != 1:
+        raise ValueError('Missing unique normalization boundary')
+    opening = source.index('{', source.index(marker))
+    depth, closing = 1, opening + 1
+    while depth:
+        if closing == len(source):
+            raise ValueError('Unclosed normalization boundary')
+        depth += (source[closing] == '{') - (source[closing] == '}')
+        closing += 1
+    return source[opening + 1:closing - 1]
+
+
 def extract(source):
     marker = 'final class SourceIngressMailbox: Sendable {'
     end_marker = '\n@MainActor\nenum ModelPublicationBatch'
@@ -32,10 +45,14 @@ def extract(source):
      "prefixIndexEntryKind": IngressMeasurement.ledger.checkpointBenchmarkPrefixIndexEntryKind]
 }
 '''
+    # Expected outputs describe the app preparation contract, not collector observations.
+    preparation = swift_body(source, '    static func normalizeTranscript(' if 'struct Prepared: Sendable' in mailbox else '    private func normalizeTranscriptChanges(')
+    keeps_auxiliary = not all(assignment in preparation for assignment in ['relevant.lexicalPaths = []', 'relevant.structuralPaths = []'])
+    common += '\n@MainActor func benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { ' + ('count' if keeps_auxiliary else '0') + ' }\n'
     header = 'import Foundation\nimport os\nimport TraceCore\n\n' + mailbox + '\n' + common
     if 'struct Prepared: Sendable' in mailbox:
         wrapper = r'''
-@MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void) -> SourceIngressMailbox {
+@MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void, retired: @escaping @MainActor @Sendable () -> Void) -> SourceIngressMailbox {
     let roots = IngressMeasurement.roots
     _ = IngressMeasurement.ledger
     return SourceIngressMailbox(prepare: {
@@ -45,23 +62,15 @@ def extract(source):
         let changes = delivery.enrolled(in: IngressMeasurement.ledger)
         IngressMeasurement.record(start, changes: changes)
         await receive(changes); return TRANSFER
-    }, retire: { _ in preconditionFailure("Untransferred benchmark boundary") })
+    }, retire: { _ in retired() })
 }
 '''.replace('TRANSFER', '.ordinaryTransferred' if 'enum Transfer:' in mailbox else 'true')
     else:
-        marker = '    private func normalizeTranscriptChanges('
-        if source.count(marker) != 1:
-            raise ValueError('Missing unique historical normalization boundary')
-        opening = source.index('{', source.index(marker)); depth = 1; closing = opening + 1
-        while depth:
-            if closing == len(source):
-                raise ValueError('Unclosed historical normalization boundary')
-            depth += (source[closing] == '{') - (source[closing] == '}'); closing += 1
-        body = source[opening + 1:closing - 1]
+        body = preparation
         normalize = '\n@MainActor private func normalizeBenchmarkChanges(_ changes: SourceChanges) -> (changes: SourceChanges, recoveryEligible: Bool) {\n    let watcherRootsByAgent = IngressMeasurement.roots\n' + body + '\n}\n'
         parameters = 'raw, _, _' if 'struct ReplayPosition:' in mailbox else 'raw, _'
         wrapper = normalize + r'''
-@MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void) -> SourceIngressMailbox {
+@MainActor func makeBenchmarkMailbox(_ receive: @escaping @MainActor @Sendable (SourceChanges) async -> Void, retired: @escaping @MainActor @Sendable () -> Void) -> SourceIngressMailbox {
     _ = IngressMeasurement.roots
     _ = IngressMeasurement.ledger
     return SourceIngressMailbox { PARAMETERS in

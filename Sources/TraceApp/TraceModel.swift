@@ -103,11 +103,11 @@ final class SourceIngressMailbox: Sendable {
         }
         /// Only the undelivered suffix is taken. Delivered coverage may remain
         /// unpaid in the ledger without becoming delivery debt again.
-        func takeUndelivered(_ suffix: SourceChanges) -> SourceChanges? {
+        func takeUndeliveredReservations() -> [IndexCheckpointReservation]? {
             enrollment.withLock { state in
                 guard !state.retired, let reserved = state.reservations else { return nil }
                 state.retired = true
-                var changes = suffix; changes.checkpointReservations = reserved; return changes
+                return reserved
             }
         }
     }
@@ -153,12 +153,20 @@ final class SourceIngressMailbox: Sendable {
             }
         }
         relevant.paths = Set(paths.map(\.path)); relevant.reconciliationPaths = Set(reconciliation.map(\.path))
+        relevant.lexicalPaths = []; relevant.structuralPaths = []
         relevant = checkpointable(relevant, excluding: unavailableStreams)
         let known = Dictionary(roots.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         let canonicalRoots = relevant.watermarks.isEmpty || !relevant.checkpointReservations.isEmpty ? [:]
             : relevant.streamRoots.mapValues { Set($0.map { known[$0] ?? TraceFileIO.canonicalPath($0) }) }
         return .init(changes: relevant, recoveryEligible: eligible || !reconciliation.isEmpty,
             canonicalPaths: paths, canonicalReconciliation: reconciliation, canonicalRoots: canonicalRoots)
+    }
+    static func normalizeMetadata(_ changes: SourceChanges) -> Prepared {
+        // CodexMetadataWatcher has already mapped lexical/structural topology to
+        // configured indexing paths before this app-only handoff.
+        var relevant = changes
+        relevant.lexicalPaths = []; relevant.structuralPaths = []
+        return .init(changes: relevant, recoveryEligible: relevant.hasIndexWork)
     }
     private struct Chunk: Sendable { let changes: SourceChanges; let diagnostics: [String]? }
     private final class Ingress: Sendable {
@@ -212,6 +220,11 @@ final class SourceIngressMailbox: Sendable {
             var callbacks = 1
             var diagnostics: [String]?
             var inputCount: Int { Self.count(value.changes) }
+            func canMerge(_ other: Prepared) -> Bool {
+                callbacks < 128 && inputCount + Self.count(other.changes) <= 128
+                    && value.changes.checkpointReservations.isEmpty == other.changes.checkpointReservations.isEmpty
+                    && (!value.changes.checkpointReservations.isEmpty || value.changes.watermarks.isEmpty == other.changes.watermarks.isEmpty)
+            }
             static func count(_ changes: SourceChanges) -> Int {
                 changes.paths.count + changes.reconciliationPaths.count + changes.lexicalPaths.count + changes.structuralPaths.count
             }
@@ -261,7 +274,7 @@ final class SourceIngressMailbox: Sendable {
             guard !ingress.isClosed else { return }
             for chunk in chunks {
                 let value = prepare(chunk.changes)
-                let canMerge = groups[tail].map { $0.callbacks < 128 && $0.value.changes.checkpointReservations.isEmpty == value.changes.checkpointReservations.isEmpty && $0.inputCount + Group.count(value.changes) <= 128 } ?? false
+                let canMerge = groups[tail]?.canMerge(value) ?? false
                 if canMerge {
                     var group = groups.removeValue(forKey: tail)!
                     group.value.merge(value); group.callbacks += 1
@@ -281,20 +294,21 @@ final class SourceIngressMailbox: Sendable {
                 head &+= 1
                 let boundary = Boundary(group.value), fragments = Fragments(group.value.changes)
                 var next = 0
-                while next < fragments.count, !ingress.isClosed {
+                fragmentLoop: while next < fragments.count, !ingress.isClosed {
                     let outcome = await receive(.init(boundary: boundary, changes: fragments.value(from: next),
                         startsBoundary: next == 0, endsBoundary: next == fragments.count - 1,
                         diagnostics: next == 0 ? group.diagnostics : nil))
                     switch outcome {
-                    case .rejected: break
+                    case .rejected: break fragmentLoop
                     case .ordinaryTransferred: next += 1
                     case .recoveryTransferred, .retired: next = fragments.count
                     }
-                    if case .rejected = outcome { break }
                     // Complete transfer is recorded before any suspension.
                     if next < fragments.count { await Task.yield() }
                 }
-                if next < fragments.count, let remainder = boundary.takeUndelivered(fragments.value(from: next, suffix: true)) {
+                if next < fragments.count, let reservations = boundary.takeUndeliveredReservations() {
+                    var remainder = fragments.value(from: next, suffix: true)
+                    remainder.checkpointReservations = reservations
                     await retire(remainder)
                 }
             }
@@ -1729,12 +1743,15 @@ final class TraceModel: ObservableObject {
                     if let mapped = mappedBookmarks[entry.reference], entry.bookmark != nil { visitedNavigationReferences[mapped.session.id] = entry.reference }
                 }
                 let latest = navigation.reference.flatMap { active in saved.last { $0.reference.unanchored == active.unanchored } }
-                let restoredAnchor = latest?.bookmark == nil && latest != nil ? nil
+                // Only a still-pending explicit message request uses the native
+                // search route (offset zero). A saved bookmark keeps its offset.
+                let restoredAnchor = requestedMessageID == nil || (latest?.bookmark == nil && latest != nil) ? nil
                     : (bookmarks[id]?.messageID ?? resolved.anchorMessageID)
                 settings.pendingNavigationReference = nil
                 settings.lastSessionID = id
                 selectionSourceIdentity = snapshot.session.flatMap(SelectionSourceIdentity.from)
                 requestedMessageID = restoredAnchor
+                scrollRequest = UUID()
                 updateTranscript {
                     $0.sessionID = id
                     $0.hydrated = [:]; $0.failures = [:]; $0.expanded = []
@@ -2795,31 +2812,38 @@ final class TraceModel: ObservableObject {
     var sourceIngressAfterTransferGateForTesting: Task<Void, Never>?
     private(set) var sourceIngressAfterTransferWaitingForTesting = false
     var sourceIngressTransfersForTesting: [SourceIngressMailbox.Transfer]?
-    @discardableResult
-    func recoverDeferredRebuildForTesting(_ changes: SourceChanges, safety: Bool = false) async -> Bool {
-        guard let database else { return false }
+    enum SourceIngressTestError: Error { case unavailableDatabase, timedOut, missingDelivery }
+    func deliverSourceChangesForTesting(_ changes: SourceChanges, safety: Bool = false,
+                                        metadata: Bool = false, diagnostics: [String]? = nil,
+                                        respectSuppression: Bool = false,
+                                        timeout: Duration = .seconds(10)) async throws -> SourceIngressMailbox.Transfer {
+        guard let database else { throw SourceIngressTestError.unavailableDatabase }
+        try Task.checkCancellation()
         if sourceIngressTransfersForTesting == nil { sourceIngressTransfersForTesting = [] }
-        var result: Bool?
+        let (events, completion) = AsyncThrowingStream<SourceIngressMailbox.Transfer, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let mailbox = makeSourceIngress(database: database, generation: watcherGeneration,
-            kind: .transcript(safety: safety), rootsByAgent: watcherRootsByAgent,
-            unavailableStreams: unavailableCheckpointStreams, observe: { delivery, outcome in
-                switch outcome {
-                case .recoveryTransferred: result = true
-                case .retired, .rejected: result = false
-                case .ordinaryTransferred: if delivery.endsBoundary { result = false }
+            kind: metadata ? .metadata : .transcript(safety: safety), rootsByAgent: watcherRootsByAgent,
+            unavailableStreams: unavailableCheckpointStreams, testingInjection: !respectSuppression,
+            observe: { delivery, outcome in
+                if outcome != .ordinaryTransferred || delivery.endsBoundary {
+                    completion.yield(outcome); completion.finish()
                 }
             })
         sourceIngressMailboxes.append(mailbox)
-        defer { mailbox.close(); sourceIngressMailboxes.removeAll { $0 === mailbox } }
-        mailbox.enqueue(changes)
-        let deadline = ContinuousClock.now + .seconds(10)
-        while result == nil {
-            let state = await mailbox.snapshotForTesting()
-            if !state.delivering, !state.pending, state.queued == 0 { return false }
-            guard !Task.isCancelled, ContinuousClock.now < deadline else { return false }
-            try? await Task.sleep(for: .milliseconds(5))
+        defer { mailbox.close(); sourceIngressMailboxes.removeAll { $0 === mailbox }; completion.finish() }
+        mailbox.enqueue(changes, diagnostics: diagnostics)
+        let deadline = Task {
+            do { try await Task.sleep(for: timeout) }
+            catch { return }
+            completion.finish(throwing: SourceIngressTestError.timedOut)
         }
-        return result == true
+        defer { deadline.cancel() }
+        for try await outcome in events {
+            try Task.checkCancellation()
+            return outcome
+        }
+        try Task.checkCancellation()
+        throw SourceIngressTestError.missingDelivery
     }
 
     var explicitRebuildGateOpenForTesting: Bool? { rebuildRequest?.explicitGate?.open }
@@ -6622,16 +6646,21 @@ final class TraceModel: ObservableObject {
 
     private func makeSourceIngress(database: IndexDatabase, generation: UInt64, kind: SourceIngressKind,
                                    rootsByAgent: [AgentKind: [TraceFileIO.CanonicalPath]],
-                                   unavailableStreams: Set<String>,
+                                   unavailableStreams: Set<String>, testingInjection: Bool = false,
                                    observe: (@MainActor @Sendable (SourceIngressMailbox.Delivery, SourceIngressMailbox.Transfer) -> Void)? = nil) -> SourceIngressMailbox {
         let transcript: Bool
         switch kind { case .transcript: transcript = true; case .metadata: transcript = false }
         return SourceIngressMailbox(prepare: { changes in
             transcript ? SourceIngressMailbox.normalizeTranscript(changes, rootsByAgent: rootsByAgent, unavailableStreams: unavailableStreams)
-                : .init(changes: changes, recoveryEligible: changes.hasIndexWork)
+                : SourceIngressMailbox.normalizeMetadata(changes)
         }, receivePrepared: { [weak self, weak database] delivery in
             guard let self, let database else { return .retired }
-            let outcome = await self.receiveSourceIngress(delivery, database: database, generation: generation, kind: kind, testingInjection: observe != nil)
+            let outcome = await self.receiveSourceIngress(delivery, database: database, generation: generation, kind: kind, testingInjection: testingInjection)
+            #if DEBUG
+            // An explicit observer owns these test receipts. Ignored background
+            // callbacks are not part of that injected invocation.
+            if observe != nil { self.sourceIngressTransfersForTesting?.append(outcome) }
+            #endif
             observe?(delivery, outcome)
             return outcome
         }, retire: { [weak self, weak database] changes in
@@ -6640,10 +6669,18 @@ final class TraceModel: ObservableObject {
         })
     }
 
+    private func sourceIngressRejection(database: IndexDatabase, generation: UInt64) -> SourceIngressMailbox.Transfer? {
+        if self.database !== database || terminating { return .retired }
+        if watcherGeneration != generation { return .rejected }
+        return nil
+    }
+
     private func receiveSourceIngress(_ delivery: SourceIngressMailbox.Delivery, database: IndexDatabase,
                                       generation: UInt64, kind: SourceIngressKind, testingInjection: Bool = false) async -> SourceIngressMailbox.Transfer {
-        guard self.database === database, !terminating else { return .retired }
-        guard watcherGeneration == generation else { return .rejected }
+        if let rejection = sourceIngressRejection(database: database, generation: generation) { return rejection }
+        #if DEBUG
+        if suppressLiveWatcherIngressForTesting && !testingInjection { return .rejected }
+        #endif
         let acceptsCheckpoints: Bool, safety: Bool
         switch kind {
         case .transcript(let isSafety):
@@ -6655,18 +6692,12 @@ final class TraceModel: ObservableObject {
                 metadataMonitoringWarnings = diagnostics; updateMonitoringWarnings()
             }
         }
-        guard self.database === database, !terminating else { return .retired }
-        guard watcherGeneration == generation else { return .rejected }
-        #if DEBUG
-        if suppressLiveWatcherIngressForTesting && !testingInjection { return .rejected }
-        #endif
+        // Warning publication may synchronously replace the attachment or watcher.
+        if let rejection = sourceIngressRejection(database: database, generation: generation) { return rejection }
         let reservations = delivery.boundary.reservations(in: checkpointLedger, acceptsCheckpoints: acceptsCheckpoints)
         if delivery.startsBoundary, delivery.boundary.value.recoveryEligible || safety {
             var complete = delivery.boundary.value.changes; complete.checkpointReservations = reservations
             if enrollDeferredRebuildRecovery(changes: complete, safety: safety) != nil {
-                #if DEBUG
-                sourceIngressTransfersForTesting?.append(.recoveryTransferred)
-                #endif
                 return .recoveryTransferred
             }
         }
@@ -6679,7 +6710,6 @@ final class TraceModel: ObservableObject {
             await gate.value
             sourceIngressAfterTransferWaitingForTesting = false
         }
-        sourceIngressTransfersForTesting?.append(.ordinaryTransferred)
         #endif
         // Delivery has transferred to the scheduler or same-database buffer.
         // Later watcher freshness cannot turn that fact into rejection.
