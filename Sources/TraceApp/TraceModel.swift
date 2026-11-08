@@ -1020,6 +1020,10 @@ final class TraceModel: ObservableObject {
         let previous = scrollPositions[sessionID]
         if !needsClear, previous?.messageID == bookmark?.messageID, previous?.offset == bookmark?.offset,
            previous?.index == bookmark?.index { return }
+        if selectedSessionID == sessionID,
+           pendingMessageRestore?.intent.token == requestedMessageIntentID {
+            setRequestedMessage(nil)
+        }
         bookmarkRevision &+= 1
         bookmarkRevisions[sessionID] = bookmarkRevision
         storeBookmark(sessionID, bookmark, reference: source, generation: selectionSourceIdentity.flatMap { $0.sessionID == sessionID ? $0.generation : nil })
@@ -1082,7 +1086,6 @@ final class TraceModel: ObservableObject {
         var committed = false
         var lastResolutionEvent: UUID?
         var resolutionRunning = false
-        var scanCoverageComplete = false
         init(database: IndexDatabase, reset: RebuildResetReceipt, reference: SessionNavigationReference?,
              sessionID: Int64?, request: UUID, bookmark: TranscriptBookmark?,
              savedBookmarks: [SavedResetBookmark], searchAnchor: SearchResultAnchor?, searchReference: SessionNavigationReference?, depth: Int,
@@ -1093,7 +1096,30 @@ final class TraceModel: ObservableObject {
             self.searchAnchor = searchAnchor; self.searchReference = searchReference
         }
     }
-    private var navigationCoverageGeneration: IndexContentGeneration?
+    private var navigationCoverage: IndexNavigationCoverage?
+    private var navigationCoverageConfiguration: UInt64?
+    private final class PendingMessageRestore {
+        let database: IndexDatabase
+        let generation: IndexContentGeneration
+        let sessionID: Int64
+        let request: UUID
+        let intent: AutomaticMessageIntent
+        var running = false
+        var lastEvent: UUID?
+        init(database: IndexDatabase, generation: IndexContentGeneration, sessionID: Int64,
+             request: UUID, intent: AutomaticMessageIntent) {
+            self.database = database; self.generation = generation; self.sessionID = sessionID
+            self.request = request; self.intent = intent
+        }
+    }
+    private var pendingMessageRestore: PendingMessageRestore?
+
+    private func navigationSourceCovered(_ reference: SessionNavigationReference?, database: IndexDatabase) -> Bool {
+        guard self.database === database, let reference, let coverage = navigationCoverage,
+              coverage.contentGeneration == database.contentGeneration,
+              navigationCoverageConfiguration == sourceConfigurationRevision else { return false }
+        return coverage.covers(reference)
+    }
     private var observedContentGeneration: IndexContentGeneration?
     private struct SelectionSourceIdentity {
         let sessionID: Int64
@@ -1457,7 +1483,7 @@ final class TraceModel: ObservableObject {
     private func ordinaryRecoveryCompleted(_ claim: RebuildClaim) -> @Sendable () -> Void {
         let request = claim.admission.requestID, revision = claim.inputRevision
         let ownerDatabase = claim.admission.database, attachment = claim.admission.attachment
-        let configuration = claim.admission.configuration, reset = claim.reset
+        let configuration = claim.admission.configuration
         return { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, !self.terminating,
@@ -1466,12 +1492,10 @@ final class TraceModel: ObservableObject {
                 if self.rebuildRequest?.id == request, self.rebuildRequest?.recoveryRevision == revision {
                     self.rebuildRequest?.recoveryInputs = .init()
                 }
-                if reset.isCommitted { self.navigationCoverageGeneration = ownerDatabase.contentGeneration }
                 if let navigation = self.automaticNavigation, self.automaticNavigationIsCurrent(navigation), navigation.reset.isCommitted {
-                    navigation.scanCoverageComplete = true
                     // The terminal notification precedes accepted scheduler coverage.
                     // Revisit provisional absence, but do not retry a failed read.
-                    if self.transientTranscriptAbsence != nil, self.transcriptReadError == nil {
+                    if self.transientTranscriptAbsence != nil || self.pendingMessageRestore != nil, self.transcriptReadError == nil {
                         await self.restoreAutomaticNavigation(after: self.progress, event: UUID())
                     }
                 }
@@ -1499,23 +1523,32 @@ final class TraceModel: ObservableObject {
         }
         do {
             var anchors: [Int64: Int64?] = bookmarks.mapValues { $0.messageID }
-            if let sessionID { anchors.updateValue(bookmark?.messageID ?? requestedMessageID, forKey: sessionID) }
+            if let sessionID { anchors.updateValue(bookmark?.messageID, forKey: sessionID) }
             var expected = visitedNavigationReferences
             if let source = selectionSourceIdentity, let reference = source.reference { expected[source.sessionID] = reference }
-            let captured = try await database.captureNavigationReferences(anchors,
-                expectedGeneration: content,
-                expectedReferences: expected)
+            let ids = anchors.keys.sorted()
+            var requests = ids.map { id in
+                NavigationCaptureRequest(sessionID: id, anchorMessageID: anchors[id] ?? nil,
+                    expectedReference: expected[id],
+                    stableAnchor: expected[id].flatMap { reference in
+                        bookmarkIntents[reference.unanchored].flatMap { $0.bookmark != nil ? $0.reference : nil }
+                    } ?? (bookmarkSlots[id].map { $0.generation != content } == true ? expected[id] : nil),
+                    anchorGeneration: bookmarkSlots[id]?.generation ?? content)
+            }
+            let intentIndex = requests.count
+            if let sessionID, messageIntent != nil {
+                requests.append(.init(sessionID: sessionID, anchorMessageID: targetMessageID,
+                    expectedReference: expected[sessionID], stableAnchor: messageIntent?.reference,
+                    anchorGeneration: selectionSourceIdentity?.generation ?? content))
+            }
+            let results = try await database.captureNavigationReferences(requests, expectedGeneration: content)
             guard isCurrent() else { return false }
+            let captured = Dictionary(ids.indices.compactMap { index in results[index].map { (ids[index], $0) } },
+                uniquingKeysWith: { _, last in last })
             var capturedIntent = messageIntent
-            if let sessionID, let targetMessageID, let messageIntent {
-                var target = captured[sessionID]
-                if let bookmark, bookmark.messageID != targetMessageID {
-                    target = try await database.captureNavigationReferences([sessionID: targetMessageID],
-                        expectedGeneration: content, expectedReferences: expected)[sessionID]
-                    guard isCurrent() else { return false }
-                }
+            if let messageIntent, results.indices.contains(intentIndex) {
                 capturedIntent = .init(token: messageIntent.token,
-                    reference: target ?? messageIntent.reference,
+                    reference: results[intentIndex] ?? messageIntent.reference,
                     bookmarkRevision: messageIntent.bookmarkRevision)
             }
             for (id, reference) in captured { refreshNavigationReference(sessionID: id, current: reference) }
@@ -1570,7 +1603,7 @@ final class TraceModel: ObservableObject {
         guard !terminating, let database, observedContentGeneration != database.contentGeneration else { return }
         let currentGeneration = database.contentGeneration
         observedContentGeneration = currentGeneration
-        navigationCoverageGeneration = nil
+        navigationCoverage = nil
         // Selection may have changed after delivery. Global cursor/read invalidation
         // still commits, then restoration follows only the latest selection.
         let reset = automaticNavigation?.reset ?? RebuildResetReceipt()
@@ -1593,8 +1626,13 @@ final class TraceModel: ObservableObject {
             savedBookmarks: saved, searchAnchor: hasSearchReturnContext ? mainSearchReturnAnchor : nil,
             searchReference: hasSearchReturnContext ? mainSearchReturnReference : nil,
             depth: max(loadedSessionPageCount, pageState.read(\.requestedDepth)),
-            messageIntent: currentAutomaticMessageIntent(previous: old?.messageIntent ?? captured?.messageIntent))
+            messageIntent: currentAutomaticMessageIntent(previous: [captured?.messageIntent, old?.messageIntent]))
+        if navigation.messageIntent == nil,
+           [captured?.messageIntent, old?.messageIntent].contains(where: { $0?.token == requestedMessageIntentID }) {
+            setRequestedMessage(nil)
+        }
         automaticNavigation = navigation
+        pendingMessageRestore = nil
         preparedResetNavigation = nil
         settings.lastSessionID = nil
         settings.pendingNavigationReference = navigation.reference
@@ -1643,7 +1681,10 @@ final class TraceModel: ObservableObject {
 
     private func restoreAutomaticNavigation(after update: IndexProgress, event: UUID? = nil) async {
         guard let navigation = automaticNavigation, automaticNavigationIsCurrent(navigation),
-              navigation.reset.isCommitted else { return }
+              navigation.reset.isCommitted else {
+            await restorePendingMessageIntent(event: event ?? indexWorkflow.generation)
+            return
+        }
         let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
         let workflow = indexWorkflow.generation
         func isCurrent() -> Bool {
@@ -1709,8 +1750,7 @@ final class TraceModel: ObservableObject {
                         requestID: navigation.request, paused: true)
                 }
                 guard isCurrent() else { return }
-                if navigation.reference != nil, navigation.scanCoverageComplete, update.phase == .complete, update.failedFiles == 0,
-                   update.unresolvedFailedFiles == 0, update.unresolvedDiscoveryFailures == 0 {
+                if navigationSourceCovered(navigation.reference, database: navigation.database) {
                     automaticNavigation = nil
                     returnFromSession()
                 }
@@ -1757,9 +1797,8 @@ final class TraceModel: ObservableObject {
             let targetMessage = intentIsCurrent ? pendingIntent?.reference.flatMap { reference in
                 rows.first { $0.navigationIdentity.map(reference.matchesAnchor) == true }?.id
             } : nil
-            let authoritative = navigation.scanCoverageComplete && update.phase == .complete
-                && update.failedFiles == 0 && update.unresolvedFailedFiles == 0 && update.unresolvedDiscoveryFailures == 0
-            if intentIsCurrent, targetMessage == nil, !authoritative { return }
+            let authoritative = navigationSourceCovered(pendingIntent?.reference ?? navigation.reference, database: navigation.database)
+            let retainTarget = intentIsCurrent && targetMessage == nil && !authoritative
             let id = resolved.session.id, nextRequest = UUID()
             let completion = pendingSelectionCompletion
             ModelPublicationBatch.perform {
@@ -1787,6 +1826,15 @@ final class TraceModel: ObservableObject {
                 if let targetMessage {
                     requestedMessageID = targetMessage
                     requestedMessageReference = pendingIntent?.reference
+                } else if retainTarget, let pendingIntent {
+                    // Reader availability and target adjudication have separate
+                    // lifetimes. A nil UI row ID does not consume stable intent.
+                    requestedMessageID = nil
+                    requestedMessageReference = pendingIntent.reference
+                    pendingMessageRestore = .init(database: navigation.database,
+                        generation: navigation.database.contentGeneration, sessionID: id,
+                        request: nextRequest, intent: .init(token: pendingIntent.token,
+                            reference: pendingIntent.reference, bookmarkRevision: bookmarkRevisions[id] ?? 0))
                 } else if pendingIntent?.token == requestedMessageIntentID {
                     setRequestedMessage(nil)
                 }
@@ -1816,6 +1864,55 @@ final class TraceModel: ObservableObject {
                 $0.readError = "Could not refresh this session. Try again."
                 $0.absence = nil
             }
+        }
+    }
+
+    private func pendingMessageIsCurrent(_ pending: PendingMessageRestore) -> Bool {
+        !terminating && pendingMessageRestore === pending && database === pending.database
+            && pending.generation == pending.database.contentGeneration
+            && selectedSessionID == pending.sessionID && sessionRequestID == pending.request
+            && requestedMessageIntentID == pending.intent.token
+            && (bookmarkRevisions[pending.sessionID] ?? 0) == pending.intent.bookmarkRevision
+    }
+
+    private func restorePendingMessageIntent(event: UUID) async {
+        guard let pending = pendingMessageRestore, pendingMessageIsCurrent(pending),
+              !indexWorkflow.isActive, !pending.running, pending.lastEvent != event,
+              let reference = pending.intent.reference else { return }
+        pending.running = true; pending.lastEvent = event
+        defer { pending.running = false }
+        let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
+        func isCurrent() -> Bool {
+            pendingMessageIsCurrent(pending) && attachment == attachmentGeneration
+                && configuration == sourceConfigurationRevision && !indexWorkflow.isActive
+        }
+        do {
+            let resolved = try await pending.database.resolveNavigationReference(reference)
+            guard isCurrent() else { return }
+            guard let resolved else {
+                if navigationSourceCovered(reference, database: pending.database) { setRequestedMessage(nil) }
+                return
+            }
+            guard resolved.session.id == pending.sessionID else { return }
+            let snapshot = try await pending.database.transcriptSnapshot(sessionID: resolved.session.id,
+                expectedGeneration: pending.generation, expectedReference: reference)
+            guard isCurrent(), snapshot.session != nil, acceptTranscript(snapshot) == .accepted else { return }
+            let target = snapshot.messages?.first { $0.navigationIdentity.map(reference.matchesAnchor) == true }?.id
+            ModelPublicationBatch.perform {
+                if let target {
+                    pendingMessageRestore = nil
+                    requestedMessageID = target; requestedMessageReference = reference
+                    scrollRequest = UUID()
+                } else if navigationSourceCovered(reference, database: pending.database) {
+                    setRequestedMessage(nil)
+                }
+                applyTranscript(snapshot)
+            }
+        } catch is CancellationError { return }
+        catch {
+            guard isCurrent() else { return }
+            recordSummaryReadFailure(error, operation: .restoration)
+            transcriptReadError = "Could not refresh this session. Try again."
         }
     }
 
@@ -1871,8 +1968,6 @@ final class TraceModel: ObservableObject {
                 let replacements = Dictionary(changed.map { ($0.reference.unanchored, $0) }, uniquingKeysWith: { _, last in last })
                 entries = entries.map { replacements[$0.reference.unanchored] ?? $0 }
             }
-            let authoritative = progress.phase == .complete && progress.unresolvedFailedFiles == 0
-                && progress.unresolvedDiscoveryFailures == 0 && navigationCoverageGeneration == owner.database.contentGeneration
             for entry in entries {
                 let reference = entry.reference
                 if let newest = bookmarkIntents[reference.unanchored], newest.revision > entry.revision {
@@ -1889,7 +1984,7 @@ final class TraceModel: ObservableObject {
                         visitedNavigationReferences.removeValue(forKey: mapped.session.id)
                     }
                     pendingResetBookmarks?.references.removeValue(forKey: reference.unanchored)
-                } else if authoritative { pendingResetBookmarks?.references.removeValue(forKey: reference.unanchored) }
+                } else if navigationSourceCovered(reference, database: owner.database) { pendingResetBookmarks?.references.removeValue(forKey: reference.unanchored) }
             }
         } catch {
             guard isCurrent() else { return }
@@ -2404,15 +2499,21 @@ final class TraceModel: ObservableObject {
     private var requestedMessageIntentID = UUID()
     private var requestedMessageReference: SessionNavigationReference?
     private func setRequestedMessage(_ messageID: Int64?, reference: SessionNavigationReference? = nil) {
+        pendingMessageRestore = nil
         requestedMessageIntentID = UUID()
         requestedMessageReference = messageID == nil ? nil : reference
         requestedMessageID = messageID
     }
-    private func currentAutomaticMessageIntent(previous: AutomaticMessageIntent? = nil) -> AutomaticMessageIntent? {
-        guard requestedMessageID != nil else { return nil }
-        if let previous, previous.token == requestedMessageIntentID { return previous }
-        return .init(token: requestedMessageIntentID, reference: requestedMessageReference,
-            bookmarkRevision: selectedSessionID.flatMap { bookmarkRevisions[$0] } ?? 0)
+    private static func preferredMessageIntent(_ candidates: [AutomaticMessageIntent?], token: UUID) -> AutomaticMessageIntent? {
+        candidates.compactMap { $0 }.first { $0.token == token }
+    }
+    private func currentAutomaticMessageIntent(previous: [AutomaticMessageIntent?] = []) -> AutomaticMessageIntent? {
+        guard requestedMessageID != nil || pendingMessageRestore?.intent.token == requestedMessageIntentID else { return nil }
+        let revision = selectedSessionID.flatMap { bookmarkRevisions[$0] } ?? 0
+        if let previous = Self.preferredMessageIntent(previous, token: requestedMessageIntentID) {
+            return previous.bookmarkRevision == revision ? previous : nil
+        }
+        return .init(token: requestedMessageIntentID, reference: requestedMessageReference, bookmarkRevision: revision)
     }
     private var mayRestoreSession = true
     enum SummaryReadOperation: String, Hashable { case sidebar, restoration, sourceHealth, statistics, sessionList, sessionPage, indexStatus, sourceReload }
@@ -2702,6 +2803,25 @@ final class TraceModel: ObservableObject {
     private(set) var automaticNavigationCaptureWaitingForTesting = false
     var automaticNavigationTranscriptGateForTesting: Task<Void, Never>?
     private(set) var automaticNavigationTranscriptWaitingForTesting = false
+    private var retainedSearchResultForUITesting: SearchResult?
+    func retainSearchResultForUITesting() {
+        guard TraceTestHooks.isUITesting else { return }
+        retainedSearchResultForUITesting = mainSearch.results.first ?? globalSearch.results.first
+    }
+    func openRetainedSearchResultForUITesting() {
+        guard TraceTestHooks.isUITesting, let result = retainedSearchResultForUITesting else { return }
+        openSearchResult(result)
+    }
+    static func preferredCapturedMessageReferenceForTesting(captured: SessionNavigationReference,
+            prior: SessionNavigationReference, capturedIsCurrent: Bool) -> SessionNavigationReference? {
+        let token = UUID(), obsolete = UUID()
+        let captured = AutomaticMessageIntent(token: capturedIsCurrent ? token : obsolete,
+            reference: captured, bookmarkRevision: 17)
+        let prior = AutomaticMessageIntent(token: capturedIsCurrent ? obsolete : token,
+            reference: prior, bookmarkRevision: 23)
+        return preferredMessageIntent([captured, prior], token: token)?.reference
+    }
+    var pendingMessageIntentForTesting: Bool { pendingMessageRestore != nil }
     var automaticNavigationRestoreGateForTesting: Task<Void, Never>?
     private(set) var automaticNavigationRestoreWaitingForTesting = false
     private(set) var automaticNavigationRestoreCompletionsForTesting = 0
@@ -3500,9 +3620,10 @@ final class TraceModel: ObservableObject {
             discardBufferedSourceWork(nextDatabase: database)
             pendingStartupRecovery = .init()
             automaticNavigation = nil
+            pendingMessageRestore = nil
             preparedResetNavigation = nil
             observedContentGeneration = database.contentGeneration
-            navigationCoverageGeneration = nil
+            navigationCoverage = nil
             selectionSourceIdentity = nil
             visitedNavigationReferences = [:]
             bookmarkIntents = [:]; bookmarkRevisions = [:]; bookmarkRevision = 0
@@ -3544,6 +3665,11 @@ final class TraceModel: ObservableObject {
         var mutationAdvanced = false
         ModelPublicationBatch.perform {
             stageAutomaticNavigationCommit()
+            if let coverage = update.navigationCoverage, coverage.contentGeneration == database?.contentGeneration {
+                navigationCoverage = navigationCoverageConfiguration == sourceConfigurationRevision
+                    ? navigationCoverage.map { $0.merging(coverage) } ?? coverage : coverage
+                navigationCoverageConfiguration = sourceConfigurationRevision
+            }
             mutationAdvanced = recordSearchMutation(update)
             retireRebuildAdmission()
             if workflow != indexWorkflow.generation { invalidateTranscriptSettlement() }
@@ -5059,6 +5185,7 @@ final class TraceModel: ObservableObject {
         }
         saveCurrentNavigationReference()
         automaticNavigation = nil
+        pendingMessageRestore = nil
         settings.pendingNavigationReference = nil
         let request = UUID(), ownerDatabase = database
         sessionRequestID = request
@@ -5524,6 +5651,10 @@ final class TraceModel: ObservableObject {
     }
 
     func retrySelectedTranscript() {
+        if pendingMessageRestore != nil {
+            Task { await restorePendingMessageIntent(event: UUID()) }
+            return
+        }
         if automaticNavigationIsCommitted {
             let event = UUID()
             Task { await restoreAutomaticNavigation(after: progress, event: event) }
@@ -7047,9 +7178,10 @@ final class TraceModel: ObservableObject {
                                                  configuration: sourceConfigurationRevision)
         if terminal == nil { summaryRequestID = owner.id }
         let refresh = owner.id
-        if !lightweight, automaticNavigationIsCommitted, !indexWorkflow.isActive {
-            let terminalOwner = terminal ?? pendingFullSummaryRefresh
-            let event = terminalOwner?.workflow == indexWorkflow.generation ? indexWorkflow.generation : owner.id
+        if !lightweight, (automaticNavigationIsCommitted || pendingMessageRestore != nil), !indexWorkflow.isActive {
+            // One terminal event is deduplicated; an explicit full refresh is a
+            // distinct request even while inheriting the terminal summary tail.
+            let event = terminal?.workflow == indexWorkflow.generation ? indexWorkflow.generation : owner.id
             await restoreAutomaticNavigation(after: progress, event: event)
             guard summaryRefreshIsCurrent(owner) else { return }
         }

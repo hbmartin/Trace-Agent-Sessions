@@ -2522,6 +2522,17 @@ public actor IndexDatabase {
     public func captureNavigationReferences(_ anchors: [Int64: Int64?],
             expectedGeneration: IndexContentGeneration?,
             expectedReferences: [Int64: SessionNavigationReference]) throws -> [Int64: SessionNavigationReference] {
+        let requests = anchors.map { NavigationCaptureRequest(sessionID: $0.key, anchorMessageID: $0.value,
+            expectedReference: expectedReferences[$0.key], anchorGeneration: expectedGeneration ?? contentGeneration) }
+        let captured = try captureNavigationReferences(requests, expectedGeneration: expectedGeneration)
+        return Dictionary(requests.indices.compactMap { index in captured[index].map { (requests[index].sessionID, $0) } },
+            uniquingKeysWith: { _, last in last })
+    }
+
+    /// Every result corresponds to its input position; duplicate session IDs do
+    /// not collapse independent anchors. The entire capture uses one SQL read.
+    public func captureNavigationReferences(_ requests: [NavigationCaptureRequest],
+            expectedGeneration: IndexContentGeneration? = nil) throws -> [SessionNavigationReference?] {
         #if DEBUG
         if let error = navigationCaptureErrorForTesting { navigationCaptureErrorForTesting = nil; throw error }
         navigationCaptureReads += 1
@@ -2529,12 +2540,20 @@ public actor IndexDatabase {
         return try pool.read { db in
             let generation = try Self.readContentGeneration(db)
             if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
-            return try anchors.reduce(into: [:]) { result, entry in
-                let reference = try captureNavigationReference(sessionID: entry.key, anchorMessageID: entry.value, in: db)
-                if let expected = expectedReferences[entry.key],
-                   try !matchesReference(expected, current: reference, sessionID: entry.key,
-                       generation: generation, in: db) { return }
-                result[entry.key] = reference
+            return try requests.map { request in
+                let numericIsCurrent = request.anchorGeneration == generation
+                let stable = request.stableAnchor.flatMap { $0.anchorExternalID != nil || $0.anchorSourceKey != nil ? $0 : nil }
+                guard let current = try captureNavigationReference(sessionID: request.sessionID,
+                    anchorMessageID: stable == nil && numericIsCurrent ? request.anchorMessageID : nil, in: db) else { return nil }
+                if let expected = request.expectedReference,
+                   try !matchesReference(expected, current: current, sessionID: request.sessionID,
+                        generation: generation, in: db) { return nil }
+                if let stable {
+                    guard try matchesReference(stable, current: current, sessionID: request.sessionID,
+                        generation: generation, in: db) else { return nil }
+                    return current.unanchored.preservingAnchor(from: stable)
+                }
+                return current
             }
         }
     }

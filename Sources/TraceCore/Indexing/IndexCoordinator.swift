@@ -69,6 +69,7 @@ public struct IndexProgress: Sendable {
     public var failedFiles: Int = 0
     public var unresolvedFailedFiles: Int = 0
     public var unresolvedDiscoveryFailures: Int = 0
+    public var navigationCoverage: IndexNavigationCoverage? = nil
     public var failedPaths: Set<String> = []
     public var failedReconciliationPaths: Set<String> = []
     public var committedBytes: Int64 = 0
@@ -465,12 +466,30 @@ public actor IndexCoordinator {
         return result.progress
     }
 
+    #if DEBUG
+    private var checkpointReadResultGate: (stream: String, task: Task<Void, Never>)?
+    private(set) var checkpointReadResultWaitingForTesting = false
+    func gateCheckpointReadResultForTesting(stream: String, task: Task<Void, Never>) {
+        checkpointReadResultGate = (stream, task)
+    }
+    #endif
     func checkpointRecord(stream: String) async throws -> IndexEventCheckpoint? {
-        do {
-            let checkpoint = try await database.eventCheckpointRecord(volumeID: stream)
+        let result: Result<IndexEventCheckpoint?, Error>
+        do { result = .success(try await database.eventCheckpointRecord(volumeID: stream)) }
+        catch { result = .failure(error) }
+        #if DEBUG
+        if let gate = checkpointReadResultGate, gate.stream == stream {
+            checkpointReadResultGate = nil
+            checkpointReadResultWaitingForTesting = true
+            await gate.task.value
+            checkpointReadResultWaitingForTesting = false
+        }
+        #endif
+        switch result {
+        case .success(let checkpoint):
             failures.succeeded("Checkpoint initialization", scope: stream)
             return checkpoint
-        } catch {
+        case .failure(let error):
             if !(error is CancellationError) { failures.record(error, operation: "Checkpoint initialization", scope: stream) }
             throw error
         }
@@ -827,6 +846,7 @@ public actor IndexCoordinator {
             status.failedReconciliationPaths = Self.minimalScopes(
                 status.failedReconciliationPaths
             )
+            var incompleteFiles: Set<SourceFileKey> = []
             var uniqueFiles: [SourceFileKey: DiscoveredSourceFile] = [:]
             for file in allFiles {
                 let key = SourceFileKey(
@@ -875,6 +895,9 @@ public actor IndexCoordinator {
                         update.committedBytes += newlyCommitted
                         update.mutationRevision = await mutations.version()
                         await progress(update)
+                    }
+                    if !outcome.complete {
+                        incompleteFiles.insert(.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey))
                     }
                     let metadataChanged = try await refreshMetadata(file: file)
                     if metadataChanged { await mutations.markChanged() }
@@ -1083,6 +1106,27 @@ public actor IndexCoordinator {
                 status.rollupError = "Could not update token totals."
             }
             try Task.checkCancellation()
+            let regions = rootsByID.values.compactMap { root -> IndexNavigationCoverage.Region? in
+                guard let context = mappingContexts[root.id] else { return nil }
+                var facts: [RootRelativeScope: IndexNavigationCoverage.Fact] = [:]
+                for attempt in discoveryAttempts where attempt.root.id == root.id {
+                    for scope in attempt.scannedScopes { facts[scope] = .init(order: 0, covered: true) }
+                    for failure in attempt.failures { facts[failure.relativeScope] = .init(order: 0, covered: false) }
+                }
+                for file in allFiles where file.agent == root.agent && file.root.path == root.url.path {
+                    guard let relative = root.relativeScope(forStoredPath: file.url.path, in: context) else { continue }
+                    let failed = status.failedPaths.contains(file.url.path)
+                        || incompleteFiles.contains(.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey))
+                    facts[relative] = .init(order: 0, covered: !failed)
+                }
+                for missing in missingSources where missing.agent == root.agent {
+                    if let relative = root.relativeScope(forStoredPath: missing.path, in: context) {
+                        facts[relative] = .init(order: 0, covered: true)
+                    }
+                }
+                return facts.isEmpty ? nil : .init(root: root, context: context, facts: facts)
+            }
+            status.navigationCoverage = status.checkpointContentGeneration.map { .init(contentGeneration: $0, scope: scope, regions: regions) }
             status.phase = .complete
             status.currentPath = nil
             status.agent = nil
@@ -1316,7 +1360,7 @@ public actor IndexCoordinator {
         attempt: Int = 0,
         mutation: @escaping @Sendable () async -> Void = {},
         committed: @escaping @Sendable (Int64, Int64, String?) async -> Void = { _, _, _ in }
-    ) async throws -> (changed: Bool, committedBytes: Int64, hadRecordedError: Bool) {
+    ) async throws -> (changed: Bool, committedBytes: Int64, hadRecordedError: Bool, complete: Bool) {
         try Task.checkCancellation()
         let initialFingerprint = try TraceFileIO.fingerprint(url: file.url)
         var state = try await database.sourceState(agent: file.agent, path: file.url.path)
@@ -1374,7 +1418,7 @@ public actor IndexCoordinator {
            state.scannedBytes == state.size,
            state.headLength == initialFingerprint.headLength,
            state.headHash == initialFingerprint.headHash {
-            return (false, 0, hadRecordedError)
+            return (false, 0, hadRecordedError, true)
         }
 
         // For small files the existing head digest covers the entire payload. This is a
@@ -1391,7 +1435,7 @@ public actor IndexCoordinator {
             try await database.finishSource(
                 id: state.id, fingerprint: initialFingerprint, scannedBytes: state.scannedBytes
             )
-            return (false, 0, hadRecordedError)
+            return (false, 0, hadRecordedError, true)
         }
 
         if file.format == .geminiJSON {
@@ -1422,7 +1466,7 @@ public actor IndexCoordinator {
                 mutation: mutation
             )
             await committed(initialFingerprint.size, initialFingerprint.size, nil)
-            return (true, initialFingerprint.size, hadRecordedError)
+            return (true, initialFingerprint.size, hadRecordedError, true)
         }
 
         let sourceID: Int64
@@ -1561,12 +1605,12 @@ public actor IndexCoordinator {
             )
             return (
                 retried.changed, retried.committedBytes,
-                hadRecordedError || retried.hadRecordedError
+                hadRecordedError || retried.hadRecordedError, retried.complete
             )
         }
         // Persist the fingerprint of the boundary actually consumed. Later appends remain detectable.
         try await database.finishSource(id: sourceID, fingerprint: initialFingerprint, scannedBytes: checkpoint)
-        return (checkpoint > startOffset, max(0, checkpoint - startOffset), hadRecordedError)
+        return (checkpoint > startOffset, max(0, checkpoint - startOffset), hadRecordedError, checkpoint == initialFingerprint.size)
     }
 
     private func processSnapshot(

@@ -244,6 +244,7 @@ private func mailboxDeadline(_ completion: DeliveryCompletion, after duration: D
         guard ["plain", "oversized", "structural", "mixed"].contains(variant) else {
             FileHandle.standardError.write(Data("Unknown mailbox workload variant: \(variant)\n".utf8)); exit(2)
         }
+        try benchmarkValidatePreparationContract() // Behavioral preflight is outside setup and timing.
         let starting = footprint(), sampling = OSAllocatedUnfairLock(initialState: (done: false, active: false, peak: UInt64(0)))
         let sampler = Task.detached {
             while !sampling.withLock({ $0.done }) {

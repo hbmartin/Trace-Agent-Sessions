@@ -118,3 +118,15 @@ func compileCanonicalCheckpointClient(_ ledger: IndexCheckpointLedger, changes: 
         streamEpochs: changes.streamEpochs)
     _ = ledger.reserve(prepared)
 }
+
+func compileMultiAnchorCoverageClient(_ database: IndexDatabase, progress: IndexProgress, sessionID: Int64) async throws {
+    let generation = database.contentGeneration
+    let reference = try await database.captureNavigationReference(sessionID: sessionID)
+    let requests = [NavigationCaptureRequest(sessionID: sessionID, expectedReference: reference, anchorGeneration: generation),
+        NavigationCaptureRequest(sessionID: sessionID, expectedReference: reference, stableAnchor: reference, anchorGeneration: generation)]
+    let captured: [SessionNavigationReference?] = try await database.captureNavigationReferences(requests, expectedGeneration: generation)
+    if let reference = captured.first ?? nil, let coverage: IndexNavigationCoverage = progress.navigationCoverage {
+        _ = coverage.covers(reference)
+        _ = coverage.merging(coverage).contentGeneration
+    }
+}
