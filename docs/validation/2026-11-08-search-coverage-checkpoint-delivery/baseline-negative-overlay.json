@@ -1,0 +1,21 @@
+{
+  "baseline": "cb353d36f0533731cf5a034b80a61d2ddff2ad1b",
+  "testOnlyFiles": {
+    "Tests/TraceAppTests/AppReviewFollowupTests.swift": "bef6acd1768126208305075258be6959b868ab0701e64e9714fe5cf781109ee2",
+    "Tests/TraceCoreTests/IndexingRegressionTests.swift": "df115bf9c130140ee2fd1421302c3859306aab77447781968a152fdc978c4b72"
+  },
+  "productionSourceMatchesPinned": [
+    "Sources/TraceApp/TraceModel.swift",
+    "Sources/TraceCore/Indexing/IndexScheduler.swift",
+    "Sources/TraceCore/Models.swift",
+    "Sources/TraceCore/Indexing/IndexCoordinator.swift",
+    "Sources/TraceCore/Database/IndexDatabase.swift"
+  ],
+  "selectors": [
+    "TraceAppTests/AppReviewFollowupTests/testMissingSearchTargetWithUnrelatedFailurePublishesReadableBookmark",
+    "TraceAppTests/AppReviewFollowupTests/testOldGenerationSearchAfterRebuildUsesExistingSourceCoverage",
+    "TraceAppTests/AppReviewFollowupTests/testSearchCaptureKeepsStableAnchorAfterSameGenerationSourceRewrite",
+    "TraceCoreTests/IndexingRegressionTests/testAdmittedCheckpointCallbacksStayOrderedAcrossTakeover"
+  ],
+  "sourceCandidate": "38f8b9dcf3162bb88b79c4230f1351d872f6000f"
+}
