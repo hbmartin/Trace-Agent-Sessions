@@ -4703,6 +4703,64 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "latest-scroll-preserved-through-reset")
     }
 
+    func testPendingSearchWithBookmarkSurvivesAutomaticReset() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let name = "Pending anchor reader"
+        try addLongSession(name, project: "PendingAnchorProject", directory: directory, count: 40, contentRepeats: 0)
+        let deferred = directory.appendingPathComponent("pending-deferred"), committed = directory.appendingPathComponent("pending-committed")
+        let bookmark = directory.appendingPathComponent("pending-bookmark"), idle = directory.appendingPathComponent("pending-idle")
+        let searchStarted = directory.appendingPathComponent("pending-search-started"), searchRelease = directory.appendingPathComponent("pending-search-release")
+        let receipts = directory.appendingPathComponent("pending-restoration"), database = directory.appendingPathComponent("index.sqlite")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "2"
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmark.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idle.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = searchStarted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = searchRelease.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = receipts.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["PendingAnchorProject"].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 1 ? true : nil })
+        app.staticTexts["PendingAnchorProject"].firstMatch.click(); openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -450)
+        XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
+        let saved = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
+        XCTAssertNotEqual(saved, 25)
+        app.buttons["backToProject"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10))
+        query.click(); query.typeText("\"Pending anchor reader message 25\"")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Pending anchor reader message 25")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(waitForFile(searchStarted, timeout: 10))
+        let oldGeneration = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
+        let prior = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
+        try addLongSession("Pending anchor trigger", project: "PendingAnchorTrigger", directory: directory, count: 1, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
+        let generation = try XCTUnwrap(poll(timeout: 20) { () -> String? in
+            guard let value = try? self.sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';"), value != oldGeneration else { return nil }
+            return value
+        })
+        let selected = try XCTUnwrap(poll(timeout: 20) {
+            try? self.sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Pending anchor reader';")
+        })
+        try Data().write(to: searchRelease)
+        let restored = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
+            $0.matches(generation: generation, sessionID: selected, bookmark: 25, excluding: prior)
+        } })
+        XCTAssertEqual(restored.bookmarkOffset, 0, accuracy: 8)
+        XCTAssertTrue(transcriptMessage(name, index: 25, in: scroll).wait(for: \.isHittable, toEqual: true, timeout: 10))
+        attach(app, name: "pending-search-and-saved-bookmark-after-reset")
+    }
+
     func testSearchTargetMessageSurvivesAutomaticReset() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let name = "Anchor reader"
@@ -4846,7 +4904,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.windows[name].exists)
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let generation = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
-        let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Recovery reader';")
+        let selected = try XCTUnwrap(poll(timeout: 20) {
+            try? self.sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Recovery reader';")
+        }, "The committed reset must be followed by reindexing the selected source session")
         let completion = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: restoration).first {
             $0.matches(generation: generation, sessionID: selected, bookmark: index, excluding: priorRestores)
         } })

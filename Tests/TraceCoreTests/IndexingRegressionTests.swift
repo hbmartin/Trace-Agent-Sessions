@@ -8,6 +8,98 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testReturnedOlderPublicationCannotFollowNewerFrontier() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        let gate = CheckpointFailureGate(), marks = OSAllocatedUnfairLock(initialState: [UInt64]())
+        defer { Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        func make() -> IndexScheduler {
+            IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+                progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                    if let value = updates["s"]?.value { marks.withLock { $0.append(value) } }
+                    try? await database.saveQualifiedEventCheckpoints(updates)
+                })
+        }
+        let old = make(); await old.waitUntilIdle()
+        await old.setCheckpointPublicationHookForTesting { await gate.wait() }
+        let first = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: false)
+        await old.request(checkpointReservations: [first])
+        try await waitForCondition { await gate.entered }
+        let successor = make()
+        let later = ledger.reserve(watermarks: ["s": 200], streamRoots: [:], hasIndexWork: false)
+        await successor.request(checkpointReservations: [later]); await successor.waitUntilIdle()
+        XCTAssertEqual(marks.withLock { $0 }, [200])
+        await gate.open(); await old.waitUntilIdle(); await successor.waitUntilIdle()
+        XCTAssertEqual(marks.withLock { $0 }, [200], "A late return must not emit a regressive callback, even when persistence clamps it")
+        let persisted = try await database.eventCheckpoint(volumeID: "s")
+        XCTAssertEqual(persisted, 200)
+        await old.stop(); await successor.stop()
+    }
+
+    func testPausedCacheTracksFailureSeedRestartAndHandback() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        let notices = OSAllocatedUnfairLock(initialState: [Set<String>]())
+        _ = ledger.reserve(watermarks: ["a": 100, "b": 200], streamRoots: [:], hasIndexWork: false)
+        await database.failCheckpointReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY), stream: "a")
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger, didChangePausedCheckpointStreams: { streams in notices.withLock { $0.append(streams) } })
+        await scheduler.waitUntilIdle()
+        XCTAssertTrue(ledger.pausedStateIsConsistentForTesting)
+        XCTAssertEqual(notices.withLock { $0 }, [["a"]])
+        let failedRevision = ledger.pausedRevisionForTesting
+        XCTAssertGreaterThan(failedRevision, 0)
+        for _ in 0..<5 { await scheduler.waitUntilIdle() }
+        XCTAssertEqual(ledger.pausedRevisionForTesting, failedRevision)
+        let attempts = await database.checkpointReadCountForTesting(stream: "a")
+        XCTAssertEqual(attempts, 1)
+        ledger.seed(stream: "a", checkpoint: nil); await scheduler.waitUntilIdle()
+        XCTAssertTrue(ledger.pausedStateIsConsistentForTesting)
+        XCTAssertGreaterThan(ledger.pausedRevisionForTesting, failedRevision)
+        XCTAssertEqual(notices.withLock { $0 }, [["a"], []])
+        let stable = ledger.pausedRevisionForTesting
+        ledger.seed(stream: "a", checkpoint: nil); await scheduler.waitUntilIdle()
+        XCTAssertEqual(ledger.pausedRevisionForTesting, stable)
+        let successor = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger)
+        await successor.waitUntilIdle(); await successor.stop(); await scheduler.waitUntilIdle()
+        XCTAssertTrue(ledger.pausedStateIsConsistentForTesting)
+        XCTAssertEqual(ledger.pausedRevisionForTesting, stable)
+        _ = ledger.reserve(watermarks: ["c": 300], streamRoots: [:], hasIndexWork: false)
+        await database.failCheckpointReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY), stream: "c")
+        let transient = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger)
+        await transient.waitUntilIdle()
+        ledger.seed(stream: "c", checkpoint: nil); await transient.waitUntilIdle()
+        await transient.stop(); await scheduler.waitUntilIdle()
+        XCTAssertTrue(ledger.pausedStateIsConsistentForTesting)
+        XCTAssertEqual(notices.withLock { $0 }, [["a"], []], "An unobserved pause/recovery cycle must not republish an unchanged set")
+        await scheduler.stop(); await scheduler.stop()
+    }
+
+    func testRealResetWorkerRetainsSchedulerUntilFenceRetires() async throws {
+        for rebuild in [false, true] {
+            let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+            let gate = CheckpointFailureGate(), marks = OSAllocatedUnfairLock(initialState: [UInt64]())
+            defer { Task { await gate.open() } }
+            ledger.seed(stream: "s", checkpoint: nil)
+            var scheduler: IndexScheduler? = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+                progress: { update in if update.phase == .discovering { await gate.wait() } }, checkpointLedger: ledger)
+            await scheduler?.request(reconcile: true, rebuild: rebuild, scope: rebuild ? .proseOnly : .everything, watermarks: ["s": 100])
+            try await waitForCondition { await gate.entered }
+            weak var released = scheduler; scheduler = nil
+            XCTAssertNotNil(released, "The running task owns the actor until synchronous reset work retires")
+            let successor = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: rebuild ? .proseOnly : .everything,
+                progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                    if let mark = updates["s"]?.value { marks.withLock { $0.append(mark) } }
+                })
+            await gate.open()
+            try await waitForCondition { released == nil }
+            await successor.waitUntilIdle()
+            XCTAssertEqual(marks.withLock { $0 }, [100])
+            await successor.stop(); await successor.stop()
+        }
+    }
+
     func testNewestSchedulerStopHandsDrainingBackToLiveOwner() async throws {
         let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
         let marks = OSAllocatedUnfairLock(initialState: [String: [UInt64]]())

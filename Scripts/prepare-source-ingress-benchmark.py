@@ -17,7 +17,9 @@ def swift_body(source, marker):
     return source[opening + 1:closing - 1]
 
 
-def extract(source):
+def extract(source, preparation_contract):
+    if preparation_contract not in {'consumed-topology', 'preserved-topology'}:
+        raise ValueError('Unsupported preparation contract')
     marker = 'final class SourceIngressMailbox: Sendable {'
     end_marker = '\n@MainActor\nenum ModelPublicationBatch'
     if source.count(marker) != 1 or source.count(end_marker) != 1:
@@ -47,7 +49,7 @@ def extract(source):
 '''
     # Expected outputs describe the app preparation contract, not collector observations.
     preparation = swift_body(source, '    static func normalizeTranscript(' if 'struct Prepared: Sendable' in mailbox else '    private func normalizeTranscriptChanges(')
-    keeps_auxiliary = not all(assignment in preparation for assignment in ['relevant.lexicalPaths = []', 'relevant.structuralPaths = []'])
+    keeps_auxiliary = preparation_contract == 'preserved-topology'
     common += '\n@MainActor func benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { ' + ('count' if keeps_auxiliary else '0') + ' }\n'
     header = 'import Foundation\nimport os\nimport TraceCore\n\n' + mailbox + '\n' + common
     if 'struct Prepared: Sendable' in mailbox:
@@ -93,9 +95,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--preparation-contract', choices=['consumed-topology', 'preserved-topology'], required=True)
     args = parser.parse_args()
     source = (args.root / 'Sources/TraceApp/TraceModel.swift').read_text()
-    args.output.write_text(extract(source))
+    args.output.write_text(extract(source, args.preparation_contract))
 
 
 if __name__ == '__main__':

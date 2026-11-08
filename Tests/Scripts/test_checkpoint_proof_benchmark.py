@@ -234,12 +234,12 @@ private func cpuSeconds() -> Double { 0 }
         extraction = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(extraction)
         source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
-        generated = extraction.extract(source)
+        generated = extraction.extract(source, 'consumed-topology')
         self.assertIn('SourceIngressMailbox.normalizeTranscript', generated)
         self.assertIn('delivery.enrolled(in:', generated)
         self.assertIn('mainActorPreparationElapsedSeconds', generated)
         with self.assertRaisesRegex(ValueError, 'Missing unique'):
-            extraction.extract(source + 'final class SourceIngressMailbox: Sendable {')
+            extraction.extract(source + 'final class SourceIngressMailbox: Sendable {', 'consumed-topology')
 
     def test_both_mailbox_layouts_prepare_shared_setup_before_enqueue(self):
         spec = importlib.util.spec_from_file_location('ingress_setup', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
@@ -254,45 +254,75 @@ enum ModelPublicationBatch {}
     }
 """
         for source in [current, historical]:
-            generated = extraction.extract(source)
+            generated = extraction.extract(source, 'consumed-topology')
             factory = generated[generated.index('@MainActor func makeBenchmarkMailbox'):]
             self.assertLess(factory.index('IngressMeasurement.roots'), factory.index('return SourceIngressMailbox'))
             self.assertLess(factory.index('IngressMeasurement.ledger'), factory.index('return SourceIngressMailbox'))
 
     def test_mailbox_variants_wait_for_all_path_roles(self):
         source = (ROOT / 'Scripts/benchmark-source-ingress.swift').read_text()
-        self.assertIn('["plain", "oversized", "structural"]', source)
-        self.assertIn('lexical.count == auxiliaryCount && structural.count == auxiliaryCount', source)
+        self.assertIn('["plain", "oversized", "structural", "mixed"]', source)
+        self.assertIn('lexical.count == auxiliary && structural.count == auxiliary', source)
         self.assertIn('"deliveredLexicalPaths": lexical.count', source)
         self.assertIn('"deliveredStructuralPaths": structural.count', source)
-        self.assertIn('let inputs = workloadInputs(count: count, variant: variant)', source)
+        self.assertIn('let inputs = Inputs(count: count, variant: variant)', source)
         timed = source[source.index('let start = WorkloadStamp()', source.index('let producer = Task.detached')):source.index('let deliveryDeadline = Task')]
         self.assertNotIn('oversized.merge', timed)
         self.assertNotIn('var changes = SourceChanges()', timed)
-        self.assertIn('submitted.withLock', timed)
+        self.assertIn('submitted.record(index)', timed)
+        self.assertEqual(source.count('submitted.snapshot('), 1)
 
     def test_mailbox_adapter_supports_pinned_boolean_and_transfer_receivers(self):
         spec = importlib.util.spec_from_file_location('ingress_transfer', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
         extraction = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(extraction)
         source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
-        self.assertIn('return .ordinaryTransferred', extraction.extract(source))
-        self.assertIn('retire: { _ in retired() }', extraction.extract(source))
-        self.assertNotIn('preconditionFailure', extraction.extract(source))
+        self.assertIn('return .ordinaryTransferred', extraction.extract(source, 'consumed-topology'))
+        self.assertIn('retire: { _ in retired() }', extraction.extract(source, 'consumed-topology'))
+        self.assertNotIn('preconditionFailure', extraction.extract(source, 'consumed-topology'))
         historical = source.replace('enum Transfer:', 'enum HistoricalTransfer:')
-        self.assertIn('return true', extraction.extract(historical))
+        self.assertIn('return true', extraction.extract(historical, 'consumed-topology'))
 
     def test_mailbox_adapter_declares_auxiliary_output_contract(self):
         spec = importlib.util.spec_from_file_location('ingress_auxiliary', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
         extraction = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(extraction)
         source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
-        candidate = extraction.extract(source)
+        candidate = extraction.extract(source, 'consumed-topology')
         self.assertIn('benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { 0 }', candidate)
-        marker = 'relevant.lexicalPaths = []; relevant.structuralPaths = []'
-        # Metadata preparation must not determine the transcript contract.
-        baseline = extraction.extract(source.replace(marker, '', 1))
+        baseline = extraction.extract(source, 'preserved-topology')
         self.assertIn('benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { count }', baseline)
+        refactored = source.replace('changes.lexicalPaths = []; changes.structuralPaths = []',
+                                    'changes.lexicalPaths.removeAll(); changes.structuralPaths.removeAll()')
+        self.assertIn('benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { 0 }',
+                      extraction.extract(refactored, 'consumed-topology'))
+        with self.assertRaisesRegex(ValueError, 'Unsupported preparation contract'):
+            extraction.extract(source, 'guessed')
+        with self.assertRaises(TypeError):
+            extraction.extract(source)
+
+    def test_mailbox_memory_baseline_and_fixture_release_are_explicit(self):
+        source = (ROOT / 'Scripts/benchmark-source-ingress.swift').read_text()
+        run = source[source.index('@MainActor private static func run()'):]
+        self.assertLess(run.index('let starting = footprint()'), run.index('try await measure('))
+        self.assertLess(run.index('measured.lifetimes.inputs == nil'), run.index('Task.sleep(for: .seconds(2))'))
+        self.assertIn('measured.lifetimes.submitted == nil', run)
+        self.assertIn('measured.collector.payloadsReleased', run)
+        self.assertIn('timestampReads += 1', source)
+        self.assertIn('paths = []; lexical = []; structural = []; marks = [:]; latencies = []; submitted = nil', source)
+        self.assertIn('retainedFixture', run)
+
+    def test_mailbox_preparation_contract_is_required_before_source_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'output.swift'
+            command = ['python3', str(ROOT / 'Scripts/prepare-source-ingress-benchmark.py'),
+                       '--root', str(Path(temporary) / 'absent-root'), '--output', str(output)]
+            for extra in [[], ['--preparation-contract', 'unknown']]:
+                result = subprocess.run(command + extra, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('preparation-contract', result.stderr)
+                self.assertNotIn('FileNotFoundError', result.stderr)
+                self.assertFalse(output.exists())
 
     def test_acceptance_cannot_be_rescued_by_a_cleanup_scan(self):
         source = (ROOT / 'Scripts/benchmark-checkpoint-enqueue.swift').read_text()

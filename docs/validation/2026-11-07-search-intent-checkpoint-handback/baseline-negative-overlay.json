@@ -1,0 +1,21 @@
+{
+  "baseline": "4b1daa6449ddbe4f40bc852dc7d15d1ce00ee706",
+  "productionSourceUnchanged": true,
+  "testOnlyOverlays": {
+    "Tests/TraceAppTests/AppReviewFollowupTests.swift": {
+      "originalSHA256": "2d8f8bb0146f2a1811636aafbe7c8ae1c41d67920b38bdc3ed92c427f8da1ce5",
+      "overlaySHA256": "2a70adff3c8982894a43a72bb3dd25ec4c1833fc75c0bba0af3c6fa01ce6a49c",
+      "addedTests": [
+        "pendingSearchBookmarkFixture",
+        "testPendingSearchTargetAndSavedBookmarkRestoreIndependently"
+      ]
+    },
+    "Tests/TraceCoreTests/IndexingRegressionTests.swift": {
+      "originalSHA256": "0bcea185631ef70b5aa63594b5b068a70ec172d1d2a8f4029615eb9b51bd50a0",
+      "overlaySHA256": "0cd37f1e14d2f83fcffe0eea3a9cfa51431ce5362be41fad7507ff7cd83aedab",
+      "addedTests": [
+        "testReturnedOlderPublicationCannotFollowNewerFrontier"
+      ]
+    }
+  }
+}
