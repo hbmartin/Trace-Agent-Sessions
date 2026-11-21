@@ -12,6 +12,24 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testProvisionalTargetFollowsMovedSourceCoverage() async throws {
+        let (f, original) = try await provisionalSearchFixture()
+        let old = f.root.appendingPathComponent("sessions.jsonl"), moved = f.root.appendingPathComponent("moved-session.jsonl")
+        try FileManager.default.moveItem(at: old, to: moved)
+        var changes = SourceChanges(); changes.reconciliationPaths = [f.root.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        try await wait { f.model.selectedSession?.sourcePath == moved.path && !f.model.terminalSummaryPendingForTesting }
+        XCTAssertTrue(f.model.pendingMessageIntentForTesting, "Coverage of the obsolete path cannot adjudicate an incomplete moved source")
+        XCTAssertNil(f.model.transcriptBanner)
+        try Data(original.utf8).write(to: moved)
+        changes = SourceChanges(); changes.paths = [moved.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { !f.model.pendingMessageIntentForTesting && f.model.requestedMessageID != nil }
+        let results = try await f.database.search(query: "IntentTargetNeedle")
+        XCTAssertEqual(f.model.requestedMessageID, results.results.first?.id)
+    }
+
     func testNewSourceCompletionDuringPendingLookupSchedulesSuccessor() async throws {
         let (f, original) = try await provisionalSearchFixture()
         let gate = ReviewReadGate(), held = Task { await gate.wait() }

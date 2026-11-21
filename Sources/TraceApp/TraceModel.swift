@@ -1859,7 +1859,7 @@ final class TraceModel: ObservableObject {
             let targetMessage = intentIsCurrent ? pendingIntent?.reference.flatMap { reference in
                 rows.first { $0.navigationIdentity.map(reference.matchesAnchor) == true }?.id
             } : nil
-            let authoritative = navigationSourceCovered(pendingIntent?.reference ?? navigation.reference, database: navigation.database)
+            let authoritative = navigationSourceCovered(resolved.session.navigationReference ?? pendingIntent?.reference ?? navigation.reference, database: navigation.database)
             let retainTarget = intentIsCurrent && targetMessage == nil && !authoritative
             let id = resolved.session.id, nextRequest = UUID()
             let completion = pendingSelectionCompletion
@@ -1986,7 +1986,8 @@ final class TraceModel: ObservableObject {
                 return
             }
             guard resolved.session.id == pending.sessionID else { return }
-            let reference = pending.intent.reference!
+            let savedReference = pending.intent.reference!
+            let reference = resolved.session.navigationReference?.unanchored.preservingAnchor(from: savedReference) ?? savedReference
             // The coherent, complete reader can satisfy target-only adjudication
             // without re-reading/re-publishing its locator rows.
             let cached = selectedSession?.transcriptIdentity == resolved.session.transcriptIdentity
