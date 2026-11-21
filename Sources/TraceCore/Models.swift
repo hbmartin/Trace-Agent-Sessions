@@ -863,6 +863,76 @@ public struct SidebarSnapshot: Sendable {
     public var contentGeneration: IndexContentGeneration? = nil
 }
 
+/// One logical anchor in a generation-fenced capture. Multiple requests may
+/// identify the same session, for example its bookmark and a search target.
+public struct NavigationCaptureRequest: Sendable {
+    public let sessionID: Int64
+    public let anchorMessageID: Int64?
+    public let expectedReference: SessionNavigationReference?
+    public let stableAnchor: SessionNavigationReference?
+    /// Numeric fallback is eligible only in this exact content generation.
+    public let anchorGeneration: IndexContentGeneration?
+    public init(sessionID: Int64, anchorMessageID: Int64? = nil,
+                expectedReference: SessionNavigationReference? = nil,
+                stableAnchor: SessionNavigationReference? = nil,
+                anchorGeneration: IndexContentGeneration? = nil) {
+        self.sessionID = sessionID; self.anchorMessageID = anchorMessageID
+        self.expectedReference = expectedReference; self.stableAnchor = stableAnchor
+        self.anchorGeneration = anchorGeneration
+    }
+}
+
+/// Accepted source coverage, independent of progress presentation or navigation
+/// objects. Construction is Core-owned; callers may combine successive outcomes.
+public struct IndexNavigationCoverage: Sendable {
+    struct Fact: Sendable { let order: UInt64; let covered: Bool }
+    struct Region: Sendable {
+        let root: SourceRoot
+        let context: SourceRootPathContext
+        var facts: [RootRelativeScope: Fact]
+        func latestFact(for relative: RootRelativeScope) -> Fact? {
+            var latest: Fact?
+            for depth in 0...relative.components.count {
+                let prefix = RootRelativeScope(components: Array(relative.components.prefix(depth)),
+                    caseSensitive: relative.isCaseSensitive)
+                if let fact = facts[prefix], latest.map({ fact.order >= $0.order }) ?? true { latest = fact }
+            }
+            return latest
+        }
+    }
+    public let contentGeneration: IndexContentGeneration
+    public let scope: IndexScope
+    private var order: UInt64 = 0
+    var regions: [String: Region]
+
+    init(contentGeneration: IndexContentGeneration, scope: IndexScope, regions: [Region]) {
+        self.contentGeneration = contentGeneration; self.scope = scope
+        self.regions = Dictionary(regions.map { ($0.root.id, $0) }, uniquingKeysWith: { _, last in last })
+    }
+    public func covers(_ reference: SessionNavigationReference) -> Bool {
+        guard let region = regions[reference.agent + ":" + reference.root],
+              let relative = region.root.relativeScope(forStoredPath: reference.path, in: region.context) else { return false }
+        return region.latestFact(for: relative)?.covered == true
+    }
+    public func merging(_ newer: Self) -> Self {
+        guard contentGeneration == newer.contentGeneration, scope == newer.scope else { return newer }
+        var result = self; result.order &+= 1
+        for (key, incoming) in newer.regions {
+            guard var region = result.regions[key], region.context == incoming.context else {
+                var region = incoming
+                region.facts = region.facts.mapValues { .init(order: result.order, covered: $0.covered) }
+                result.regions[key] = region; continue
+            }
+            // A newer broad observation supersedes its old descendants. Repeated
+            // file outcomes replace one slot rather than retaining pass history.
+            region.facts = region.facts.filter { incoming.latestFact(for: $0.key) == nil }
+            for (scope, fact) in incoming.facts { region.facts[scope] = .init(order: result.order, covered: fact.covered) }
+            result.regions[key] = region
+        }
+        return result
+    }
+}
+
 /// An opaque source identity used to restore navigation after row IDs change.
 /// It is captured by IndexDatabase, never constructed from presentation text.
 public struct SessionNavigationReference: Hashable, Codable, Sendable {

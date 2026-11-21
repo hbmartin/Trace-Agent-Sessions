@@ -347,10 +347,43 @@ public final class IndexCheckpointLedger: Sendable {
             let upper = first.upper; remove(first.key); return upper
         }
     }
+    /// Only permit tickets and continuations live here, never scheduler references
+    /// or client callbacks. No ingress lock is held across an asynchronous callback.
+    fileprivate actor PublicationPermit {
+        private var holder: UUID?
+        private var waiting: [(UUID, CheckedContinuation<Bool, Never>)] = []
+        func acquire(_ ticket: UUID) async -> Bool {
+            await withTaskCancellationHandler {
+                guard !Task.isCancelled else { return false }
+                let granted = await withCheckedContinuation { continuation in
+                    if holder == nil { holder = ticket; continuation.resume(returning: true) }
+                    else { waiting.append((ticket, continuation)) }
+                }
+                if Task.isCancelled {
+                    if granted { release(ticket) }
+                    return false
+                }
+                return granted
+            } onCancel: { Task { await self.cancelWaiter(ticket) } }
+        }
+        func cancelWaiter(_ ticket: UUID) {
+            let cancelled = waiting.filter { $0.0 == ticket }
+            waiting.removeAll { $0.0 == ticket }
+            for waiter in cancelled { waiter.1.resume(returning: false) }
+        }
+        func release(_ ticket: UUID) {
+            guard holder == ticket else { return }
+            if waiting.isEmpty { holder = nil }
+            else { let next = waiting.removeFirst(); holder = next.0; next.1.resume(returning: true) }
+        }
+    }
+    fileprivate let publicationPermit = PublicationPermit()
+
     private final class Stream {
         var epoch = ""
         var predecessors: Set<String> = []
         var floor: UInt64?
+        var lastDelivered: IndexEventCheckpoint?
         var roots: Set<TraceFileIO.CanonicalPath> = []
         var records: [UUID: Record] = [:]
         var outcomeCount = 0
@@ -380,6 +413,8 @@ public final class IndexCheckpointLedger: Sendable {
     fileprivate struct Publication: Sendable {
         var updates: [String: IndexEventCheckpoint] = [:]
         var activity: IndexActivity = .fileChanges
+        var scope: IndexScope?
+        var content: IndexContentGeneration?
     }
     private struct Registration {
         let listener: Readiness
@@ -508,7 +543,7 @@ public final class IndexCheckpointLedger: Sendable {
     }
     fileprivate func pauseInitialization(_ name: String) {
         state.withLock { value in
-            guard let stream = value.streams[name] else { return }
+            guard let stream = value.streams[name], !stream.initialized else { return }
             stream.initializationFailed = true
             value.uninitializedStreams.remove(name)
             if value.pausedStreams.insert(name).inserted { value.pausedRevision &+= 1 }
@@ -774,6 +809,33 @@ public final class IndexCheckpointLedger: Sendable {
         }
         if accepted { signalReadiness() }
     }
+    fileprivate func qualifyPublication(_ publication: Publication, owner: UUID,
+            content: IndexContentGeneration, scope: IndexScope) -> Publication? {
+        state.withLock { value in
+            guard value.drainOwner == owner, value.content == content, value.fences.isEmpty,
+                  publication.content == nil || publication.content == content,
+                  publication.scope == nil || publication.scope == scope else { return nil }
+            let updates = publication.updates.filter { name, update in
+                guard let stream = value.streams[name], stream.epoch == update.epoch,
+                      update.contentGeneration == nil || update.contentGeneration == content,
+                      stream.floor.map({ update.value >= $0 }) ?? true else { return false }
+                guard let delivered = stream.lastDelivered, delivered.epoch == update.epoch,
+                      delivered.contentGeneration == update.contentGeneration else { return true }
+                return update.value > delivered.value
+            }
+            return .init(updates: updates, activity: publication.activity, scope: scope, content: content)
+        }
+    }
+    fileprivate func didDeliver(_ publication: Publication) {
+        state.withLock { value in
+            for (name, update) in publication.updates {
+                guard let stream = value.streams[name], stream.epoch == update.epoch,
+                      update.contentGeneration == nil || update.contentGeneration == value.content else { continue }
+                stream.lastDelivered = update
+            }
+        }
+    }
+
     fileprivate var hasCompletedProofs: Bool { state.withLock { !$0.proofs.isEmpty } }
     fileprivate var hasReadyProofs: Bool {
         state.withLock { value in
@@ -886,7 +948,7 @@ public final class IndexCheckpointLedger: Sendable {
             }
             guard value.fences.isEmpty, value.proofs.isEmpty,
                   !value.prefixStreams.contains(where: { value.streams[$0]?.initialized == true }) else { return .init() }
-            let publication = Publication(updates: value.updates, activity: value.publicationActivity)
+            let publication = Publication(updates: value.updates, activity: value.publicationActivity, scope: scope, content: content)
             value.updates = [:]; value.publicationActivity = .fileChanges
             return publication
         }
@@ -1795,8 +1857,24 @@ public actor IndexScheduler {
             checkpointLedger.returnUnpublished(publication)
             return
         }
-        if let qualifiedCompletion { await qualifiedCompletion(publication.updates) }
-        else { await didComplete(publication.activity, publication.updates.mapValues(\.value)) }
+        let permit = checkpointLedger.publicationPermit
+        guard await permit.acquire(installationID) else {
+            checkpointLedger.returnUnpublished(publication); return
+        }
+        let context = coordinator.checkpointContext
+        guard !stopping, !Task.isCancelled,
+              let qualified = checkpointLedger.qualifyPublication(publication, owner: installationID,
+                content: context.generation, scope: context.scope) else {
+            checkpointLedger.returnUnpublished(publication)
+            await permit.release(installationID)
+            return
+        }
+        if !qualified.updates.isEmpty {
+            if let qualifiedCompletion { await qualifiedCompletion(qualified.updates) }
+            else { await didComplete(qualified.activity, qualified.updates.mapValues(\.value)) }
+            checkpointLedger.didDeliver(qualified)
+        }
+        await permit.release(installationID)
     }
 
     private func uniqueCheckpoints(_ receipts: [CheckpointReceipt]) -> [CheckpointReceipt] {
@@ -1929,6 +2007,7 @@ public actor IndexScheduler {
         ordinaryRecovery = nil
         cancelScheduledRetry()
         operation?.cancel()
+        await checkpointLedger.publicationPermit.cancelWaiter(installationID)
         if let task = readinessTask.withLock({ $0 }) { await task.value }
         readinessTask.withLock { $0 = nil }
         await worker?.value

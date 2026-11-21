@@ -280,6 +280,14 @@ private struct SessionSidebar: View {
                     if TraceTestHooks.showsTestControls,
                        TraceTestHooks.environment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] == "1" {
                         VStack {
+                            if TraceTestHooks.environment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] == "1" {
+                                HStack {
+                                    Button("Save result") { model.retainSearchResultForUITesting() }
+                                        .accessibilityIdentifier("testSaveSearchResult")
+                                    Button("Open saved") { model.openRetainedSearchResultForUITesting() }
+                                        .accessibilityIdentifier("testOpenSavedSearchResult")
+                                }.font(.caption)
+                            }
                             HStack {
                                 Button("Fail") { model.cancelLaunchRestorationForUserIntent(); model.failSidebarSummaryForUITesting() }
                                     .accessibilityIdentifier("testFailSidebarSummary")

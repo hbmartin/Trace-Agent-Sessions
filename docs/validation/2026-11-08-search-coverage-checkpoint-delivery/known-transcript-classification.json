@@ -1,0 +1,26 @@
+{
+  "candidate": "38f8b9dcf3162bb88b79c4230f1351d872f6000f",
+  "baseline": "cb353d36f0533731cf5a034b80a61d2ddff2ad1b",
+  "test": "TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+  "candidateAndFreshPinnedBaseline": [
+    {
+      "receipt": "accepted-known-transcript.json",
+      "failedTests": 1,
+      "failureIssues": 2,
+      "issues": [
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/TraceAppTests/AppReviewFollowupTests.swift:9368: error: -[TraceAppTests.AppReviewFollowupTests testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData] : failed - Timed out waiting for app state",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/TraceAppTests/AppReviewFollowupTests.swift:4338: error: -[TraceAppTests.AppReviewFollowupTests testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData] : failed: caught error: \"CancellationError()\""
+      ]
+    },
+    {
+      "receipt": "baseline-known-transcript.json",
+      "failedTests": 1,
+      "failureIssues": 2,
+      "issues": [
+        "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:9304: error: -[TraceAppTests.AppReviewFollowupTests testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData] : failed - Timed out waiting for app state",
+        "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:4274: error: -[TraceAppTests.AppReviewFollowupTests testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData] : failed: caught error: \"CancellationError()\""
+      ]
+    }
+  ],
+  "classification": "Same isolated state timeout and caught CancellationError on frozen candidate and unchanged pinned #94 production. Excluded from passing focused totals; matching symptoms establish baseline evidence, without asserting a new root cause."
+}

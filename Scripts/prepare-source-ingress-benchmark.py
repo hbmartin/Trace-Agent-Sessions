@@ -87,7 +87,28 @@ def extract(source, preparation_contract):
     }
 }
 '''.replace('PARAMETERS', parameters)
-    return header + wrapper
+    normalization = ('SourceIngressMailbox.normalizeTranscript(input, rootsByAgent: IngressMeasurement.roots, unavailableStreams: []).changes'
+                     if 'struct Prepared: Sendable' in mailbox else 'normalizeBenchmarkChanges(input).changes')
+    observed = normalization
+    if 'struct Prepared: Sendable' in mailbox:
+        observed += ', SourceIngressMailbox.normalizeMetadata(input).changes'
+    preflight = r'''
+@MainActor func benchmarkValidatePreparationContract() throws {
+    var input = SourceChanges()
+    let path = "/tmp/mailbox/preflight.jsonl"
+    input.paths = [path]; input.lexicalPaths = [path]; input.structuralPaths = [path]
+    let expected = benchmarkIngressExpectedAuxiliaryCount(1)
+    let observations = [OBSERVED]
+    for (index, output) in observations.enumerated() {
+        guard output.paths.count == 1, output.lexicalPaths.count == expected,
+              output.structuralPaths.count == expected else {
+            throw NSError(domain: "MailboxBenchmark.preparationContractMismatch", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Preparation contract CONTRACT mismatch in normalization \(index): expected one indexing path and \(expected) auxiliary paths per role; observed \(output.paths.count), \(output.lexicalPaths.count), \(output.structuralPaths.count)"])
+        }
+    }
+}
+'''.replace('OBSERVED', observed).replace('CONTRACT', preparation_contract)
+    return header + wrapper + preflight
 
 
 

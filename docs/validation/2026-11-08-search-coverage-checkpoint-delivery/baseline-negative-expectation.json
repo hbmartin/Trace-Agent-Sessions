@@ -1,0 +1,8 @@
+{
+  "baseline": "cb353d36f0533731cf5a034b80a61d2ddff2ad1b",
+  "expectedFailure": true,
+  "testCount": 4,
+  "actualExitCode": 65,
+  "productionUnchanged": true,
+  "note": "Inspect actual assertion counts and symptoms; no final performance measurement is inferred."
+}

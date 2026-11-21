@@ -1,0 +1,27 @@
+{
+  "baseline": "cb353d36f0533731cf5a034b80a61d2ddff2ad1b",
+  "productionUnchanged": true,
+  "overlay": "baseline-negative-overlay.json",
+  "receipt": "baseline-negative.json",
+  "failedTests": 4,
+  "failureIssues": 11,
+  "symptoms": [
+    "Legacy and qualified callbacks deliver successor 200 while predecessor 100 is held, then callbacks are [200, 100].",
+    "Missing target plus unrelated failure never publishes a readable session.",
+    "A stale-generation search opened after indexing completes never publishes a readable session.",
+    "Same-generation source rewrite causes two capture reads and adopts a reused numeric message ID instead of the stable target."
+  ],
+  "issues": [
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceCoreTests/IndexingRegressionTests.swift:38: error: -[TraceCoreTests.IndexingRegressionTests testAdmittedCheckpointCallbacksStayOrderedAcrossTakeover] : XCTAssertEqual failed: (\"[200]\") is not equal to (\"[]\") - A successor cannot deliver while the admitted callback is held",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceCoreTests/IndexingRegressionTests.swift:41: error: -[TraceCoreTests.IndexingRegressionTests testAdmittedCheckpointCallbacksStayOrderedAcrossTakeover] : XCTAssertEqual failed: (\"[200, 100]\") is not equal to (\"[100, 200]\")",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceCoreTests/IndexingRegressionTests.swift:38: error: -[TraceCoreTests.IndexingRegressionTests testAdmittedCheckpointCallbacksStayOrderedAcrossTakeover] : XCTAssertEqual failed: (\"[200]\") is not equal to (\"[]\") - A successor cannot deliver while the admitted callback is held",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceCoreTests/IndexingRegressionTests.swift:41: error: -[TraceCoreTests.IndexingRegressionTests testAdmittedCheckpointCallbacksStayOrderedAcrossTakeover] : XCTAssertEqual failed: (\"[200, 100]\") is not equal to (\"[100, 200]\")",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:46: error: -[TraceAppTests.AppReviewFollowupTests testMissingSearchTargetWithUnrelatedFailurePublishesReadableBookmark] : failed - Timed out waiting for app state",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:4274: error: -[TraceAppTests.AppReviewFollowupTests testMissingSearchTargetWithUnrelatedFailurePublishesReadableBookmark] : failed: caught error: \"CancellationError()\"",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:68: error: -[TraceAppTests.AppReviewFollowupTests testOldGenerationSearchAfterRebuildUsesExistingSourceCoverage] : failed - Timed out waiting for app state",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:4274: error: -[TraceAppTests.AppReviewFollowupTests testOldGenerationSearchAfterRebuildUsesExistingSourceCoverage] : failed: caught error: \"CancellationError()\"",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:93: error: -[TraceAppTests.AppReviewFollowupTests testSearchCaptureKeepsStableAnchorAfterSameGenerationSourceRewrite] : XCTAssertEqual failed: (\"2\") is not equal to (\"1\")",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:95: error: -[TraceAppTests.AppReviewFollowupTests testSearchCaptureKeepsStableAnchorAfterSameGenerationSourceRewrite] : XCTAssertEqual failed: (\"Optional(1782579210485760000)\") is not equal to (\"Optional(1782579210485760001)\")",
+    "/Volumes/Pro2T/TraceValidation/search-coverage-checkpoint-delivery-followup/baseline-checkout/Tests/TraceAppTests/AppReviewFollowupTests.swift:96: error: -[TraceAppTests.AppReviewFollowupTests testSearchCaptureKeepsStableAnchorAfterSameGenerationSourceRewrite] : XCTAssertNotEqual failed: (\"Optional(1782579210485760000)\") is equal to (\"Optional(1782579210485760000)\")"
+  ]
+}

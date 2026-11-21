@@ -4703,6 +4703,90 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "latest-scroll-preserved-through-reset")
     }
 
+    func testMissingSearchTargetWithUnrelatedFailureShowsReader() throws {
+        try assertMissingSearchTargetShowsReader(openAfterReset: false)
+    }
+
+    func testOldGenerationSearchResultAfterRebuildShowsReader() throws {
+        try assertMissingSearchTargetShowsReader(openAfterReset: true)
+    }
+
+    private func assertMissingSearchTargetShowsReader(openAfterReset: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let name = "Covered reader", project = "CoveredReaderProject"
+        try addLongSession(name, project: project, directory: directory, count: 40, contentRepeats: 0)
+        let chats = directory.appendingPathComponent("Sources/Gemini/broken/chats")
+        try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+        try Data("{invalid snapshot".utf8).write(to: chats.appendingPathComponent("session-broken.json"))
+        let deferred = directory.appendingPathComponent("coverage-deferred"), committed = directory.appendingPathComponent("coverage-committed")
+        let bookmark = directory.appendingPathComponent("coverage-bookmark"), idle = directory.appendingPathComponent("coverage-idle")
+        let receipts = directory.appendingPathComponent("coverage-restorations"), database = directory.appendingPathComponent("index.sqlite")
+        let searchStarted = directory.appendingPathComponent("coverage-search-started"), searchRelease = directory.appendingPathComponent("coverage-search-release")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "2"
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = bookmark.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idle.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = receipts.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = searchStarted.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = searchRelease.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 1 ? true : nil })
+        app.staticTexts[project].firstMatch.click(); openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -450)
+        XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
+        let saved = try XCTUnwrap(waitForStableBookmarkIndex(bookmark))
+        let y = try XCTUnwrap(savedAnchorY(index: saved, in: scroll, timeout: 10))
+        XCTAssertLessThan(saved, 25, "The saved bookmark must differ from the removed target")
+        app.buttons["backToProject"].click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10)); query.click(); query.typeText("\"Covered reader message 25\"")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Covered reader message 25")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        app.buttons["testSaveSearchResult"].click()
+        if !openAfterReset { result.click(); XCTAssertTrue(waitForFile(searchStarted, timeout: 10)) }
+        let previous = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
+        let oldGeneration = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
+        let file = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = try text.split(separator: "\n").filter { line in
+            let object = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            return object?["uuid"] as? String != "\(name)-25"
+        }
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file)
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
+        let generation = try XCTUnwrap(poll(timeout: 20) { () -> String? in
+            guard let value = try? self.sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';"), value != oldGeneration else { return nil }
+            return value
+        })
+        let selected = try XCTUnwrap(poll(timeout: 20) { () -> Int64? in
+            guard let value = try? self.sqliteText(database, sql: "SELECT id FROM session WHERE external_id='Covered reader';") else { return nil }
+            return Int64(value)
+        })
+        try Data().write(to: searchRelease)
+        if openAfterReset { app.buttons["testOpenSavedSearchResult"].click() }
+        let restored = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
+            $0.matches(generation: generation, sessionID: selected, bookmark: saved, excluding: previous)
+        } })
+        XCTAssertEqual(restored.bookmarkOffset, Double(y), accuracy: 8)
+        XCTAssertTrue(transcriptMessage(name, index: saved, in: scroll).waitForExistence(timeout: 10))
+        assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "missing target with independent failed source")
+        XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["retrySelectedTranscript"].waitForNonExistence(timeout: 5))
+        let failures = try sqliteInteger(database, sql: "SELECT count(*) FROM adapter_health WHERE last_error IS NOT NULL;")
+        XCTAssertGreaterThan(failures, 0, "The unrelated failure must remain real")
+        attach(app, name: openAfterReset ? "old-search-result-readable-after-reset" : "missing-target-readable-with-unrelated-failure")
+    }
+
     func testPendingSearchWithBookmarkSurvivesAutomaticReset() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         installNativeAnchorProbe(app: app, directory: directory)
@@ -4749,8 +4833,9 @@ final class TraceUITests: XCTestCase {
             guard let value = try? self.sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';"), value != oldGeneration else { return nil }
             return value
         })
-        let selected = try XCTUnwrap(poll(timeout: 20) {
-            try? self.sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Pending anchor reader';")
+        let selected = try XCTUnwrap(poll(timeout: 20) { () -> Int64? in
+            guard let text = try? self.sqliteText(database, sql: "SELECT id FROM session WHERE external_id='Pending anchor reader';") else { return nil }
+            return Int64(text)
         })
         try Data().write(to: searchRelease)
         let restored = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
@@ -4904,8 +4989,9 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.windows[name].exists)
         XCTAssertTrue(scroll.waitForExistence(timeout: 10))
         let generation = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
-        let selected = try XCTUnwrap(poll(timeout: 20) {
-            try? self.sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Recovery reader';")
+        let selected = try XCTUnwrap(poll(timeout: 20) { () -> Int64? in
+            guard let text = try? self.sqliteText(database, sql: "SELECT id FROM session WHERE external_id='Recovery reader';") else { return nil }
+            return Int64(text)
         }, "The committed reset must be followed by reindexing the selected source session")
         let completion = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: restoration).first {
             $0.matches(generation: generation, sessionID: selected, bookmark: index, excluding: priorRestores)

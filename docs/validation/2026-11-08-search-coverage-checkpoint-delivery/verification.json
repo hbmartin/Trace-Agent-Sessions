@@ -1,0 +1,163 @@
+{
+  "candidate": "38f8b9dcf3162bb88b79c4230f1351d872f6000f",
+  "base": "283c2114e3aff3c8e28b2351d0a2e7755c6c7ae5",
+  "pinnedBaseline": "cb353d36f0533731cf5a034b80a61d2ddff2ad1b",
+  "focused": {
+    "passed": 728,
+    "groups": {
+      "IndexingRegressionTests": 215,
+      "FSEventsWatcherTests": 13,
+      "SessionMetadataTests": 64,
+      "SidecarDependencyTests": 27,
+      "AppReviewFollowupTests": 409
+    },
+    "receipt": "accepted-focused.json"
+  },
+  "races": {
+    "cases": 82,
+    "repetitions": 5,
+    "passedExecutions": 410
+  },
+  "scripts": {
+    "passed": 76
+  },
+  "checks": {
+    "accepted-debug-build": 0,
+    "accepted-discovery": 0,
+    "accepted-external-client": 0,
+    "accepted-focused": 0,
+    "accepted-inputs": 0,
+    "accepted-network": 0,
+    "accepted-project-drift": 0,
+    "accepted-races-1": 0,
+    "accepted-races-2": 0,
+    "accepted-races-3": 0,
+    "accepted-races-4": 0,
+    "accepted-races-5": 0,
+    "accepted-release-build": 0,
+    "accepted-scripts": 0,
+    "accepted-signing": 0,
+    "accepted-whitespace": 0
+  },
+  "hashesVerified": 325,
+  "discovery": {
+    "candidate": "38f8b9dcf3162bb88b79c4230f1351d872f6000f",
+    "discovered": 971,
+    "races": 82,
+    "ui": 15,
+    "missing": []
+  },
+  "productNegativeControl": {
+    "failedTests": 4,
+    "failureIssues": 11,
+    "classification": "baseline-product-regressions.json"
+  },
+  "isolatedTranscriptFailure": "known-transcript-classification.json",
+  "optimizedCorrectnessSmokes": [
+    {
+      "receipt": "baseline-acceptance-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "baseline-backlog-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "baseline-enqueue-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "baseline-mailbox-mixed-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "baseline-mailbox-oversized-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "baseline-mailbox-plain-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "baseline-mailbox-structural-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "candidate-acceptance-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "candidate-backlog-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "candidate-enqueue-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "candidate-mailbox-mixed-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "candidate-mailbox-oversized-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "candidate-mailbox-plain-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "candidate-mailbox-structural-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    },
+    {
+      "receipt": "equivalent-normalization-smoke.json",
+      "purpose": "Optimized correctness-only smoke, not paired performance acceptance."
+    }
+  ],
+  "behavioralPreflightNegative": {
+    "receipt": "wrong-contract-negative.json",
+    "expectedExit": 1,
+    "domain": "MailboxBenchmark.preparationContractMismatch",
+    "elapsedSeconds": 0.014916915912181139,
+    "timing": "Before footprint, workload setup, and timed delivery."
+  },
+  "ui": {
+    "selected": 15,
+    "compiledDiscoveryVerified": true,
+    "executed": false,
+    "accepted": false,
+    "runs": [],
+    "reason": "User: Skip UI and measurements; publish with limitations"
+  },
+  "pairedTargetedMeasurements": {
+    "executed": false,
+    "accepted": false,
+    "pairs": 0,
+    "plannedCounts": [
+      1000,
+      10000
+    ],
+    "plannedVariants": [
+      "enqueue",
+      "acceptance",
+      "backlog",
+      "mailbox-plain",
+      "mailbox-oversized",
+      "mailbox-structural",
+      "mailbox-mixed"
+    ],
+    "reason": "User: Skip UI and measurements; publish with limitations"
+  },
+  "omittedByOriginalScope": [
+    "Complete suites",
+    "Three full Release comparison pairs against 61c00de"
+  ],
+  "localTenPercentPerformanceAcceptanceClaim": false,
+  "rawPayloadAvailability": "Local-only, not downloadable repository/CI attachments.",
+  "scopeQualifications": {
+    "finding4": "Defensive current-candidate selector regression; no real stale-old/current-captured overlap claimed.",
+    "finding9": "Optional pausedStatus/snapshot locking cleanup unchanged.",
+    "finding10": "Existing underlying fixture async teardown retained; no leak fix required."
+  }
+}

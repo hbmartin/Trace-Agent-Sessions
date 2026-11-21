@@ -8,6 +8,151 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testAdmittedCheckpointCallbacksStayOrderedAcrossTakeover() async throws {
+        for qualified in [false, true] {
+            let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate()
+            let marks = OSAllocatedUnfairLock(initialState: [UInt64]())
+            defer { Task { await gate.open() } }
+            ledger.seed(stream: "s", checkpoint: nil)
+            let completion: @Sendable ([String: UInt64]) async -> Void = { updates in
+                guard let mark = updates["s"] else { return }
+                if mark == 100 { await gate.wait() }
+                marks.withLock { $0.append(mark) }
+            }
+            let qualifiedCallback: @Sendable ([String: IndexEventCheckpoint]) async -> Void = { updates in
+                await completion(updates.mapValues(\.value))
+                try? await database.saveQualifiedEventCheckpoints(updates)
+            }
+            func make() -> IndexScheduler {
+                IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+                    progress: { _ in }, didComplete: { _, marks in await completion(marks) }, checkpointLedger: ledger,
+                    didCompleteCheckpoints: qualified ? qualifiedCallback : nil)
+            }
+            let first = make(); await first.waitUntilIdle()
+            await first.request(watermarks: ["s": 100])
+            try await waitForCondition { await gate.entered }
+            let second = make()
+            await second.request(watermarks: ["s": 200])
+            try await waitForCondition { ledger.initializationForTesting(stream: "s").floor == 200 }
+            XCTAssertEqual(marks.withLock { $0 }, [], "A successor cannot deliver while the admitted callback is held")
+            let stopping = Task { await first.stop() }
+            await gate.open(); await stopping.value; await second.waitUntilIdle()
+            XCTAssertEqual(marks.withLock { $0 }, [100, 200])
+            if qualified { let saved = try await database.eventCheckpoint(volumeID: "s"); XCTAssertEqual(saved, 200) }
+            await second.stop(); await first.stop()
+        }
+    }
+
+    func testQueuedPublicationStopReturnsWorkBeforeAdmittedCallbackFinishes() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate()
+        let marks = OSAllocatedUnfairLock(initialState: [UInt64]())
+        defer { Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        func make() -> IndexScheduler {
+            IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+                progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                    if updates["s"]?.value == 100 { await gate.wait() }
+                    if let mark = updates["s"]?.value { marks.withLock { $0.append(mark) } }
+                    try? await database.saveQualifiedEventCheckpoints(updates)
+                })
+        }
+        let first = make(); await first.waitUntilIdle(); await first.request(watermarks: ["s": 100])
+        try await waitForCondition { await gate.entered }
+        let second = make(); await second.request(watermarks: ["s": 200])
+        try await waitForCondition { ledger.initializationForTesting(stream: "s").floor == 200 }
+        let stopped = OSAllocatedUnfairLock(initialState: false)
+        let stopping = Task { await second.stop(); stopped.withLock { $0 = true } }
+        try await waitForCondition { stopped.withLock { $0 } }
+        XCTAssertTrue(marks.withLock { $0.isEmpty })
+        await gate.open(); await stopping.value; await first.waitUntilIdle()
+        XCTAssertEqual(marks.withLock { $0 }, [100, 200])
+        let saved = try await database.eventCheckpoint(volumeID: "s"); XCTAssertEqual(saved, 200)
+        await first.stop()
+    }
+
+    func testLateInitializationFailureCannotPauseSeededStream() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        let notices = OSAllocatedUnfairLock(initialState: [Set<String>]())
+        let coordinator = IndexCoordinator(database: database, sources: [])
+        await coordinator.gateCheckpointReadResultForTesting(stream: "s", task: held)
+        await database.failCheckpointReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY), stream: "s")
+        _ = ledger.reserve(watermarks: ["s": 100], streamRoots: [:], hasIndexWork: false)
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in },
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in try? await database.saveQualifiedEventCheckpoints(updates) },
+            didChangePausedCheckpointStreams: { streams in notices.withLock { $0.append(streams) } })
+        try await waitForCondition { await coordinator.checkpointReadResultWaitingForTesting }
+        ledger.seed(stream: "s", checkpoint: nil)
+        await gate.open(); await scheduler.waitUntilIdle()
+        XCTAssertTrue(ledger.initializationForTesting(stream: "s").initialized)
+        XCTAssertTrue(ledger.pausedStateIsConsistentForTesting)
+        XCTAssertFalse(notices.withLock { $0.contains(["s"]) })
+        await scheduler.request(watermarks: ["s": 200]); await scheduler.waitUntilIdle()
+        let saved = try await database.eventCheckpoint(volumeID: "s"); XCTAssertEqual(saved, 200)
+        await scheduler.stop()
+    }
+
+    func testNavigationCoverageExcludesOnlyFailedOrIncompleteSources() async throws {
+        let root = try directory(), good = root.appendingPathComponent("good.jsonl"), bad = root.appendingPathComponent("bad.jsonl")
+        try Data(line(1).utf8).write(to: good); try Data(line(2).utf8).write(to: bad)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [root])
+        let failing = IndexCoordinator(database: database, sources: [SelectiveReadFailureSource(base: source, failedName: "bad.jsonl")])
+        let updates = OSAllocatedUnfairLock(initialState: [IndexProgress]())
+        await failing.indexAll(scope: .proseOnly, progress: { update in updates.withLock { $0.append(update) } })
+        let complete = try XCTUnwrap(updates.withLock { $0.last }), coverage = try XCTUnwrap(complete.navigationCoverage)
+        let sessions = try await database.sessions(), session = try XCTUnwrap(sessions.first)
+        let reference = try XCTUnwrap(session.navigationReference)
+        XCTAssertGreaterThan(complete.unresolvedFailedFiles, 0)
+        XCTAssertTrue(coverage.covers(reference))
+        let missing = SessionNavigationReference(agent: reference.agent, root: reference.root,
+            path: bad.path, externalSessionID: "missing", anchorSourceKey: nil, anchorExternalID: nil)
+        XCTAssertFalse(coverage.covers(missing))
+        let healthy = IndexCoordinator(database: database, sources: [source])
+        let recovery = OSAllocatedUnfairLock(initialState: IndexProgress(phase: .waiting))
+        await healthy.refresh(paths: [bad.path], scope: .proseOnly, progress: { update in recovery.withLock { $0 = update } })
+        let next = try XCTUnwrap(recovery.withLock { $0.navigationCoverage })
+        XCTAssertTrue(coverage.merging(next).covers(missing))
+    }
+
+    func testMultiAnchorCapturePreservesStableTargetDespiteReusedMessageID() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        func row(_ uuid: String, _ text: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["type": "user", "uuid": uuid, "sessionId": "one", "cwd": "/tmp/Capture",
+                "timestamp": 1_700_000_000_000, "message": ["content": text]]) + Data([10])
+        }
+        try (row("bookmark", "Saved bookmark") + row("target", "StableTargetNeedle")).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        await coordinator.indexAll(scope: .proseOnly)
+        let matches = try await database.search(query: "StableTargetNeedle"), old = try XCTUnwrap(matches.results.first)
+        let stable = try XCTUnwrap(old.navigationReference)
+        let generation = database.contentGeneration
+        try (row("bookmark", "Saved bookmark") + row("decoy", "Wrong reused row") + row("target", "StableTargetNeedle")).write(to: file)
+        await coordinator.indexAll(scope: .proseOnly, rebuild: true)
+        let sessions = try await database.sessions(), session = try XCTUnwrap(sessions.first)
+        let rows = try await database.messages(sessionID: session.id), target = try XCTUnwrap(rows.first { $0.prefix.contains("StableTargetNeedle") })
+        XCTAssertNotEqual(target.id, old.id)
+        let before = await database.navigationReadCountsForTesting()
+        let captured = try await database.captureNavigationReferences([
+            NavigationCaptureRequest(sessionID: session.id, anchorMessageID: rows.first?.id, expectedReference: stable, anchorGeneration: database.contentGeneration),
+            NavigationCaptureRequest(sessionID: session.id, anchorMessageID: old.id, expectedReference: stable, stableAnchor: stable, anchorGeneration: generation)
+        ], expectedGeneration: database.contentGeneration)
+        let after = await database.navigationReadCountsForTesting()
+        XCTAssertEqual(after.capture - before.capture, 1)
+        XCTAssertEqual(captured.count, 2)
+        let anchored = try XCTUnwrap(captured[1]), resolved = try await database.resolveNavigationReference(anchored)
+        XCTAssertEqual(resolved?.anchorMessageID, target.id)
+        XCTAssertNotEqual(captured[0], captured[1])
+        await database.failNavigationCaptureOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        do { _ = try await database.captureNavigationReferences([NavigationCaptureRequest(sessionID: session.id)], expectedGeneration: database.contentGeneration); XCTFail("Capture must surface read failure") }
+        catch is DatabaseError { }
+        do { _ = try await database.captureNavigationReferences([NavigationCaptureRequest(sessionID: session.id)], expectedGeneration: generation); XCTFail("Old generation must be rejected") }
+        catch is CancellationError { }
+    }
+
     func testReturnedOlderPublicationCannotFollowNewerFrontier() async throws {
         let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
         let gate = CheckpointFailureGate(), marks = OSAllocatedUnfairLock(initialState: [UInt64]())

@@ -12,8 +12,8 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
-    private func pendingSearchBookmarkFixture() async throws -> (Fixture, SearchResult) {
-        let f = try await deferredResetFixture()
+    private func pendingSearchBookmarkFixture(failUnrelated: Bool = false) async throws -> (Fixture, SearchResult) {
+        let f = try await deferredResetFixture(failUnrelated: failUnrelated)
         let file = f.root.appendingPathComponent("sessions.jsonl")
         let handle = try FileHandle(forWritingTo: file)
         try handle.seekToEnd()
@@ -34,6 +34,133 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.openSearchResult(target); try await wait { f.model.messages.count == 3 }
         XCTAssertEqual(f.model.requestedMessageID, target.id)
         return (f, target)
+    }
+
+    func testMissingSearchTargetWithUnrelatedFailurePublishesReadableBookmark() async throws {
+        let (f, _) = try await pendingSearchBookmarkFixture(failUnrelated: true)
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let original = try String(contentsOf: file, encoding: .utf8)
+        try Data((original.split(separator: "\n").filter { !$0.contains("intent-target") }.joined(separator: "\n") + "\n").utf8).write(to: file)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 2 && f.model.settings.pendingNavigationReference == nil }
+        XCTAssertGreaterThan(f.model.progress.unresolvedFailedFiles, 0)
+        XCTAssertNotNil(f.model.selectedSession)
+        XCTAssertNil(f.model.transcriptBanner)
+        XCTAssertNil(f.model.requestedMessageID)
+        XCTAssertFalse(f.model.pendingMessageIntentForTesting, "Successful coverage of this source settles absence despite an unrelated failure")
+        let selected = try XCTUnwrap(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.scrollPositions[selected]?.offset, -40)
+        f.model.retrySelectedTranscript()
+        try await wait { !f.model.messages.isEmpty && f.model.transcriptBanner == nil }
+    }
+
+    func testProvisionalSearchTargetShowsReaderThenResolvesOrSettles() async throws {
+        for returns in [false, true] {
+            let (f, _) = try await pendingSearchBookmarkFixture()
+            let file = f.root.appendingPathComponent("sessions.jsonl"), original = try String(contentsOf: file, encoding: .utf8)
+            let complete = original.split(separator: "\n").filter { !$0.contains("intent-target") }.joined(separator: "\n") + "\n"
+            try Data((complete + "{\"type\":").utf8).write(to: file)
+            var changes = SourceChanges(); changes.paths = [file.path]
+            _ = try await f.model.deliverSourceChangesForTesting(changes)
+            try await wait { !f.model.pendingRebuildForTesting && f.model.pendingMessageIntentForTesting && f.model.messages.count == 2 }
+            XCTAssertNotNil(f.model.selectedSession); XCTAssertNil(f.model.transcriptBanner)
+            XCTAssertNil(f.model.requestedMessageID)
+            let selected = try XCTUnwrap(f.model.selectedSessionID)
+            XCTAssertEqual(f.model.scrollPositions[selected]?.offset, -40)
+            await f.model.schedulerForTesting?.waitUntilIdle()
+            try await wait { !f.model.terminalSummaryPendingForTesting }
+            await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+            f.model.retrySelectedTranscript()
+            try await wait { f.model.transcriptBanner?.feedback == .readError }
+            XCTAssertTrue(f.model.pendingMessageIntentForTesting)
+            try Data((returns ? original : complete).utf8).write(to: file)
+            _ = try await f.model.deliverSourceChangesForTesting(changes)
+            try await wait { !f.model.pendingMessageIntentForTesting && f.model.transcriptBanner == nil }
+            if returns {
+                let results = try await f.database.search(query: "IntentTargetNeedle"), target = try XCTUnwrap(results.results.first)
+                XCTAssertEqual(f.model.requestedMessageID, target.id)
+            } else { XCTAssertNil(f.model.requestedMessageID) }
+            XCTAssertEqual(f.model.scrollPositions[selected]?.offset, -40)
+        }
+    }
+
+    func testOldGenerationSearchAfterRebuildUsesExistingSourceCoverage() async throws {
+        let (f, old) = try await pendingSearchBookmarkFixture(failUnrelated: true)
+        let file = f.root.appendingPathComponent("sessions.jsonl"), original = try String(contentsOf: file, encoding: .utf8)
+        f.model.consumeRequestedMessageID(old.id)
+        try Data((original.split(separator: "\n").filter { !$0.contains("intent-target") }.joined(separator: "\n") + "\n").utf8).write(to: file)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 2 }
+        f.model.returnFromSession()
+        f.model.openSearchResult(old)
+        try await wait { f.model.selectedSession != nil && f.model.messages.count == 2 && f.model.settings.pendingNavigationReference == nil }
+        XCTAssertNil(f.model.requestedMessageID)
+        XCTAssertFalse(f.model.pendingMessageIntentForTesting)
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    func testNewerIntentRetiresProvisionalSearchWithoutLosingReadableSession() async throws {
+        for action in ["scroll", "clear", "navigation", "termination"] {
+            let (f, _) = try await pendingSearchBookmarkFixture()
+            let file = f.root.appendingPathComponent("sessions.jsonl"), original = try String(contentsOf: file, encoding: .utf8)
+            let partial = original.split(separator: "\n").filter { !$0.contains("intent-target") }.joined(separator: "\n") + "\n{\"type\":"
+            try Data(partial.utf8).write(to: file)
+            var changes = SourceChanges(); changes.paths = [file.path]
+            _ = try await f.model.deliverSourceChangesForTesting(changes)
+            try await wait { f.model.pendingMessageIntentForTesting && f.model.messages.count == 2 }
+            let selected = try XCTUnwrap(f.model.selectedSessionID)
+            if action == "scroll" {
+                let last = try XCTUnwrap(f.model.messages.last)
+                f.model.updateTranscriptBookmark(sessionID: selected, bookmark: .init(messageID: last.id, offset: -81, index: 1))
+            } else if action == "clear" { f.model.updateTranscriptBookmark(sessionID: selected, bookmark: nil) }
+            else if action == "navigation" { f.model.returnFromSession() }
+            else { await f.model.prepareToTerminate() }
+            XCTAssertFalse(f.model.pendingMessageIntentForTesting, action)
+            XCTAssertNil(f.model.requestedMessageID, action)
+            if action == "scroll" { XCTAssertEqual(f.model.scrollPositions[selected]?.offset, -81) }
+            if action == "clear" { XCTAssertNil(f.model.scrollPositions[selected]) }
+        }
+    }
+
+    func testSearchCaptureKeepsStableAnchorAfterSameGenerationSourceRewrite() async throws {
+        let (f, old) = try await pendingSearchBookmarkFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl"), text = try String(contentsOf: file, encoding: .utf8)
+        let lines = text.split(separator: "\n").map(String.init)
+        let targetLine = try XCTUnwrap(lines.first { $0.contains("intent-target") })
+        var decoy = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(targetLine.utf8)) as? [String: Any])
+        decoy["uuid"] = "capture-decoy"; decoy["message"] = ["content": "Reused numeric anchor"]
+        let decoyLine = String(decoding: try JSONSerialization.data(withJSONObject: decoy), as: UTF8.self)
+        let changed = lines.flatMap { $0.contains("intent-target") ? [decoyLine, $0] : [$0] }.joined(separator: "\n") + "\n"
+        try Data(changed.utf8).write(to: file)
+        await f.model.coordinatorForTesting?.refresh(paths: [file.path], scope: .proseOnly)
+        let rows = try await f.database.messages(sessionID: old.sessionID)
+        let decoyRow = try XCTUnwrap(rows.first { $0.prefix == "Reused numeric anchor" })
+        XCTAssertEqual(decoyRow.id, old.id, "The current generation deliberately reuses the requested numeric message ID")
+        let before = await f.database.navigationReadCountsForTesting()
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { !f.model.pendingRebuildForTesting && f.model.messages.count == 4 && f.model.settings.pendingNavigationReference == nil }
+        let after = await f.database.navigationReadCountsForTesting()
+        XCTAssertEqual(after.capture - before.capture, 1)
+        let result = try await f.database.search(query: "IntentTargetNeedle"), target = try XCTUnwrap(result.results.first)
+        XCTAssertEqual(f.model.requestedMessageID, target.id)
+        XCTAssertNotEqual(f.model.requestedMessageID, decoyRow.id)
+        let id = try XCTUnwrap(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.scrollPositions[id]?.offset, -40)
+    }
+
+    func testIntentCandidateSelectionIgnoresStalePriorToken() async throws {
+        let (f, target) = try await pendingSearchBookmarkFixture()
+        let captured = try XCTUnwrap(target.navigationReference)
+        let prior = try XCTUnwrap(f.model.selectedSession?.navigationReference)
+        // The real capture usually supplies the same object to both slots. This
+        // nonmutating selector regression is defensive until a real overlap is reproduced.
+        XCTAssertEqual(TraceModel.preferredCapturedMessageReferenceForTesting(captured: captured,
+            prior: prior, capturedIsCurrent: true), captured)
+        XCTAssertEqual(TraceModel.preferredCapturedMessageReferenceForTesting(captured: captured,
+            prior: prior, capturedIsCurrent: false), prior)
     }
 
     func testPendingSearchTargetAndSavedBookmarkRestoreIndependently() async throws {
@@ -1608,8 +1735,8 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(after, 1)
     }
 
-    private func deferredResetFixture(count: Int = 3) async throws -> Fixture {
-        let f = try await fixture(count: count)
+    private func deferredResetFixture(count: Int = 3, failUnrelated: Bool = false) async throws -> Fixture {
+        let f = try await fixture(count: count, failUnrelated: failUnrelated)
         f.model.settings.onboardingComplete = true
         try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.suppressLiveWatcherIngressForTesting = true
@@ -4164,7 +4291,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let project: ProjectSummary
     }
 
-    private func fixture(count: Int = 430, grouping: WatcherGroupingPolicy = .byVolume) async throws -> Fixture {
+    private func fixture(count: Int = 430, grouping: WatcherGroupingPolicy = .byVolume, failUnrelated: Bool = false) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceAppReview-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("sessions.jsonl")
@@ -4174,7 +4301,9 @@ final class AppReviewFollowupTests: XCTestCase {
         }
         try data.write(to: file)
         let clock = TestClock()
-        let source = ClaudeCodeSource(roots: [root])
+        let base = ClaudeCodeSource(roots: [root])
+        if failUnrelated { try line(count + 99, project: "OtherReview").write(to: root.appendingPathComponent("bad.jsonl")) }
+        let source: any SessionSource = failUnrelated ? NavigationReviewFaultSource(base: base) : base
         let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
         let coordinator = IndexCoordinator(database: database, sources: [source], clock: clock)
         await coordinator.indexAll(scope: .proseOnly)
@@ -11659,6 +11788,32 @@ private actor ReviewReadGate {
         opened = true
         continuation?.resume()
         continuation = nil
+    }
+}
+#endif
+
+#if DEBUG
+private struct NavigationReviewFaultSource: SessionSource {
+    let base: ClaudeCodeSource
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    func discover() throws -> [DiscoveredSourceFile] { try base.discover() }
+    func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult { try base.discoverResult(scopedTo: paths) }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialContext: .init(fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary,
+            initialContext: .init(sessionID: initialSessionID, fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        if file.url.lastPathComponent == "bad.jsonl" {
+            return AsyncThrowingStream { $0.finish(throwing: SessionSourceError.malformedRecord("Synthetic unrelated source failure")) }
+        }
+        return base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
+        try base.hydrate(fileURL: fileURL, format: format, locator: locator)
     }
 }
 #endif

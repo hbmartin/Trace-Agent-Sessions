@@ -294,12 +294,30 @@ enum ModelPublicationBatch {}
         self.assertIn('benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { count }', baseline)
         refactored = source.replace('changes.lexicalPaths = []; changes.structuralPaths = []',
                                     'changes.lexicalPaths.removeAll(); changes.structuralPaths.removeAll()')
+        self.assertNotEqual(refactored, source)
         self.assertIn('benchmarkIngressExpectedAuxiliaryCount(_ count: Int) -> Int { 0 }',
                       extraction.extract(refactored, 'consumed-topology'))
         with self.assertRaisesRegex(ValueError, 'Unsupported preparation contract'):
             extraction.extract(source, 'guessed')
         with self.assertRaises(TypeError):
             extraction.extract(source)
+
+    def test_mailbox_contract_preflight_uses_normalization_before_workload_setup(self):
+        spec = importlib.util.spec_from_file_location('ingress_preflight', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
+        extraction = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(extraction)
+        source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
+        for contract in ['consumed-topology', 'preserved-topology']:
+            generated = extraction.extract(source, contract)
+            preflight = generated[generated.index('@MainActor func benchmarkValidatePreparationContract'):]
+            self.assertIn('SourceIngressMailbox.normalizeTranscript(input,', preflight)
+            self.assertIn('SourceIngressMailbox.normalizeMetadata(input)', preflight)
+            self.assertIn('preparationContractMismatch', preflight)
+            self.assertIn(contract + ' mismatch', preflight)
+        workload = (ROOT / 'Scripts/benchmark-source-ingress.swift').read_text()
+        run = workload[workload.index('@MainActor private static func run()'):]
+        self.assertLess(run.index('try benchmarkValidatePreparationContract()'), run.index('let starting = footprint()'))
+        self.assertLess(run.index('try benchmarkValidatePreparationContract()'), run.index('try await measure('))
 
     def test_mailbox_memory_baseline_and_fixture_release_are_explicit(self):
         source = (ROOT / 'Scripts/benchmark-source-ingress.swift').read_text()
