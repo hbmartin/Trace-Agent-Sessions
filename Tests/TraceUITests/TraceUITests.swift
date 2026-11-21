@@ -4711,7 +4711,18 @@ final class TraceUITests: XCTestCase {
         try assertMissingSearchTargetShowsReader(openAfterReset: true)
     }
 
-    private func assertMissingSearchTargetShowsReader(openAfterReset: Bool) throws {
+    func testProgrammaticRestoreSaveKeepsProvisionalSearchTarget() throws {
+        try assertMissingSearchTargetShowsReader(openAfterReset: false, provisional: true)
+    }
+    func testPendingSearchTargetSurvivesSecondResetWithoutNumericTarget() throws {
+        try assertMissingSearchTargetShowsReader(openAfterReset: false, provisional: true, secondReset: true)
+    }
+    func testReadableRetryDuringIndexingKeepsProvisionalSearchTarget() throws {
+        try assertMissingSearchTargetShowsReader(openAfterReset: false, provisional: true, retryDuringIndex: true)
+    }
+
+    private func assertMissingSearchTargetShowsReader(openAfterReset: Bool, provisional: Bool = false,
+                                                     secondReset: Bool = false, retryDuringIndex: Bool = false) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         installNativeAnchorProbe(app: app, directory: directory)
         let name = "Covered reader", project = "CoveredReaderProject"
@@ -4726,6 +4737,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
         app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "2"
         app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
         app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
@@ -4735,6 +4747,15 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = searchStarted.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = searchRelease.path
         app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        let batchRelease = directory.appendingPathComponent("retry-batch-release")
+        let batchCommitted = directory.appendingPathComponent("retry-batch-committed")
+        let retried = directory.appendingPathComponent("reader-retry-completed")
+        if retryDuringIndex {
+            try Data().write(to: batchRelease)
+            app.launchEnvironment["TRACE_TEST_INDEX_BATCH_RELEASE_PATH"] = batchRelease.path
+            app.launchEnvironment["TRACE_TEST_INDEX_BATCH_COMMITTED_PATH"] = batchCommitted.path
+            app.launchEnvironment["TRACE_TEST_READER_RETRY_COMPLETED_PATH"] = retried.path
+        }
         app.launch()
         XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20))
         app.buttons["testRebuildSidebarIndex"].click()
@@ -4762,7 +4783,7 @@ final class TraceUITests: XCTestCase {
             let object = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
             return object?["uuid"] as? String != "\(name)-25"
         }
-        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file)
+        try Data((lines.joined(separator: "\n") + (provisional ? "\n{\"type\":" : "\n")).utf8).write(to: file)
         XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: committed).count == 1 ? true : nil })
         let generation = try XCTUnwrap(poll(timeout: 20) { () -> String? in
             guard let value = try? self.sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';"), value != oldGeneration else { return nil }
@@ -4784,6 +4805,43 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.buttons["retrySelectedTranscript"].waitForNonExistence(timeout: 5))
         let failures = try sqliteInteger(database, sql: "SELECT count(*) FROM adapter_health WHERE last_error IS NOT NULL;")
         XCTAssertGreaterThan(failures, 0, "The unrelated failure must remain real")
+        if provisional {
+            var latestGeneration = generation
+            if secondReset {
+                app.buttons["testResetAgainWithNavigation"].click()
+                latestGeneration = try XCTUnwrap(poll(timeout: 20) { () -> String? in
+                    guard let next = try? self.sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';"), next != generation else { return nil }
+                    return next
+                })
+                XCTAssertNotNil(poll(timeout: 20) {
+                    self.nativeRestorationRecords(in: receipts).first {
+                        $0.generation.value == latestGeneration && $0.bookmarkIndex == saved
+                    }
+                })
+            }
+            if retryDuringIndex {
+                try FileManager.default.removeItem(at: batchRelease)
+                try? FileManager.default.removeItem(at: batchCommitted)
+                try addLongSession("Held unrelated indexing", project: "HeldReaderIndexing", directory: directory, count: 300, contentRepeats: 0)
+                XCTAssertTrue(waitForFile(batchCommitted, timeout: 15))
+                app.buttons["testReaderRetryDuringIndexing"].click()
+                XCTAssertTrue(waitForFile(retried, timeout: 10), "Reader Retry must finish while indexing is held")
+                XCTAssertTrue(transcriptMessage(name, index: saved, in: scroll).exists)
+                XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 5))
+                try Data().write(to: batchRelease)
+            }
+            let beforeTarget = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
+            try Data(text.utf8).write(to: file)
+            let currentID = try XCTUnwrap(poll(timeout: 20) { () -> Int64? in
+                guard let value = try? self.sqliteText(database, sql: "SELECT id FROM session WHERE external_id='Covered reader';") else { return nil }
+                return Int64(value)
+            })
+            let target = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
+                $0.matches(generation: latestGeneration, sessionID: currentID, bookmark: 25, excluding: beforeTarget)
+            } })
+            XCTAssertEqual(target.bookmarkOffset, 0, accuracy: 8)
+            XCTAssertTrue(transcriptMessage(name, index: 25, in: scroll).wait(for: \.isHittable, toEqual: true, timeout: 10))
+        }
         attach(app, name: openAfterReset ? "old-search-result-readable-after-reset" : "missing-target-readable-with-unrelated-failure")
     }
 

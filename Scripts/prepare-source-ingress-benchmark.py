@@ -87,6 +87,13 @@ def extract(source, preparation_contract):
     }
 }
 '''.replace('PARAMETERS', parameters)
+    if 'func navigation(in ledger: IndexNavigationWorkLedger)' in mailbox:
+        header = header.replace('static let ledger = IndexCheckpointLedger()',
+            'static let ledger = IndexCheckpointLedger()\n    static let navigation = IndexNavigationWorkLedger()')
+        header = header.replace('"prefixIndexEntryKind": IngressMeasurement.ledger.checkpointBenchmarkPrefixIndexEntryKind]',
+            '"prefixIndexEntryKind": IngressMeasurement.ledger.checkpointBenchmarkPrefixIndexEntryKind, "navigationState": IngressMeasurement.navigation.benchmarkCounts]')
+        wrapper = wrapper.replace('let changes = delivery.enrolled(in: IngressMeasurement.ledger)',
+            'var changes = delivery.enrolled(in: IngressMeasurement.ledger)\n        changes.navigationWork = delivery.boundary.navigation(in: IngressMeasurement.navigation)')
     normalization = ('SourceIngressMailbox.normalizeTranscript(input, rootsByAgent: IngressMeasurement.roots, unavailableStreams: []).changes'
                      if 'struct Prepared: Sendable' in mailbox else 'normalizeBenchmarkChanges(input).changes')
     observed = normalization

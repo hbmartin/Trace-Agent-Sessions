@@ -286,6 +286,12 @@ private struct SessionSidebar: View {
                                         .accessibilityIdentifier("testSaveSearchResult")
                                     Button("Open saved") { model.openRetainedSearchResultForUITesting() }
                                         .accessibilityIdentifier("testOpenSavedSearchResult")
+                                    if TraceTestHooks.environment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] == "1" {
+                                        Button("Reset again") { model.resetAgainForNavigationUITesting() }
+                                            .accessibilityIdentifier("testResetAgainWithNavigation")
+                                        Button("Reader Retry") { model.retryReaderDuringIndexingForUITesting() }
+                                            .accessibilityIdentifier("testReaderRetryDuringIndexing")
+                                    }
                                 }.font(.caption)
                             }
                             HStack {
@@ -876,6 +882,7 @@ struct TranscriptRenderer: NSViewRepresentable {
             }
             var inputGeneration: UInt64 = 0
             var sessionID: Int64 = 0
+            var bookmarkOwner: TraceModel.TranscriptRestoreOwner?
 
             init(
                 bookmark: TranscriptBookmark, reason: Reason,
@@ -965,6 +972,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         private var injectedAppendAdjustmentForUITest = false
         private var pendingDocumentBottomShift: (origin: CGFloat, expires: ContinuousClock.Instant)?
         private var userScrolling = false
+        private var bookmarkSaveOwner: TraceModel.TranscriptRestoreOwner?
         private var liveScrolling = false
         private var scrollerTracking = false
         private var selectionTracking = false
@@ -1531,7 +1539,8 @@ struct TranscriptRenderer: NSViewRepresentable {
                   let bookmark = (followsBottom ? nil : establishedBookmark) ?? currentBookmark(), let model else { return }
             establishedBookmark = bookmark
             let persisted = deferredContentRestore?.bookmark ?? bookmark
-            model.updateTranscriptBookmark(sessionID: sessionID, bookmark: persisted)
+            model.updateTranscriptBookmark(sessionID: sessionID, bookmark: persisted,
+                origin: bookmarkSaveOwner.map(TraceModel.BookmarkSaveOrigin.restoration) ?? .user)
             TraceTestHooks.appendLine("\(persisted.index),\(persisted.offset)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_PERSISTED_BOOKMARK_PATH")
             if TraceTestHooks.isUITesting,
@@ -1693,6 +1702,7 @@ struct TranscriptRenderer: NSViewRepresentable {
             var request = initialRequest
             request.inputGeneration = userInputGeneration
             request.sessionID = sessionID
+            request.bookmarkOwner = model?.transcriptRestoreOwner(sessionID: sessionID)
             cancelPendingRestore(reportCancellation: false, preserveDeferred: !request.reason.isExplicitNavigation)
             pendingRestore = request
             if case .search = request.reason {
@@ -2037,6 +2047,7 @@ struct TranscriptRenderer: NSViewRepresentable {
                     model?.consumeRequestedMessageID(messageID)
                 }
                 pendingIdleSaveAfterRestore = false
+                bookmarkSaveOwner = request.bookmarkOwner
                 savePosition()
             }
         }
@@ -2074,6 +2085,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func beginUserScrolling() {
+            bookmarkSaveOwner = nil
             guard !applyingProgrammaticScroll else { return }
             if TraceTestHooks.isUITesting,
                TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_FORCE_LIVE_SCROLL"] == "1" {
