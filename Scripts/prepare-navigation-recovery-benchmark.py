@@ -30,7 +30,8 @@ import TraceCore
 @MainActor final class PendingTargetWorkload {
     struct Intent { let reference: SessionNavigationReference? }
     final class Pending {
-        let database: IndexDatabase, generation: IndexContentGeneration, sessionID: Int64, intent: Intent
+        let database: IndexDatabase, generation: IndexContentGeneration, sessionID: Int64
+        var intent: Intent
         var running = false, lastEvent: UUID?, demand: UInt64 = 0
         init(database: IndexDatabase, sessionID: Int64, reference: SessionNavigationReference) {
             self.database = database; self.generation = database.contentGeneration
@@ -55,6 +56,12 @@ import TraceCore
     // source does in the app. The production resolver and coherent-read predicate
     // below are extracted without rewriting their control flow.
     private func navigationSourceCovered(_ reference: SessionNavigationReference?, database: IndexDatabase) -> Bool { false }
+    private func refreshNavigationReference(sessionID: Int64, current: SessionNavigationReference) {
+        // Relocation itself is exercised by App regressions. This steady-source
+        // workload uses the same accepted-reference update if its fixture moves.
+        pendingMessageRestore?.intent = .init(reference: current)
+        requestedMessageReference = current
+    }
     private func setRequestedMessage(_ id: Int64?) { pendingMessageRestore = nil; requestedMessageID = id }
     private func acceptTranscript(_ snapshot: SessionTranscriptSnapshot) -> Acceptance { .accepted }
     private func applyTranscript(_ snapshot: SessionTranscriptSnapshot) {

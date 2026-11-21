@@ -1145,7 +1145,7 @@ final class TraceModel: ObservableObject {
         let generation: IndexContentGeneration
         let sessionID: Int64
         let request: UUID
-        let intent: AutomaticMessageIntent
+        var intent: AutomaticMessageIntent
         var running = false
         var lastEvent: UUID?
         var demand: UInt64 = 0
@@ -1175,6 +1175,17 @@ final class TraceModel: ObservableObject {
     private var selectionSourceIdentity: SelectionSourceIdentity?
     private var visitedNavigationReferences: [Int64: SessionNavigationReference] = [:]
     private func refreshNavigationReference(sessionID: Int64, current: SessionNavigationReference) {
+        if let pending = pendingMessageRestore, pending.database === database,
+           pending.sessionID == sessionID, pending.request == sessionRequestID,
+           pending.generation == database?.contentGeneration, pending.intent.token == requestedMessageIntentID,
+           let reference = pending.intent.reference {
+            // Callers have generation/source-validated this metadata. Refresh
+            // mutable location before a rewrite can retire relocation lineage.
+            let refreshed = current.unanchored.preservingAnchor(from: reference)
+            pending.intent = .init(token: pending.intent.token, reference: refreshed,
+                bookmarkRevision: pending.intent.bookmarkRevision)
+            requestedMessageReference = refreshed
+        }
         let source = selectionSourceIdentity.flatMap { $0.sessionID == sessionID ? $0.reference : nil }
         let old = [visitedNavigationReferences[sessionID], source].compactMap { $0 }
         for reference in old where reference.unanchored != current.unanchored {
@@ -1851,7 +1862,12 @@ final class TraceModel: ObservableObject {
                     bookmarks[mapped.session.id] = .init(messageID: message, offset: bookmark.offset, index: index)
                 }
             }
-            let pendingIntent = navigation.messageIntent
+            let pendingIntent = navigation.messageIntent.map { intent in
+                AutomaticMessageIntent(token: intent.token,
+                    reference: intent.reference.map { saved in
+                        resolved.session.navigationReference?.unanchored.preservingAnchor(from: saved) ?? saved
+                    }, bookmarkRevision: intent.bookmarkRevision)
+            }
             let intentIsCurrent = pendingIntent.map {
                 $0.token == requestedMessageIntentID && $0.reference?.hasStableAnchor == true
                     && $0.bookmarkRevision == (bookmarkRevisions[oldSessionID] ?? 0)
@@ -1988,14 +2004,21 @@ final class TraceModel: ObservableObject {
             guard resolved.session.id == pending.sessionID else { return }
             let savedReference = pending.intent.reference!
             let reference = resolved.session.navigationReference?.unanchored.preservingAnchor(from: savedReference) ?? savedReference
+            if reference != savedReference {
+                refreshNavigationReference(sessionID: resolved.session.id, current: reference)
+            }
             // The coherent, complete reader can satisfy target-only adjudication
             // without re-reading/re-publishing its locator rows.
-            let cached = selectedSession?.transcriptIdentity == resolved.session.transcriptIdentity
+            let sameReader = selectedSession?.transcriptIdentity == resolved.session.transcriptIdentity
                 && selectedSession?.messageCount == resolved.session.messageCount
                 && messages.count == resolved.session.messageCount
                 && selectedSession?.contentGeneration == pending.generation
+            let cachedTarget = sameReader ? resolved.anchorMessageID.flatMap { id in
+                messages.first { $0.id == id && $0.navigationIdentity.map(reference.matchesAnchor) == true }?.id
+            } : nil
+            let cached = sameReader && (resolved.anchorMessageID == nil || cachedTarget != nil)
             if cached {
-                if let target = messages.first(where: { $0.navigationIdentity.map(reference.matchesAnchor) == true })?.id {
+                if let target = cachedTarget {
                     pendingMessageRestore = nil
                     requestedMessageID = target; requestedMessageReference = reference
                     scrollRequest = UUID()
