@@ -62,6 +62,30 @@ final class IndexingRegressionTests: XCTestCase {
         await second.stop(); await first.stop()
     }
 
+    func testFilteredLegacyPublicationRetainsActivityWithoutRegressiveValues() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate()
+        let values = OSAllocatedUnfairLock(initialState: [(IndexActivity, [String: UInt64])]())
+        defer { Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        func make() -> IndexScheduler {
+            IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+                progress: { _ in }, didComplete: { activity, marks in values.withLock { $0.append((activity, marks)) } },
+                checkpointLedger: ledger)
+        }
+        let first = make(); await first.waitUntilIdle()
+        await first.setCheckpointPublicationHookForTesting { await gate.wait() }
+        await first.request(activity: .eventStreamRecovery, watermarks: ["s": 100])
+        try await waitForCondition { await gate.entered }
+        let second = make(); await second.request(watermarks: ["s": 200]); await second.waitUntilIdle()
+        await gate.open(); await first.waitUntilIdle(); await second.waitUntilIdle()
+        XCTAssertEqual(values.withLock { $0.compactMap { $0.1["s"] } }, [200])
+        XCTAssertEqual(values.withLock { $0.filter { $0.0 == .eventStreamRecovery && $0.1.isEmpty }.count }, 1)
+        await first.stop(); await first.stop(); await second.waitUntilIdle()
+        XCTAssertEqual(values.withLock { $0.filter { $0.0 == .eventStreamRecovery }.count }, 1)
+        await second.stop()
+    }
+
     func testLegacyActivityOnlyCompletionIsDeliveredOnce() async throws {
         let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
         let activities = OSAllocatedUnfairLock(initialState: [IndexActivity]())

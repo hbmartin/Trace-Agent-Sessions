@@ -7581,7 +7581,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.refreshSummariesForTesting()
         XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting, "fresh failures do not reset an exhausted episode")
         f.model.retrySelectedTranscript()
-        XCTAssertNil(f.model.transcriptBanner?.details)
+        XCTAssertNotNil(f.model.transcriptBanner?.details, "Retry retains genuine read feedback until a successful read")
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }
