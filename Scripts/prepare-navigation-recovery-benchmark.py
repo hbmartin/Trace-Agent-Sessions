@@ -16,8 +16,9 @@ extension IndexNavigationCoverage {
         return .init(contentGeneration: generation, scope: .proseOnly, regions: [Region(root: root, context: context, facts: facts)])
     }
     public func benchmarkCovers(_ name: String) -> Bool {
-        covers(.init(agent: AgentKind.claudeCode.rawValue, root: "/tmp/navigation-cache",
-            path: "/tmp/navigation-cache/" + name, externalSessionID: "fixture", anchorSourceKey: nil, anchorExternalID: nil))
+        guard let region = regions.values.first else { return false }
+        return covers(.init(agent: region.root.agent.rawValue, root: region.root.url.path,
+            path: region.context.scanPath.path + "/" + name, externalSessionID: "fixture", anchorSourceKey: nil, anchorExternalID: nil))
     }
 }
 #endif

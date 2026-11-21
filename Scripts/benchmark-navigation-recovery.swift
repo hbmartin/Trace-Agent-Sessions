@@ -45,6 +45,9 @@ private func seconds(_ d: Duration) -> Double { let v = d.components; return Dou
             if mode == "coverage" {
                 var coverage = IndexNavigationCoverage.benchmarkFixture(generation: database.contentGeneration,
                     names: (0..<count).map { "file-\($0).jsonl" }, covered: true)
+                guard (0..<count).allSatisfy({ coverage.benchmarkCovers("file-\($0).jsonl") }) else {
+                    throw NSError(domain: "NavigationBenchmark.initialCoverageCorrectness", code: 1)
+                }
                 var deltas: [IndexNavigationCoverage]? = (0..<count).map {
                     .benchmarkFixture(generation: database.contentGeneration, names: ["file-\($0).jsonl"], covered: false)
                 }
