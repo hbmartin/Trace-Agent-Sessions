@@ -1031,12 +1031,19 @@ final class TraceModel: ObservableObject {
         fileprivate let source: SessionTranscriptIdentity
         fileprivate let revision: UInt64
     }
-    enum BookmarkSaveOrigin { case user, restoration(TranscriptRestoreOwner) }
+    enum BookmarkSaveOrigin { case user, restoration(TranscriptRestoreOwner?) }
     func transcriptRestoreOwner(sessionID: Int64) -> TranscriptRestoreOwner? {
         guard selectedSessionID == sessionID, let generation = database?.contentGeneration,
               selectionSourceIdentity?.generation == generation, let source = selectedSession?.transcriptIdentity else { return nil }
         return .init(session: sessionID, request: sessionRequestID, generation: generation, source: source,
             revision: bookmarkRevisions[sessionID] ?? 0)
+    }
+
+    func transcriptRestoreOwnerIsCurrent(_ owner: TranscriptRestoreOwner?) -> Bool {
+        guard let owner else { return false }
+        return !terminating && owner.session == selectedSessionID && owner.request == sessionRequestID
+            && owner.generation == database?.contentGeneration && owner.source == selectedSession?.transcriptIdentity
+            && owner.revision == (bookmarkRevisions[owner.session] ?? 0)
     }
 
     /// Renderer persistence is not a new user navigation command. Its captured
@@ -1046,9 +1053,7 @@ final class TraceModel: ObservableObject {
         switch origin {
         case .user: userSave = true
         case .restoration(let owner):
-            guard !terminating, owner.session == sessionID, selectedSessionID == sessionID,
-                  owner.request == sessionRequestID, owner.generation == database?.contentGeneration,
-                  owner.source == selectedSession?.transcriptIdentity, owner.revision == (bookmarkRevisions[sessionID] ?? 0) else { return }
+            guard owner?.session == sessionID, transcriptRestoreOwnerIsCurrent(owner) else { return }
             userSave = false
         }
         let source = selectionSourceIdentity.flatMap { $0.sessionID == sessionID ? $0.reference : nil }
@@ -4824,6 +4829,13 @@ final class TraceModel: ObservableObject {
 
     func consumeRequestedMessageID(_ messageID: Int64) {
         if requestedMessageID == messageID { setRequestedMessage(nil) }
+    }
+
+    @discardableResult
+    func consumeRequestedMessageID(_ messageID: Int64, restorationOwner: TranscriptRestoreOwner?) -> Bool {
+        guard transcriptRestoreOwnerIsCurrent(restorationOwner), requestedMessageID == messageID else { return false }
+        setRequestedMessage(nil)
+        return true
     }
 
     @discardableResult

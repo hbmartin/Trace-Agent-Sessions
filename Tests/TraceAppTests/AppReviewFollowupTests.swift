@@ -88,6 +88,11 @@ final class AppReviewFollowupTests: XCTestCase {
             let id = try XCTUnwrap(f.model.selectedSessionID), row = try XCTUnwrap(f.model.messages.first)
             // The no-bookmark case is an achieved renderer position, not a user clear.
             if clear { f.model.scrollPositions[id] = nil }
+            let previous = f.model.scrollPositions[id]
+            f.model.updateTranscriptBookmark(sessionID: id,
+                bookmark: .init(messageID: row.id, offset: 0, index: 0), origin: .restoration(nil))
+            XCTAssertTrue(f.model.pendingMessageIntentForTesting)
+            XCTAssertEqual(f.model.scrollPositions[id]?.offset, previous?.offset)
             let owner = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: id))
             f.model.updateTranscriptBookmark(sessionID: id,
                 bookmark: .init(messageID: row.id, offset: clear ? 0 : -39.625, index: 0), origin: .restoration(owner))
@@ -100,6 +105,19 @@ final class AppReviewFollowupTests: XCTestCase {
                 bookmark: .init(messageID: row.id, offset: -39, index: 0), origin: .restoration(owner))
             XCTAssertEqual(f.model.scrollPositions[id]?.offset, -71, "The old renderer cannot overwrite newer intent")
         }
+    }
+
+    func testRendererTargetConsumptionRequiresItsCurrentRestoreOwner() async throws {
+        let (f, target) = try await pendingSearchBookmarkFixture()
+        let owner = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: target.sessionID))
+        XCTAssertFalse(f.model.consumeRequestedMessageID(target.id, restorationOwner: nil))
+        XCTAssertEqual(f.model.requestedMessageID, target.id)
+        f.model.openSearchResult(target)
+        try await wait { f.model.messages.count == 3 }
+        XCTAssertFalse(f.model.consumeRequestedMessageID(target.id, restorationOwner: owner), "The previous renderer cannot consume a new same-ID request")
+        let current = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: target.sessionID))
+        XCTAssertTrue(f.model.consumeRequestedMessageID(target.id, restorationOwner: current))
+        XCTAssertNil(f.model.requestedMessageID)
     }
 
     func testProvisionalSearchIntentSurvivesSecondAutomaticReset() async throws {
