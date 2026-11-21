@@ -1,0 +1,14 @@
+{
+  "test": "testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+  "baseline": "6c21e794d774776e1a7b511306912823d440e43f",
+  "candidate": "67f62626067af39509e1275235c0c4b84a549e67",
+  "baselineReceipt": "baseline-known-transcript.json",
+  "candidateReceipt": "accepted-v6-known-transcript.json",
+  "failedTestsPerRun": 1,
+  "failureIssuesPerRun": 2,
+  "matchingFailureMessages": [
+    "failed - Timed out waiting for app state",
+    "failed: caught error: \"CancellationError()\""
+  ],
+  "classification": "Reproduced on matching pinned baseline and frozen candidate; excluded from the passing focused group, retained as an explicit limitation."
+}
