@@ -4242,9 +4242,6 @@ final class TraceModel: ObservableObject {
             }
             guard isCurrent() else { return }
             #endif
-            if includesRebuild, let rebuild {
-                includesRebuild = self.rebuildClaimIsCurrent(rebuild) && self.capturedNavigationIsCurrent(rebuild)
-            }
             var preparedStartup: IndexNavigationInputs
             while true {
                 let recovery = self.pendingStartupRecovery
@@ -4257,6 +4254,9 @@ final class TraceModel: ObservableObject {
                 guard isCurrent() else { return }
                 if paths == self.pendingStartupRecovery.filePaths,
                    reconciliation == self.startupReconciliationPaths.union(self.pendingStartupRecovery.reconciliationPaths) { break }
+            }
+            if includesRebuild, let rebuild {
+                includesRebuild = self.rebuildClaimIsCurrent(rebuild) && self.capturedNavigationIsCurrent(rebuild)
             }
             var buffered = self.bufferedSourceChanges
             if includesRebuild, let changes = rebuild?.recovery?.changes { buffered.merge(changes) }
