@@ -88,7 +88,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let rows = f.model.messages
         await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
         await f.model.requestPendingMessageResolutionForTesting()
-        XCTAssertTrue(f.model.targetLookupFailureIsVisible)
+        try await wait { f.model.targetLookupFailureIsVisible }
         XCTAssertNil(f.model.transcriptBanner)
         XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
         let before = await f.database.navigationReadCountsForTesting()
@@ -104,7 +104,7 @@ final class AppReviewFollowupTests: XCTestCase {
         let (f, _) = try await provisionalSearchFixture()
         await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
         await f.model.requestPendingMessageResolutionForTesting()
-        XCTAssertTrue(f.model.targetLookupFailureIsVisible)
+        try await wait { f.model.targetLookupFailureIsVisible }
         let before = await f.database.navigationReadCountsForTesting()
         await f.model.receiveProgress(.init(phase: .indexing))
         f.model.retrySearchTarget()
@@ -116,7 +116,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { !f.model.targetLookupFailureIsVisible }
         await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
         await f.model.requestPendingMessageResolutionForTesting()
-        XCTAssertTrue(f.model.targetLookupFailureIsVisible)
+        try await wait { f.model.targetLookupFailureIsVisible }
         f.model.returnFromSession()
         XCTAssertFalse(f.model.targetLookupFailureIsVisible)
     }
