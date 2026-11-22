@@ -4579,6 +4579,27 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "moved-reader-restores-after-relaunch")
     }
 
+    func testResetWithoutFileEventsSettlesDeletedSelection() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let name = "Deleted reset selection", project = "DeletedResetProject"
+        try addLongSession(name, project: project, directory: directory, count: 8, contentRepeats: 0)
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SUPPRESS_LIVE_WATCHER_INGRESS"] = "1"
+        app.launch()
+        XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20))
+        app.staticTexts[project].firstMatch.click()
+        openSidebarSession(name, in: app)
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForExistence(timeout: 10))
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Sources/Claude/\(name).jsonl"))
+        app.buttons["testResetAgainWithNavigation"].click()
+        XCTAssertTrue(app.scrollViews["transcriptScroll"].waitForNonExistence(timeout: 20))
+        XCTAssertTrue(app.windows[name].waitForNonExistence(timeout: 10))
+        attach(app, name: "qualified-reset-settles-deleted-selection")
+    }
+
     func testSourceRewriteReissuesHeldNativeRestoreWithCurrentOwnership() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         let name = "Rewritten restore", project = "RewriteRestoreProject"

@@ -2949,7 +2949,8 @@ final class TraceModel: ObservableObject {
     var startupSubmissionRecordingGateForTesting: Task<Void, Never>?
     var startupPayloadGateForTesting: Task<Void, Never>?
     private(set) var startupSubmissionRecordingWaitingForTesting = false
-    var suppressLiveWatcherIngressForTesting = false
+    var suppressLiveWatcherIngressForTesting = TraceTestHooks.isUITesting
+        && TraceTestHooks.environment["TRACE_TEST_SUPPRESS_LIVE_WATCHER_INGRESS"] == "1"
     var automaticNavigationCaptureGateForTesting: Task<Void, Never>?
     private(set) var automaticNavigationCaptureWaitingForTesting = false
     var automaticNavigationTranscriptGateForTesting: Task<Void, Never>?
