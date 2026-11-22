@@ -4617,6 +4617,17 @@ final class TraceUITests: XCTestCase {
         try addLongSession(name, project: project, directory: directory, count: 60, contentRepeats: 0)
         let started = directory.appendingPathComponent("rewrite-restore-started"), release = directory.appendingPathComponent("rewrite-restore-release")
         let receipts = directory.appendingPathComponent("rewrite-restorations"), database = directory.appendingPathComponent("index.sqlite")
+        let persisted = directory.appendingPathComponent("rewrite-persisted-bookmark")
+        installNativeAnchorProbe(app: app, directory: directory)
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_PERSISTED_BOOKMARK_PATH"] = persisted.path
+        defer {
+            for file in [receipts, persisted, directory.appendingPathComponent("native-anchor-samples"),
+                         directory.appendingPathComponent("native-anchor-offset")] {
+                let attachment = XCTAttachment(string: fileLines(in: file).joined(separator: "\n"))
+                attachment.name = file.lastPathComponent; attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"] = "15"
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] = "-40"
@@ -4652,9 +4663,16 @@ final class TraceUITests: XCTestCase {
         let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Rewritten restore';")
         if survivingOtherSource { XCTAssertNotEqual(selected, beforeSession) }
         else { XCTAssertEqual(selected, beforeSession) }
-        XCTAssertNotNil(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
+        let receipt = try XCTUnwrap(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
             $0.matches(generation: generation, sessionID: Int64(selected), bookmark: 15, excluding: []) && $0.renderedMessageCount == 61
         } })
+        XCTAssertEqual(receipt.bookmarkOffset, -40, accuracy: 1)
+        XCTAssertNotNil(poll(timeout: 5) {
+            self.fileLines(in: persisted).contains { line in
+                let fields = line.split(separator: ",")
+                return fields.count == 2 && fields[0] == "15" && Double(fields[1]).map { abs($0 + 40) <= 1 } == true
+            } ? true : nil
+        }, "The refreshed native owner must persist the achieved bookmark")
         let scroll = app.scrollViews["transcriptScroll"]
         assertSavedAnchorOnScreen(index: 15, in: scroll, expectedY: -40, stage: "rewritten source restore")
     }
