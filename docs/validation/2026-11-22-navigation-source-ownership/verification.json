@@ -39,7 +39,8 @@
     "compiledIdentifiersVerified": true,
     "runs": [],
     "accepted": false,
-    "status": "Pending fresh desktop-idle confirmation; not waived"
+    "status": "Skipped at user request; not executed",
+    "skippedByUser": true
   },
   "targeted": {
     "baseline": "9fbae14d6532f5f49dbe524d5b7166c689fdb479",
@@ -54,7 +55,8 @@
     "plannedTotalSamples": 384,
     "samplesRun": 0,
     "optimizedExecutablesBuilt": 6,
-    "status": "Pending fresh desktop-idle confirmation and quiet competing-check gate; not waived"
+    "status": "Skipped at user request; not executed",
+    "skippedByUser": true
   },
   "knownExcludedFailure": "known-transcript-classification.json",
   "completeNativeSuites": "omitted",
@@ -1337,5 +1339,11 @@
     "regularFiles": 200,
     "sha256": "2f8ea43192e467acdb95f91e796e4a5238aab58ee3c1a46c8906ede5ec86a51e",
     "verified": true
+  },
+  "desktopChecksSkippedByUser": true,
+  "publicationDecision": {
+    "instruction": "Skip UI and measurements; publish with limitations",
+    "rawReceipt": "user-desktop-skip-20261122.json",
+    "note": "UI/performance acceptance remains incomplete; publish with explicit limitations."
   }
 }

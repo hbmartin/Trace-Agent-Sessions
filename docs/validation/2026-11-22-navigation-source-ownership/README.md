@@ -2,7 +2,7 @@
 
 Follow-up to merged [PR #97](https://github.com/hbmartin/Trace-Agent-Sessions/pull/97). Frozen implementation and harness: `e637490c2cfc39b0364c0172fcd8e1b2b04e43f3`; pinned merge base: `97f2b8de2188a85b7a058aba907dde0c68701aad`. Targeted comparison baseline: published #97 HEAD `9fbae14d6532f5f49dbe524d5b7166c689fdb479`.
 
-**Incomplete checks:** the 28 selected UI cases and paired targeted measurements have not run. Fresh desktop-idle confirmation remains pending; these checks have not been waived. Both optimized revisions and all six workload executables are prepared. There is no new local 10% performance-acceptance claim. The three full Release comparison pairs and complete native suites are omitted as selected.
+**User-selected limitations:** the 28 selected UI cases and paired targeted measurements were skipped at the user's request: “Skip UI and measurements; publish with limitations.” No UI execution or timed sample is claimed. Both optimized revisions and all six workload executables are prepared. There is no new local 10% performance-acceptance claim. The three full Release comparison pairs and complete native suites are omitted as selected.
 
 ## Changes and evidence
 
@@ -34,7 +34,7 @@ The first Release test recipes either omitted testability or attempted the whole
 
 The first optimized archive build lacked dependency Git metadata required by the existing SQLite overlay setup. Isolated metadata, refs and indexes were added to the archives, sharing source objects read-only; original vendor files and prior artifacts were preserved. Both corrected optimized builds and six workload compilations pass. No timed sample or cleanup scan was run.
 
-The planned targeted matrix has 32 cases: checkpoint enqueue/acceptance/backlog; plain, oversized, structural and alternating tracked/untracked ingress; coverage, pending target, short/long ledger and contention, and shared-root navigation at 1,000/10,000 inputs, plus short/long 5,000-file footprint cases. Each revision requires one warm-up and five recorded samples. CPU definitions, elapsed time, latency, signed physical footprint, retained state and correctness must be retained when those pending runs occur.
+The planned targeted matrix has 32 cases: checkpoint enqueue/acceptance/backlog; plain, oversized, structural and alternating tracked/untracked ingress; coverage, pending target, short/long ledger and contention, and shared-root navigation at 1,000/10,000 inputs, plus short/long 5,000-file footprint cases. The planned protocol specifies one warm-up and five recorded samples per revision. These measurements remain unrun at the user's request; compilation does not establish runtime correctness or performance acceptance.
 
 ## Artifact availability
 
@@ -43,3 +43,5 @@ Raw payloads are **local-only**, not downloadable repository or CI attachments. 
 `/Volumes/Pro2T/TraceValidation/navigation-source-ownership-followup`
 
 Receipt basenames in [verification.json](verification.json) refer to that directory. It retains command/input snapshots, logs, XCResults, compiled discovery, parser probes, baseline/candidate archives, isolated dependency metadata, binary/framework hashes and the unexecuted gated targeted driver. [Raw artifact manifest](raw-artifacts.json) specifies its selected-file inventory and digest. No upload is required.
+
+The later publication decision is recorded locally in `user-desktop-skip-20261122.json`. The immutable raw-artifact snapshot and frozen source manifest remain unchanged; their historical preparation records predate this decision.
