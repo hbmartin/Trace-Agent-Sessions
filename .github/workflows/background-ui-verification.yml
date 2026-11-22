@@ -31,14 +31,14 @@ jobs:
       LC_ALL: en_US.UTF-8
       UI_SELECTION: ${{ inputs.selection || 'Tests/Verification/ui-smoke.json' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
           persist-credentials: false
-      - uses: maxim-lobanov/setup-xcode@v1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: '26.3'
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
       - name: Verify runner contracts
         run: python3 -m unittest discover -s Tests/Scripts -p test_background_ui_verification.py
       - name: Configure custom SQLite
