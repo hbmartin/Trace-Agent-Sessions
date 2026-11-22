@@ -126,7 +126,7 @@ func nearestRankPercentile(_ sorted: [Double], fraction: Double) -> Double {
                 if half > 0 {
                     let unfinished = ledger.benchmarkCounts
                     guard (unfinished["pendingReceipts"] ?? unfinished["requiredScopeFacts"] ?? 0) >= count - half,
-                          !ledger.permitsAbsence(firstCoverage!.benchmarkReference(names!.last!), coverage: firstCoverage!) else {
+                          !ledger.permitsAbsence(firstCoverage!.benchmarkReference(names!.last!), coverage: laterCoverage!) else {
                         throw NSError(domain: "NavigationBenchmark.newerAdmissionWasConsumed", code: 1)
                     }
                 }
