@@ -1,0 +1,90 @@
+{
+  "accepted-v7-focused": {
+    "totalTestCount": 759,
+    "passedTests": 759,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  },
+  "accepted-v7-races-1": {
+    "totalTestCount": 109,
+    "passedTests": 109,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  },
+  "accepted-v7-races-2": {
+    "totalTestCount": 109,
+    "passedTests": 109,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  },
+  "accepted-v7-races-3": {
+    "totalTestCount": 109,
+    "passedTests": 109,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  },
+  "accepted-v7-races-4": {
+    "totalTestCount": 109,
+    "passedTests": 109,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  },
+  "accepted-v7-races-5": {
+    "totalTestCount": 109,
+    "passedTests": 109,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  },
+  "accepted-v7-known-transcript": {
+    "totalTestCount": 1,
+    "passedTests": 0,
+    "failedTests": 1,
+    "skippedTests": 0,
+    "testFailures": [
+      {
+        "failureText": "failed - Timed out waiting for app state",
+        "targetName": "TraceAppTests",
+        "testIdentifier": 1,
+        "testIdentifierString": "AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData()",
+        "testIdentifierURL": "test://com.apple.xcode/Trace/TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+        "testName": "testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData()"
+      }
+    ]
+  },
+  "baseline-v2-known-transcript": {
+    "totalTestCount": 1,
+    "passedTests": 0,
+    "failedTests": 1,
+    "skippedTests": 0,
+    "testFailures": [
+      {
+        "failureText": "failed - Timed out waiting for app state",
+        "targetName": "TraceAppTests",
+        "testIdentifier": 1,
+        "testIdentifierString": "AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData()",
+        "testIdentifierURL": "test://com.apple.xcode/Trace/TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+        "testName": "testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData()"
+      }
+    ]
+  },
+  "accepted-v7-ui-01": {
+    "totalTestCount": 22,
+    "passedTests": 22,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  },
+  "root-scope-regression-01": {
+    "totalTestCount": 1,
+    "passedTests": 1,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "testFailures": []
+  }
+}

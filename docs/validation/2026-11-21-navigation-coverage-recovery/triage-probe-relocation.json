@@ -1,0 +1,69 @@
+{
+  "reason": "Historical untracked triage probes are not frozen build inputs. Retained outside the build checkout so strict benchmark input validation can run. Tracked files, vendor changes, and other triage records remain unchanged.",
+  "candidate": "3b861a4991864c5a996be51d9e4803d663586ff6",
+  "files": [
+    {
+      "originalRelativePath": "reviews_triage/pr-82-read-only-probe.swift",
+      "originalPath": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/reviews_triage/pr-82-read-only-probe.swift",
+      "preservedPath": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/preserved-triage-build-inputs/reviews_triage/pr-82-read-only-probe.swift",
+      "sha256": "88e50d918bfdee83a601c0ab5a44bea8e71bd78eba2535650a06a47d7baa3f1f",
+      "bytes": 2835,
+      "mode": "0o644",
+      "mtimeNs": 1793552168526774466
+    },
+    {
+      "originalRelativePath": "reviews_triage/pr-87-ledger-probe.swift",
+      "originalPath": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/reviews_triage/pr-87-ledger-probe.swift",
+      "preservedPath": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/preserved-triage-build-inputs/reviews_triage/pr-87-ledger-probe.swift",
+      "sha256": "af361d16079bbd90075292e487a38637626e31ff01e6c165391cdc31367c2a5b",
+      "bytes": 29261,
+      "mode": "0o644",
+      "mtimeNs": 1793811853378227538
+    },
+    {
+      "originalRelativePath": "reviews_triage/pr-88-probe.swift",
+      "originalPath": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/reviews_triage/pr-88-probe.swift",
+      "preservedPath": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/preserved-triage-build-inputs/reviews_triage/pr-88-probe.swift",
+      "sha256": "2cde2c90d6111af35a295605e48cccf2a85f97df01b9c11442bbab172f21105c",
+      "bytes": 3964,
+      "mode": "0o644",
+      "mtimeNs": 1793916043149769651
+    },
+    {
+      "originalRelativePath": "reviews_triage/pr-90-delivery-probe.swift",
+      "originalPath": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/reviews_triage/pr-90-delivery-probe.swift",
+      "preservedPath": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/preserved-triage-build-inputs/reviews_triage/pr-90-delivery-probe.swift",
+      "sha256": "d499b6a9d0b1b1ead4025d84b9754476249ce7105d29e29183c9fc5ed5a25369",
+      "bytes": 1674,
+      "mode": "0o644",
+      "mtimeNs": 1793994626167371538
+    },
+    {
+      "originalRelativePath": "reviews_triage/pr-90-tooling-probe.py",
+      "originalPath": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/reviews_triage/pr-90-tooling-probe.py",
+      "preservedPath": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/preserved-triage-build-inputs/reviews_triage/pr-90-tooling-probe.py",
+      "sha256": "c24123770cda1a599735af3ad9133584a393109c1c9efa2c2b163b4fb9193d3c",
+      "bytes": 1270,
+      "mode": "0o644",
+      "mtimeNs": 1793994626177156485
+    },
+    {
+      "originalRelativePath": "reviews_triage/pr-90-triage-probe.swift",
+      "originalPath": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/reviews_triage/pr-90-triage-probe.swift",
+      "preservedPath": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/preserved-triage-build-inputs/reviews_triage/pr-90-triage-probe.swift",
+      "sha256": "b6c93eb4b8cd89706a4b23eb591144302b3802822bfe09118205247164bd6259",
+      "bytes": 2565,
+      "mode": "0o644",
+      "mtimeNs": 1793994626103594317
+    },
+    {
+      "originalRelativePath": "reviews_triage/pr-96-reset-coverage-probe.swift",
+      "originalPath": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/reviews_triage/pr-96-reset-coverage-probe.swift",
+      "preservedPath": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/preserved-triage-build-inputs/reviews_triage/pr-96-reset-coverage-probe.swift",
+      "sha256": "0d3b27c59940926e672f8f54641d2e9656c05bcb066137ce7a403de58e63e29b",
+      "bytes": 2386,
+      "mode": "0o644",
+      "mtimeNs": 1795310458292570786
+    }
+  ]
+}
