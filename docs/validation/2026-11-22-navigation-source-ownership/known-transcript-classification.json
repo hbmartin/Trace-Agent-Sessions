@@ -1,0 +1,20 @@
+{
+  "test": "testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+  "candidate": "e637490c2cfc39b0364c0172fcd8e1b2b04e43f3",
+  "baseline": "9fbae14d6532f5f49dbe524d5b7166c689fdb479",
+  "baselineRuntime": "3b861a4991864c5a996be51d9e4803d663586ff6",
+  "runtimeSourceEquivalentToPublishedBaseline": true,
+  "testBodySHA256": {
+    "baseline": "a2299e943187a6fe911c0d913094b3708137f8beb1b4cfb08ee185a7ad6daa42",
+    "candidate": "a2299e943187a6fe911c0d913094b3708137f8beb1b4cfb08ee185a7ad6daa42"
+  },
+  "candidateReceipt": "accepted-v4-known-transcript.json",
+  "baselineReceipt": "/Volumes/Pro2T/TraceValidation/navigation-coverage-recovery-followup/accepted-v7-known-transcript.json",
+  "matchingMessages": [
+    "failed - Timed out waiting for app state",
+    "failed: caught error: \"CancellationError()\""
+  ],
+  "failedTestsPerRun": 1,
+  "reportedIssuesPerRun": 2,
+  "classification": "Same published-baseline runtime failure, excluded from the passing affected-group count; retained separately."
+}
