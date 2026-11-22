@@ -1244,7 +1244,10 @@ public final class IndexNavigationWorkLedger: Sendable {
             let sameContext = snapshot.content == coverage.contentGeneration && snapshot.scope == coverage.scope
             guard sameContext || execution >= snapshot.contextExecution else { return }
             var observed = sameContext ? snapshot.observed : .init()
-            let roots = snapshot.sourceRoots.merging(coverage.sourceRoots) { _, incoming in incoming }
+            // Every producer includes its complete configured roster, even
+            // sources with no observations. Older executions cannot reinstall
+            // a displaced roster or retain obsolete configured-root metadata.
+            let roots = execution >= snapshot.contextExecution ? coverage.sourceRoots : snapshot.sourceRoots
             observations.visit { key, fact in observed = observed.setting(key, fact) }
             var remaining: NavigationAdmissions?
             let captured = snapshot.sequence
@@ -1254,7 +1257,6 @@ public final class IndexNavigationWorkLedger: Sendable {
                     for key in IndexNavigationCoverage.qualifying([], roots: roots) where !observed.fullyCovered(key, through: admission) {
                         required = required.setting(key, .init(rank: .init(admission: admission), covered: false))
                     }
-                    if roots.isEmpty { required = inputs.index }
                 } else {
                     inputs.index.visit { key, _ in
                         // A global reset requirement expands only after an actual
@@ -1298,6 +1300,7 @@ public final class IndexNavigationWorkLedger: Sendable {
     }
     #if DEBUG
     public var countsForTesting: [String: Int] { retainedCounts }
+    var retainedConfiguredSourcesForTesting: Int { state.withLock { $0.sourceRoots.count } }
     #endif
     #if TRACE_CHECKPOINT_BENCHMARK
     public var benchmarkCounts: [String: Int] { retainedCounts }

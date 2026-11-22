@@ -113,6 +113,32 @@ final class IndexingRegressionTests: XCTestCase {
         #endif
     }
 
+    func testNavigationEmptyFullScanRetiresGlobalEnrollmentAndDisplacedRoster() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+        let root = SourceRoot(agent: .claudeCode, url: directory)
+        let ledger = IndexNavigationWorkLedger()
+        let populated = IndexNavigationCoverage(contentGeneration: database.contentGeneration, scope: .proseOnly,
+            regions: [.init(root: root, context: root.mappingContext,
+                facts: [root.rootScope.relativeScope: .init(order: 0, covered: true)])], performedFullScan: true)
+        let empty = IndexNavigationCoverage(contentGeneration: database.contentGeneration, scope: .proseOnly,
+            regions: [], performedFullScan: true)
+        for coverage in [empty, populated, empty] {
+            let work = ledger.reserve(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)
+            let execution = IndexNavigationWork.begin(work)
+            IndexNavigationWork.observe(coverage, executions: execution); IndexNavigationWork.finish(execution)
+            #if DEBUG
+            XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+            XCTAssertEqual(ledger.countsForTesting["observedScopeFacts"], 0)
+            #endif
+        }
+        #if DEBUG
+        XCTAssertEqual(ledger.retainedConfiguredSourcesForTesting, 0)
+        #endif
+    }
+
     #if DEBUG
     func testEnrolledResetAndScopeScansRetireStartupNavigationDebt() async throws {
         let root = try directory(), file = root.appendingPathComponent("session.jsonl")
