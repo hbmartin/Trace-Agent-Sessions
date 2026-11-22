@@ -18,23 +18,34 @@ final class TraceUITests: XCTestCase {
                   let document = Double(fields[7]), let viewport = Double(fields[8]),
                   [offset, height, rowY, document, viewport].allSatisfy(\.isFinite),
                   height >= 0, document >= 0, viewport >= 0 else { return nil }
-            if fields.count == 10, fields[9].isEmpty { return nil }
+            let generation: String?
+            if fields.count == 10 {
+                guard let value = try? JSONSerialization.jsonObject(with: Data(fields[9].utf8), options: .fragmentsAllowed) else { return nil }
+                if value is NSNull { generation = nil }
+                else {
+                    guard let object = value as? [String: Any], let token = object["value"] as? String, !token.isEmpty else { return nil }
+                    generation = fields[9]
+                }
+            } else { generation = nil }
             self.index = index; sessionID = session; self.offset = offset; self.visible = visible
             phase = fields[4]; self.height = height; self.rowY = rowY
             documentHeight = document; viewportHeight = viewport
-            generation = fields.count == 10 ? fields[9] : nil
+            self.generation = generation
         }
     }
 
     func testNativeAnchorSampleParserPreservesGenerationAndRejectsMalformedGeometry() {
         let legacy = "3,-17.25,true,42,waiting,100,300,2000,600"
-        let modern = legacy + ",\"generation-2\""
-        XCTAssertEqual(NativeAnchorSample(modern)?.generation, "\"generation-2\"")
+        let token = #"{"value":"generation-2"}"#
+        let modern = legacy + "," + token
+        XCTAssertEqual(NativeAnchorSample(modern)?.generation, token)
         XCTAssertEqual(NativeAnchorSample(modern)?.offset, -17.25)
         XCTAssertEqual(NativeAnchorSample(modern)?.sessionID, 42)
         XCTAssertNil(NativeAnchorSample(legacy)?.generation)
+        XCTAssertNil(NativeAnchorSample(legacy + ",null")?.generation)
         for line in ["invalid", legacy.replacingOccurrences(of: "-17.25", with: "nan"),
-                     legacy.replacingOccurrences(of: ",100,", with: ",-100,"), legacy + ","] {
+                     legacy.replacingOccurrences(of: ",100,", with: ",-100,"), legacy + ",", legacy + ",junk",
+                     legacy + #",{"value":""}"#] {
             XCTAssertNil(NativeAnchorSample(line), line)
         }
     }
