@@ -39,6 +39,8 @@ jobs:
         with:
           xcode-version: '26.3'
       - uses: jdx/mise-action@v2
+      - name: Verify runner contracts
+        run: python3 -m unittest discover -s Tests/Scripts -p test_background_ui_verification.py
       - name: Configure custom SQLite
         run: Scripts/configure-grdb.sh
       - name: Run compiled selection serially on the isolated desktop

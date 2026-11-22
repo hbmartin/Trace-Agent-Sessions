@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +56,19 @@ class BackgroundUIVerificationTests(unittest.TestCase):
             receipt = json.loads((output / "verification.json").read_text())
             self.assertEqual(receipt["phases"][0]["status"], "failed")
             self.assertIn("detail", (output / "failure.log").read_text())
+
+    def test_timeout_terminates_command_and_preserves_receipt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = module.Runner(Path(temp) / "attempt", {})
+            self.assertEqual(runner.command("timeout", [sys.executable, "-c", "import time; time.sleep(30)"], .05), 124)
+            self.assertEqual(runner.receipt["phases"][0]["status"], "timeout")
+
+    def test_launch_failure_does_not_leave_running_phase(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = module.Runner(Path(temp) / "attempt", {})
+            with self.assertRaises(FileNotFoundError):
+                runner.command("launch", [str(Path(temp) / "missing")], 1)
+            self.assertEqual(runner.receipt["phases"][0]["status"], "launch-failed")
 
 
 if __name__ == "__main__":

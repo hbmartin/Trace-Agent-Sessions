@@ -71,24 +71,36 @@ class Runner:
         self.save()
         print(f"Starting {label}", flush=True)
         start = time.monotonic()
+        interrupted = False
         with (self.output / phase["log"]).open("w") as log:
-            child = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                child = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            except OSError as error:
+                phase.update(status="launch-failed", error=str(error), elapsedSeconds=time.monotonic() - start)
+                self.save()
+                raise
             try:
                 code = child.wait(timeout=timeout)
-            except (subprocess.TimeoutExpired, KeyboardInterrupt):
-                os.killpg(child.pid, signal.SIGTERM)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+                interrupted = isinstance(error, KeyboardInterrupt)
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
                 try:
                     child.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
                     child.wait()
-                phase["status"] = "timeout-or-interrupted"
-                code = 124
+                phase["status"] = "interrupted" if interrupted else "timeout"
+                code = 130 if interrupted else 124
         phase.update(exitCode=code, elapsedSeconds=time.monotonic() - start)
         if phase["status"] == "running":
             phase["status"] = "passed" if code == 0 else "failed"
         self.save()
         print(f"Finished {label}: {phase['status']} ({phase['elapsedSeconds']:.1f}s)", flush=True)
+        if interrupted:
+            raise KeyboardInterrupt
         return code
 
 
@@ -112,6 +124,9 @@ def main() -> int:
             "selectionSHA256": hashlib.sha256(selection.read_bytes()).hexdigest(),
             "selectedTests": tests, "uiExecution": "isolated-runner", "performanceAcceptance": False,
             "githubRunID": os.environ.get("GITHUB_RUN_ID"),
+            "toolchain": subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
+            "macOS": subprocess.check_output(["sw_vers"], text=True).strip(),
+            "submodules": subprocess.check_output(["git", "submodule", "status", "--recursive"], text=True).splitlines(),
         })
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
@@ -154,7 +169,7 @@ def main() -> int:
                         raise ValueError("Could not export XCTest result summary")
                     require_executed(json.loads(result.stdout))
                     test["passed"] = code == 0
-                except (ValueError, json.JSONDecodeError) as error:
+                except ValueError as error:
                     test["error"] = str(error)
             runner.receipt["tests"].append(test)
             runner.save()
