@@ -8,6 +8,146 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
     #if DEBUG
+    func testScopeOnlyReplacementRejectsReturnedCheckpointQualification() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate()
+        let updates = OSAllocatedUnfairLock(initialState: [UInt64]())
+        defer { Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        func scheduler(_ scope: IndexScope) -> IndexScheduler {
+            IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: scope,
+                progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { marks in
+                    if let mark = marks["s"] { updates.withLock { $0.append(mark.value) } }
+                })
+        }
+        let first = scheduler(.proseOnly); await first.waitUntilIdle()
+        await first.setCheckpointPublicationHookForTesting { await gate.wait() }
+        await first.request(watermarks: ["s": 100])
+        try await waitForCondition { await gate.entered }
+        let generation = database.contentGeneration
+        try await database.setIndexScope(.everything)
+        XCTAssertEqual(database.contentGeneration, generation, "Scope-only public transition intentionally does not reset rows")
+        let second = scheduler(.everything); await second.waitUntilIdle()
+        await gate.open(); await first.waitUntilIdle(); await second.waitUntilIdle()
+        XCTAssertTrue(updates.withLock { $0.isEmpty }, "The returned old-scope envelope must not acquire the successor's scope")
+        await second.request(reconcile: true); await second.waitUntilIdle()
+        XCTAssertEqual(updates.withLock { $0 }, [100], "Fresh compatible coverage pays the retained qualification")
+        await first.stop(); await second.stop()
+    }
+
+    func testStopClosesPublicationAdmissionBeforeLatePermitEnrollment() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate()
+        let delivered = OSAllocatedUnfairLock(initialState: [UInt64]())
+        defer { Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        let first = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { marks in
+                if let mark = marks["s"] { delivered.withLock { $0.append(mark.value) } }
+            })
+        await first.waitUntilIdle()
+        await first.setCheckpointPermitEnrollmentHookForTesting { await gate.wait() }
+        await first.request(watermarks: ["s": 100])
+        try await waitForCondition { await gate.entered }
+        let stopping = Task { await first.stop() }
+        try await waitForCondition { await first.stoppingForTesting }
+        await gate.open(); await stopping.value
+        XCTAssertTrue(delivered.withLock { $0.isEmpty })
+        let second = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, checkpointLedger: ledger, didCompleteCheckpoints: { marks in
+                if let mark = marks["s"] { delivered.withLock { $0.append(mark.value) } }
+            })
+        await second.waitUntilIdle()
+        XCTAssertEqual(delivered.withLock { $0 }, [100])
+        await second.stop(); await first.stop()
+    }
+
+    func testFilteredLegacyPublicationRetainsActivityWithoutRegressiveValues() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let ledger = IndexCheckpointLedger(), gate = CheckpointFailureGate()
+        let values = OSAllocatedUnfairLock(initialState: [(IndexActivity, [String: UInt64])]())
+        defer { Task { await gate.open() } }
+        ledger.seed(stream: "s", checkpoint: nil)
+        func make() -> IndexScheduler {
+            IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+                progress: { _ in }, didComplete: { activity, marks in values.withLock { $0.append((activity, marks)) } },
+                checkpointLedger: ledger)
+        }
+        let first = make(); await first.waitUntilIdle()
+        await first.setCheckpointPublicationHookForTesting { await gate.wait() }
+        await first.request(activity: .eventStreamRecovery, watermarks: ["s": 100])
+        try await waitForCondition { await gate.entered }
+        let second = make(); await second.request(watermarks: ["s": 200]); await second.waitUntilIdle()
+        await gate.open(); await first.waitUntilIdle(); await second.waitUntilIdle()
+        XCTAssertEqual(values.withLock { $0.compactMap { $0.1["s"] } }, [200])
+        XCTAssertEqual(values.withLock { $0.filter { $0.0 == .eventStreamRecovery && $0.1.isEmpty }.count }, 1)
+        await first.stop(); await first.stop(); await second.waitUntilIdle()
+        XCTAssertEqual(values.withLock { $0.filter { $0.0 == .eventStreamRecovery }.count }, 1)
+        await second.stop()
+    }
+
+    func testLegacyActivityOnlyCompletionIsDeliveredOnce() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let activities = OSAllocatedUnfairLock(initialState: [IndexActivity]())
+        let scheduler = IndexScheduler(coordinator: IndexCoordinator(database: database, sources: []), scope: .proseOnly,
+            progress: { _ in }, didComplete: { activity, marks in
+                XCTAssertTrue(marks.isEmpty); activities.withLock { $0.append(activity) }
+            })
+        await scheduler.request(reconcile: true, activity: .eventStreamRecovery)
+        await scheduler.waitUntilIdle(); await scheduler.waitUntilIdle()
+        XCTAssertEqual(activities.withLock { $0 }, [.eventStreamRecovery])
+        await scheduler.stop()
+    }
+
+    func testNavigationObligationsWithholdOlderCoverageUntilActualSourceSuccess() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = SourceRoot(agent: .claudeCode, url: root), context = source.mappingContext
+        let path = root.appendingPathComponent("a.jsonl").path, other = root.appendingPathComponent("b.jsonl").path
+        let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path, path: path,
+            externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+        func coverage(_ paths: [String: Bool]) -> IndexNavigationCoverage {
+            .init(contentGeneration: database.contentGeneration, scope: .proseOnly, regions: [.init(root: source, context: context,
+                facts: Dictionary(uniqueKeysWithValues: paths.map { path, covered in
+                    (source.relativeScope(forStoredPath: path, in: context)!, .init(order: 0, covered: covered))
+                }))])
+        }
+        let old = coverage([path: true]), ledger = IndexNavigationWorkLedger()
+        XCTAssertTrue(ledger.permitsAbsence(reference, coverage: old))
+        let first = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(path)], canonicalReconciliationPaths: [])
+        XCTAssertFalse(ledger.permitsAbsence(reference, coverage: old))
+        let execution = IndexNavigationWork.begin(first)
+        let later = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(path)], canonicalReconciliationPaths: [])
+        IndexNavigationWork.observe(old, executions: execution)
+        XCTAssertFalse(ledger.permitsAbsence(reference, coverage: old), "A pass terminal cannot retire newer queued source work")
+        let next = IndexNavigationWork.begin(later)
+        IndexNavigationWork.observe(coverage([other: true, path: false]), executions: next)
+        XCTAssertFalse(ledger.permitsAbsence(reference, coverage: old), "Failed same-source work invalidates old authority")
+        IndexNavigationWork.observe(old, executions: IndexNavigationWork.begin(later))
+        XCTAssertTrue(ledger.permitsAbsence(reference, coverage: old))
+        IndexNavigationWork.observe(coverage([path: false]), executions: execution)
+        XCTAssertTrue(ledger.permitsAbsence(reference, coverage: old), "An obsolete execution cannot undo the later success")
+        XCTAssertTrue(ledger.reserve(canonicalPaths: [], canonicalReconciliationPaths: []).isEmpty)
+    }
+
+    func testPersistentNavigationCoverageRetainsOldSnapshotsAndBroadScopePrecedence() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = SourceRoot(agent: .claudeCode, url: root), context = source.mappingContext
+        func fact(_ name: String, _ covered: Bool) -> IndexNavigationCoverage {
+            .init(contentGeneration: database.contentGeneration, scope: .proseOnly, regions: [.init(root: source, context: context,
+                facts: [RootRelativeScope(components: name.isEmpty ? [] : name.split(separator: "/").map(String.init), caseSensitive: true): .init(order: 0, covered: covered)])])
+        }
+        func ref(_ name: String) -> SessionNavigationReference {
+            .init(agent: source.agent.rawValue, root: root.path, path: root.appendingPathComponent(name).path,
+                externalSessionID: "x", anchorSourceKey: nil, anchorExternalID: nil)
+        }
+        let initial = fact("", true), failed = initial.merging(fact("a.jsonl", false))
+        XCTAssertTrue(initial.covers(ref("a.jsonl"))); XCTAssertFalse(failed.covers(ref("a.jsonl")))
+        XCTAssertTrue(failed.covers(ref("b.jsonl")))
+        let merged = failed.merging(fact("b.jsonl", false).merging(fact("c.jsonl", true)))
+        XCTAssertFalse(merged.covers(ref("a.jsonl"))); XCTAssertFalse(merged.covers(ref("b.jsonl")))
+        XCTAssertTrue(merged.covers(ref("c.jsonl"))); XCTAssertTrue(merged.merging(fact("", true)).covers(ref("a.jsonl")))
+    }
+
     func testAdmittedCheckpointCallbacksStayOrderedAcrossTakeover() async throws {
         for qualified in [false, true] {
             let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
@@ -1780,10 +1920,10 @@ final class IndexingRegressionTests: XCTestCase {
             streamRoots: ["stream": [root.path]], onRebuildReset: {}, onRebuildDeferred: {}, automaticallyRetryReset: false)
         await scheduler.waitUntilIdle()
         let premature = await completions.values
-        XCTAssertTrue(premature.isEmpty, "newer pending work cannot checkpoint past the older ordinary fallback")
+        XCTAssertTrue(premature.allSatisfy { $0.watermarks.isEmpty }, "Legacy activity may complete while checkpoint coverage remains blocked")
         failures.replace(with: [])
         await clock.advance(by: .seconds(5))
-        try await waitForCondition { !(await completions.values).isEmpty }
+        try await waitForCondition { (await completions.values).contains { !$0.watermarks.isEmpty } }
         await scheduler.waitUntilIdle()
         let accepted = await completions.values
         XCTAssertEqual(accepted.last?.watermarks["stream"], 20)
@@ -4070,7 +4210,8 @@ final class IndexingRegressionTests: XCTestCase {
         await scheduler.waitUntilIdle()
 
         let values = await completions.values
-        XCTAssertTrue(values.isEmpty)
+        XCTAssertEqual(values.count, 1)
+        XCTAssertTrue(values.allSatisfy { $0.watermarks.isEmpty })
         XCTAssertEqual(progress.terminal?.phase, .complete)
         XCTAssertEqual(progress.terminal?.activity, .safetyVerification)
         let completedSafetyTimestamp = try await database.lastSafetyReconciliationMilliseconds()

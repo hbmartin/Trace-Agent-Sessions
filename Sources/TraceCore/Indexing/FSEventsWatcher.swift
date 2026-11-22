@@ -33,6 +33,7 @@ public struct SourceChanges: Sendable {
     /// scheduler hold back only streams whose indexed paths failed.
     public var streamRoots: [String: Set<String>] = [:]
     public var checkpointReservations: [IndexCheckpointReservation] = []
+    public var navigationWork: [IndexNavigationWork] = []
     public var historyDone = false
     public var requiresReconciliation: Bool { !reconciliationPaths.isEmpty }
     public var hasIndexWork: Bool { !paths.isEmpty || requiresReconciliation }
@@ -92,6 +93,7 @@ public struct SourceChanges: Sendable {
 
     public mutating func merge(_ other: SourceChanges) {
         checkpointReservations = IndexCheckpointReservation.coalesced(checkpointReservations + other.checkpointReservations)
+        navigationWork = IndexNavigationWork.coalesced(navigationWork + other.navigationWork)
         paths.formUnion(other.paths)
         lexicalPaths.formUnion(other.lexicalPaths)
         structuralPaths.formUnion(other.structuralPaths)

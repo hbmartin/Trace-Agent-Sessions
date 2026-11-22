@@ -349,17 +349,24 @@ public final class IndexCheckpointLedger: Sendable {
     }
     /// Only permit tickets and continuations live here, never scheduler references
     /// or client callbacks. No ingress lock is held across an asynchronous callback.
+    fileprivate final class PublicationLifetime: Sendable {
+        private let closed = OSAllocatedUnfairLock(initialState: false)
+        var isClosed: Bool { closed.withLock { $0 } }
+        func close() { closed.withLock { $0 = true } }
+        // Enrollment and closure have one synchronous linearization point.
+        func enroll() -> Bool { closed.withLock { !$0 } }
+    }
     fileprivate actor PublicationPermit {
         private var holder: UUID?
-        private var waiting: [(UUID, CheckedContinuation<Bool, Never>)] = []
-        func acquire(_ ticket: UUID) async -> Bool {
+        private var waiting: [(UUID, PublicationLifetime, CheckedContinuation<Bool, Never>)] = []
+        func acquire(_ ticket: UUID, lifetime: PublicationLifetime) async -> Bool {
             await withTaskCancellationHandler {
-                guard !Task.isCancelled else { return false }
+                guard !Task.isCancelled, lifetime.enroll() else { return false }
                 let granted = await withCheckedContinuation { continuation in
                     if holder == nil { holder = ticket; continuation.resume(returning: true) }
-                    else { waiting.append((ticket, continuation)) }
+                    else { waiting.append((ticket, lifetime, continuation)) }
                 }
-                if Task.isCancelled {
+                if Task.isCancelled || lifetime.isClosed {
                     if granted { release(ticket) }
                     return false
                 }
@@ -369,12 +376,16 @@ public final class IndexCheckpointLedger: Sendable {
         func cancelWaiter(_ ticket: UUID) {
             let cancelled = waiting.filter { $0.0 == ticket }
             waiting.removeAll { $0.0 == ticket }
-            for waiter in cancelled { waiter.1.resume(returning: false) }
+            for waiter in cancelled { waiter.2.resume(returning: false) }
         }
         func release(_ ticket: UUID) {
             guard holder == ticket else { return }
-            if waiting.isEmpty { holder = nil }
-            else { let next = waiting.removeFirst(); holder = next.0; next.1.resume(returning: true) }
+            holder = nil
+            while !waiting.isEmpty {
+                let next = waiting.removeFirst()
+                guard next.1.enroll() else { next.2.resume(returning: false); continue }
+                holder = next.0; next.2.resume(returning: true); break
+            }
         }
     }
     fileprivate let publicationPermit = PublicationPermit()
@@ -410,11 +421,18 @@ public final class IndexCheckpointLedger: Sendable {
         let scope: IndexScope
         var activity: IndexActivity = .fileChanges
     }
+    fileprivate final class PublicationCompletion: Sendable {
+        private let delivered = OSAllocatedUnfairLock(initialState: false)
+        var isDelivered: Bool { delivered.withLock { $0 } }
+        func complete() { delivered.withLock { $0 = true } }
+    }
     fileprivate struct Publication: Sendable {
         var updates: [String: IndexEventCheckpoint] = [:]
         var activity: IndexActivity = .fileChanges
         var scope: IndexScope?
         var content: IndexContentGeneration?
+        var completion: PublicationCompletion?
+        var hasDelivery: Bool { !updates.isEmpty || completion?.isDelivered == false }
     }
     private struct Registration {
         let listener: Readiness
@@ -446,6 +464,9 @@ public final class IndexCheckpointLedger: Sendable {
         var updates: [String: IndexEventCheckpoint] = [:]
         var content: IndexContentGeneration?
         var publicationActivity: IndexActivity = .fileChanges
+        var publicationCompletion: PublicationCompletion?
+        var returnedPublications: [Publication] = []
+        var scope: IndexScope?
         var prefixStreams: Set<String> = []
         var head: Record?
         var tail: Record?
@@ -674,9 +695,10 @@ public final class IndexCheckpointLedger: Sendable {
         if removed, !isDrainOwner(token) { signalReadiness() }
     }
     /// Called synchronously from the database's committed-reset callback.
-    fileprivate func committedReset(content: IndexContentGeneration, extending coverage: Coverage) -> Coverage {
+    fileprivate func committedReset(content: IndexContentGeneration, scope: IndexScope? = nil, extending coverage: Coverage) -> Coverage {
         state.withLock { value in
             Self.resetRecords(content: content, state: &value)
+            if let scope { value.scope = scope }
             // The scan begins after commitment: include every obligation that
             // arrived before that boundary, including ingress during preparation.
             value.sequence &+= 1
@@ -688,6 +710,7 @@ public final class IndexCheckpointLedger: Sendable {
     private static func resetRecords(content: IndexContentGeneration, state value: inout State) {
         value.revision &+= 1; value.content = content
         value.proofs.removeAll(); value.proofIDs.removeAll(); value.executions.removeAll(); value.updates.removeAll()
+        value.returnedPublications.removeAll(); value.publicationCompletion = nil
         for (name, stream) in value.streams {
             stream.frontier = Frontier()
             // clearIndex deletes durable checkpoints too. Preserve their last
@@ -713,11 +736,16 @@ public final class IndexCheckpointLedger: Sendable {
             value.prefixStreams.insert(name)
         }
     }
-    fileprivate func synchronizeContext(content: IndexContentGeneration, owner: UUID? = nil) {
+    fileprivate func synchronizeContext(content: IndexContentGeneration, scope: IndexScope? = nil, owner: UUID? = nil) {
         state.withLock { value in
             guard owner == nil || value.drainOwner == owner else { return }
             if let prior = value.content, prior != content { Self.resetRecords(content: content, state: &value) }
-            else { value.content = content }
+            else if let scope, let prior = value.scope, prior != scope {
+                // A scope-only installation change requires new coverage even
+                // when its public database API did not advance row generation.
+                Self.resetRecords(content: content, state: &value)
+            } else { value.content = content }
+            if let scope { value.scope = scope }
         }
     }
     fileprivate func coverableEntries(paths changed: Set<TraceFileIO.CanonicalPath>, reconciliationPaths scanned: Set<TraceFileIO.CanonicalPath>, fullScan: Bool) -> [Entry] {
@@ -794,25 +822,30 @@ public final class IndexCheckpointLedger: Sendable {
         if retained { signalReadiness() }
     }
     fileprivate func returnUnpublished(_ publication: Publication) {
-        guard !publication.updates.isEmpty else { return }
+        guard publication.hasDelivery else { return }
         let accepted = state.withLock { value in
-            var accepted = false
-            for (stream, update) in publication.updates where value.streams[stream]?.epoch == update.epoch
-                && (update.contentGeneration == nil || update.contentGeneration == value.content)
-                && (value.streams[stream]?.floor.map { update.value >= $0 } ?? true) {
-                if value.updates[stream].map({ $0.value <= update.value }) ?? true {
-                    value.updates[stream] = update; accepted = true
-                }
+            guard publication.content == nil || publication.content == value.content,
+                  publication.scope == nil || publication.scope == value.scope,
+                  publication.completion?.isDelivered != true else { return false }
+            let updates = publication.updates.filter { name, update in
+                guard let stream = value.streams[name], stream.epoch == update.epoch,
+                      update.contentGeneration == nil || update.contentGeneration == value.content,
+                      stream.floor.map({ update.value >= $0 }) ?? true else { return false }
+                return stream.lastDelivered.map { $0.epoch != update.epoch || $0.value < update.value } ?? true
             }
-            if accepted { value.publicationActivity = IndexActivity.moreSignificant(value.publicationActivity, publication.activity) }
-            return accepted
+            guard !updates.isEmpty || publication.completion != nil else { return false }
+            if let completion = publication.completion,
+               value.returnedPublications.contains(where: { $0.completion === completion }) { return false }
+            var returned = publication; returned.updates = updates
+            value.returnedPublications.append(returned)
+            return true
         }
         if accepted { signalReadiness() }
     }
     fileprivate func qualifyPublication(_ publication: Publication, owner: UUID,
             content: IndexContentGeneration, scope: IndexScope) -> Publication? {
         state.withLock { value in
-            guard value.drainOwner == owner, value.content == content, value.fences.isEmpty,
+            guard value.drainOwner == owner, value.content == content, value.scope == scope, value.fences.isEmpty,
                   publication.content == nil || publication.content == content,
                   publication.scope == nil || publication.scope == scope else { return nil }
             let updates = publication.updates.filter { name, update in
@@ -823,10 +856,12 @@ public final class IndexCheckpointLedger: Sendable {
                       delivered.contentGeneration == update.contentGeneration else { return true }
                 return update.value > delivered.value
             }
-            return .init(updates: updates, activity: publication.activity, scope: scope, content: content)
+            return .init(updates: updates, activity: publication.activity, scope: publication.scope,
+                content: publication.content, completion: publication.completion)
         }
     }
     fileprivate func didDeliver(_ publication: Publication) {
+        publication.completion?.complete()
         state.withLock { value in
             for (name, update) in publication.updates {
                 guard let stream = value.streams[name], stream.epoch == update.epoch,
@@ -839,13 +874,13 @@ public final class IndexCheckpointLedger: Sendable {
     fileprivate var hasCompletedProofs: Bool { state.withLock { !$0.proofs.isEmpty } }
     fileprivate var hasReadyProofs: Bool {
         state.withLock { value in
-            !value.processing && (!value.proofs.isEmpty || (value.fences.isEmpty && (!value.updates.isEmpty || value.prefixStreams.contains { value.streams[$0]?.initialized == true })))
+            !value.processing && (!value.proofs.isEmpty || (value.fences.isEmpty && (!value.updates.isEmpty || !value.returnedPublications.isEmpty || value.publicationCompletion != nil || value.prefixStreams.contains { value.streams[$0]?.initialized == true })))
         }
     }
     /// One bounded worker turn. Reentrant ingress never invalidates unrelated
     /// computation. Only reset/epoch retirement can discard the captured records.
     fileprivate func drainProofs(scope: IndexScope, content: IndexContentGeneration, owner: UUID? = nil) -> Publication {
-        synchronizeContext(content: content, owner: owner)
+        synchronizeContext(content: content, scope: scope, owner: owner)
         #if TRACE_CHECKPOINT_BENCHMARK
         let measurement = CheckpointAcceptanceBenchmark.begin()
         defer { CheckpointAcceptanceBenchmark.end(measurement) }
@@ -861,6 +896,7 @@ public final class IndexCheckpointLedger: Sendable {
             }
             value.processing = true
             value.publicationActivity = IndexActivity.moreSignificant(value.publicationActivity, proof.activity)
+            if value.publicationCompletion == nil { value.publicationCompletion = .init() }
             let end = min(cursor.offset + 128, proof.coverage.entries.count)
             let items = proof.coverage.entries[cursor.offset..<end].compactMap { entry -> Item? in
                 guard let record = value.streams[entry.stream]?.records[entry.id] else { return nil }
@@ -933,6 +969,10 @@ public final class IndexCheckpointLedger: Sendable {
         return state.withLock { value in
             guard owner == nil || value.drainOwner == owner,
                   !value.processing, value.fences.isEmpty else { return .init() }
+            while !value.returnedPublications.isEmpty {
+                let returned = value.returnedPublications.removeFirst()
+                if returned.content == content, returned.scope == scope, returned.completion?.isDelivered != true { return returned }
+            }
             var budget = 128
             for name in Array(value.prefixStreams) where budget > 0 {
                 guard let stream = value.streams[name], stream.initialized else { continue }
@@ -948,8 +988,9 @@ public final class IndexCheckpointLedger: Sendable {
             }
             guard value.fences.isEmpty, value.proofs.isEmpty,
                   !value.prefixStreams.contains(where: { value.streams[$0]?.initialized == true }) else { return .init() }
-            let publication = Publication(updates: value.updates, activity: value.publicationActivity, scope: scope, content: content)
-            value.updates = [:]; value.publicationActivity = .fileChanges
+            let publication = Publication(updates: value.updates, activity: value.publicationActivity, scope: scope, content: content,
+                completion: value.publicationCompletion ?? (value.updates.isEmpty ? nil : .init()))
+            value.updates = [:]; value.publicationActivity = .fileChanges; value.publicationCompletion = nil
             return publication
         }
     }
@@ -1046,8 +1087,10 @@ public actor IndexScheduler {
     private typealias CheckpointReceipt = IndexCheckpointReservation.Entry
     public nonisolated let checkpointLedger: IndexCheckpointLedger
     private let installationID = UUID()
+    private let publicationLifetime = IndexCheckpointLedger.PublicationLifetime()
     private let qualifiedCompletion: (@Sendable ([String: IndexEventCheckpoint]) async -> Void)?
     private var pendingCheckpointReceipts: [CheckpointReceipt] = []
+    private var pendingNavigationWork: [IndexNavigationWork] = []
     private let readiness = IndexCheckpointLedger.Readiness()
     private let readinessTask = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     private let pausedCheckpointStreamsChanged: (@Sendable (Set<String>) async -> Void)?
@@ -1077,6 +1120,7 @@ public actor IndexScheduler {
         let generation: UInt64
         var ordinaryReceipts: [OrdinaryReceipt] = []
         var checkpointReceipts: [CheckpointReceipt] = []
+        var navigationWork: [IndexNavigationWork] = []
     }
 
     private let coordinator: IndexCoordinator
@@ -1113,6 +1157,8 @@ public actor IndexScheduler {
     private var preservingDeferredScope = false
     private var pendingUsesCommittedScope = false
     #if DEBUG
+    private var checkpointPermitEnrollmentHookForTesting: (@Sendable () async -> Void)?
+    func setCheckpointPermitEnrollmentHookForTesting(_ hook: (@Sendable () async -> Void)?) { checkpointPermitEnrollmentHookForTesting = hook }
     private var checkpointPublicationHookForTesting: (@Sendable () async -> Void)?
     func setCheckpointPublicationHookForTesting(_ hook: (@Sendable () async -> Void)?) { checkpointPublicationHookForTesting = hook }
     private var deferredCheckpointAcceptanceHookForTesting: (@Sendable () async -> Void)?
@@ -1202,7 +1248,8 @@ public actor IndexScheduler {
         self.pausedCheckpointStreamsChanged = pausedStreamsChanged
         let readiness = readiness, taskHolder = readinessTask
         checkpointLedger.registerReadiness(readiness, owner: installationID, content: coordinator.checkpointContentGeneration)
-        checkpointLedger.synchronizeContext(content: coordinator.checkpointContentGeneration, owner: installationID)
+        checkpointLedger.synchronizeContext(content: coordinator.checkpointContentGeneration,
+            scope: coordinator.checkpointContext.scope, owner: installationID)
         checkpointLedger.resumeInitialization(owner: installationID)
         readiness.request()
         #if DEBUG
@@ -1221,6 +1268,7 @@ public actor IndexScheduler {
     }
 
     deinit {
+        publicationLifetime.close()
         checkpointLedger.unregisterReadiness(installationID)
         checkpointLedger.releaseReset(installationID)
         readinessTask.withLock { $0?.cancel() }
@@ -1378,14 +1426,52 @@ public actor IndexScheduler {
             automaticallyRetryReset: true, onOrdinaryWorkCompleted: onOrdinaryWorkCompleted, checkpointReservations: checkpointReservations)
     }
 
+    /// Additive source-observation enrollment. Existing request overloads retain
+    /// their checkpoint and completion contracts without creating navigation work.
+    public func request(paths: Set<String> = [], reconcile: Bool = false,
+                        reconciliationPaths: Set<String> = [], rebuild: Bool = false,
+                        scope: IndexScope? = nil, activity: IndexActivity? = nil,
+                        satisfiesSafetyReconciliation: Bool? = nil,
+                        watermarks: [String: UInt64] = [:], streamRoots: [String: Set<String>] = [:],
+                        onRebuildReset: (@Sendable () -> Void)? = nil,
+                        onRebuildDeferred: (@Sendable () -> Void)? = nil,
+                        automaticallyRetryReset: Bool = true,
+                        onOrdinaryWorkCompleted: (@Sendable () -> Void)? = nil,
+                        checkpointReservations: [IndexCheckpointReservation], navigationWork: [IndexNavigationWork]) {
+        enqueue(paths: paths, reconcile: reconcile, reconciliationPaths: reconciliationPaths,
+            rebuild: rebuild, scope: scope, activity: activity,
+            satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, watermarks: watermarks,
+            streamRoots: streamRoots, onRebuildReset: onRebuildReset, onRebuildDeferred: onRebuildDeferred,
+            automaticallyRetryReset: automaticallyRetryReset, onOrdinaryWorkCompleted: onOrdinaryWorkCompleted,
+            checkpointReservations: checkpointReservations, navigationWork: navigationWork)
+    }
+
+    public func requestOrdinaryRecovery(paths: Set<String> = [], reconcile: Bool = false,
+                        reconciliationPaths: Set<String> = [], activity: IndexActivity? = nil,
+                        satisfiesSafetyReconciliation: Bool? = nil, watermarks: [String: UInt64] = [:],
+                        streamRoots: [String: Set<String>] = [:],
+                        onOrdinaryWorkCompleted: (@Sendable () -> Void)? = nil,
+                        checkpointReservations: [IndexCheckpointReservation], navigationWork: [IndexNavigationWork]) {
+        guard !stopping else { return }
+        pendingUsesCommittedScope = true
+        enqueue(paths: paths, reconcile: reconcile, reconciliationPaths: reconciliationPaths,
+            rebuild: false, scope: nil, activity: activity,
+            satisfiesSafetyReconciliation: satisfiesSafetyReconciliation, watermarks: watermarks,
+            streamRoots: streamRoots, onRebuildReset: nil, onRebuildDeferred: nil, automaticallyRetryReset: true,
+            onOrdinaryWorkCompleted: onOrdinaryWorkCompleted, checkpointReservations: checkpointReservations,
+            navigationWork: navigationWork)
+    }
+
     private func enqueue(paths: Set<String>, reconcile: Bool, reconciliationPaths: Set<String>,
                          rebuild: Bool, scope: IndexScope?, activity: IndexActivity?,
                          satisfiesSafetyReconciliation: Bool?, watermarks: [String: UInt64],
                          streamRoots: [String: Set<String>], onRebuildReset: (@Sendable () -> Void)?,
                          onRebuildDeferred: (@Sendable () -> Void)?, automaticallyRetryReset: Bool,
                          onOrdinaryWorkCompleted: (@Sendable () -> Void)? = nil,
-                         checkpointReservations: [IndexCheckpointReservation]? = nil) {
+                         checkpointReservations: [IndexCheckpointReservation]? = nil,
+                         navigationWork: [IndexNavigationWork] = []) {
         guard !stopping else { return }
+        pendingNavigationWork = IndexNavigationWork.coalesced(pendingNavigationWork + navigationWork)
         let canonicalRoots = streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) }
         let reservations = checkpointReservations ?? [checkpointLedger.reserve(watermarks: watermarks,
             streamRoots: streamRoots, hasIndexWork: !paths.isEmpty || !reconciliationPaths.isEmpty || reconcile || rebuild,
@@ -1411,6 +1497,7 @@ public actor IndexScheduler {
             for batch in waitingRetries.map(\.batch) + [dormantBatch, ordinaryRecovery].compactMap({ $0 }) {
                 carryPendingResets(batch)
                 pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + batch.ordinaryReceipts)
+                pendingNavigationWork = IndexNavigationWork.coalesced(pendingNavigationWork + batch.navigationWork)
                 pendingCheckpointReceipts = uniqueCheckpoints(pendingCheckpointReceipts + batch.checkpointReceipts)
                 pendingPaths.formUnion(batch.paths)
                 pendingReconciliationPaths.formUnion(batch.reconciliationPaths)
@@ -1513,12 +1600,13 @@ public actor IndexScheduler {
                     activity: pendingActivity ?? .fileChanges,
                     satisfiesSafetyReconciliation: pendingSatisfiesSafetyReconciliation,
                     retryAttempt: 0, resetRetryAttempt: 0, usesCommittedScope: preservingDeferredScope || pendingUsesCommittedScope,
-                    generation: configurationGeneration, ordinaryReceipts: pendingOrdinaryReceipts, checkpointReceipts: pendingCheckpointReceipts
+                    generation: configurationGeneration, ordinaryReceipts: pendingOrdinaryReceipts, checkpointReceipts: pendingCheckpointReceipts, navigationWork: pendingNavigationWork
                 )
                 fullScan = false
                 pendingResets.removeAll()
                 pendingOrdinaryReceipts.removeAll()
                 pendingCheckpointReceipts.removeAll()
+                pendingNavigationWork.removeAll()
                 pendingPaths.removeAll()
                 pendingReconciliationPaths.removeAll()
                 pendingWatermarks.removeAll()
@@ -1536,8 +1624,9 @@ public actor IndexScheduler {
             let resetCoverage = OSAllocatedUnfairLock<IndexCheckpointLedger.Coverage?>(initialState: nil)
             let ledger = checkpointLedger
             let execution = batch
+            let navigationExecutions = IndexNavigationWork.begin(batch.navigationWork)
             let forward: @Sendable (IndexProgress) async -> Void = { [weak self] update in
-                await self?.forwardProgress(update, generation: execution.generation)
+                await self?.forwardProgress(update, generation: execution.generation, navigationExecutions: navigationExecutions)
             }
             let operation = Task {
                 await coordinator.executeScheduled(paths: execution.paths, reconciliationPaths: execution.reconciliationPaths,
@@ -1547,7 +1636,7 @@ public actor IndexScheduler {
                     satisfiesSafetyReconciliation: execution.satisfiesSafetyReconciliation,
                     onRebuildReset: { for reset in execution.resets { reset.commit() } },
                     onIndexReset: { content in
-                        let coverage = ledger.committedReset(content: content, extending: checkpointCoverage)
+                        let coverage = ledger.committedReset(content: content, scope: execution.scope, extending: checkpointCoverage)
                         resetCoverage.withLock { $0 = coverage }
                     }, progress: forward)
             }
@@ -1560,6 +1649,12 @@ public actor IndexScheduler {
             let committedCoverage = resetCoverage.withLock { $0 }
             let performedFullScan = executionResult.performedFullScan
             if result.phase == .complete {
+                if let navigation = result.navigationCoverage {
+                    let context = coordinator.checkpointContext
+                    if navigation.contentGeneration == context.generation, navigation.scope == context.scope {
+                        IndexNavigationWork.observe(navigation, executions: navigationExecutions)
+                    }
+                }
                 let coverage = committedCoverage ?? checkpointCoverage
                 checkpointLedger.retain(.init(coverage: coverage, paths: canonicalPaths,
                     reconciliation: canonicalReconciliation,
@@ -1577,6 +1672,7 @@ public actor IndexScheduler {
                 if !stopping {
                     carryPendingResets(batch)
                     pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + batch.ordinaryReceipts)
+                    pendingNavigationWork = IndexNavigationWork.coalesced(pendingNavigationWork + batch.navigationWork)
                     pendingCheckpointReceipts = uniqueCheckpoints(pendingCheckpointReceipts + batch.checkpointReceipts)
                     pendingPaths.formUnion(batch.paths)
                     pendingReconciliationPaths.formUnion(batch.reconciliationPaths)
@@ -1603,7 +1699,7 @@ public actor IndexScheduler {
                         activity: .subtreeRecovery, satisfiesSafetyReconciliation: false,
                         retryAttempt: batch.retryAttempt, resetRetryAttempt: 0,
                         usesCommittedScope: batch.usesCommittedScope,
-                        generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts
+                        generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts, navigationWork: batch.navigationWork
                     )
                     if batch.retryAttempt == 0 {
                         retainForRetry(recovery)
@@ -1640,10 +1736,17 @@ public actor IndexScheduler {
         }
     }
 
-    private func forwardProgress(_ update: IndexProgress, generation: UInt64) async {
+    private func forwardProgress(_ update: IndexProgress, generation: UInt64,
+                                 navigationExecutions: [IndexNavigationWork.Execution]) async {
         // A cancelled operation may still finish database awaits and its final
         // callback. The app also checks cancellation after the main-actor hop.
         guard !Task.isCancelled, !stopping, generation == configurationGeneration else { return }
+        if update.phase == .complete, let coverage = update.navigationCoverage {
+            let context = coordinator.checkpointContext
+            if coverage.contentGeneration == context.generation, coverage.scope == context.scope {
+                IndexNavigationWork.observe(coverage, executions: navigationExecutions)
+            }
+        }
         await progress(update)
     }
 
@@ -1683,7 +1786,7 @@ public actor IndexScheduler {
             retryAttempt: batch.retryAttempt + (reset ? 0 : 1),
             resetRetryAttempt: batch.resetRetryAttempt + (reset ? 1 : 0),
             usesCommittedScope: batch.usesCommittedScope,
-            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts
+            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts, navigationWork: batch.navigationWork
         )
         if !reset, !candidate.rebuild,
            let index = waitingRetries.firstIndex(where: {
@@ -1719,7 +1822,7 @@ public actor IndexScheduler {
             satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
             retryAttempt: batch.retryAttempt, resetRetryAttempt: batch.resetRetryAttempt,
             usesCommittedScope: batch.usesCommittedScope,
-            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts
+            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts, navigationWork: batch.navigationWork
         )
         dormantBatch = merged(dormantBatch, candidate, retryAttempt: candidate.retryAttempt)
     }
@@ -1748,7 +1851,7 @@ public actor IndexScheduler {
                 : batch.activity,
             satisfiesSafetyReconciliation: batch.satisfiesSafetyReconciliation,
             retryAttempt: batch.retryAttempt, resetRetryAttempt: 0, usesCommittedScope: true,
-            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts)
+            generation: configurationGeneration, ordinaryReceipts: batch.ordinaryReceipts, checkpointReceipts: batch.checkpointReceipts, navigationWork: batch.navigationWork)
         if full || !ordinary.paths.isEmpty || !ordinary.reconciliationPaths.isEmpty {
             ordinaryRecovery = merged(ordinaryRecovery, ordinary, retryAttempt: ordinary.retryAttempt)
         } else if !ordinary.watermarks.isEmpty {
@@ -1778,7 +1881,7 @@ public actor IndexScheduler {
             satisfiesSafetyReconciliation: pendingSatisfiesSafetyReconciliation,
             retryAttempt: 0, resetRetryAttempt: retry.resetRetryAttempt,
             usesCommittedScope: retry.usesCommittedScope, generation: configurationGeneration,
-            ordinaryReceipts: pendingOrdinaryReceipts, checkpointReceipts: pendingCheckpointReceipts)
+            ordinaryReceipts: pendingOrdinaryReceipts, checkpointReceipts: pendingCheckpointReceipts, navigationWork: pendingNavigationWork)
         waitingRetries[index].batch = merged(retry, incoming, retryAttempt: retry.retryAttempt)
         fullScan = false
         pendingPaths.removeAll(); pendingReconciliationPaths.removeAll()
@@ -1786,6 +1889,7 @@ public actor IndexScheduler {
         pendingActivity = nil; pendingSatisfiesSafetyReconciliation = false
         pendingOrdinaryReceipts.removeAll()
         pendingCheckpointReceipts.removeAll()
+        pendingNavigationWork.removeAll()
         // Keep the original scheduled deadline and retry readiness.
     }
 
@@ -1815,7 +1919,8 @@ public actor IndexScheduler {
             usesCommittedScope: !resets.contains { $0.isPending } && (existing.usesCommittedScope || incoming.usesCommittedScope),
             generation: configurationGeneration,
             ordinaryReceipts: uniqueOrdinary(existing.ordinaryReceipts + incoming.ordinaryReceipts),
-            checkpointReceipts: uniqueCheckpoints(existing.checkpointReceipts + incoming.checkpointReceipts)
+            checkpointReceipts: uniqueCheckpoints(existing.checkpointReceipts + incoming.checkpointReceipts),
+            navigationWork: IndexNavigationWork.coalesced(existing.navigationWork + incoming.navigationWork)
         )
     }
 
@@ -1853,12 +1958,15 @@ public actor IndexScheduler {
     }
 
     private func publishCheckpoints(_ publication: IndexCheckpointLedger.Publication) async {
-        guard !stopping, checkpointLedger.isDrainOwner(installationID), !publication.updates.isEmpty else {
+        guard !stopping, checkpointLedger.isDrainOwner(installationID), publication.hasDelivery else {
             checkpointLedger.returnUnpublished(publication)
             return
         }
         let permit = checkpointLedger.publicationPermit
-        guard await permit.acquire(installationID) else {
+        #if DEBUG
+        await checkpointPermitEnrollmentHookForTesting?()
+        #endif
+        guard await permit.acquire(installationID, lifetime: publicationLifetime) else {
             checkpointLedger.returnUnpublished(publication); return
         }
         let context = coordinator.checkpointContext
@@ -1869,11 +1977,12 @@ public actor IndexScheduler {
             await permit.release(installationID)
             return
         }
-        if !qualified.updates.isEmpty {
-            if let qualifiedCompletion { await qualifiedCompletion(qualified.updates) }
-            else { await didComplete(qualified.activity, qualified.updates.mapValues(\.value)) }
-            checkpointLedger.didDeliver(qualified)
+        if let qualifiedCompletion {
+            if !qualified.updates.isEmpty { await qualifiedCompletion(qualified.updates) }
+        } else if qualified.completion?.isDelivered != true {
+            await didComplete(qualified.activity, qualified.updates.mapValues(\.value))
         }
+        checkpointLedger.didDeliver(qualified)
         await permit.release(installationID)
     }
 
@@ -1924,6 +2033,7 @@ public actor IndexScheduler {
         // A committed reset still owes its scan; an uncommitted one must reset.
         pendingResets = uniqueResets(pendingResets + dormantBatch.resets)
         pendingOrdinaryReceipts = uniqueOrdinary(pendingOrdinaryReceipts + dormantBatch.ordinaryReceipts)
+        pendingNavigationWork = IndexNavigationWork.coalesced(pendingNavigationWork + dormantBatch.navigationWork)
         pendingCheckpointReceipts = uniqueCheckpoints(pendingCheckpointReceipts + dormantBatch.checkpointReceipts)
         pendingActivity = IndexActivity.moreSignificant(
             pendingActivity, dormantBatch.activity
@@ -1988,10 +2098,12 @@ public actor IndexScheduler {
     }
 
     public func stop() async {
+        publicationLifetime.close()
         stopping = true
         checkpointLedger.unregisterReadiness(installationID)
         readinessTask.withLock { $0?.cancel() }
         pendingCheckpointReceipts.removeAll()
+        pendingNavigationWork.removeAll()
         unprovenOrdinaryReceipts.removeAll()
         pendingResets.removeAll()
         pendingOrdinaryReceipts.removeAll()

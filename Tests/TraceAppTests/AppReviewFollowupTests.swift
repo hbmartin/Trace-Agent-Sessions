@@ -12,6 +12,171 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testProvisionalTargetFollowsMovedSourceCoverage() async throws {
+        let (f, original) = try await provisionalSearchFixture()
+        let old = f.root.appendingPathComponent("sessions.jsonl"), moved = f.root.appendingPathComponent("moved-session.jsonl")
+        try FileManager.default.moveItem(at: old, to: moved)
+        var changes = SourceChanges(); changes.reconciliationPaths = [f.root.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        try await wait { f.model.selectedSession?.sourcePath == moved.path && !f.model.terminalSummaryPendingForTesting }
+        XCTAssertTrue(f.model.pendingMessageIntentForTesting, "Coverage of the obsolete path cannot adjudicate an incomplete moved source")
+        XCTAssertNil(f.model.transcriptBanner)
+        try Data(original.utf8).write(to: moved)
+        changes = SourceChanges(); changes.paths = [moved.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { !f.model.pendingMessageIntentForTesting && f.model.requestedMessageID != nil }
+        let results = try await f.database.search(query: "IntentTargetNeedle")
+        XCTAssertEqual(f.model.requestedMessageID, results.results.first?.id)
+    }
+
+    func testNewSourceCompletionDuringPendingLookupSchedulesSuccessor() async throws {
+        let (f, original) = try await provisionalSearchFixture()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.pendingMessageResolutionGateForTesting = held
+        let lookup = Task { await f.model.requestPendingMessageResolutionForTesting() }
+        try await wait { f.model.pendingMessageResolutionWaitingForTesting }
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        try Data(original.utf8).write(to: file)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        await gate.open(); await lookup.value
+        try await wait { !f.model.pendingMessageIntentForTesting && f.model.requestedMessageID != nil }
+        let results = try await f.database.search(query: "IntentTargetNeedle")
+        XCTAssertEqual(f.model.requestedMessageID, results.results.first?.id)
+        XCTAssertEqual(f.model.messages.count, 3)
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    func testUnsupportedNumericTargetSettlesWithoutDisablingReaderRetry() async throws {
+        let (f, target) = try await pendingSearchBookmarkFixture()
+        f.model.selectSession(target.sessionID, messageID: Int64.max)
+        try await wait { f.model.messages.count == 3 }
+        var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { !f.model.pendingRebuildForTesting && f.model.settings.pendingNavigationReference == nil }
+        XCTAssertNil(f.model.requestedMessageID)
+        XCTAssertFalse(f.model.pendingMessageIntentForTesting)
+        XCTAssertEqual(f.model.messages.count, 3)
+        let reads = await f.database.transcriptReadCountForTesting()
+        f.model.retrySelectedTranscript()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance()
+        try await wait { await f.database.transcriptReadCountForTesting() > reads }
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    private func provisionalSearchFixture() async throws -> (Fixture, String) {
+        let (f, _) = try await pendingSearchBookmarkFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let original = try String(contentsOf: file, encoding: .utf8)
+        let partial = original.split(separator: "\n").filter { !$0.contains("intent-target") }.joined(separator: "\n") + "\n{\"type\":"
+        try Data(partial.utf8).write(to: file)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { f.model.pendingMessageIntentForTesting && f.model.messages.count == 2 }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        try await wait { !f.model.terminalSummaryPendingForTesting }
+        return (f, original)
+    }
+
+    func testRendererSavePreservesProvisionalTargetWithoutBookmarkOrWithFractionalAdjustment() async throws {
+        for clear in [false, true] {
+            let (f, _) = try await provisionalSearchFixture()
+            let id = try XCTUnwrap(f.model.selectedSessionID), row = try XCTUnwrap(f.model.messages.first)
+            // The no-bookmark case is an achieved renderer position, not a user clear.
+            if clear { f.model.scrollPositions[id] = nil }
+            let previous = f.model.scrollPositions[id]
+            f.model.updateTranscriptBookmark(sessionID: id,
+                bookmark: .init(messageID: row.id, offset: 0, index: 0), origin: .restoration(nil))
+            XCTAssertTrue(f.model.pendingMessageIntentForTesting)
+            XCTAssertEqual(f.model.scrollPositions[id]?.offset, previous?.offset)
+            let owner = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: id))
+            f.model.updateTranscriptBookmark(sessionID: id,
+                bookmark: .init(messageID: row.id, offset: clear ? 0 : -39.625, index: 0), origin: .restoration(owner))
+            XCTAssertTrue(f.model.pendingMessageIntentForTesting)
+            XCTAssertNil(f.model.requestedMessageID)
+            f.model.updateTranscriptBookmark(sessionID: id,
+                bookmark: .init(messageID: row.id, offset: -71, index: 0))
+            XCTAssertFalse(f.model.pendingMessageIntentForTesting, "Real user scrolling supersedes the target")
+            f.model.updateTranscriptBookmark(sessionID: id,
+                bookmark: .init(messageID: row.id, offset: -39, index: 0), origin: .restoration(owner))
+            XCTAssertEqual(f.model.scrollPositions[id]?.offset, -71, "The old renderer cannot overwrite newer intent")
+        }
+    }
+
+    func testRendererTargetConsumptionRequiresItsCurrentRestoreOwner() async throws {
+        let (f, target) = try await pendingSearchBookmarkFixture()
+        let owner = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: target.sessionID))
+        XCTAssertFalse(f.model.consumeRequestedMessageID(target.id, restorationOwner: nil))
+        XCTAssertEqual(f.model.requestedMessageID, target.id)
+        f.model.openSearchResult(target)
+        try await wait { f.model.messages.count == 3 }
+        XCTAssertFalse(f.model.consumeRequestedMessageID(target.id, restorationOwner: owner), "The previous renderer cannot consume a new same-ID request")
+        let current = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: target.sessionID))
+        XCTAssertTrue(f.model.consumeRequestedMessageID(target.id, restorationOwner: current))
+        XCTAssertNil(f.model.requestedMessageID)
+    }
+
+    func testProvisionalSearchIntentSurvivesSecondAutomaticReset() async throws {
+        let (f, original) = try await provisionalSearchFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let generation = f.database.contentGeneration
+        try Data(original.utf8).write(to: file)
+        // A second accepted scheduler reset uses the real generation/commit
+        // transition while the retained request has no numeric UI target.
+        await f.model.schedulerForTesting?.request(rebuild: true)
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        try await wait { f.database.contentGeneration != generation && f.model.messages.count == 3 && f.model.requestedMessageID != nil }
+        let results = try await f.database.search(query: "IntentTargetNeedle")
+        XCTAssertEqual(f.model.requestedMessageID, results.results.first?.id)
+        XCTAssertFalse(f.model.pendingMessageIntentForTesting)
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    func testPendingLookupCoalescesDemandAndSkipsUnchangedTranscriptReads() async throws {
+        let (f, original) = try await provisionalSearchFixture()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.pendingMessageResolutionGateForTesting = held
+        let first = Task { await f.model.requestPendingMessageResolutionForTesting() }
+        try await wait { f.model.pendingMessageResolutionWaitingForTesting }
+        let before = await f.database.navigationReadCountsForTesting()
+        let readsBefore = await f.database.transcriptReadCountForTesting()
+        for _ in 0..<12 { await f.model.requestPendingMessageResolutionForTesting() }
+        await gate.open(); await first.value
+        try await wait { !f.model.pendingMessageResolutionWaitingForTesting }
+        // Drive one more external demand after the coalesced successor retires.
+        await f.model.requestPendingMessageResolutionForTesting()
+        let after = await f.database.navigationReadCountsForTesting()
+        let readsAfter = await f.database.transcriptReadCountForTesting()
+        XCTAssertLessThanOrEqual(after.resolution - before.resolution, 3)
+        XCTAssertEqual(readsAfter, readsBefore, "A matching complete reader needs no repeated snapshot")
+        XCTAssertTrue(f.model.pendingMessageIntentForTesting)
+        let file = f.root.appendingPathComponent("sessions.jsonl"); try Data(original.utf8).write(to: file)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { f.model.requestedMessageID != nil && !f.model.pendingMessageIntentForTesting }
+    }
+
+    func testTargetOnlyReadFailureKeepsCachedReaderAndRetryAvailable() async throws {
+        let (f, _) = try await provisionalSearchFixture()
+        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.requestPendingMessageResolutionForTesting()
+        XCTAssertTrue(f.model.pendingMessageIntentForTesting)
+        XCTAssertNil(f.model.transcriptBanner)
+        let before = await f.database.transcriptReadCountForTesting()
+        await f.model.receiveProgress(.init(phase: .indexing))
+        f.model.retrySelectedTranscript()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance()
+        try await wait { await f.database.transcriptReadCountForTesting() > before }
+        XCTAssertEqual(f.model.messages.count, 2)
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
     private func pendingSearchBookmarkFixture(failUnrelated: Bool = false) async throws -> (Fixture, SearchResult) {
         let f = try await deferredResetFixture(failUnrelated: failUnrelated)
         let file = f.root.appendingPathComponent("sessions.jsonl")
@@ -72,7 +237,8 @@ final class AppReviewFollowupTests: XCTestCase {
             try await wait { !f.model.terminalSummaryPendingForTesting }
             await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
             f.model.retrySelectedTranscript()
-            try await wait { f.model.transcriptBanner?.feedback == .readError }
+            await f.model.requestPendingMessageResolutionForTesting()
+            XCTAssertNil(f.model.transcriptBanner, "A target-only lookup cannot replace a readable transcript with an error")
             XCTAssertTrue(f.model.pendingMessageIntentForTesting)
             try Data((returns ? original : complete).utf8).write(to: file)
             _ = try await f.model.deliverSourceChangesForTesting(changes)
@@ -7451,7 +7617,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.refreshSummariesForTesting()
         XCTAssertFalse(f.model.transcriptRecoveryPendingForTesting, "fresh failures do not reset an exhausted episode")
         f.model.retrySelectedTranscript()
-        XCTAssertNil(f.model.transcriptBanner?.details)
+        XCTAssertNotNil(f.model.transcriptBanner?.details, "Retry retains genuine read feedback until a successful read")
         XCTAssertEqual(f.model.messages.map(\.locator), rows.map(\.locator))
         await f.clock.advance()
         try await wait { !f.model.transcriptRecoveryPendingForTesting }

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public enum AgentKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case claudeCode = "claude_code"
@@ -882,54 +883,232 @@ public struct NavigationCaptureRequest: Sendable {
     }
 }
 
-/// Accepted source coverage, independent of progress presentation or navigation
-/// objects. Construction is Core-owned; callers may combine successive outcomes.
+/// A persistent byte trie. Branching is bounded by UTF-8's byte alphabet, so
+/// updating one flat-directory entry never copies all of its sibling files.
+private struct NavigationRank: Comparable, Sendable {
+    let admission: UInt64
+    var execution: UInt64 = 0
+    static func < (a: Self, b: Self) -> Bool {
+        a.admission == b.admission ? a.execution < b.execution : a.admission < b.admission
+    }
+}
+private struct NavigationFact: Sendable {
+    let rank: NavigationRank
+    let covered: Bool
+}
+private final class NavigationScopeIndex: Sendable {
+    let value: NavigationFact?
+    let children: [UInt8: NavigationScopeIndex]
+    let maximum: NavigationRank?
+    init(value: NavigationFact? = nil, children: [UInt8: NavigationScopeIndex] = [:]) {
+        self.value = value; self.children = children
+        maximum = ([value?.rank].compactMap { $0 } + children.values.compactMap(\.maximum)).max()
+    }
+    func visit(_ prefix: [UInt8] = [], _ body: ([UInt8], NavigationFact) -> Void) {
+        if let value { body(prefix, value) }
+        for (byte, child) in children { child.visit(prefix + [byte], body) }
+    }
+    func latest(_ key: [UInt8]) -> NavigationFact? {
+        var node = self, result = value
+        for byte in key {
+            guard let next = node.children[byte] else { break }
+            node = next
+            if let value = next.value, result.map({ $0.rank <= value.rank }) ?? true { result = value }
+        }
+        return result
+    }
+    private func retaining(after rank: NavigationRank) -> NavigationScopeIndex? {
+        guard maximum.map({ $0 > rank }) == true else { return nil }
+        return .init(value: value.flatMap { $0.rank > rank ? $0 : nil },
+            children: children.compactMapValues { $0.retaining(after: rank) })
+    }
+    func setting(_ key: [UInt8], _ fact: NavigationFact, at position: Int = 0) -> NavigationScopeIndex {
+        if position == key.count {
+            if let value, value.rank > fact.rank { return self }
+            return .init(value: fact, children: children.compactMapValues { $0.retaining(after: fact.rank) })
+        }
+        var children = children
+        let byte = key[position]
+        children[byte] = (children[byte] ?? .init()).setting(key, fact, at: position + 1)
+        return .init(value: value, children: children)
+    }
+}
+
+/// Accepted source coverage. Old snapshots remain immutable while incremental
+/// merges copy only affected scope prefixes, not the retained file dictionary.
 public struct IndexNavigationCoverage: Sendable {
     struct Fact: Sendable { let order: UInt64; let covered: Bool }
     struct Region: Sendable {
         let root: SourceRoot
         let context: SourceRootPathContext
         var facts: [RootRelativeScope: Fact]
-        func latestFact(for relative: RootRelativeScope) -> Fact? {
-            var latest: Fact?
-            for depth in 0...relative.components.count {
-                let prefix = RootRelativeScope(components: Array(relative.components.prefix(depth)),
-                    caseSensitive: relative.isCaseSensitive)
-                if let fact = facts[prefix], latest.map({ fact.order >= $0.order }) ?? true { latest = fact }
-            }
-            return latest
-        }
+    }
+    private struct IndexedRegion: Sendable {
+        let root: SourceRoot
+        let context: SourceRootPathContext
+        var index: NavigationScopeIndex
     }
     public let contentGeneration: IndexContentGeneration
     public let scope: IndexScope
     private var order: UInt64 = 0
-    var regions: [String: Region]
-
+    // Only a freshly-produced value retains its delta. A merged cache holds the
+    // persistent index, with no accumulated full-file dictionary to filter.
+    private var delta: [Region]
+    private var regions: [String: IndexedRegion] = [:]
     init(contentGeneration: IndexContentGeneration, scope: IndexScope, regions: [Region]) {
-        self.contentGeneration = contentGeneration; self.scope = scope
-        self.regions = Dictionary(regions.map { ($0.root.id, $0) }, uniquingKeysWith: { _, last in last })
+        self.contentGeneration = contentGeneration; self.scope = scope; delta = regions
+        for region in regions {
+            self.regions[region.root.id] = .init(root: region.root, context: region.context,
+                index: Self.applying(region.facts, to: .init(), order: 0))
+        }
+    }
+    private static func key(_ relative: RootRelativeScope) -> [UInt8] {
+        Array((relative.isRoot ? "" : relative.comparisonKey + "/").utf8)
+    }
+    private static func applying(_ facts: [RootRelativeScope: Fact], to original: NavigationScopeIndex,
+                                 order: UInt64) -> NavigationScopeIndex {
+        var index = original
+        for (path, fact) in facts.sorted(by: { $0.key.components.count < $1.key.components.count }) {
+            index = index.setting(key(path), .init(rank: .init(admission: order), covered: fact.covered))
+        }
+        return index
     }
     public func covers(_ reference: SessionNavigationReference) -> Bool {
         guard let region = regions[reference.agent + ":" + reference.root],
               let relative = region.root.relativeScope(forStoredPath: reference.path, in: region.context) else { return false }
-        return region.latestFact(for: relative)?.covered == true
+        return region.index.latest(Self.key(relative))?.covered == true
+    }
+    fileprivate func absoluteKey(_ reference: SessionNavigationReference) -> [UInt8]? {
+        guard let region = regions[reference.agent + ":" + reference.root],
+              let relative = region.root.relativeScope(forStoredPath: reference.path, in: region.context) else { return nil }
+        let base = region.context.scanPath.path
+        let absolute = relative.isRoot ? base : (base == "/" ? "/" : base + "/") + relative.path
+        return Array((TraceFileIO.comparisonKey(absolute, caseSensitive: relative.isCaseSensitive) + "/").utf8)
     }
     public func merging(_ newer: Self) -> Self {
         guard contentGeneration == newer.contentGeneration, scope == newer.scope else { return newer }
-        var result = self; result.order &+= 1
-        for (key, incoming) in newer.regions {
-            guard var region = result.regions[key], region.context == incoming.context else {
-                var region = incoming
-                region.facts = region.facts.mapValues { .init(order: result.order, covered: $0.covered) }
-                result.regions[key] = region; continue
+        var result = self; result.order &+= 1; result.delta = []
+        for region in newer.delta {
+            let old = result.regions[region.root.id]
+            let original = old?.context == region.context ? old!.index : .init()
+            result.regions[region.root.id] = .init(root: region.root, context: region.context,
+                index: Self.applying(region.facts, to: original, order: result.order))
+        }
+        // Public callers may combine previously merged values too. Traverse only
+        // that supplied value when it has no producer delta.
+        if newer.delta.isEmpty {
+            let offset = result.order
+            for (id, incoming) in newer.regions {
+                var index = result.regions[id].flatMap { $0.context == incoming.context ? $0.index : nil } ?? .init()
+                var facts: [([UInt8], NavigationFact)] = []
+                incoming.index.visit { facts.append(($0, $1)) }
+                for (key, fact) in facts.sorted(by: { $0.1.rank < $1.1.rank }) {
+                    index = index.setting(key, .init(rank: .init(admission: offset + fact.rank.admission), covered: fact.covered))
+                }
+                result.regions[id] = .init(root: incoming.root, context: incoming.context, index: index)
             }
-            // A newer broad observation supersedes its old descendants. Repeated
-            // file outcomes replace one slot rather than retaining pass history.
-            region.facts = region.facts.filter { incoming.latestFact(for: $0.key) == nil }
-            for (scope, fact) in incoming.facts { region.facts[scope] = .init(order: result.order, covered: fact.covered) }
-            result.regions[key] = region
+            result.order += newer.order
         }
         return result
+    }
+    fileprivate func observations(_ body: ([UInt8], Bool) -> Void) {
+        for region in delta {
+            for (relative, fact) in region.facts.sorted(by: { $0.key.components.count < $1.key.components.count }) {
+                let base = region.context.scanPath.path
+                let absolute = relative.isRoot ? base : (base == "/" ? "/" : base + "/") + relative.path
+                body(Array((TraceFileIO.comparisonKey(absolute, caseSensitive: relative.isCaseSensitive) + "/").utf8), fact.covered)
+            }
+        }
+    }
+}
+
+/// Source-scoped navigation obligations, independent of checkpoint watermarks.
+/// The owner replaces this ledger on database replacement, but keeps it through
+/// same-database resets/reconfiguration. It retains no model or scheduler.
+public final class IndexNavigationWorkLedger: Sendable {
+    private struct State {
+        var sequence: UInt64 = 0
+        var execution: UInt64 = 0
+        var required = NavigationScopeIndex()
+        var observed = NavigationScopeIndex()
+        var content: IndexContentGeneration?
+        var scope: IndexScope?
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    public init() {}
+    #if TRACE_CHECKPOINT_BENCHMARK
+    public var benchmarkCounts: [String: Int] {
+        let indexes = state.withLock { ($0.required, $0.observed) }
+        var required = 0, observed = 0
+        indexes.0.visit { _, _ in required += 1 }
+        indexes.1.visit { _, _ in observed += 1 }
+        return ["requiredScopeFacts": required, "observedScopeFacts": observed]
+    }
+    #endif
+    public func reserve(canonicalPaths: Set<TraceFileIO.CanonicalPath>,
+                        canonicalReconciliationPaths: Set<TraceFileIO.CanonicalPath>,
+                        fullScan: Bool = false) -> [IndexNavigationWork] {
+        guard fullScan || !canonicalPaths.isEmpty || !canonicalReconciliationPaths.isEmpty else { return [] }
+        return state.withLock { value in
+            value.sequence &+= 1
+            let fact = NavigationFact(rank: .init(admission: value.sequence), covered: false)
+            if fullScan { value.required = value.required.setting([], fact) }
+            for path in canonicalPaths.union(canonicalReconciliationPaths) {
+                value.required = value.required.setting(Array((path.comparisonKey + "/").utf8), fact)
+            }
+            return [.init(ledger: self, sequence: value.sequence)]
+        }
+    }
+    public func permitsAbsence(_ reference: SessionNavigationReference, coverage: IndexNavigationCoverage) -> Bool {
+        guard coverage.covers(reference), let key = coverage.absoluteKey(reference) else { return false }
+        return state.withLock { value in
+            guard let needed = value.required.latest(key) else { return true }
+            guard value.content == coverage.contentGeneration, value.scope == coverage.scope,
+                  let paid = value.observed.latest(key), paid.covered else { return false }
+            return paid.rank.admission >= needed.rank.admission
+        }
+    }
+    fileprivate func begin() -> UInt64 {
+        state.withLock { $0.execution &+= 1; return $0.execution }
+    }
+    fileprivate func observe(_ coverage: IndexNavigationCoverage, through sequence: UInt64, execution: UInt64) {
+        var observations: [([UInt8], Bool)] = []
+        coverage.observations { observations.append(($0, $1)) }
+        let captured = observations
+        state.withLock { value in
+            if value.content != coverage.contentGeneration || value.scope != coverage.scope {
+                value.observed = .init(); value.content = coverage.contentGeneration; value.scope = coverage.scope
+            }
+            for (path, covered) in captured {
+                value.observed = value.observed.setting(path,
+                    .init(rank: .init(admission: sequence, execution: execution), covered: covered))
+            }
+        }
+    }
+}
+/// Opaque enrollment shared by every fragment of its original delivery.
+public struct IndexNavigationWork: Sendable {
+    fileprivate let ledger: IndexNavigationWorkLedger
+    fileprivate let sequence: UInt64
+    public static func coalesced(_ inputs: [Self]) -> [Self] {
+        var latest: [ObjectIdentifier: Self] = [:]
+        for input in inputs {
+            let key = ObjectIdentifier(input.ledger)
+            if latest[key].map({ $0.sequence < input.sequence }) ?? true { latest[key] = input }
+        }
+        return Array(latest.values)
+    }
+    struct Execution: Sendable {
+        let work: IndexNavigationWork
+        let sequence: UInt64
+    }
+    static func begin(_ inputs: [Self]) -> [Execution] {
+        coalesced(inputs).map { .init(work: $0, sequence: $0.ledger.begin()) }
+    }
+    static func observe(_ coverage: IndexNavigationCoverage, executions: [Execution]) {
+        for execution in executions {
+            execution.work.ledger.observe(coverage, through: execution.work.sequence, execution: execution.sequence)
+        }
     }
 }
 
@@ -965,6 +1144,8 @@ public struct SessionNavigationReference: Hashable, Codable, Sendable {
         if let key = anchorSourceKey { return identity.sourceKey == key }
         return false
     }
+
+    public var hasStableAnchor: Bool { anchorSourceKey != nil || anchorExternalID != nil }
 
     public var unanchored: Self {
         .init(agent: agent, root: root, path: path, externalSessionID: externalSessionID,
@@ -1155,3 +1336,21 @@ public struct TranscriptVisibility: Hashable, Sendable {
         return sections.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 }
+
+#if TRACE_CHECKPOINT_BENCHMARK
+extension IndexNavigationCoverage {
+    public static func benchmarkFixture(generation: IndexContentGeneration, names: [String], covered: Bool) -> Self {
+        let root = SourceRoot(agent: .claudeCode, url: URL(fileURLWithPath: "/tmp/navigation-cache"))
+        let context = root.mappingContext
+        let facts = Dictionary(uniqueKeysWithValues: names.map {
+            (RootRelativeScope(components: $0.isEmpty ? [] : [$0], caseSensitive: context.scanPath.isCaseSensitive), Fact(order: 0, covered: covered))
+        })
+        return .init(contentGeneration: generation, scope: .proseOnly, regions: [Region(root: root, context: context, facts: facts)])
+    }
+    public func benchmarkCovers(_ name: String) -> Bool {
+        guard let region = regions.values.first else { return false }
+        return covers(.init(agent: region.root.agent.rawValue, root: region.root.url.path,
+            path: region.context.scanPath.path + "/" + name, externalSessionID: "fixture", anchorSourceKey: nil, anchorExternalID: nil))
+    }
+}
+#endif

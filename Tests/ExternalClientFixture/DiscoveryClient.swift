@@ -130,3 +130,16 @@ func compileMultiAnchorCoverageClient(_ database: IndexDatabase, progress: Index
         _ = coverage.merging(coverage).contentGeneration
     }
 }
+
+// Source work is independent of FSEvents/checkpoint availability.
+func compileNavigationWorkClient(_ scheduler: IndexScheduler, reference: SessionNavigationReference,
+                                 coverage: IndexNavigationCoverage) async {
+    let ledger = IndexNavigationWorkLedger()
+    let work: [IndexNavigationWork] = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath("/tmp/source.jsonl")],
+        canonicalReconciliationPaths: [])
+    var changes = SourceChanges(); changes.navigationWork = IndexNavigationWork.coalesced(work)
+    _ = ledger.permitsAbsence(reference, coverage: coverage)
+    _ = reference.hasStableAnchor
+    await scheduler.request(paths: changes.paths, checkpointReservations: [], navigationWork: changes.navigationWork)
+    await scheduler.requestOrdinaryRecovery(paths: changes.paths, checkpointReservations: [], navigationWork: changes.navigationWork)
+}

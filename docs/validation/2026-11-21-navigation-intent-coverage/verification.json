@@ -1,0 +1,97 @@
+{
+  "candidate": "67f62626067af39509e1275235c0c4b84a549e67",
+  "base": "9bd76f52fde82627c54a6b4a6d6bb15b99053b12",
+  "pinnedBaseline": "6c21e794d774776e1a7b511306912823d440e43f",
+  "sourceHashesVerified": 510,
+  "checks": {
+    "accepted-v6-races-2": 0,
+    "accepted-v6-release-build": 0,
+    "accepted-v6-races-3": 0,
+    "accepted-v6-races-4": 0,
+    "accepted-v6-scripts": 0,
+    "accepted-v6-network": 0,
+    "accepted-v6-known-transcript": 65,
+    "accepted-v6-signing": 0,
+    "accepted-v6-races-5": 0,
+    "accepted-v6-focused": 0,
+    "accepted-v6-whitespace": 0,
+    "accepted-v6-debug-build": 0,
+    "accepted-v6-discovery": 0,
+    "accepted-v6-external-client": 0,
+    "accepted-v6-races-1": 0,
+    "accepted-v6-project-drift": 0
+  },
+  "focused": {
+    "groups": {
+      "IndexingRegressionTests": 221,
+      "FSEventsWatcherTests": 13,
+      "SessionMetadataTests": 64,
+      "SidecarDependencyTests": 27,
+      "TranscriptViewportPolicyTests": 4,
+      "AppReviewFollowupTests": 417
+    },
+    "passed": 746,
+    "completeSuites": false
+  },
+  "races": {
+    "selected": 96,
+    "completedRepetitions": 5,
+    "runs": [
+      {
+        "receipt": "accepted-v6-races-1.json",
+        "exitCode": 0
+      },
+      {
+        "receipt": "accepted-v6-races-2.json",
+        "exitCode": 0
+      },
+      {
+        "receipt": "accepted-v6-races-3.json",
+        "exitCode": 0
+      },
+      {
+        "receipt": "accepted-v6-races-4.json",
+        "exitCode": 0
+      },
+      {
+        "receipt": "accepted-v6-races-5.json",
+        "exitCode": 0
+      }
+    ]
+  },
+  "discovery": {
+    "candidate": "67f62626067af39509e1275235c0c4b84a549e67",
+    "discovered": 988,
+    "ui": 18,
+    "races": 96,
+    "missing": []
+  },
+  "ui": {
+    "selected": 18,
+    "executed": false,
+    "accepted": false,
+    "reason": "User authorized publishing now with UI execution unrun after being offered publication with these limitations; selected identifiers were validated through compiled discovery."
+  },
+  "pairedTargetedMeasurements": {
+    "executed": false,
+    "accepted": false,
+    "counts": [
+      1000,
+      10000
+    ],
+    "warmupsPerRevision": 1,
+    "recordedSamplesPerRevision": 5,
+    "reason": "User authorized publishing now with paired targeted measurements unrun. Correctness-only preflights are not measurement acceptance."
+  },
+  "scripts": {
+    "passed": 78,
+    "receipt": "accepted-v6-scripts.json"
+  },
+  "knownTranscriptFailure": "known-transcript-classification.json",
+  "baselineBuildProvenance": "baseline-build-provenance.json",
+  "completeSuitesOmitted": true,
+  "fullReleaseComparisonPairsOmitted": true,
+  "localTenPercentAcceptanceClaim": false,
+  "rawPayloadAvailability": "Local-only; not downloadable repository/CI attachments.",
+  "publicationAuthorization": "publication-authorization.json"
+}
