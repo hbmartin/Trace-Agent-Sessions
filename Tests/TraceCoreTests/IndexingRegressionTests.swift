@@ -7,6 +7,36 @@ import XCTest
 @testable import TraceCore
 
 final class IndexingRegressionTests: XCTestCase {
+
+    func testNavigationCoveragePaysCanonicalFilesystemRootRequirements() throws {
+        for rootPath in ["/", "/tmp"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+            let root = SourceRoot(agent: .claudeCode, url: URL(fileURLWithPath: rootPath))
+            let context = root.mappingContext
+            let relative = RootRelativeScope(components: [], caseSensitive: context.scanPath.isCaseSensitive)
+            let coverage = IndexNavigationCoverage(contentGeneration: database.contentGeneration, scope: .proseOnly,
+                regions: [.init(root: root, context: context, facts: [relative: .init(order: 0, covered: true)])],
+                performedFullScan: true)
+            let reference = SessionNavigationReference(agent: AgentKind.claudeCode.rawValue, root: rootPath,
+                path: "/tmp/navigation-root.jsonl", externalSessionID: "root", anchorSourceKey: nil, anchorExternalID: nil)
+            let ledger = IndexNavigationWorkLedger()
+            let work = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(reference.path)],
+                canonicalReconciliationPaths: [context.scanPath])
+                + ledger.reserve(.init(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true))
+            XCTAssertFalse(ledger.permitsAbsence(reference, coverage: coverage))
+            let executions = IndexNavigationWork.begin(work)
+            IndexNavigationWork.observe(coverage, executions: executions)
+            IndexNavigationWork.finish(executions)
+            XCTAssertTrue(coverage.covers(reference))
+            XCTAssertTrue(ledger.permitsAbsence(reference, coverage: coverage), rootPath)
+            XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0, rootPath)
+            XCTAssertEqual(ledger.countsForTesting["requiredScopeFacts"], 0, rootPath)
+            XCTAssertEqual(ledger.countsForTesting["activeExecutions"], 0, rootPath)
+        }
+    }
     #if DEBUG
     func testEnrolledResetAndScopeScansRetireStartupNavigationDebt() async throws {
         let root = try directory(), file = root.appendingPathComponent("session.jsonl")

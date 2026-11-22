@@ -987,6 +987,10 @@ private final class NavigationScopeIndex: Sendable {
 
 /// Accepted source coverage. Old snapshots remain immutable while incremental
 /// merges copy only affected scope prefixes, not the retained file dictionary.
+private func navigationAbsoluteKey(_ comparisonKey: String) -> [UInt8] {
+    Array((comparisonKey == "/" ? "/" : comparisonKey + "/").utf8)
+}
+
 public struct IndexNavigationCoverage: Sendable {
     struct Fact: Sendable { let order: UInt64; let covered: Bool }
     struct Region: Sendable {
@@ -1036,7 +1040,7 @@ public struct IndexNavigationCoverage: Sendable {
               let relative = region.root.relativeScope(forStoredPath: reference.path, in: region.context) else { return nil }
         let base = region.context.scanPath.path
         let absolute = relative.isRoot ? base : (base == "/" ? "/" : base + "/") + relative.path
-        return Array((TraceFileIO.comparisonKey(absolute, caseSensitive: relative.isCaseSensitive) + "/").utf8)
+        return navigationAbsoluteKey(TraceFileIO.comparisonKey(absolute, caseSensitive: relative.isCaseSensitive))
     }
     public func merging(_ newer: Self) -> Self {
         guard contentGeneration == newer.contentGeneration, scope == newer.scope else { return newer }
@@ -1067,12 +1071,12 @@ public struct IndexNavigationCoverage: Sendable {
         return result
     }
     fileprivate var rootKeys: [[UInt8]] {
-        regions.values.map { Array(($0.context.scanPath.comparisonKey + "/").utf8) }
+        regions.values.map { navigationAbsoluteKey($0.context.scanPath.comparisonKey) }
     }
     fileprivate func observationIndex(admission: UInt64, execution: UInt64) -> NavigationScopeIndex {
         var result = NavigationScopeIndex()
         for region in delta.values {
-            let base = Array((region.context.scanPath.comparisonKey + "/").utf8)
+            let base = navigationAbsoluteKey(region.context.scanPath.comparisonKey)
             region.index.visit { key, fact in
                 result = result.setting(base + key, .init(rank: .init(admission: admission, execution: execution), covered: fact.covered))
             }
@@ -1092,7 +1096,7 @@ public struct IndexNavigationInputs: Sendable {
         let fact = NavigationFact(rank: .init(admission: 0), covered: false)
         if fullScan { index = index.setting([], fact) }
         for path in canonicalPaths.union(canonicalReconciliationPaths) {
-            index = index.setting(Array((path.comparisonKey + "/").utf8), fact)
+            index = index.setting(navigationAbsoluteKey(path.comparisonKey), fact)
         }
         self.index = index; self.fullScan = fullScan
     }
