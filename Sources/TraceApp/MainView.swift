@@ -289,6 +289,8 @@ private struct SessionSidebar: View {
                                     if TraceTestHooks.environment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] == "1" {
                                         Button("Reset again") { model.resetAgainForNavigationUITesting() }
                                             .accessibilityIdentifier("testResetAgainWithNavigation")
+                                        Button("Fail jump") { model.failTargetLookupForUITesting() }
+                                            .accessibilityIdentifier("testFailTargetLookup")
                                         Button("Reader Retry") { model.retryReaderDuringIndexingForUITesting() }
                                             .accessibilityIdentifier("testReaderRetryDuringIndexing")
                                     }
@@ -510,6 +512,18 @@ struct TranscriptView: View {
                     Button("Retry") { model.retrySelectedTranscript() }
                         .accessibilityIdentifier("retrySelectedTranscript")
                 }
+                .padding(12)
+                Divider()
+            }
+            if model.targetLookupFailureIsVisible {
+                HStack {
+                    Text("Could not locate the search target.")
+                        .accessibilityIdentifier("searchTargetLookupFailure")
+                    Spacer()
+                    Button("Retry jump") { model.retrySearchTarget() }
+                        .accessibilityIdentifier("retrySearchTarget")
+                }
+                .font(.callout)
                 .padding(12)
                 Divider()
             }
@@ -1330,10 +1344,19 @@ struct TranscriptRenderer: NSViewRepresentable {
                     refreshesRowHeights: refreshesRowHeights
                 )
             }
-            if refinementChanged, pendingRestore != nil {
-                pendingRestore?.resetRefinement()
-                if restoreGateTask == nil, let pendingRestore {
-                    applyRestore(token: pendingRestore.token)
+            if refinementChanged, let active = pendingRestore {
+                if model.transcriptRestoreOwnerIsCurrent(active.bookmarkOwner) != true,
+                   active.sessionID == sessionID, active.inputGeneration == userInputGeneration,
+                   model.transcriptRestoreOwnerMayRefreshSource(active.bookmarkOwner) {
+                    let targetIsCurrent: Bool
+                    if case .search(let target) = active.reason { targetIsCurrent = model.requestedMessageID == target }
+                    else { targetIsCurrent = true }
+                    if targetIsCurrent {
+                        beginRestore(.init(bookmark: active.effectiveBookmark, reason: active.reason, refreshesRowHeights: true))
+                    } else { cancelPendingRestore(reportCancellation: false) }
+                } else {
+                    pendingRestore?.resetRefinement()
+                    if restoreGateTask == nil, let pendingRestore { applyRestore(token: pendingRestore.token) }
                 }
             }
             refreshDeferredContentRestore()
@@ -1692,7 +1715,14 @@ struct TranscriptRenderer: NSViewRepresentable {
                     active.refreshesRowHeights = true
                     active.resetRefinement()
                 }
-                pendingRestore = active
+                if model?.transcriptRestoreOwnerIsCurrent(active.bookmarkOwner) != true {
+                    // A rewrite changes locator/row geometry. Reissue only the
+                    // still-current restore intent, rather than adopting its old owner.
+                    guard let model, model.transcriptRestoreOwnerMayRefreshSource(active.bookmarkOwner) else { return }
+                    if case .search(let target) = active.reason, model.requestedMessageID != target { return }
+                    beginRestore(.init(bookmark: active.effectiveBookmark, reason: active.reason,
+                        refreshesRowHeights: active.refreshesRowHeights || refreshesRowHeights))
+                } else { pendingRestore = active }
                 return
             }
             beginRestore(request)

@@ -1186,6 +1186,8 @@ public actor IndexScheduler {
     }
     #endif
 
+    /// Legacy completion reports a valid activity once, including an empty map
+    /// when no checkpoint value qualifies. Qualified callbacks are checkpoint-only.
     public init(coordinator: IndexCoordinator, scope: IndexScope,
                 progress: @escaping @Sendable (IndexProgress) async -> Void,
                 retryDelay: Duration = .seconds(5),
@@ -1642,6 +1644,7 @@ public actor IndexScheduler {
             }
             self.operation = operation
             let executionResult = await operation.value
+            defer { IndexNavigationWork.finish(navigationExecutions) }
             let result = executionResult.progress
             self.operation = nil
             // Proof transfer precedes stop/replacement checks. A complete pass is

@@ -70,6 +70,13 @@ import TraceCore
     private enum ReadOperation { case restoration }
     private func recordSummaryReadFailure(_ error: Error, operation: ReadOperation) { lookupErrors += 1 }
     var transcriptReadError: String?
+    struct TranscriptState { var targetLookupFailed = false }
+    private struct StateStore {
+        var value = TranscriptState()
+        func read<T>(_ key: KeyPath<TranscriptState, T>) -> T { value[keyPath: key] }
+    }
+    private var transcriptState = StateStore()
+    private func updateTranscript(_ body: (inout TranscriptState) -> Void) { body(&transcriptState.value) }
     func run(_ count: Int) async { for _ in 0..<count { await restorePendingMessageIntent(event: UUID()) } }
 '''
 
@@ -89,7 +96,36 @@ def prepare(root, output):
         if source.count(FACTORY) != 1:
             raise ValueError('Conflicting navigation benchmark fixture')
     else:
-        models.write_text(source + FACTORY)
+        source += FACTORY
+    adapter_marker = "// TRACE_NAVIGATION_LEDGER_WORKLOAD_V2"
+    if "// TRACE_NAVIGATION_LEDGER_WORKLOAD_" in source and adapter_marker not in source:
+        raise ValueError("Conflicting navigation ledger workload instrumentation")
+    modern = "private final class NavigationAdmissions:" in source
+    legacy = "var required = NavigationScopeIndex()" in source
+    if not modern and not legacy:
+        raise ValueError("Unsupported navigation ledger workload layout")
+    finish = "IndexNavigationWork.finish(executions)" if modern else ""
+    admission = ("let inputs = IndexNavigationInputs(canonicalPaths: paths, canonicalReconciliationPaths: [])\n"
+                 "        return { self.reserve(inputs) }" if modern else
+                 "return { self.reserve(canonicalPaths: paths, canonicalReconciliationPaths: []) }")
+    adapter = "\n#if TRACE_CHECKPOINT_BENCHMARK\n" + adapter_marker + "\n" + "extension IndexNavigationWorkLedger {\n" + \
+        "    public func benchmarkAdmission(_ paths: Set<TraceFileIO.CanonicalPath>) -> @Sendable () -> [IndexNavigationWork] {\n        " + admission + "\n    }\n" + \
+        "    public func benchmarkObserve(_ coverage: IndexNavigationCoverage, work: [IndexNavigationWork]) {\n" + \
+        "        let executions = IndexNavigationWork.begin(work)\n" + \
+        "        let stamp = CheckpointAcceptanceBenchmark.begin()\n" + \
+        "        IndexNavigationWork.observe(coverage, executions: executions)\n" + \
+        "        " + finish + "\n        CheckpointAcceptanceBenchmark.end(stamp)\n    }\n}\n" + \
+        "extension IndexNavigationCoverage {\n" + \
+        "    public func benchmarkReference(_ name: String) -> SessionNavigationReference {\n" + \
+        "        let region = regions.values.first!\n" + \
+        "        return .init(agent: region.root.agent.rawValue, root: region.root.url.path,\n" + \
+        "            path: region.context.scanPath.path + \"/\" + name, externalSessionID: \"fixture\", anchorSourceKey: nil, anchorExternalID: nil)\n    }\n}\n#endif\n"
+    if adapter_marker in source:
+        if source.count(adapter_marker) != 1 or source.count(adapter) != 1:
+            raise ValueError("Conflicting navigation ledger workload instrumentation")
+    else:
+        source += adapter
+    models.write_text(source)
 
 
 if __name__ == '__main__':

@@ -78,9 +78,8 @@ final class SourceIngressMailbox: Sendable {
             canonicalReconciliation.formUnion(other.canonicalReconciliation)
             for (stream, roots) in other.canonicalRoots { canonicalRoots[stream, default: []].formUnion(roots) }
         }
-        func navigationInputs(in ledger: IndexNavigationWorkLedger) -> [IndexNavigationWork] {
-            if !changes.navigationWork.isEmpty { return changes.navigationWork }
-            return ledger.reserve(canonicalPaths: canonicalPaths, canonicalReconciliationPaths: canonicalReconciliation)
+        var navigationInputs: IndexNavigationInputs {
+            .init(canonicalPaths: canonicalPaths, canonicalReconciliationPaths: canonicalReconciliation)
         }
         var checkpointInputs: IndexCheckpointInputs? {
             guard !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty else { return nil }
@@ -93,9 +92,10 @@ final class SourceIngressMailbox: Sendable {
     final class Boundary: Sendable {
         let value: Prepared
         private let inputs: IndexCheckpointInputs?
+        private let navigationInputs: IndexNavigationInputs
         private struct Enrollment { var reservations: [IndexCheckpointReservation]?; var navigation: [IndexNavigationWork]?; var retired = false }
         private let enrollment = OSAllocatedUnfairLock(initialState: Enrollment())
-        init(_ value: Prepared) { self.value = value; inputs = value.checkpointInputs }
+        init(_ value: Prepared) { self.value = value; inputs = value.checkpointInputs; navigationInputs = value.navigationInputs }
         @MainActor func reservations(in ledger: IndexCheckpointLedger, acceptsCheckpoints: Bool = true) -> [IndexCheckpointReservation] {
             enrollment.withLock { state in
                 if state.reservations == nil {
@@ -107,7 +107,7 @@ final class SourceIngressMailbox: Sendable {
         }
         @MainActor func navigation(in ledger: IndexNavigationWorkLedger) -> [IndexNavigationWork] {
             enrollment.withLock { state in
-                if state.navigation == nil { state.navigation = value.navigationInputs(in: ledger) }
+                if state.navigation == nil { state.navigation = value.changes.navigationWork.isEmpty ? ledger.reserve(navigationInputs) : value.changes.navigationWork }
                 return state.navigation!
             }
         }
@@ -718,6 +718,7 @@ final class TraceModel: ObservableObject {
         var failures: [Int64: String] = [:]
         var expanded: Set<Int64> = []
         fileprivate var readError: String?
+        fileprivate var targetLookupFailed = false
         fileprivate var absence: TranscriptAbsence?
         var messageRevision = 0
         var contentRevision = 0
@@ -1045,6 +1046,13 @@ final class TraceModel: ObservableObject {
             && owner.generation == database?.contentGeneration && owner.source == selectedSession?.transcriptIdentity
             && owner.revision == (bookmarkRevisions[owner.session] ?? 0)
     }
+    func transcriptRestoreOwnerMayRefreshSource(_ owner: TranscriptRestoreOwner?) -> Bool {
+        guard let owner, transcriptRestoreOwner(sessionID: owner.session) != nil else { return false }
+        return !terminating && owner.session == selectedSessionID && owner.request == sessionRequestID
+            && owner.generation == database?.contentGeneration
+            && owner.revision == (bookmarkRevisions[owner.session] ?? 0)
+    }
+
 
     /// Renderer persistence is not a new user navigation command. Its captured
     /// owner also prevents an old renderer from saving into a replacement slot.
@@ -1390,6 +1398,7 @@ final class TraceModel: ObservableObject {
         let inputRevision: UInt64
         var navigation: AutomaticNavigation?
         var ordinaryFallbackSubmitted = false
+        var navigationWork: [IndexNavigationWork] = []
         #if DEBUG
         var acknowledgmentGate: Task<Void, Never>?
         #endif
@@ -1512,25 +1521,24 @@ final class TraceModel: ObservableObject {
         return enrollment
     }
 
-    private func reservingNavigationWork(_ changes: SourceChanges) -> SourceChanges {
-        guard changes.hasIndexWork, changes.navigationWork.isEmpty else { return changes }
-        var changes = changes
-        changes.navigationWork = navigationWorkLedger.reserve(
-            canonicalPaths: Set(changes.paths.map(TraceFileIO.canonicalPath)),
-            canonicalReconciliationPaths: Set(changes.reconciliationPaths.map(TraceFileIO.canonicalPath)))
+    /// Raw safety/fallback inputs use the same background preparation as live
+    /// ingress. Enrollment follows the owner check, so stale work creates no debt.
+    private func prepareSourceWork(_ changes: SourceChanges) async -> SourceChanges? {
+        let filtered = SourceIngressMailbox.checkpointable(changes, excluding: unavailableCheckpointStreams)
+        guard filtered.navigationWork.isEmpty || (!filtered.watermarks.isEmpty && filtered.checkpointReservations.isEmpty) else { return filtered }
+        let owner = database, attachment = attachmentGeneration, configuration = sourceConfigurationRevision
+        let (prepared, navigationInputs, checkpointInputs) = await Task.detached {
+            let prepared = SourceIngressMailbox.Prepared(changes: filtered, recoveryEligible: false)
+            return (prepared, prepared.navigationInputs, prepared.checkpointInputs)
+        }.value
+        guard !terminating, database === owner, attachment == attachmentGeneration,
+              configuration == sourceConfigurationRevision else { return nil }
+        var changes = prepared.changes
+        if changes.navigationWork.isEmpty { changes.navigationWork = navigationWorkLedger.reserve(navigationInputs) }
+        if !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty {
+            changes.checkpointReservations = checkpointInputs.map { [checkpointLedger.reserve($0)] } ?? []
+        }
         return changes
-    }
-
-    private func reservingCheckpointWork(_ changes: SourceChanges) -> SourceChanges {
-        guard !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty else { return changes }
-        var enrolled = SourceIngressMailbox.checkpointable(changes, excluding: unavailableCheckpointStreams)
-        guard !enrolled.watermarks.isEmpty else { return enrolled }
-        enrolled.checkpointReservations = [checkpointLedger.reserve(watermarks: enrolled.watermarks,
-            streamRoots: enrolled.streamRoots, hasIndexWork: enrolled.hasIndexWork,
-            wrappedStreams: enrolled.wrappedStreams,
-            paths: enrolled.paths, reconciliationPaths: enrolled.reconciliationPaths,
-            streamEpochs: enrolled.streamEpochs)]
-        return enrolled
     }
 
     /// Callers normalize/filter live input before this common routing boundary.
@@ -1538,7 +1546,7 @@ final class TraceModel: ObservableObject {
     @discardableResult
     private func routeLiveSourceChanges(_ changes: SourceChanges, acceptsCheckpoints: Bool,
                                         recoveryEligible: Bool, safety: Bool = false) async -> RecoveryEnrollment? {
-        let changes = reservingNavigationWork(reservingCheckpointWork(changes))
+        guard let changes = await prepareSourceWork(changes) else { return nil }
         if recoveryEligible, let enrollment = enrollDeferredRebuildRecovery(changes: changes, safety: safety) {
             return enrollment
         }
@@ -1682,6 +1690,7 @@ final class TraceModel: ObservableObject {
         let currentGeneration = database.contentGeneration
         observedContentGeneration = currentGeneration
         navigationCoverage = nil
+        if transcriptState.read(\.targetLookupFailed) { updateTranscript { $0.targetLookupFailed = false } }
         // Selection may have changed after delivery. Global cursor/read invalidation
         // still commits, then restoration follows only the latest selection.
         let reset = automaticNavigation?.reset ?? RebuildResetReceipt()
@@ -1852,11 +1861,13 @@ final class TraceModel: ObservableObject {
             // anchor against the accepted rows, not an older awaited bookmark.
             saved = mergedResetBookmarks([navigation.reference.flatMap { reference in navigation.bookmark.map { [SavedResetBookmark(reference: reference, bookmark: $0)] } } ?? [], navigation.savedBookmarks])
             let sources = Dictionary(mappedBookmarks.map { ($0.key.unanchored, $0.value) }, uniquingKeysWith: { _, last in last })
+            var bookmarkReferences: [Int64: SessionNavigationReference] = [:]
             bookmarks = [:]
             var clearedBookmarks: Set<Int64> = []
             for entry in saved {
                 guard let mapped = sources[entry.reference.unanchored] else { continue }
                 guard let bookmark = entry.bookmark else { clearedBookmarks.insert(mapped.session.id); continue }
+                bookmarkReferences[mapped.session.id] = mapped.session.navigationReference
                 if mapped.session.id == resolved.session.id, !rows.isEmpty {
                     let index = rows.firstIndex { row in
                         row.navigationIdentity.map { entry.reference.matchesAnchor($0) } == true
@@ -1900,8 +1911,7 @@ final class TraceModel: ObservableObject {
                 if oldSessionID != id { removeObsoleteBookmark(oldSessionID, captured: oldBookmarkSlot, database: navigation.database) }
                 for id in clearedBookmarks { storeBookmark(id, nil) }
                 for (id, bookmark) in bookmarks {
-                    let mapped = sources.first { $0.value.session.id == id }
-                    var reference = mapped?.value.session.navigationReference
+                    var reference = bookmarkReferences[id]
                     if id == resolved.session.id, let row = rows.first(where: { $0.id == bookmark.messageID }), let identity = row.navigationIdentity {
                         reference = reference?.anchored(at: identity)
                     }
@@ -2002,6 +2012,8 @@ final class TraceModel: ObservableObject {
             }
             #endif
             guard isCurrent(), pending.demand == demand else { return }
+            if transcriptState.read(\.targetLookupFailed) { updateTranscript { $0.targetLookupFailed = false } }
+            guard isCurrent(), pending.demand == demand else { return }
             guard let resolved else {
                 if navigationSourceCovered(pending.intent.reference, database: pending.database) { setRequestedMessage(nil) }
                 return
@@ -2048,8 +2060,9 @@ final class TraceModel: ObservableObject {
         catch {
             guard isCurrent() else { return }
             recordSummaryReadFailure(error, operation: .restoration)
-            // A target-only lookup does not create a reader failure episode.
-            // Existing reader errors remain owned by ordinary reader recovery.
+            // The readable transcript remains healthy. This distinct notice
+            // offers an actual user action without creating a reader episode.
+            updateTranscript { $0.targetLookupFailed = true }
         }
     }
 
@@ -2208,6 +2221,7 @@ final class TraceModel: ObservableObject {
     private func finishRebuildSubmission(_ claim: RebuildClaim) {
         guard !claim.finalized else { return }
         claim.finalized = true
+        if claim.phase == .claimed { for work in claim.navigationWork { work.retire() } }
         let receipt = claim.admission
         let ownsClaim = rebuildRequest?.id == receipt.requestID && rebuildRequest?.claimant === claim
         claim.enrollment?.finish(.retired)
@@ -2640,6 +2654,7 @@ final class TraceModel: ObservableObject {
         requestedMessageIntentID = UUID()
         requestedMessageReference = messageID == nil ? nil : reference
         requestedMessageID = messageID
+        if transcriptState.read(\.targetLookupFailed) { updateTranscript { $0.targetLookupFailed = false } }
     }
     private static func preferredMessageIntent(_ candidates: [AutomaticMessageIntent?], token: UUID) -> AutomaticMessageIntent? {
         candidates.compactMap { $0 }.first { $0.token == token }
@@ -2942,7 +2957,15 @@ final class TraceModel: ObservableObject {
     private var retainedSearchResultForUITesting: SearchResult?
     func resetAgainForNavigationUITesting() {
         guard TraceTestHooks.isUITesting, TraceTestHooks.environment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] == "1", let scheduler else { return }
-        Task { await scheduler.request(rebuild: true) }
+        let work = navigationWorkLedger.reserve(.init(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true))
+        Task { await scheduler.request(rebuild: true, checkpointReservations: [], navigationWork: work) }
+    }
+    func failTargetLookupForUITesting() {
+        guard TraceTestHooks.isUITesting, TraceTestHooks.environment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] == "1", let database else { return }
+        Task {
+            await database.failTargetResolutionForUITesting()
+            await restorePendingMessageIntent(event: UUID())
+        }
     }
     func retryReaderDuringIndexingForUITesting() {
         guard TraceTestHooks.isUITesting, TraceTestHooks.environment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] == "1" else { return }
@@ -2964,6 +2987,10 @@ final class TraceModel: ObservableObject {
         let prior = AutomaticMessageIntent(token: capturedIsCurrent ? obsolete : token,
             reference: prior, bookmarkRevision: 23)
         return preferredMessageIntent([captured, prior], token: token)?.reference
+    }
+    var navigationWorkCountsForTesting: [String: Int] { navigationWorkLedger.countsForTesting }
+    func navigationSourceCoveredForTesting(_ reference: SessionNavigationReference) -> Bool {
+        database.map { navigationSourceCovered(reference, database: $0) } ?? false
     }
     var pendingMessageIntentForTesting: Bool { pendingMessageRestore != nil }
     var pendingMessageResolutionGateForTesting: Task<Void, Never>?
@@ -4217,6 +4244,19 @@ final class TraceModel: ObservableObject {
             if includesRebuild, let rebuild {
                 includesRebuild = self.rebuildClaimIsCurrent(rebuild) && self.capturedNavigationIsCurrent(rebuild)
             }
+            var preparedStartup: IndexNavigationInputs
+            while true {
+                let recovery = self.pendingStartupRecovery
+                let paths = recovery.filePaths
+                let reconciliation = self.startupReconciliationPaths.union(recovery.reconciliationPaths)
+                preparedStartup = await Task.detached {
+                    IndexNavigationInputs(canonicalPaths: Set(paths.map(TraceFileIO.canonicalPath)),
+                        canonicalReconciliationPaths: Set(reconciliation.map(TraceFileIO.canonicalPath)))
+                }.value
+                guard isCurrent() else { return }
+                if paths == self.pendingStartupRecovery.filePaths,
+                   reconciliation == self.startupReconciliationPaths.union(self.pendingStartupRecovery.reconciliationPaths) { break }
+            }
             var buffered = self.bufferedSourceChanges
             if includesRebuild, let changes = rebuild?.recovery?.changes { buffered.merge(changes) }
             let recovery = self.pendingStartupRecovery
@@ -4225,9 +4265,7 @@ final class TraceModel: ObservableObject {
                 ? (buffered.paths.isEmpty && buffered.reconciliationPaths.isEmpty
                     ? self.startupActivity : self.activity(for: buffered))
                 : self.startupActivity
-            let startupWork = self.navigationWorkLedger.reserve(
-                canonicalPaths: Set(recovery.filePaths.map(TraceFileIO.canonicalPath)),
-                canonicalReconciliationPaths: Set(self.startupReconciliationPaths.union(recovery.reconciliationPaths).map(TraceFileIO.canonicalPath)))
+            let startupWork = self.navigationWorkLedger.reserve(preparedStartup)
             let payload = StartupHandoff(
                 paths: buffered.paths.union(recovery.filePaths),
                 reconciliationPaths: self.startupReconciliationPaths
@@ -4241,7 +4279,7 @@ final class TraceModel: ObservableObject {
                     || self.bufferedSourceWork.obligations.contains { $0.safety },
                 watermarks: buffered.watermarks, streamRoots: buffered.streamRoots,
                 checkpointReservations: buffered.checkpointReservations,
-                navigationWork: IndexNavigationWork.coalesced(buffered.navigationWork + startupWork))
+                navigationWork: IndexNavigationWork.coalesced(buffered.navigationWork + startupWork + (includesRebuild ? rebuild?.navigationWork ?? [] : [])))
             let onReset: @Sendable () -> Void
             let onDeferred: @Sendable () -> Void
             let onOrdinary: @Sendable () -> Void
@@ -4456,7 +4494,7 @@ final class TraceModel: ObservableObject {
                 automaticallyRetryReset: ownedClaim.automaticallyRetryReset,
                 onOrdinaryWorkCompleted: ordinaryRecoveryCompleted(ownedClaim),
                 checkpointReservations: recovery?.changes.checkpointReservations ?? [],
-                navigationWork: recovery?.changes.navigationWork ?? [])
+                navigationWork: IndexNavigationWork.coalesced((recovery?.changes.navigationWork ?? []) + ownedClaim.navigationWork))
             ownedClaim.enrollment?.finish(.delivered)
             #if DEBUG
             await holdRebuildHandoffForTesting()
@@ -4491,6 +4529,7 @@ final class TraceModel: ObservableObject {
                 enrollment: request.recoveryEnrollment, inputRevision: request.recoveryRevision)
             #endif
             if let claim {
+                claim.navigationWork = navigationWorkLedger.reserve(.init(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true))
                 rebuildRequest?.claimant = claim
                 rebuildRequest?.recoveryTriggered = false
                 claim.reset.enroll(claim.id)
@@ -5812,6 +5851,14 @@ final class TraceModel: ObservableObject {
         if clearPresentation { transcriptReadError = nil }
     }
 
+    var targetLookupFailureIsVisible: Bool {
+        transcriptState.read(\.targetLookupFailed) && pendingMessageRestore.map(pendingMessageIsCurrent) == true
+            && transcriptBanner == nil
+    }
+    func retrySearchTarget() {
+        Task { await restorePendingMessageIntent(event: UUID()) }
+    }
+
     func retrySelectedTranscript() {
         if pendingMessageRestore != nil {
             Task { await restorePendingMessageIntent(event: UUID()) }
@@ -7092,7 +7139,7 @@ final class TraceModel: ObservableObject {
                                     delivery: RecoveryEnrollment? = nil, safety: Bool = false) async {
         guard changes.hasIndexWork || (acceptsCheckpoints && !changes.watermarks.isEmpty)
                 || !changes.checkpointReservations.isEmpty || completion != nil || delivery != nil || safety else { return }
-        let changes = reservingNavigationWork(reservingCheckpointWork(changes))
+        guard let changes = await prepareSourceWork(changes) else { delivery?.retire(); return }
         let obligations: [BufferedOrdinaryWork]
         if completion != nil || delivery != nil || safety {
             let once = BufferedCompletion(completion ?? {})
@@ -7111,6 +7158,11 @@ final class TraceModel: ObservableObject {
             "paths=\(changes.paths.sorted()),reconcile=\(changes.reconciliationPaths.sorted()),reasons=\(changes.recoveryReasons.map(\.rawValue).sorted())",
             pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"
         )
+        var changes = changes
+        if navigationCoverage?.scope != settings.indexScope {
+            changes.navigationWork = IndexNavigationWork.coalesced(changes.navigationWork + navigationWorkLedger.reserve(
+                .init(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)))
+        }
         if rebuildRequest?.database === database, rebuildRequest?.reset.isCommitted == false {
             await scheduler.requestOrdinaryRecovery(paths: changes.paths,
                 reconciliationPaths: changes.reconciliationPaths,

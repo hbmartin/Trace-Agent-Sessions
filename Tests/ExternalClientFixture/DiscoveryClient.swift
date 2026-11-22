@@ -143,3 +143,10 @@ func compileNavigationWorkClient(_ scheduler: IndexScheduler, reference: Session
     await scheduler.request(paths: changes.paths, checkpointReservations: [], navigationWork: changes.navigationWork)
     await scheduler.requestOrdinaryRecovery(paths: changes.paths, checkpointReservations: [], navigationWork: changes.navigationWork)
 }
+
+func compilePreparedNavigationClient(_ ledger: IndexNavigationWorkLedger) {
+    let inputs = IndexNavigationInputs(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)
+    let prepared = ledger.reserve(inputs)
+    _ = ledger.reserve(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)
+    for work in prepared { work.retire() }
+}

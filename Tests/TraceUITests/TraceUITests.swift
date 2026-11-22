@@ -4579,6 +4579,36 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "moved-reader-restores-after-relaunch")
     }
 
+    func testSourceRewriteReissuesHeldNativeRestoreWithCurrentOwnership() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let name = "Rewritten restore", project = "RewriteRestoreProject"
+        try addLongSession(name, project: project, directory: directory, count: 60, contentRepeats: 0)
+        let started = directory.appendingPathComponent("rewrite-restore-started"), release = directory.appendingPathComponent("rewrite-restore-release")
+        let receipts = directory.appendingPathComponent("rewrite-restorations"), database = directory.appendingPathComponent("index.sqlite")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_INDEX"] = "15"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_OFFSET"] = "-40"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_STARTED_PATH"] = started.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_ALL_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = receipts.path
+        app.launch()
+        XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20)); app.staticTexts[project].firstMatch.click()
+        openSidebarSession(name, in: app)
+        XCTAssertTrue(waitForFile(started, timeout: 10))
+        try addLongSession(name, project: project, directory: directory, count: 61, contentRepeats: 0)
+        XCTAssertNotNil(poll(timeout: 15) {
+            (try? self.sqliteInteger(database, sql: "SELECT message_count FROM session WHERE external_id='Rewritten restore';")) == 61 ? true : nil
+        })
+        try Data().write(to: release)
+        let generation = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
+        let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Rewritten restore';")
+        XCTAssertNotNil(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
+            $0.matches(generation: generation, sessionID: Int64(selected), bookmark: 15, excluding: [])
+        } })
+        let scroll = app.scrollViews["transcriptScroll"]
+        assertSavedAnchorOnScreen(index: 15, in: scroll, expectedY: -40, stage: "rewritten source restore")
+    }
+
     func testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
@@ -4721,8 +4751,13 @@ final class TraceUITests: XCTestCase {
         try assertMissingSearchTargetShowsReader(openAfterReset: false, provisional: true, retryDuringIndex: true)
     }
 
+    func testFailedSearchTargetOffersRetryJumpWhileReaderRemainsAvailable() throws {
+        try assertMissingSearchTargetShowsReader(openAfterReset: false, provisional: true, retryJump: true)
+    }
+
     private func assertMissingSearchTargetShowsReader(openAfterReset: Bool, provisional: Bool = false,
-                                                     secondReset: Bool = false, retryDuringIndex: Bool = false) throws {
+                                                     secondReset: Bool = false, retryDuringIndex: Bool = false,
+                                                     retryJump: Bool = false) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         installNativeAnchorProbe(app: app, directory: directory)
         let name = "Covered reader", project = "CoveredReaderProject"
@@ -4805,6 +4840,16 @@ final class TraceUITests: XCTestCase {
         XCTAssertTrue(app.buttons["retrySelectedTranscript"].waitForNonExistence(timeout: 5))
         let failures = try sqliteInteger(database, sql: "SELECT count(*) FROM adapter_health WHERE last_error IS NOT NULL;")
         XCTAssertGreaterThan(failures, 0, "The unrelated failure must remain real")
+        if retryJump {
+            app.buttons["testFailTargetLookup"].click()
+            let notice = app.staticTexts["searchTargetLookupFailure"]
+            XCTAssertTrue(notice.waitForExistence(timeout: 5))
+            XCTAssertTrue(transcriptMessage(name, index: saved, in: scroll).exists)
+            XCTAssertFalse(app.staticTexts["transcriptLoadError"].exists)
+            app.buttons["retrySearchTarget"].click()
+            XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
+            assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "target-only Retry")
+        }
         if provisional {
             var latestGeneration = generation
             if secondReset {

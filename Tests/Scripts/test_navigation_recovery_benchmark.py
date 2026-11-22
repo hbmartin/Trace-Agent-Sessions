@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -30,3 +31,34 @@ class NavigationRecoveryBenchmarkTests(unittest.TestCase):
         self.assertLess(source.index("let beforeFixtures = memoryBytes()"), source.index("let database ="))
         self.assertIn("resolver = nil", source)
         self.assertIn("processCPUDefinition", source)
+
+    def test_nearest_rank_percentile_uses_one_based_rank(self):
+        source = (ROOT / "Scripts/benchmark-navigation-recovery.swift").read_text()
+        start = source.index("func nearestRankPercentile(")
+        end = source.index("\n}", start) + 2
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "percentile.swift"
+            probe.write_text("import Foundation\n" + source[start:end] + '\nfor n in [1, 20, 100] { print(Int(nearestRankPercentile((1...n).map(Double.init), fraction: 0.95))) }\n')
+            result = subprocess.run(["xcrun", "swift", str(probe)], check=True, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.stdout.splitlines(), ["1", "19", "95"])
+
+    def test_ledger_adapter_rejects_conflicting_instrumentation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ["Sources/TraceApp/TraceModel.swift", "Sources/TraceCore/Models.swift"]:
+                target = root / name; target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT / name, target)
+            output = root / "resolver.swift"
+            MODULE.prepare(root, output)
+            models = root / "Sources/TraceCore/Models.swift"
+            models.write_text(models.read_text().replace("CheckpointAcceptanceBenchmark.end(stamp)", "CheckpointAcceptanceBenchmark.reset()"))
+            with self.assertRaisesRegex(ValueError, "Conflicting navigation ledger"):
+                MODULE.prepare(root, output)
+
+    def test_ledger_measurements_have_explicit_modes_and_thread_cpu(self):
+        source = (ROOT / "Scripts/benchmark-navigation-recovery.swift").read_text()
+        for value in ["ledger-short", "ledger-long", "contention-short", "contention-long"]:
+            self.assertIn(value, source)
+        self.assertIn("Same worker thread", source)
+        self.assertLess(source.index("await gate.release()"), source.index("let startCPU = processCPU(), start = ContinuousClock.now", source.index("await gate.release()")))
+        self.assertIn("admissions = nil; names = nil", source)
