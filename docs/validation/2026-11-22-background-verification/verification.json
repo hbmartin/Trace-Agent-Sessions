@@ -1,0 +1,108 @@
+{
+  "candidate": "bd380af97138ebba02ab4664ca990b27f6febb97",
+  "sourceHashes": {
+    ".github/workflows/background-ui-verification.yml": "1ed4fabd4411c71d0ad136ddece418868431298213de4263c7bb693d6440a17b",
+    "AGENTS.md": "fca389c46c2d2c38407d82656ac03c88e54885d03156e3148c73bc9d0e8602dd",
+    "Scripts/run-selected-ui-verification.py": "bff761cac3b98e7c34938493102fae2c7deac66b00387e58f6f32e7ed475883c",
+    "Tests/Scripts/test_background_ui_verification.py": "817988287ee5edb14dc74fa79ed6f9dd71233ae25ad4e9c2954bda4887434bb2",
+    "Tests/Verification/ui-smoke.json": "04ba657fc755dcf2f1b47ae417b659689a6b3c441c4db0842545d7f24e19e600",
+    "docs/background-verification.md": "f55df9aaf882376d2e8c8e5ece15c82b1f5f31935ade9778fe90afaec55b74f7"
+  },
+  "functionalSmokeDemonstrated": true,
+  "uniqueUICases": 2,
+  "hostedRuns": [
+    {
+      "id": 45056134715,
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45056134715",
+      "testedRevision": "bb0cb16e66fe26cdb5b081f13109231d21459b6d",
+      "status": "passed",
+      "tests": [
+        {
+          "selector": "TraceUITests/TraceUITests/testOnboardingRadiosAndScopePersistence",
+          "exitCode": 0,
+          "result": "ui-001.xcresult",
+          "passed": true
+        },
+        {
+          "selector": "TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart",
+          "exitCode": 0,
+          "result": "ui-002.xcresult",
+          "passed": true
+        }
+      ],
+      "summaries": [
+        {
+          "file": "ui-001-summary.json",
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0
+        },
+        {
+          "file": "ui-002-summary.json",
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0
+        }
+      ],
+      "receiptSHA256": "e1cab4b7087c8a18392f44bf9b248b385dfb3883a20db80c7d3f0089b461c9d5"
+    },
+    {
+      "id": 45056693562,
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45056693562",
+      "testedRevision": "7d5b7c266047e6b41de4eb0fbce4da23f1630a32",
+      "status": "passed",
+      "tests": [
+        {
+          "selector": "TraceUITests/TraceUITests/testOnboardingRadiosAndScopePersistence",
+          "exitCode": 0,
+          "result": "ui-001.xcresult",
+          "passed": true
+        },
+        {
+          "selector": "TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart",
+          "exitCode": 0,
+          "result": "ui-002.xcresult",
+          "passed": true
+        }
+      ],
+      "summaries": [
+        {
+          "file": "ui-001-summary.json",
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0
+        },
+        {
+          "file": "ui-002-summary.json",
+          "passed": 1,
+          "failed": 0,
+          "skipped": 0
+        }
+      ],
+      "receiptSHA256": "b854f001772cb372698482e33a87e3c911a76ad19daa9dfb45b04e894065730b"
+    }
+  ],
+  "runnerContractTests": 8,
+  "finalTestedRunnerRevision": "7d5b7c266047e6b41de4eb0fbce4da23f1630a32",
+  "configurationOnlyPinning": "Candidate pins the exact action SHAs recorded by the final passing run; runner code and selection are unchanged.",
+  "pinnedActionsVerifiedAgainstPassingLog": {
+    "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
+    "maxim-lobanov/setup-xcode": "ed7a3b1fda3918c0306d1b724322adc0b8cc0a90",
+    "jdx/mise-action": "c37c93293d6b742fc901e1406b8f764f6fb19dac",
+    "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02"
+  },
+  "environment": {
+    "macOS": "15.8.2 (24H232)",
+    "Xcode": "26.3 (17C529)"
+  },
+  "localDesktopUsed": false,
+  "performanceAcceptanceClaim": false,
+  "prior28CaseSelectionExecuted": false,
+  "rawRoot": "/Volumes/Pro2T/TraceValidation/background-verification",
+  "artifactAvailability": "Downloadable Actions artifacts retained 14 days; copies also retained locally.",
+  "scannerDisposition": {
+    "rule": "python:S2083",
+    "status": "invalid for current call sites; alert state unchanged",
+    "reason": "The log filename is built from fixed phase labels or a decimal enumeration index. Selection-file strings never supply a path component. The output root is an explicit local CLI argument and must not already exist."
+  }
+}

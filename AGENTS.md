@@ -1,3 +1,23 @@
+# Verification routing
+
+Run selected native UI tests on the independent GitHub-hosted Mac through
+`.github/workflows/background-ui-verification.yml` and
+`Scripts/run-selected-ui-verification.py` by default. See
+`docs/background-verification.md` for exact-selector execution and artifacts.
+A failed unit-test job must not prevent selected UI verification.
+
+Hosted UI execution does not need the user's local desktop to be idle. A
+separately provisioned macOS guest with its own logged-in graphical session
+is also suitable for functional UI checks after a successful smoke run.
+Do not treat a background shell, another Space, or another monitor in the
+same login as independent input/focus isolation. Use the working desktop only
+as an explicit fallback, preserving the current permission-dialog policy.
+
+Builds and noninteractive checks can run in the background. Physical-Mac
+performance acceptance still requires the quiet-host protocol below; hosted
+or shared-host VM measurements remain report-only. Do not request local
+window minimization for work actually running on an independent remote Mac.
+
 # Performance verification
 
 Performance regression acceptance runs locally, not in CI. CI comparison jobs
