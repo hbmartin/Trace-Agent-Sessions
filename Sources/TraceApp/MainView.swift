@@ -2578,6 +2578,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func sampleEstablishedAnchorForUITest() {
+            #if DEBUG
             guard TraceTestHooks.isUITesting,
                   TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH"] != nil,
                   positionEstablished, let table, let scrollView,
@@ -2592,6 +2593,7 @@ struct TranscriptRenderer: NSViewRepresentable {
                 .map { String(decoding: $0, as: UTF8.self) } ?? "null"
             TraceTestHooks.appendLine("\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(sessionID),\(phase),\(rect.height),\(rect.minY),\(table.frame.height),\(viewport.height),\(generation)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH")
+            #endif
         }
 
         private func simulateTranscriptScrollForUITest() {
