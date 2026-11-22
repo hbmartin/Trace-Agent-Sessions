@@ -1124,7 +1124,9 @@ public actor IndexCoordinator {
                         facts[relative] = .init(order: 0, covered: true)
                     }
                 }
-                return facts.isEmpty ? nil : .init(root: root, context: context, facts: facts)
+                // Empty regions retain configured-source membership. Another
+                // provider scanning this directory cannot pay their obligations.
+                return .init(root: root, context: context, facts: facts)
             }
             status.navigationCoverage = status.checkpointContentGeneration.map { .init(contentGeneration: $0, scope: scope, regions: regions, performedFullScan: fullScan) }
             status.phase = .complete

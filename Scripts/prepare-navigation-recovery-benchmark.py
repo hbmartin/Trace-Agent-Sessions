@@ -15,6 +15,23 @@ extension IndexNavigationCoverage {
         })
         return .init(contentGeneration: generation, scope: .proseOnly, regions: [Region(root: root, context: context, facts: facts)])
     }
+    public static func benchmarkSharedFixture(generation: IndexContentGeneration, names: [String], covered: Bool) -> Self {
+        let roots = [AgentKind.claudeCode, .codex].map { SourceRoot(agent: $0, url: URL(fileURLWithPath: "/tmp/navigation-cache")) }
+        let regions = roots.map { root in
+            let context = root.mappingContext
+            let facts = Dictionary(uniqueKeysWithValues: names.map {
+                (RootRelativeScope(components: $0.isEmpty ? [] : [$0], caseSensitive: context.scanPath.isCaseSensitive), Fact(order: 0, covered: covered))
+            })
+            return Region(root: root, context: context, facts: facts)
+        }
+        return .init(contentGeneration: generation, scope: .proseOnly, regions: regions)
+    }
+    public func benchmarkReferences(_ name: String) -> [SessionNavigationReference] {
+        regions.values.map { region in
+            .init(agent: region.root.agent.rawValue, root: region.root.url.path,
+                path: region.context.scanPath.path + "/" + name, externalSessionID: "fixture", anchorSourceKey: nil, anchorExternalID: nil)
+        }
+    }
     public func benchmarkCovers(_ name: String) -> Bool {
         guard let region = regions.values.first else { return false }
         return covers(.init(agent: region.root.agent.rawValue, root: region.root.url.path,
@@ -23,6 +40,9 @@ extension IndexNavigationCoverage {
 }
 #endif
 '''
+
+# Exact fixture shipped in the pinned #97 baseline; synchronization is explicit.
+LEGACY_FACTORY = '\n#if TRACE_CHECKPOINT_BENCHMARK\nextension IndexNavigationCoverage {\n    public static func benchmarkFixture(generation: IndexContentGeneration, names: [String], covered: Bool) -> Self {\n        let root = SourceRoot(agent: .claudeCode, url: URL(fileURLWithPath: "/tmp/navigation-cache"))\n        let context = root.mappingContext\n        let facts = Dictionary(uniqueKeysWithValues: names.map {\n            (RootRelativeScope(components: $0.isEmpty ? [] : [$0], caseSensitive: context.scanPath.isCaseSensitive), Fact(order: 0, covered: covered))\n        })\n        return .init(contentGeneration: generation, scope: .proseOnly, regions: [Region(root: root, context: context, facts: facts)])\n    }\n    public func benchmarkCovers(_ name: String) -> Bool {\n        guard let region = regions.values.first else { return false }\n        return covers(.init(agent: region.root.agent.rawValue, root: region.root.url.path,\n            path: region.context.scanPath.path + "/" + name, externalSessionID: "fixture", anchorSourceKey: nil, anchorExternalID: nil))\n    }\n}\n#endif\n'
 
 HEADER = r'''import Foundation
 import TraceCore
@@ -81,7 +101,7 @@ import TraceCore
 '''
 
 
-def prepare(root, output):
+def prepare(root, output, *, synchronize_existing=False):
     helpers = runpy.run_path(str(Path(__file__).with_name('prepare-source-ingress-benchmark.py')))
     model = (root / 'Sources/TraceApp/TraceModel.swift').read_text()
     body = helpers['swift_body'](model, '    private func restorePendingMessageIntent(event: UUID) async')
@@ -94,7 +114,10 @@ def prepare(root, output):
     source = models.read_text()
     if 'public static func benchmarkFixture(' in source:
         if source.count(FACTORY) != 1:
-            raise ValueError('Conflicting navigation benchmark fixture')
+            if synchronize_existing and source.count(LEGACY_FACTORY) == 1:
+                source = source.replace(LEGACY_FACTORY, FACTORY, 1)
+            else:
+                raise ValueError('Conflicting navigation benchmark fixture; supported legacy fixtures require --synchronize-existing')
     else:
         source += FACTORY
     adapter_marker = "// TRACE_NAVIGATION_LEDGER_WORKLOAD_V2"
@@ -132,5 +155,6 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--synchronize-existing', action='store_true')
     a = p.parse_args()
-    prepare(a.root, a.output)
+    prepare(a.root, a.output, synchronize_existing=a.synchronize_existing)

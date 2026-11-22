@@ -1070,13 +1070,27 @@ public struct IndexNavigationCoverage: Sendable {
         }
         return result
     }
-    fileprivate var rootKeys: [[UInt8]] {
-        regions.values.map { navigationAbsoluteKey($0.context.scanPath.comparisonKey) }
+    // Source identity precedes the canonical path. Providers and configured
+    // aliases may scan the same directory without sharing observation authority.
+    private static func sourcePrefix(_ id: String) -> [UInt8] { [0] + Array(id.utf8) + [0] }
+    fileprivate var sourceRoots: [String: [UInt8]] {
+        regions.mapValues { navigationAbsoluteKey($0.context.scanPath.comparisonKey) }
+    }
+    fileprivate func qualifiedKey(_ reference: SessionNavigationReference) -> [UInt8]? {
+        absoluteKey(reference).map { Self.sourcePrefix(reference.agent + ":" + reference.root) + $0 }
+    }
+    fileprivate static func qualifying(_ key: [UInt8], roots: [String: [UInt8]]) -> [[UInt8]] {
+        if key.first == 0 { return [key] }
+        return roots.compactMap { id, root in
+            if key.starts(with: root) { return sourcePrefix(id) + key }
+            if root.starts(with: key) { return sourcePrefix(id) + root }
+            return nil
+        }
     }
     fileprivate func observationIndex(admission: UInt64, execution: UInt64) -> NavigationScopeIndex {
         var result = NavigationScopeIndex()
-        for region in delta.values {
-            let base = navigationAbsoluteKey(region.context.scanPath.comparisonKey)
+        for (id, region) in delta {
+            let base = Self.sourcePrefix(id) + navigationAbsoluteKey(region.context.scanPath.comparisonKey)
             region.index.visit { key, fact in
                 result = result.setting(base + key, .init(rank: .init(admission: admission, execution: execution), covered: fact.covered))
             }
@@ -1151,6 +1165,7 @@ public final class IndexNavigationWorkLedger: Sendable {
         var content: IndexContentGeneration?
         var scope: IndexScope?
         var contextExecution: UInt64 = 0
+        var sourceRoots: [String: [UInt8]] = [:]
         var executions: Set<UInt64> = []
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -1175,11 +1190,12 @@ public final class IndexNavigationWorkLedger: Sendable {
         }
     }
     public func permitsAbsence(_ reference: SessionNavigationReference, coverage: IndexNavigationCoverage) -> Bool {
-        guard coverage.covers(reference), let key = coverage.absoluteKey(reference) else { return false }
+        guard coverage.covers(reference), let key = coverage.absoluteKey(reference),
+              let qualified = coverage.qualifiedKey(reference) else { return false }
         let snapshot = state.withLock { ($0.pending, $0.observed, $0.content, $0.scope) }
-        guard let needed = snapshot.0?.required(key) else { return true }
+        guard let needed = [snapshot.0?.required(key), snapshot.0?.required(qualified)].compactMap({ $0 }).max() else { return true }
         guard snapshot.2 == coverage.contentGeneration, snapshot.3 == coverage.scope,
-              let paid = snapshot.1.latest(key), paid.covered else { return false }
+              let paid = snapshot.1.latest(qualified), paid.covered else { return false }
         return paid.rank.admission >= needed
     }
     fileprivate func retire(_ sequence: UInt64) {
@@ -1198,15 +1214,18 @@ public final class IndexNavigationWorkLedger: Sendable {
         folding.lock(); defer { folding.unlock() }
         let snapshot = state.withLock { $0 }
         guard snapshot.executions.isEmpty else { return }
-        let compact = Self.compact(snapshot.observed, pending: snapshot.pending)
+        let compact = Self.compact(snapshot.observed, pending: snapshot.pending, roots: snapshot.sourceRoots)
         state.withLock { value in
             if value.revision == snapshot.revision { value.observed = compact; value.revision &+= 1 }
         }
     }
-    private static func compact(_ observed: NavigationScopeIndex, pending: NavigationAdmissions?) -> NavigationScopeIndex {
+    private static func compact(_ observed: NavigationScopeIndex, pending: NavigationAdmissions?, roots: [String: [UInt8]]) -> NavigationScopeIndex {
         var needed = NavigationScopeIndex()
         pending?.visit { admission, inputs in
-            inputs.index.visit { key, _ in needed = needed.setting(key, .init(rank: .init(admission: admission), covered: false)) }
+            inputs.index.visit { key, _ in
+                let qualified = key.isEmpty ? [key] : IndexNavigationCoverage.qualifying(key, roots: roots)
+                for key in qualified { needed = needed.setting(key, .init(rank: .init(admission: admission), covered: false)) }
+            }
         }
         var compact = NavigationScopeIndex()
         observed.visit { key, fact in
@@ -1225,19 +1244,29 @@ public final class IndexNavigationWorkLedger: Sendable {
             let sameContext = snapshot.content == coverage.contentGeneration && snapshot.scope == coverage.scope
             guard sameContext || execution >= snapshot.contextExecution else { return }
             var observed = sameContext ? snapshot.observed : .init()
+            let roots = snapshot.sourceRoots.merging(coverage.sourceRoots) { _, incoming in incoming }
             observations.visit { key, fact in observed = observed.setting(key, fact) }
             var remaining: NavigationAdmissions?
             let captured = snapshot.sequence
             snapshot.pending?.visit { admission, inputs in
                 var required = NavigationScopeIndex()
                 if inputs.fullScan, coverage.performedFullScan, admission <= sequence {
-                    for key in coverage.rootKeys where !observed.fullyCovered(key, through: admission) {
+                    for key in IndexNavigationCoverage.qualifying([], roots: roots) where !observed.fullyCovered(key, through: admission) {
                         required = required.setting(key, .init(rank: .init(admission: admission), covered: false))
                     }
+                    if roots.isEmpty { required = inputs.index }
                 } else {
                     inputs.index.visit { key, _ in
-                        if !observed.fullyCovered(key, through: admission) {
+                        // A global reset requirement expands only after an actual
+                        // full scan. Ordinary admissions qualify against every
+                        // configured overlapping source, including empty regions.
+                        let qualified = key.isEmpty ? [] : IndexNavigationCoverage.qualifying(key, roots: roots)
+                        if qualified.isEmpty {
                             required = required.setting(key, .init(rank: .init(admission: admission), covered: false))
+                        } else {
+                            for key in qualified where !observed.fullyCovered(key, through: admission) {
+                                required = required.setting(key, .init(rank: .init(admission: admission), covered: false))
+                            }
                         }
                     }
                 }
@@ -1249,7 +1278,7 @@ public final class IndexNavigationWorkLedger: Sendable {
             // A paid leaf needs no retained history after older executions have
             // retired. Keep failure exceptions and facts needed by broad debt.
             if snapshot.executions.allSatisfy({ $0 >= execution }) {
-                observed = Self.compact(observed, pending: remaining)
+                observed = Self.compact(observed, pending: remaining, roots: roots)
             }
             let folded = remaining, accepted = observed
             #if DEBUG
@@ -1260,6 +1289,7 @@ public final class IndexNavigationWorkLedger: Sendable {
                 let later = value.pending?.split(after: captured).1
                 value.pending = NavigationAdmissions.merge(folded, later)
                 value.observed = accepted; value.content = coverage.contentGeneration; value.scope = coverage.scope
+                value.sourceRoots = roots
                 value.contextExecution = max(value.contextExecution, execution); value.revision &+= 1
                 return true
             }
@@ -1285,7 +1315,8 @@ public final class IndexNavigationWorkLedger: Sendable {
 public struct IndexNavigationWork: Sendable {
     fileprivate let ledger: IndexNavigationWorkLedger
     fileprivate let sequence: UInt64
-    /// Only an owner abandoning work before delivery may retire its enrollment.
+    /// The owner may retire undelivered work or reset-only work returned before
+    /// commitment. Accepted ordinary inputs retain their independent enrollment.
     public func retire() { ledger.retire(sequence) }
     public static func coalesced(_ inputs: [Self]) -> [Self] {
         var latest: [ObjectIdentifier: Self] = [:]
@@ -1541,6 +1572,23 @@ extension IndexNavigationCoverage {
             (RootRelativeScope(components: $0.isEmpty ? [] : [$0], caseSensitive: context.scanPath.isCaseSensitive), Fact(order: 0, covered: covered))
         })
         return .init(contentGeneration: generation, scope: .proseOnly, regions: [Region(root: root, context: context, facts: facts)])
+    }
+    public static func benchmarkSharedFixture(generation: IndexContentGeneration, names: [String], covered: Bool) -> Self {
+        let roots = [AgentKind.claudeCode, .codex].map { SourceRoot(agent: $0, url: URL(fileURLWithPath: "/tmp/navigation-cache")) }
+        let regions = roots.map { root in
+            let context = root.mappingContext
+            let facts = Dictionary(uniqueKeysWithValues: names.map {
+                (RootRelativeScope(components: $0.isEmpty ? [] : [$0], caseSensitive: context.scanPath.isCaseSensitive), Fact(order: 0, covered: covered))
+            })
+            return Region(root: root, context: context, facts: facts)
+        }
+        return .init(contentGeneration: generation, scope: .proseOnly, regions: regions)
+    }
+    public func benchmarkReferences(_ name: String) -> [SessionNavigationReference] {
+        regions.values.map { region in
+            .init(agent: region.root.agent.rawValue, root: region.root.url.path,
+                path: region.context.scanPath.path + "/" + name, externalSessionID: "fixture", anchorSourceKey: nil, anchorExternalID: nil)
+        }
     }
     public func benchmarkCovers(_ name: String) -> Bool {
         guard let region = regions.values.first else { return false }
