@@ -1018,10 +1018,11 @@ final class TraceModel: ObservableObject {
     private var bookmarkRevisions: [Int64: UInt64] = [:]
     private var bookmarkIntents: [SessionNavigationReference: SavedResetBookmark] = [:]
 
-    private func removeObsoleteBookmark(_ id: Int64, captured: BookmarkSlot?, database: IndexDatabase) {
-        guard let captured, captured.generation != database.contentGeneration,
-              let current = bookmarkSlots[id], current.generation == captured.generation,
-              current.reference == captured.reference else { return }
+    private func removeObsoleteBookmark(_ id: Int64, captured: BookmarkSlot?, database: IndexDatabase,
+                                        replacingSourceRow: Bool = false) {
+        guard let captured, let current = bookmarkSlots[id], current.generation == captured.generation,
+              current.reference == captured.reference,
+              captured.generation != database.contentGeneration || (replacingSourceRow && captured.reference != nil) else { return }
         storeBookmark(id, nil)
     }
 
@@ -1137,13 +1138,16 @@ final class TraceModel: ObservableObject {
         let searchAnchor: SearchResultAnchor?
         let searchReference: SessionNavigationReference?
         let depth: Int
+        let replacesSourceRow: Bool
         var committed = false
         var lastResolutionEvent: UUID?
+        var resolutionDemand: UInt64 = 0
         var resolutionRunning = false
         init(database: IndexDatabase, reset: RebuildResetReceipt, reference: SessionNavigationReference?,
              sessionID: Int64?, request: UUID, bookmark: TranscriptBookmark?,
              savedBookmarks: [SavedResetBookmark], searchAnchor: SearchResultAnchor?, searchReference: SessionNavigationReference?, depth: Int,
-             messageIntent: AutomaticMessageIntent? = nil) {
+             messageIntent: AutomaticMessageIntent? = nil, replacesSourceRow: Bool = false) {
+            self.replacesSourceRow = replacesSourceRow
             self.database = database; self.reset = reset; self.reference = reference
             self.sessionID = sessionID; self.request = request; self.bookmark = bookmark; self.depth = depth
             self.savedBookmarks = savedBookmarks; self.messageIntent = messageIntent
@@ -1780,14 +1784,25 @@ final class TraceModel: ObservableObject {
                 && !indexWorkflow.isActive
         }
         let event = event ?? workflow
-        guard isCurrent(), !navigation.resolutionRunning, navigation.lastResolutionEvent != event else { return }
+        guard isCurrent(), navigation.lastResolutionEvent != event else { return }
         navigation.lastResolutionEvent = event
+        navigation.resolutionDemand &+= 1
+        guard !navigation.resolutionRunning else { return }
+        let demand = navigation.resolutionDemand
         navigation.resolutionRunning = true
         defer {
             navigation.resolutionRunning = false
             #if DEBUG
             automaticNavigationRestoreCompletionsForTesting += 1
             #endif
+            if automaticNavigationIsCurrent(navigation), attachmentGeneration == attachment,
+               sourceConfigurationRevision == configuration, !indexWorkflow.isActive,
+               navigation.resolutionDemand != demand {
+                Task { [weak self, weak navigation] in
+                    guard let self, let navigation, self.automaticNavigation === navigation else { return }
+                    await self.restoreAutomaticNavigation(after: self.progress, event: UUID())
+                }
+            }
         }
         do {
             let oldBookmarkSlot = navigation.sessionID.flatMap { bookmarkSlots[$0] }
@@ -1908,7 +1923,8 @@ final class TraceModel: ObservableObject {
                         oldOrder: searchMessage.map { [$0] } ?? [])
                 }
                 hydrationEpoch = UUID(); hydratingMessageIDs.removeAll(); hydrationOrder.removeAll()
-                if oldSessionID != id { removeObsoleteBookmark(oldSessionID, captured: oldBookmarkSlot, database: navigation.database) }
+                if oldSessionID != id { removeObsoleteBookmark(oldSessionID, captured: oldBookmarkSlot, database: navigation.database,
+                    replacingSourceRow: navigation.replacesSourceRow) }
                 for id in clearedBookmarks { storeBookmark(id, nil) }
                 for (id, bookmark) in bookmarks {
                     var reference = bookmarkReferences[id]
@@ -1928,6 +1944,7 @@ final class TraceModel: ObservableObject {
                 settings.pendingNavigationReference = nil
                 settings.lastSessionID = id
                 selectionSourceIdentity = snapshot.session.flatMap(SelectionSourceIdentity.from)
+                pendingMessageRestore = nil
                 if let targetMessage {
                     requestedMessageID = targetMessage
                     requestedMessageReference = pendingIntent?.reference
@@ -1946,6 +1963,7 @@ final class TraceModel: ObservableObject {
                 scrollRequest = UUID()
                 updateTranscript {
                     $0.sessionID = id
+                    $0.targetLookupFailed = false
                     $0.hydrated = [:]; $0.failures = [:]; $0.expanded = []
                     $0.contentRevision &+= 1
                 }
@@ -5804,6 +5822,64 @@ final class TraceModel: ObservableObject {
         read?.task.cancel()
     }
 
+    private enum RecreatedSourceSelection { case unchanged, handled, failed(String) }
+
+    /// A committed source replacement can recreate a session row without a
+    /// database reset. Numeric absence must first be checked against the owned
+    /// stable source identity; reuse the existing coherent restoration handoff.
+    private func restoreRecreatedSourceSelection(database: IndexDatabase, sessionID: Int64,
+            request: UUID, summary: UUID?, terminal: TerminalSummaryReceipt?) async -> RecreatedSourceSelection {
+        guard !indexWorkflow.isActive,
+              let source = selectionSourceIdentity, source.sessionID == sessionID,
+              source.generation == database.contentGeneration, let reference = source.reference else { return .unchanged }
+        if let navigation = automaticNavigation, automaticNavigationIsCurrent(navigation), navigation.reset.isCommitted {
+            return .handled
+        }
+        let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
+        let generation = database.contentGeneration, workflow = indexWorkflow.generation
+        func contextIsCurrent() -> Bool {
+            !indexWorkflow.isActive && indexWorkflow.generation == workflow
+                && attachmentGeneration == attachment && sourceConfigurationRevision == configuration
+                && database.contentGeneration == generation && terminalSummaryTranscriptIsCurrent(terminal)
+        }
+        func isCurrent() -> Bool {
+            !Task.isCancelled && contextIsCurrent()
+                && transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary)
+        }
+        do {
+            let resolved = try await database.resolveNavigationReference(reference.unanchored)
+            guard isCurrent() else { return .handled }
+            guard let resolved, resolved.session.id != sessionID else { return .unchanged }
+            saveCurrentNavigationReference()
+            let ownedReference = visitedNavigationReferences[sessionID] ?? reference
+            let bookmark = scrollPositions[sessionID]
+            let saved = SavedResetBookmark(reference: ownedReference, bookmark: bookmark,
+                revision: bookmarkRevisions[sessionID] ?? 0)
+            // This receipt describes the already-committed source replacement;
+            // it is independent of every retained rebuild request's reset debt.
+            let committedSource = RebuildResetReceipt(); committedSource.commit()
+            let navigation = AutomaticNavigation(database: database, reset: committedSource, reference: ownedReference,
+                sessionID: sessionID, request: request, bookmark: bookmark, savedBookmarks: [saved],
+                searchAnchor: hasSearchReturnContext ? mainSearchReturnAnchor : nil,
+                searchReference: hasSearchReturnContext ? mainSearchReturnReference : nil,
+                depth: max(loadedSessionPageCount, pageState.read(\.requestedDepth)),
+                messageIntent: currentAutomaticMessageIntent(), replacesSourceRow: true)
+            navigation.committed = true
+            automaticNavigation = navigation
+            settings.pendingNavigationReference = ownedReference
+            guard contextIsCurrent(), automaticNavigationIsCurrent(navigation) else { return .handled }
+            settings.lastSessionID = nil
+            guard contextIsCurrent(), automaticNavigationIsCurrent(navigation) else { return .handled }
+            await restoreAutomaticNavigation(after: progress, event: UUID())
+            return .handled
+        } catch is CancellationError { return .handled }
+        catch {
+            guard isCurrent() else { return .handled }
+            recordSummaryReadFailure(error, operation: .restoration)
+            return .failed("Could not refresh this session. Try again.")
+        }
+    }
+
     private func readTranscript(database: IndexDatabase, sessionID: Int64, request: UUID,
                                 summary: UUID? = nil, terminal: TerminalSummaryReceipt? = nil) async -> TranscriptReadOutcome {
         let outcome: TranscriptReadOutcome
@@ -5814,6 +5890,14 @@ final class TraceModel: ObservableObject {
         catch { outcome = .failed(error.localizedDescription) }
         guard !Task.isCancelled, terminalSummaryTranscriptIsCurrent(terminal),
               transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return .superseded }
+        if case .snapshot(let snapshot) = outcome, snapshot.session == nil {
+            switch await restoreRecreatedSourceSelection(database: database, sessionID: sessionID,
+                    request: request, summary: summary, terminal: terminal) {
+            case .unchanged: break
+            case .handled: return .superseded
+            case .failed(let error): return .failed(error)
+            }
+        }
         return outcome
     }
 
@@ -6089,6 +6173,17 @@ final class TraceModel: ObservableObject {
     ) async {
         guard !Task.isCancelled, terminalSummaryTranscriptIsCurrent(terminal),
               transcriptRequestIsCurrent(database: database, sessionID: sessionID, request: request, summary: summary) else { return }
+        if loaded.session == nil {
+            switch await restoreRecreatedSourceSelection(database: database, sessionID: sessionID,
+                    request: request, summary: summary, terminal: terminal) {
+            case .unchanged: break
+            case .handled: return
+            case .failed(let error):
+                scheduleTranscriptRecovery(error: error, database: database, sessionID: sessionID,
+                    request: request, summary: summary)
+                return
+            }
+        }
         if finishPreviouslyAppliedMissingTranscript(loaded) { return }
         var snapshot = loaded
         if snapshot.session == nil {

@@ -1667,6 +1667,7 @@ final class TraceUITests: XCTestCase {
         let invocation: UUID
         let bookmarkIndex: Int
         let bookmarkOffset: Double
+        var renderedMessageCount: Int? = nil
         func matches(generation: String, sessionID: Int64, bookmark: Int, excluding prior: Set<UUID>) -> Bool {
             self.generation.value == generation && self.sessionID == sessionID && bookmarkIndex == bookmark
                 && !prior.contains(invocation)
@@ -1882,7 +1883,7 @@ final class TraceUITests: XCTestCase {
     }
 
     private func assertSavedAnchorOnScreen(
-        index: Int, in scroll: XCUIElement, expectedY: CGFloat, stage: String
+        index: Int, in scroll: XCUIElement, expectedY: CGFloat, stage: String, generation: String? = nil
     ) {
         guard let actualY = savedAnchorY(index: index, in: scroll, timeout: 10) else {
             return XCTFail("\(stage): restoration did not report completion for row \(index); probe=\(nativeAnchorProbe.map { fileLines(in: $0.output) } ?? [])")
@@ -1893,14 +1894,15 @@ final class TraceUITests: XCTestCase {
             let samples = probe.input.deletingLastPathComponent().appendingPathComponent("native-anchor-samples")
             let observed = fileLines(in: samples).filter {
                 let fields = $0.split(separator: ",")
-                return fields.count >= 4 && fields[0] == String(index) && fields[3] == session
+                let matchingGeneration = generation.map { fields.count >= 10 && fields[9].contains($0) } ?? true
+                return fields.count >= 4 && fields[0] == String(index) && fields[3] == session && matchingGeneration
             }
             XCTAssertFalse(observed.isEmpty, "\(stage): native anchor sampling must observe main-loop frames")
             for sample in observed {
                 let fields = sample.split(separator: ",")
                 guard let offset = Double(fields[1]) else { XCTFail("invalid offset sample"); continue }
                 var expected = Double(expectedY)
-                if fields.count == 9, fields[4] != "established",
+                if fields.count >= 9, fields[4] != "established",
                    let height = Double(fields[5]), let rowY = Double(fields[6]),
                    let documentHeight = Double(fields[7]), let viewportHeight = Double(fields[8]) {
                     let visibleFooter = fields[4] == "waiting" ? 64.0 : 1.0
@@ -3435,7 +3437,7 @@ final class TraceUITests: XCTestCase {
 
     private func addLongSession(
         _ name: String, project: String, directory: URL, count: Int = 70,
-        mostlySystem: Bool = false, contentRepeats: Int = 24
+        mostlySystem: Bool = false, contentRepeats: Int = 24, writeOptions: Data.WritingOptions = []
     ) throws {
         var objects: [[String: Any]] = [["type": "custom-title", "customTitle": name]]
         for index in 0..<count {
@@ -3448,7 +3450,7 @@ final class TraceUITests: XCTestCase {
         }
         var data = Data()
         for object in objects { data.append(try JSONSerialization.data(withJSONObject: object)); data.append(10) }
-        try data.write(to: directory.appendingPathComponent("Sources/Claude/\(name).jsonl"))
+        try data.write(to: directory.appendingPathComponent("Sources/Claude/\(name).jsonl"), options: writeOptions)
     }
 
     func testWheelOverTranscriptTextAndGutterScrollsWithoutBreakingCopy() throws {
@@ -4601,7 +4603,16 @@ final class TraceUITests: XCTestCase {
     }
 
     func testSourceRewriteReissuesHeldNativeRestoreWithCurrentOwnership() throws {
+        try assertSourceRewritePreservesHeldRestore(survivingOtherSource: false)
+    }
+
+    func testSourceRewriteRemapsSessionRowWithoutLosingHeldRestoration() throws {
+        try assertSourceRewritePreservesHeldRestore(survivingOtherSource: true)
+    }
+
+    private func assertSourceRewritePreservesHeldRestore(survivingOtherSource: Bool) throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Sources/Claude/session.jsonl"))
         let name = "Rewritten restore", project = "RewriteRestoreProject"
         try addLongSession(name, project: project, directory: directory, count: 60, contentRepeats: 0)
         let started = directory.appendingPathComponent("rewrite-restore-started"), release = directory.appendingPathComponent("rewrite-restore-release")
@@ -4615,16 +4626,34 @@ final class TraceUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20)); app.staticTexts[project].firstMatch.click()
         openSidebarSession(name, in: app)
+        XCTAssertTrue(app.windows[name].waitForExistence(timeout: 10))
+        let initialScroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(initialScroll.waitForExistence(timeout: 10))
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: initialScroll).waitForExistence(timeout: 10))
         XCTAssertTrue(waitForFile(started, timeout: 10))
-        try addLongSession(name, project: project, directory: directory, count: 61, contentRepeats: 0)
+        let beforeSession = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Rewritten restore';")
+        if survivingOtherSource {
+            try addLongSession("Surviving source", project: "OtherRestoreProject", directory: directory, count: 1, contentRepeats: 0)
+            XCTAssertNotNil(poll(timeout: 15) {
+                (try? self.sqliteInteger(database, sql: "SELECT count(*) FROM session WHERE external_id='Surviving source';")) == 1 ? true : nil
+            })
+        }
+        let beforeSource = try sqliteText(database, sql: "SELECT sf.id || ':' || sf.content_generation FROM source_file sf JOIN session s ON s.source_file_id=sf.id WHERE s.external_id='Rewritten restore';")
+        try addLongSession(name, project: project, directory: directory, count: 61, contentRepeats: 0, writeOptions: .atomic)
         XCTAssertNotNil(poll(timeout: 15) {
             (try? self.sqliteInteger(database, sql: "SELECT message_count FROM session WHERE external_id='Rewritten restore';")) == 61 ? true : nil
         })
+        XCTAssertNotNil(poll(timeout: 15) {
+            guard let current = try? self.sqliteText(database, sql: "SELECT sf.id || ':' || sf.content_generation FROM source_file sf JOIN session s ON s.source_file_id=sf.id WHERE s.external_id='Rewritten restore';") else { return nil }
+            return current != beforeSource ? true : nil
+        }, "The held restore must encounter an actual source identity change")
         try Data().write(to: release)
         let generation = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
         let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Rewritten restore';")
+        if survivingOtherSource { XCTAssertNotEqual(selected, beforeSession) }
+        else { XCTAssertEqual(selected, beforeSession) }
         XCTAssertNotNil(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
-            $0.matches(generation: generation, sessionID: Int64(selected), bookmark: 15, excluding: [])
+            $0.matches(generation: generation, sessionID: Int64(selected), bookmark: 15, excluding: []) && $0.renderedMessageCount == 61
         } })
         let scroll = app.scrollViews["transcriptScroll"]
         assertSavedAnchorOnScreen(index: 15, in: scroll, expectedY: -40, stage: "rewritten source restore")
@@ -4856,7 +4885,7 @@ final class TraceUITests: XCTestCase {
         } })
         XCTAssertEqual(restored.bookmarkOffset, Double(y), accuracy: 8)
         XCTAssertTrue(transcriptMessage(name, index: saved, in: scroll).waitForExistence(timeout: 10))
-        assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "missing target with independent failed source")
+        assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "missing target with independent failed source", generation: generation)
         XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.buttons["retrySelectedTranscript"].waitForNonExistence(timeout: 5))
         let failures = try sqliteInteger(database, sql: "SELECT count(*) FROM adapter_health WHERE last_error IS NOT NULL;")
@@ -4869,7 +4898,7 @@ final class TraceUITests: XCTestCase {
             XCTAssertFalse(app.staticTexts["transcriptLoadError"].exists)
             app.buttons["retrySearchTarget"].click()
             XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
-            assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "target-only Retry")
+            assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "target-only Retry", generation: generation)
         }
         if provisional {
             var latestGeneration = generation
@@ -4897,7 +4926,12 @@ final class TraceUITests: XCTestCase {
                 try Data().write(to: batchRelease)
             }
             let beforeTarget = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
-            try Data(text.utf8).write(to: file)
+            // Replace the append-only source rather than simulating an append
+            // with an unchanged prefix and edited middle records.
+            try Data(text.utf8).write(to: file, options: .atomic)
+            XCTAssertNotNil(poll(timeout: 20) {
+                (try? self.sqliteInteger(database, sql: "SELECT count(*) FROM message WHERE external_uuid='Covered reader-25';")) == 1 ? true : nil
+            }, "The source target must be indexed before waiting for native navigation")
             let currentID = try XCTUnwrap(poll(timeout: 20) { () -> Int64? in
                 guard let value = try? self.sqliteText(database, sql: "SELECT id FROM session WHERE external_id='Covered reader';") else { return nil }
                 return Int64(value)

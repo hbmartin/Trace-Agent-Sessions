@@ -937,6 +937,7 @@ struct TranscriptRenderer: NSViewRepresentable {
             let sessionID: Int64
             let invocation: UUID
             let messageRevision: Int
+            let renderedMessageCount: Int
             let inputGeneration: UInt64
             let messageID: Int64
             let bookmarkIndex: Int
@@ -1803,7 +1804,7 @@ struct TranscriptRenderer: NSViewRepresentable {
                   model?.transcriptMessageRevision == messageRevision,
                   model?.transcriptRestoreOwnerIsCurrent(request.bookmarkOwner) == true else { return }
             let receipt = NativeRestorationReceipt(generation: generation, sessionID: sessionID,
-                invocation: request.token, messageRevision: messageRevision,
+                invocation: request.token, messageRevision: messageRevision, renderedMessageCount: items.count,
                 inputGeneration: request.inputGeneration, messageID: bookmark.messageID,
                 bookmarkIndex: bookmark.index, bookmarkOffset: Double(bookmark.offset))
             guard let data = try? JSONEncoder().encode(receipt) else { return }
@@ -2587,7 +2588,9 @@ struct TranscriptRenderer: NSViewRepresentable {
             let viewport = scrollView.documentVisibleRect
             let waiting = deferredContentRestore != nil && model?.hydratedMessages[items[row].summary.id] == nil
             let phase = waiting ? "waiting" : pendingRestore != nil ? "refining" : "established"
-            TraceTestHooks.appendLine("\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(sessionID),\(phase),\(rect.height),\(rect.minY),\(table.frame.height),\(viewport.height)",
+            let generation = renderedContentGeneration.flatMap { try? JSONEncoder().encode($0) }
+                .map { String(decoding: $0, as: UTF8.self) } ?? "null"
+            TraceTestHooks.appendLine("\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(sessionID),\(phase),\(rect.height),\(rect.minY),\(table.frame.height),\(viewport.height),\(generation)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH")
         }
 
