@@ -985,12 +985,12 @@ private final class NavigationScopeIndex: Sendable {
 
 }
 
-/// Accepted source coverage. Old snapshots remain immutable while incremental
-/// merges copy only affected scope prefixes, not the retained file dictionary.
 private func navigationAbsoluteKey(_ comparisonKey: String) -> [UInt8] {
     Array((comparisonKey == "/" ? "/" : comparisonKey + "/").utf8)
 }
 
+/// Accepted source coverage. Old snapshots remain immutable while incremental
+/// merges copy only affected scope prefixes, not the retained file dictionary.
 public struct IndexNavigationCoverage: Sendable {
     struct Fact: Sendable { let order: UInt64; let covered: Bool }
     struct Region: Sendable {
