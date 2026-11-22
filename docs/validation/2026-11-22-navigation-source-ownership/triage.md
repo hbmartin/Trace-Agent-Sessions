@@ -1,0 +1,18 @@
+# PR #97 finding disposition
+
+Reviewed target: `9fbae14d6532f5f49dbe524d5b7166c689fdb479`. The merged main tree was identical. Follow-up implementation/harness candidate: `e637490c2cfc39b0364c0172fcd8e1b2b04e43f3`.
+
+| Finding | Disposition and evidence |
+| --- | --- |
+| Shared-directory provider observations collide | Fixed. Provider/configured-root prefixes separate observations. Generic inputs qualify against every overlapping configured source, including empty execution regions. Successful empty full scans retire global enrollment; displaced source-roster metadata cannot accumulate. Tests cover both insertion orders, aliases, omitted observations, and real scheduler delivery. |
+| Selection failure cleanup permits synchronous reentry | Fixed. Selection, completion and transcript ownership publish as one batch. Object and grouped subscribers reenter from B to C; C remains selected. |
+| Recreated source selection failure leaves requested window hidden | Fixed. The current automatic restoration owner may consume only requested window visibility. Error/Retry remains pending; successful Retry does not show the window twice. Superseded owners cannot show it. |
+| Missing coverage cache enrolls scope-reset debt | Qualified fix. Cache absence is not evidence of a scope transition. Installation-owned accepted/committed scope controls enrollment, initialized through an off-main actor read. Metadata that starts no pass creates no scope receipt. The reproduced problem was retained global debt/history; an unconditional absence stall was not demonstrated. |
+| Exhausted reset retains reset-only navigation work | Qualified fix. The once-only uncommitted deferral retires captured original reset receipts, independently of coalesced ordinary execution inputs. Mixed incomplete ordinary work remains unpaid and retains its normal retry. The reproduced problem was orphaned enrollment/history, not an unconditional later absence stall. |
+| Release Core test accesses DEBUG counters | Fixed. Behavioral checks remain in Release; only counter assertions are guarded. Release test-target compilation and execution are separately recorded. The existing synthetic sidecar event-injector case is DEBUG-only; its shared fixtures and other consumer tests remain compiled in Release. |
+| Native geometry sample parser expects nine fields | Fixed. Shared parser accepts legacy geometry and generation-bearing producer samples, rejects malformed geometry, and preserves session/generation checks. Selected failed-hydration/timeout cases are added to compiled discovery. |
+| Contention observation can precede process timing | Fixed harness. Each synchronous worker opens its execution span after synchronization. Overlapping spans count once, including early observer execution. |
+| Contention validation is inside process timing | Fixed harness. CPU/elapsed are the union of actual execution intervals; correctness/export gaps and handshakes are excluded. Same-thread observation CPU remains distinct. |
+| Sonar path injection in benchmark preparation | Invalid. The caller supplies the local CLI root and output paths explicitly. The source destination is that root plus the fixed `Sources/TraceCore/Models.swift` suffix. Read source contents do not select a destination. No code was changed merely to silence the alert; no GitHub thread or alert state was changed. |
+
+The timing corrections apply to the targeted navigation-contention process CPU/elapsed results. They do not invalidate PR #97's separate three-pair full Release acceptance, same-thread observation CPU, or physical-footprint measurements. Historical commands and raw payloads remain intact. This follow-up makes no new local 10% acceptance claim.

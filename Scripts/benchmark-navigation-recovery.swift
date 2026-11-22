@@ -14,6 +14,38 @@ private func processCPU() -> Double {
     var value = rusage(); precondition(getrusage(RUSAGE_SELF, &value) == 0)
     return Double(value.ru_utime.tv_sec + value.ru_stime.tv_sec) + Double(value.ru_utime.tv_usec + value.ru_stime.tv_usec) / 1e6
 }
+// Union of actual synchronous execution spans. Overlapping admission and
+// observation count process CPU/elapsed once; gates and validation gaps count zero.
+private final class ExecutionIntervals: Sendable {
+    private struct State {
+        var active = 0, intervals = 0
+        var start = 0.0, cpuStart = 0.0, elapsed = 0.0, cpu = 0.0
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let now: @Sendable () -> Double
+    private let cpu: @Sendable () -> Double
+    init(now: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
+         cpu: @escaping @Sendable () -> Double = { processCPU() }) {
+        self.now = now; self.cpu = cpu
+    }
+    func begin() {
+        state.withLock {
+            if $0.active == 0 { $0.start = now(); $0.cpuStart = cpu(); $0.intervals += 1 }
+            $0.active += 1
+        }
+    }
+    func end() {
+        state.withLock {
+            precondition($0.active > 0)
+            $0.active -= 1
+            if $0.active == 0 { $0.elapsed += now() - $0.start; $0.cpu += cpu() - $0.cpuStart }
+        }
+    }
+    func measure<T>(_ body: () -> T) -> T { begin(); defer { end() }; return body() }
+    var snapshot: (elapsed: Double, cpu: Double, intervals: Int) {
+        state.withLock { precondition($0.active == 0); return ($0.elapsed, $0.cpu, $0.intervals) }
+    }
+}
 private actor LedgerStart {
     private var open = false
     private var waiter: CheckedContinuation<Void, Never>?
@@ -30,9 +62,9 @@ func nearestRankPercentile(_ sorted: [Double], fraction: Double) -> Double {
     @MainActor static func main() async {
         do {
             guard CommandLine.arguments.count == 4, let count = Int(CommandLine.arguments[1]), count > 0,
-                  ["coverage", "target", "ledger-short", "ledger-long", "contention-short", "contention-long"].contains(CommandLine.arguments[3]) else {
+                  ["coverage", "target", "ledger-short", "ledger-long", "contention-short", "contention-long", "shared-short", "shared-long"].contains(CommandLine.arguments[3]) else {
                 throw NSError(domain: "NavigationBenchmark.arguments", code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Expected a positive count, label, and coverage|target|ledger-short|ledger-long|contention-short|contention-long mode"])
+                    userInfo: [NSLocalizedDescriptionKey: "Expected a positive count, label, and coverage|target|ledger-short|ledger-long|contention-short|contention-long|shared-short|shared-long mode"])
             }
             let mode = CommandLine.arguments[3], label = CommandLine.arguments[2]
             let beforeFixtures = memoryBytes()
@@ -56,6 +88,7 @@ func nearestRankPercentile(_ sorted: [Double], fraction: Double) -> Double {
             var ledgerCounts: [String: Int] = [:]
             var observationMetrics: [String: Double] = [:]
             var postSetup: UInt64 = 0
+            var executionIntervals = 1
             if mode == "coverage" {
                 var coverage = IndexNavigationCoverage.benchmarkFixture(generation: database.contentGeneration,
                     names: (0..<count).map { "file-\($0).jsonl" }, covered: true)
@@ -85,7 +118,7 @@ func nearestRankPercentile(_ sorted: [Double], fraction: Double) -> Double {
                 retainedEntries = count
                 deltas = nil
                 retainedCoverage = coverage
-            } else if mode.hasPrefix("ledger-") || mode.hasPrefix("contention-") {
+            } else if mode.hasPrefix("ledger-") || mode.hasPrefix("contention-") || mode.hasPrefix("shared-") {
                 let ledger = IndexNavigationWorkLedger(), count = max(2, count)
                 var names: [String]? = (0..<count).map { index in
                     (mode.hasSuffix("long") ? String(repeating: "long-path-component/", count: 8) : "") + "file-\(index).jsonl"
@@ -94,33 +127,38 @@ func nearestRankPercentile(_ sorted: [Double], fraction: Double) -> Double {
                     ledger.benchmarkAdmission([TraceFileIO.canonicalPath("/tmp/navigation-cache/" + name)])
                 }
                 // Prepared fixtures and canonicalization precede all timed calls.
-                var firstCoverage: IndexNavigationCoverage? = .benchmarkFixture(generation: database.contentGeneration,
-                    names: mode.hasPrefix("contention-") ? Array(names!.prefix(count / 2)) : names!, covered: true)
-                var laterCoverage: IndexNavigationCoverage? = .benchmarkFixture(generation: database.contentGeneration,
-                    names: Array(names!.dropFirst(count / 2)), covered: true)
+                let shared = mode.hasPrefix("shared-")
+                var firstCoverage: IndexNavigationCoverage? = shared
+                    ? .benchmarkSharedFixture(generation: database.contentGeneration, names: names!, covered: true)
+                    : .benchmarkFixture(generation: database.contentGeneration,
+                        names: mode.hasPrefix("contention-") ? Array(names!.prefix(count / 2)) : names!, covered: true)
+                var laterCoverage: IndexNavigationCoverage? = shared
+                    ? .benchmarkSharedFixture(generation: database.contentGeneration, names: Array(names!.dropFirst(count / 2)), covered: true)
+                    : .benchmarkFixture(generation: database.contentGeneration, names: Array(names!.dropFirst(count / 2)), covered: true)
                 var firstWork: [IndexNavigationWork] = [], laterWork: [IndexNavigationWork] = []
                 let half = mode.hasPrefix("contention-") ? count / 2 : 0
                 for index in 0..<half { firstWork += admissions![index]() }
-                let gate = LedgerStart()
+                let gate = LedgerStart(), intervals = ExecutionIntervals()
                 let initial = firstCoverage!, enrolled = firstWork
                 let observation: Task<Void, Never>?
                 if half > 0 {
                     observation = Task.detached {
                         await gate.wait()
-                        ledger.benchmarkObserve(initial, work: enrolled)
+                        intervals.measure { ledger.benchmarkObserve(initial, work: enrolled) }
                     }
                 } else { observation = nil }
                 CheckpointAcceptanceBenchmark.reset()
                 let starting = memoryBytes(); postSetup = starting
                 sampling.withLock { $0.active = true; $0.peak = starting }
-                // Release synchronization is outside process/elapsed intervals;
-                // observation execution has its own same-thread instrumentation.
+                // Each worker opens its execution span after synchronization.
+                // Union accounting includes early observation, without timing gates.
                 await gate.release()
-                let startCPU = processCPU(), start = ContinuousClock.now
-                for index in half..<count {
-                    let call = ContinuousClock.now
-                    laterWork += admissions![index]()
-                    latencies.append(seconds(call.duration(to: .now)))
+                intervals.measure {
+                    for index in half..<count {
+                        let call = ContinuousClock.now
+                        laterWork += admissions![index]()
+                        latencies.append(seconds(call.duration(to: .now)))
+                    }
                 }
                 if let observation { await observation.value }
                 if half > 0 {
@@ -131,11 +169,12 @@ func nearestRankPercentile(_ sorted: [Double], fraction: Double) -> Double {
                     }
                 }
                 let accepted = half > 0 ? laterCoverage! : firstCoverage!, delivered = laterWork
-                await Task.detached { ledger.benchmarkObserve(accepted, work: delivered) }.value
-                elapsed = seconds(start.duration(to: .now)); cpu = processCPU() - startCPU
+                await Task.detached { intervals.measure { ledger.benchmarkObserve(accepted, work: delivered) } }.value
+                let timing = intervals.snapshot
+                elapsed = timing.elapsed; cpu = timing.cpu; executionIntervals = timing.intervals
                 observationMetrics = CheckpointAcceptanceBenchmark.snapshot()
                 let final = firstCoverage!.merging(laterCoverage!)
-                guard names!.allSatisfy({ ledger.permitsAbsence(final.benchmarkReference($0), coverage: final) }) else {
+                guard names!.allSatisfy({ name in final.benchmarkReferences(name).allSatisfy { ledger.permitsAbsence($0, coverage: final) } }) else {
                     throw NSError(domain: "NavigationBenchmark.unpaidSourceCoverage", code: 1)
                 }
                 ledgerCounts = ledger.benchmarkCounts
@@ -187,7 +226,9 @@ func nearestRankPercentile(_ sorted: [Double], fraction: Double) -> Double {
             withExtendedLifetime(retainedLedger) {}
             let result: [String: Any] = ["mode": mode, "label": label, "inputs": count,
                 "elapsedSeconds": elapsed, "processCPUSeconds": cpu,
-                "processCPUDefinition": "All process threads during the selected cache, ledger, or pending-lookup workload; setup and release synchronization excluded",
+                "processCPUDefinition": "All process threads over the union of actual execution spans; overlapping spans counted once; setup, gates, correctness checks and gaps excluded",
+                "elapsedDefinition": "Union of actual execution spans for ledger modes; contiguous workload execution for cache/target modes",
+                "executionIntervals": executionIntervals,
                 "mainActorCallP95Seconds": p95, "prePayloadFootprintBytes": beforeFixtures,
                 "postSetupFootprintBytes": postSetup,
                 "peakFootprintBytes": sampling.withLock { $0.peak }, "retainedFootprintBytes": retained,

@@ -32,11 +32,113 @@ final class IndexingRegressionTests: XCTestCase {
             IndexNavigationWork.finish(executions)
             XCTAssertTrue(coverage.covers(reference))
             XCTAssertTrue(ledger.permitsAbsence(reference, coverage: coverage), rootPath)
+            #if DEBUG
             XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0, rootPath)
             XCTAssertEqual(ledger.countsForTesting["requiredScopeFacts"], 0, rootPath)
             XCTAssertEqual(ledger.countsForTesting["activeExecutions"], 0, rootPath)
+            #endif
         }
     }
+    func testNavigationObservationsQualifyProviderAndConfiguredRoot() throws {
+        for reverse in [false, true] {
+            for fullScan in [false, true] {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+                let claude = SourceRoot(agent: .claudeCode, url: directory), codex = SourceRoot(agent: .codex, url: directory)
+                let contexts = [claude.mappingContext, codex.mappingContext]
+                let path = TraceFileIO.canonicalPath(directory.appendingPathComponent("shared.jsonl").path)
+                func reference(_ root: SourceRoot) -> SessionNavigationReference {
+                    .init(agent: root.agent.rawValue, root: root.url.path, path: path.path,
+                          externalSessionID: "shared", anchorSourceKey: nil, anchorExternalID: nil)
+                }
+                func coverage(_ values: [Bool?]) -> IndexNavigationCoverage {
+                    var regions = zip([claude, codex], contexts).enumerated().map { index, pair in
+                        IndexNavigationCoverage.Region(root: pair.0, context: pair.1,
+                            facts: values[index].map { [pair.0.rootScope.relativeScope: .init(order: 0, covered: $0)] } ?? [:])
+                    }
+                    if reverse { regions.reverse() }
+                    return .init(contentGeneration: database.contentGeneration, scope: .proseOnly,
+                        regions: regions, performedFullScan: fullScan)
+                }
+                let ledger = IndexNavigationWorkLedger(), prior = coverage([true, true])
+                let work = ledger.reserve(canonicalPaths: [path], canonicalReconciliationPaths: [], fullScan: fullScan)
+                let execution = IndexNavigationWork.begin(work), first = coverage([false, true])
+                IndexNavigationWork.observe(first, executions: execution); IndexNavigationWork.finish(execution)
+                XCTAssertTrue(ledger.permitsAbsence(reference(codex), coverage: first), "A different provider's failure must not contaminate healthy coverage")
+                XCTAssertFalse(ledger.permitsAbsence(reference(claude), coverage: prior), "Old healthy coverage cannot pay current failed work")
+                // A configured provider with no facts is still a member of the
+                // execution. The other provider cannot retire its obligation.
+                let nextWork = ledger.reserve(canonicalPaths: [path], canonicalReconciliationPaths: [])
+                let next = IndexNavigationWork.begin(nextWork), partial = coverage([nil, true])
+                IndexNavigationWork.observe(partial, executions: next); IndexNavigationWork.finish(next)
+                XCTAssertFalse(ledger.permitsAbsence(reference(claude), coverage: prior.merging(partial)))
+                XCTAssertTrue(ledger.permitsAbsence(reference(codex), coverage: prior.merging(partial)))
+                let recovery = IndexNavigationWork.begin(nextWork), success = coverage([true, true])
+                IndexNavigationWork.observe(success, executions: recovery); IndexNavigationWork.finish(recovery)
+                XCTAssertTrue(ledger.permitsAbsence(reference(claude), coverage: success))
+                XCTAssertTrue(ledger.permitsAbsence(reference(codex), coverage: success))
+                #if DEBUG
+                XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+                XCTAssertEqual(ledger.countsForTesting["observedScopeFacts"], 0)
+                #endif
+            }
+        }
+    }
+
+    func testNavigationObservationsKeepConfiguredAliasesIndependent() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("target"), alias = directory.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+        let roots = [target, alias].map { SourceRoot(agent: .claudeCode, url: $0) }
+        let ledger = IndexNavigationWorkLedger()
+        let work = ledger.reserve(canonicalPaths: [], canonicalReconciliationPaths: [TraceFileIO.canonicalPath(target.path)])
+        let coverage = IndexNavigationCoverage(contentGeneration: database.contentGeneration, scope: .proseOnly,
+            regions: roots.enumerated().map { index, root in
+                .init(root: root, context: root.mappingContext, facts: [root.rootScope.relativeScope: .init(order: 0, covered: index == 1)])
+            })
+        let execution = IndexNavigationWork.begin(work)
+        IndexNavigationWork.observe(coverage, executions: execution); IndexNavigationWork.finish(execution)
+        let reference = SessionNavigationReference(agent: roots[1].agent.rawValue, root: alias.path,
+            path: target.appendingPathComponent("shared.jsonl").path, externalSessionID: "same", anchorSourceKey: nil, anchorExternalID: nil)
+        XCTAssertTrue(coverage.covers(reference))
+        XCTAssertTrue(ledger.permitsAbsence(reference, coverage: coverage))
+        #if DEBUG
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 1)
+        #endif
+    }
+
+    func testNavigationEmptyFullScanRetiresGlobalEnrollmentAndDisplacedRoster() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
+        let root = SourceRoot(agent: .claudeCode, url: directory)
+        let ledger = IndexNavigationWorkLedger()
+        let populated = IndexNavigationCoverage(contentGeneration: database.contentGeneration, scope: .proseOnly,
+            regions: [.init(root: root, context: root.mappingContext,
+                facts: [root.rootScope.relativeScope: .init(order: 0, covered: true)])], performedFullScan: true)
+        let empty = IndexNavigationCoverage(contentGeneration: database.contentGeneration, scope: .proseOnly,
+            regions: [], performedFullScan: true)
+        for coverage in [empty, populated, empty] {
+            let work = ledger.reserve(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)
+            let execution = IndexNavigationWork.begin(work)
+            IndexNavigationWork.observe(coverage, executions: execution); IndexNavigationWork.finish(execution)
+            #if DEBUG
+            XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+            XCTAssertEqual(ledger.countsForTesting["observedScopeFacts"], 0)
+            #endif
+        }
+        #if DEBUG
+        XCTAssertEqual(ledger.retainedConfiguredSourcesForTesting, 0)
+        #endif
+    }
+
     #if DEBUG
     func testEnrolledResetAndScopeScansRetireStartupNavigationDebt() async throws {
         let root = try directory(), file = root.appendingPathComponent("session.jsonl")
@@ -63,6 +165,37 @@ final class IndexingRegressionTests: XCTestCase {
             XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
             XCTAssertEqual(ledger.countsForTesting["activeExecutions"], 0)
         }
+        await scheduler.stop()
+    }
+
+    func testScheduledCoverageRetainsConfiguredProviderWithNoObservations() async throws {
+        let root = try directory(), file = root.appendingPathComponent("session.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database,
+            sources: [ClaudeCodeSource(roots: [root]), CodexSource(root: root)])
+        let terminal = OSAllocatedUnfairLock<IndexNavigationCoverage?>(initialState: nil)
+        await coordinator.indexAll(scope: .proseOnly, progress: { update in if update.phase == .complete { terminal.withLock { $0 = update.navigationCoverage } } })
+        let prior = try XCTUnwrap(terminal.withLock { $0 })
+        let ledger = IndexNavigationWorkLedger()
+        let work = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(file.path)], canonicalReconciliationPaths: [])
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly,
+            progress: { update in if update.phase == .complete { terminal.withLock { $0 = update.navigationCoverage } } })
+        await scheduler.request(paths: [file.path], checkpointReservations: [], navigationWork: work)
+        await scheduler.waitUntilIdle()
+        let partial = try XCTUnwrap(terminal.withLock { $0 })
+        let reference = SessionNavigationReference(agent: AgentKind.codex.rawValue, root: root.path,
+            path: file.path, externalSessionID: "provisional", anchorSourceKey: nil, anchorExternalID: nil)
+        XCTAssertTrue(prior.covers(reference))
+        XCTAssertFalse(partial.covers(reference), "Codex does not ingest a non-rollout file")
+        XCTAssertFalse(ledger.permitsAbsence(reference, coverage: prior.merging(partial)),
+                       "The configured but unobserved provider must retain its independent requirement")
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 1)
+        await scheduler.request(reconcile: true, checkpointReservations: [], navigationWork: work)
+        await scheduler.waitUntilIdle()
+        let full = try XCTUnwrap(terminal.withLock { $0 })
+        XCTAssertTrue(ledger.permitsAbsence(reference, coverage: full))
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
         await scheduler.stop()
     }
 

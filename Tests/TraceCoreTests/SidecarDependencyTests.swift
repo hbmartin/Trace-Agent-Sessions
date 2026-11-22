@@ -8,6 +8,7 @@ import XCTest
 
 @MainActor
 final class SidecarDependencyTests: XCTestCase {
+    #if DEBUG
     func testCombinedWrapUsesGlobalMetadataRecoveryWithoutRootRestartReason() throws {
         let root = try fixture(), sidecar = root.appendingPathComponent("session_index.jsonl")
         try Data().write(to: sidecar)
@@ -21,6 +22,8 @@ final class SidecarDependencyTests: XCTestCase {
         XCTAssertFalse(configured.recoveryReasons.contains(.rootChanged), "receive() must not enroll an extra stream restart")
         XCTAssertTrue(configured.watermarks.isEmpty)
     }
+
+    #endif
 
     private func fixture() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceDependencies-\(UUID())")

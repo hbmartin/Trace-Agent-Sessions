@@ -4,6 +4,52 @@ import os
 
 @MainActor
 final class TraceUITests: XCTestCase {
+    private struct NativeAnchorSample {
+        let index: Int, sessionID: Int64
+        let offset: Double, height: Double, rowY: Double, documentHeight: Double, viewportHeight: Double
+        let visible: Bool
+        let phase: String, generation: String?
+        init?(_ line: String) {
+            let fields = line.split(separator: ",", maxSplits: 9, omittingEmptySubsequences: false).map(String.init)
+            guard fields.count >= 9, let index = Int(fields[0]), let offset = Double(fields[1]),
+                  let visible = Bool(fields[2]), let session = Int64(fields[3]),
+                  ["waiting", "refining", "established"].contains(fields[4]),
+                  let height = Double(fields[5]), let rowY = Double(fields[6]),
+                  let document = Double(fields[7]), let viewport = Double(fields[8]),
+                  [offset, height, rowY, document, viewport].allSatisfy(\.isFinite),
+                  height >= 0, document >= 0, viewport >= 0 else { return nil }
+            let generation: String?
+            if fields.count == 10 {
+                guard let value = try? JSONSerialization.jsonObject(with: Data(fields[9].utf8), options: .fragmentsAllowed) else { return nil }
+                if value is NSNull { generation = nil }
+                else {
+                    guard let object = value as? [String: Any], let token = object["value"] as? String, !token.isEmpty else { return nil }
+                    generation = fields[9]
+                }
+            } else { generation = nil }
+            self.index = index; sessionID = session; self.offset = offset; self.visible = visible
+            phase = fields[4]; self.height = height; self.rowY = rowY
+            documentHeight = document; viewportHeight = viewport
+            self.generation = generation
+        }
+    }
+
+    func testNativeAnchorSampleParserPreservesGenerationAndRejectsMalformedGeometry() {
+        let legacy = "3,-17.25,true,42,waiting,100,300,2000,600"
+        let token = #"{"value":"generation-2"}"#
+        let modern = legacy + "," + token
+        XCTAssertEqual(NativeAnchorSample(modern)?.generation, token)
+        XCTAssertEqual(NativeAnchorSample(modern)?.offset, -17.25)
+        XCTAssertEqual(NativeAnchorSample(modern)?.sessionID, 42)
+        XCTAssertNil(NativeAnchorSample(legacy)?.generation)
+        XCTAssertNil(NativeAnchorSample(legacy + ",null")?.generation)
+        for line in ["invalid", legacy.replacingOccurrences(of: "-17.25", with: "nan"),
+                     legacy.replacingOccurrences(of: ",100,", with: ",-100,"), legacy + ",", legacy + ",junk",
+                     legacy + #",{"value":""}"#] {
+            XCTAssertNil(NativeAnchorSample(line), line)
+        }
+    }
+
     private var nativeAnchorProbe: (app: XCUIApplication, input: URL, output: URL)?
     private var nativeAnchorSessionID: String?
 
@@ -1892,26 +1938,23 @@ final class TraceUITests: XCTestCase {
                        "\(stage): the first completed native offset must match the bookmark")
         if let probe = nativeAnchorProbe, let session = nativeAnchorSessionID {
             let samples = probe.input.deletingLastPathComponent().appendingPathComponent("native-anchor-samples")
-            let observed = fileLines(in: samples).filter {
-                let fields = $0.split(separator: ",")
-                let matchingGeneration = generation.map { fields.count >= 10 && fields[9].contains($0) } ?? true
-                return fields.count >= 4 && fields[0] == String(index) && fields[3] == session && matchingGeneration
+            let observed = fileLines(in: samples).filter { line in
+                let fields = line.split(separator: ",", maxSplits: 9, omittingEmptySubsequences: false)
+                return fields.count >= 4 && fields[0] == String(index) && fields[3] == session
+                    && (generation.map { expected in fields.count >= 10 && fields[9].contains(expected) } ?? true)
             }
             XCTAssertFalse(observed.isEmpty, "\(stage): native anchor sampling must observe main-loop frames")
-            for sample in observed {
-                let fields = sample.split(separator: ",")
-                guard let offset = Double(fields[1]) else { XCTFail("invalid offset sample"); continue }
+            for line in observed {
+                guard let sample = NativeAnchorSample(line) else { XCTFail("invalid geometry sample: \(line)"); continue }
                 var expected = Double(expectedY)
-                if fields.count >= 9, fields[4] != "established",
-                   let height = Double(fields[5]), let rowY = Double(fields[6]),
-                   let documentHeight = Double(fields[7]), let viewportHeight = Double(fields[8]) {
-                    let visibleFooter = fields[4] == "waiting" ? 64.0 : 1.0
-                    let clipped = max(expected, -max(0, height - visibleFooter))
-                    let origin = min(max(0, rowY - clipped), max(0, documentHeight - viewportHeight))
-                    expected = rowY - origin
+                if sample.phase != "established" {
+                    let visibleFooter = sample.phase == "waiting" ? 64.0 : 1.0
+                    let clipped = max(expected, -max(0, sample.height - visibleFooter))
+                    let origin = min(max(0, sample.rowY - clipped), max(0, sample.documentHeight - sample.viewportHeight))
+                    expected = sample.rowY - origin
                 }
-                XCTAssertEqual(offset, expected, accuracy: 8,
-                    "\(stage): anchor displaced across a main-loop turn (\(sample))")
+                XCTAssertEqual(sample.offset, expected, accuracy: 8,
+                    "\(stage): anchor displaced across a main-loop turn")
             }
             try? FileManager.default.removeItem(at: samples)
         }
@@ -6201,14 +6244,13 @@ final class TraceUITests: XCTestCase {
             let waiting = fileLines(in: samples).filter { $0.split(separator: ",").dropFirst(4).first == "waiting" }
             XCTAssertFalse(waiting.isEmpty, "the provisional anchor must be sampled while restoration is pending")
             for sample in waiting {
-                let fields = sample.split(separator: ",")
-                guard fields.count == 9, let y = Double(fields[1]), let height = Double(fields[5]),
-                      let rowY = Double(fields[6]), let documentHeight = Double(fields[7]),
-                      let viewportHeight = Double(fields[8]) else { XCTFail("invalid geometry sample"); continue }
-                let clipped = max(-450.0, -max(0, height - 64))
-                let origin = min(max(0, rowY - clipped), max(0, documentHeight - viewportHeight))
-                XCTAssertEqual(y, rowY - origin, accuracy: 8, "placeholder must retain its fixture-clamped position across main-loop turns")
-                XCTAssertEqual(fields[2], "true")
+                guard let sample = NativeAnchorSample(sample) else { XCTFail("invalid geometry sample"); continue }
+                let clipped = max(-450.0, -max(0, sample.height - 64))
+                let origin = min(max(0, sample.rowY - clipped), max(0, sample.documentHeight - sample.viewportHeight))
+                XCTAssertEqual(sample.offset, sample.rowY - origin, accuracy: 8, "placeholder must retain its fixture-clamped position across main-loop turns")
+                XCTAssertTrue(sample.visible)
+                XCTAssertEqual(sample.index, bookmarkIndex)
+                XCTAssertNotNil(sample.generation, "Current native samples must identify their rendered generation")
             }
             try? FileManager.default.removeItem(at: samples)
         }

@@ -60,5 +60,50 @@ class NavigationRecoveryBenchmarkTests(unittest.TestCase):
         for value in ["ledger-short", "ledger-long", "contention-short", "contention-long"]:
             self.assertIn(value, source)
         self.assertIn("Same worker thread", source)
-        self.assertLess(source.index("await gate.release()"), source.index("let startCPU = processCPU(), start = ContinuousClock.now", source.index("await gate.release()")))
+        self.assertIn("intervals.measure { ledger.benchmarkObserve(initial, work: enrolled) }", source)
+        self.assertIn("intervals.measure { ledger.benchmarkObserve(accepted, work: delivered) }", source)
+        validation = source.index('let unfinished = ledger.benchmarkCounts')
+        self.assertLess(source.index('if let observation { await observation.value }'), validation)
+        self.assertLess(validation, source.index('let accepted = half > 0'))
+        self.assertIn("overlapping spans counted once", source)
         self.assertIn("admissions = nil; names = nil", source)
+
+    def test_execution_intervals_count_overlap_once_and_exclude_control_gaps(self):
+        source = (ROOT / "Scripts/benchmark-navigation-recovery.swift").read_text()
+        start = source.index("private final class ExecutionIntervals:")
+        end = source.index("private actor LedgerStart", start)
+        helper = source[start:end]
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "intervals.swift"
+            probe.write_text("import Foundation\nimport os\nfunc processCPU() -> Double { 0 }\n" + helper + r'''
+let clock = OSAllocatedUnfairLock(initialState: (wall: 0.0, cpu: 0.0))
+private let spans = ExecutionIntervals(now: { clock.withLock { $0.wall } }, cpu: { clock.withLock { $0.cpu } })
+func advance(_ wall: Double, _ cpu: Double) { clock.withLock { $0.wall += wall; $0.cpu += cpu } }
+advance(100, 100) // Release/setup before an early observer starts.
+spans.begin(); advance(2, 1)
+spans.begin(); advance(3, 2) // Concurrent admission; overlap counts once.
+spans.end(); advance(4, 3); spans.end()
+advance(200, 200) // Correctness checks and awaited control gaps count zero.
+spans.measure { advance(5, 4) }
+let result = spans.snapshot
+precondition(result.elapsed == 14 && result.cpu == 10 && result.intervals == 2)
+print("14.0 10.0 2")
+''')
+            result = subprocess.run(["xcrun", "swift", str(probe)], check=True, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.stdout.strip(), "14.0 10.0 2")
+
+    def test_legacy_fixture_synchronization_is_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ["Sources/TraceApp/TraceModel.swift", "Sources/TraceCore/Models.swift"]:
+                target = root / name; target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT / name, target)
+            models = root / "Sources/TraceCore/Models.swift"
+            models.write_text(models.read_text().replace(MODULE.FACTORY, MODULE.LEGACY_FACTORY))
+            output = root / "resolver.swift"
+            with self.assertRaisesRegex(ValueError, "synchronize-existing"):
+                MODULE.prepare(root, output)
+            MODULE.prepare(root, output, synchronize_existing=True)
+            self.assertEqual(models.read_text().count(MODULE.FACTORY), 1)
+            self.assertIn("benchmarkSharedFixture", models.read_text())
+            MODULE.prepare(root, output)

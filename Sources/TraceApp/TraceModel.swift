@@ -922,6 +922,33 @@ final class TraceModel: ObservableObject {
     private var watcherStartup: WatcherStartup?
     private var sourceReloadActivation: WatcherOwner?
     private var scheduler: IndexScheduler?
+    private final class SchedulerScopeEnrollment {
+        let attachment: UUID
+        var committed: IndexScope
+        var accepted: IndexScope
+        var transition: IndexScope?
+        var work: [IndexNavigationWork] = []
+        var resetOwner: UUID?
+        init(attachment: UUID, committed: IndexScope, accepted: IndexScope) {
+            self.attachment = attachment; self.committed = committed; self.accepted = accepted
+        }
+    }
+    private var schedulerScopeEnrollment: SchedulerScopeEnrollment?
+    private func navigationWorkForScope(_ scope: IndexScope, hasIndexWork: Bool = true,
+                                        resetWork: [IndexNavigationWork] = [], resetOwner: UUID? = nil) -> [IndexNavigationWork] {
+        guard let owner = schedulerScopeEnrollment, owner.attachment == attachmentGeneration,
+              hasIndexWork || owner.accepted != scope else { return [] }
+        let changed = owner.accepted != scope || owner.committed != scope
+        owner.accepted = scope
+        guard changed else { return [] }
+        if owner.transition != scope || owner.work.isEmpty {
+            owner.transition = scope
+            owner.work = resetWork.isEmpty
+                ? navigationWorkLedger.reserve(.init(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)) : resetWork
+            owner.resetOwner = resetOwner
+        }
+        return owner.work
+    }
     private var checkpointLedger = IndexCheckpointLedger()
     // These streams cannot enroll new checkpoint obligations until a successful
     // persisted read. Already-reserved work keeps its original ledger ownership.
@@ -1983,10 +2010,13 @@ final class TraceModel: ObservableObject {
         } catch {
             guard isCurrent() else { return }
             recordSummaryReadFailure(error, operation: .restoration)
+            guard isCurrent() else { return }
             updateTranscript {
                 $0.readError = "Could not refresh this session. Try again."
                 $0.absence = nil
             }
+            guard isCurrent() else { return }
+            showPendingSelectionWindow(restoration: navigation)
         }
     }
 
@@ -2165,14 +2195,22 @@ final class TraceModel: ObservableObject {
 
     private func rebuildDeferredCallback(_ claim: RebuildClaim) -> @Sendable () -> Void {
         let reset = claim.reset, enrollment = claim.id, admission = claim.admission
+        // Preserve exact reset-only identities; coalesced work is an execution
+        // ceiling and cannot identify which admissions deferral must retire.
+        let resetWork = claim.navigationWork
         let requestID = admission.requestID
         return { [weak self] in
             guard reset.deferEnrollment(enrollment) else { return }
+            resetWork.forEach { $0.retire() }
             #if DEBUG
             TraceTestHooks.appendLine("request=\(requestID),claim=\(enrollment)", pathKey: "TRACE_TEST_REBUILD_DEFERRED_PATH")
             #endif
             Task { @MainActor [weak self] in
                 guard let self, !self.terminating else { return }
+                if self.schedulerScopeEnrollment?.resetOwner == enrollment {
+                    self.schedulerScopeEnrollment?.work = []
+                    self.schedulerScopeEnrollment?.resetOwner = nil
+                }
                 self.settings.retirePreparedNavigation(owner: enrollment, committed: false)
                 guard self.rebuildRequest?.id == requestID, reset.isDeferred else { return }
                 ModelPublicationBatch.perform {
@@ -3008,6 +3046,7 @@ final class TraceModel: ObservableObject {
         return preferredMessageIntent([captured, prior], token: token)?.reference
     }
     var navigationWorkCountsForTesting: [String: Int] { navigationWorkLedger.countsForTesting }
+    func discardNavigationCoverageCacheForTesting() { navigationCoverage = nil }
     func navigationSourceCoveredForTesting(_ reference: SessionNavigationReference) -> Bool {
         database.map { navigationSourceCovered(reference, database: $0) } ?? false
     }
@@ -3622,6 +3661,12 @@ final class TraceModel: ObservableObject {
             #endif
         }
         guard !Task.isCancelled, attachmentIsCurrent(database: database, generation: generation) else { return }
+        if update.phase == .complete, let coverage = update.navigationCoverage,
+           coverage.contentGeneration == database.contentGeneration, let owner = schedulerScopeEnrollment,
+           owner.attachment == generation {
+            owner.committed = coverage.scope
+            if owner.transition == coverage.scope { owner.work = []; owner.transition = nil; owner.resetOwner = nil }
+        }
         await receiveAdmittedProgress(update)
     }
 
@@ -3744,6 +3789,12 @@ final class TraceModel: ObservableObject {
         fulfillCommittedRebuild()
         let database = pending.database
         let sameDatabase = self.database === database
+        let committedScope: IndexScope
+        do { committedScope = try await database.storedIndexScope() }
+        catch {
+            failAttachment(pending, error: indexErrorMessage(error, prefix: "Could not load index scope: "))
+            return false
+        }
         var counts = SourceFailureCounts(fileFailures: progress.unresolvedFailedFiles,
                                          discoveryFailures: progress.unresolvedDiscoveryFailures)
         if !sameDatabase {
@@ -3782,6 +3833,7 @@ final class TraceModel: ObservableObject {
             self.coordinator = coordinator
             globalSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
             mainSearch.attach(database: database, coordinator: coordinator, diagnostics: diagnostics)
+            schedulerScopeEnrollment = .init(attachment: pending.token, committed: committedScope, accepted: settings.indexScope)
             scheduler = makeScheduler(coordinator, database: database, generation: pending.token)
             pendingAttachment = nil
             if pending.intent == .installation { sourceReloadRecovery = .normal }
@@ -4285,6 +4337,9 @@ final class TraceModel: ObservableObject {
                     ? self.startupActivity : self.activity(for: buffered))
                 : self.startupActivity
             let startupWork = self.navigationWorkLedger.reserve(preparedStartup)
+            let scopeWork = self.navigationWorkForScope(self.settings.indexScope,
+                resetWork: includesRebuild ? rebuild?.navigationWork ?? [] : [],
+                resetOwner: includesRebuild ? rebuild?.id : nil)
             let payload = StartupHandoff(
                 paths: buffered.paths.union(recovery.filePaths),
                 reconciliationPaths: self.startupReconciliationPaths
@@ -4298,7 +4353,7 @@ final class TraceModel: ObservableObject {
                     || self.bufferedSourceWork.obligations.contains { $0.safety },
                 watermarks: buffered.watermarks, streamRoots: buffered.streamRoots,
                 checkpointReservations: buffered.checkpointReservations,
-                navigationWork: IndexNavigationWork.coalesced(buffered.navigationWork + startupWork + (includesRebuild ? rebuild?.navigationWork ?? [] : [])))
+                navigationWork: IndexNavigationWork.coalesced(buffered.navigationWork + startupWork + scopeWork + (includesRebuild ? rebuild?.navigationWork ?? [] : [])))
             let onReset: @Sendable () -> Void
             let onDeferred: @Sendable () -> Void
             let onOrdinary: @Sendable () -> Void
@@ -4503,6 +4558,7 @@ final class TraceModel: ObservableObject {
             }
             ownedClaim.phase = .submitting
             let recovery = ownedClaim.recovery
+            let scopeWork = navigationWorkForScope(settings.indexScope, resetWork: ownedClaim.navigationWork, resetOwner: ownedClaim.id)
             await ownedClaim.scheduler.request(paths: recovery?.changes.paths ?? [],
                 reconciliationPaths: recovery?.changes.reconciliationPaths ?? [],
                 rebuild: true, scope: settings.indexScope,
@@ -4513,7 +4569,7 @@ final class TraceModel: ObservableObject {
                 automaticallyRetryReset: ownedClaim.automaticallyRetryReset,
                 onOrdinaryWorkCompleted: ordinaryRecoveryCompleted(ownedClaim),
                 checkpointReservations: recovery?.changes.checkpointReservations ?? [],
-                navigationWork: IndexNavigationWork.coalesced((recovery?.changes.navigationWork ?? []) + ownedClaim.navigationWork))
+                navigationWork: IndexNavigationWork.coalesced((recovery?.changes.navigationWork ?? []) + ownedClaim.navigationWork + scopeWork))
             ownedClaim.enrollment?.finish(.delivered)
             #if DEBUG
             await holdRebuildHandoffForTesting()
@@ -5412,29 +5468,31 @@ final class TraceModel: ObservableObject {
         func isCurrent() -> Bool {
             !terminating && database === ownerDatabase && sessionRequestID == request
         }
-        selectionSourceIdentity = source ?? cachedSession.flatMap(SelectionSourceIdentity.from) ?? ownerDatabase.map { .init(sessionID: sessionID, generation: $0.contentGeneration, reference: nil) }
-        if let prepared = settings.preparedNavigationRecovery {
-            let reference = selectionSourceIdentity?.reference
-            settings.preparedNavigationRecovery = .init(owner: prepared.owner, generation: prepared.generation, reference: reference)
-            settings.pendingNavigationReference = reference
+        ModelPublicationBatch.perform {
+            selectionSourceIdentity = source ?? cachedSession.flatMap(SelectionSourceIdentity.from) ?? ownerDatabase.map { .init(sessionID: sessionID, generation: $0.contentGeneration, reference: nil) }
+            if let prepared = settings.preparedNavigationRecovery {
+                let reference = selectionSourceIdentity?.reference
+                settings.preparedNavigationRecovery = .init(owner: prepared.owner, generation: prepared.generation, reference: reference)
+                settings.pendingNavigationReference = reference
+            }
+            rememberSelectionProject(knownProject(for: sessionID), sessionID: sessionID)
+            invalidateTranscriptSettlement()
+            pausedTranscriptPreservation = nil
+            cancelTranscriptRecovery(clearPresentation: false)
+            cancelPendingSelectionTranscriptRead()
+            if !preservingMainSearch { mainSearchReturnContext = nil; mainSearchReturnAnchor = nil; mainSearchReturnReference = nil }
+            pendingSelectionCompletion = nil
+            mayRestoreSession = false
+            settings.lastSessionID = selectionSourceIdentity?.generation == database?.contentGeneration ? sessionID : nil
+            guard isCurrent() else { return }
+            lastAppliedTranscriptReadRevision = 0
+            setRequestedMessage(messageID, reference: selectionSourceIdentity?.reference)
+            if let database {
+                pendingSelectionCompletion = .init(database: database, sessionID: sessionID, requestID: request,
+                                                   showWindow: showWindow, preservingMainSearch: preservingMainSearch)
+            }
+            resetTranscriptValues(sessionID: sessionID, session: cachedSession)
         }
-        rememberSelectionProject(knownProject(for: sessionID), sessionID: sessionID)
-        invalidateTranscriptSettlement()
-        pausedTranscriptPreservation = nil
-        cancelTranscriptRecovery(clearPresentation: false)
-        cancelPendingSelectionTranscriptRead()
-        if !preservingMainSearch { mainSearchReturnContext = nil; mainSearchReturnAnchor = nil; mainSearchReturnReference = nil }
-        pendingSelectionCompletion = nil
-        mayRestoreSession = false
-        settings.lastSessionID = selectionSourceIdentity?.generation == database?.contentGeneration ? sessionID : nil
-        guard isCurrent() else { return }
-        lastAppliedTranscriptReadRevision = 0
-        setRequestedMessage(messageID, reference: selectionSourceIdentity?.reference)
-        if let database {
-            pendingSelectionCompletion = .init(database: database, sessionID: sessionID, requestID: request,
-                                               showWindow: showWindow, preservingMainSearch: preservingMainSearch)
-        }
-        resetTranscriptValues(sessionID: sessionID, session: cachedSession)
         guard isCurrent() else { return }
         if let database, let source = selectionSourceIdentity, source.generation != database.contentGeneration {
             let reset = RebuildResetReceipt(); reset.commit()
@@ -6322,10 +6380,16 @@ final class TraceModel: ObservableObject {
         completeSelectionIfPending(snapshot)
     }
 
-    private func showPendingSelectionWindow() {
-        guard let completion = pendingSelectionCompletion, completion.showWindow,
-              transcriptRequestIsCurrent(database: completion.database, sessionID: completion.sessionID,
-                                         request: completion.requestID) else { return }
+    private func showPendingSelectionWindow(restoration: AutomaticNavigation? = nil) {
+        guard let completion = pendingSelectionCompletion, completion.showWindow else { return }
+        if let restoration {
+            guard automaticNavigationIsCurrent(restoration), restoration.reset.isCommitted,
+                  completion.database === restoration.database, completion.sessionID == restoration.sessionID,
+                  completion.requestID == restoration.request else { return }
+        } else {
+            guard transcriptRequestIsCurrent(database: completion.database, sessionID: completion.sessionID,
+                                             request: completion.requestID) else { return }
+        }
         // Consume only window visibility; a later successful read still completes
         // scrolling and diagnostics exactly once.
         pendingSelectionCompletion?.showWindow = false
@@ -7255,10 +7319,6 @@ final class TraceModel: ObservableObject {
             pathKey: "TRACE_TEST_WATCHER_RECONFIG_AUDIT_PATH"
         )
         var changes = changes
-        if navigationCoverage?.scope != settings.indexScope {
-            changes.navigationWork = IndexNavigationWork.coalesced(changes.navigationWork + navigationWorkLedger.reserve(
-                .init(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)))
-        }
         if rebuildRequest?.database === database, rebuildRequest?.reset.isCommitted == false {
             await scheduler.requestOrdinaryRecovery(paths: changes.paths,
                 reconciliationPaths: changes.reconciliationPaths,
@@ -7267,6 +7327,7 @@ final class TraceModel: ObservableObject {
                 watermarks: changes.watermarks, streamRoots: changes.streamRoots,
                 onOrdinaryWorkCompleted: completion, checkpointReservations: changes.checkpointReservations, navigationWork: changes.navigationWork)
         } else if let completion {
+            changes.navigationWork = IndexNavigationWork.coalesced(changes.navigationWork + navigationWorkForScope(settings.indexScope, hasIndexWork: changes.hasIndexWork || safety))
             await scheduler.request(paths: changes.paths,
                 reconciliationPaths: changes.reconciliationPaths, scope: settings.indexScope,
                 activity: safety ? .safetyVerification : (changes.hasIndexWork ? activity(for: changes) : .fileChanges),
@@ -7275,6 +7336,7 @@ final class TraceModel: ObservableObject {
                 onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: completion,
                 checkpointReservations: changes.checkpointReservations, navigationWork: changes.navigationWork)
         } else {
+            changes.navigationWork = IndexNavigationWork.coalesced(changes.navigationWork + navigationWorkForScope(settings.indexScope, hasIndexWork: changes.hasIndexWork || safety))
             await scheduler.request(paths: changes.paths,
                 reconciliationPaths: changes.reconciliationPaths, scope: settings.indexScope,
                 activity: safety ? .safetyVerification : (changes.hasIndexWork ? activity(for: changes) : .fileChanges),
