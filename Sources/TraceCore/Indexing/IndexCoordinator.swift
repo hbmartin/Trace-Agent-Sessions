@@ -1126,7 +1126,7 @@ public actor IndexCoordinator {
                 }
                 return facts.isEmpty ? nil : .init(root: root, context: context, facts: facts)
             }
-            status.navigationCoverage = status.checkpointContentGeneration.map { .init(contentGeneration: $0, scope: scope, regions: regions) }
+            status.navigationCoverage = status.checkpointContentGeneration.map { .init(contentGeneration: $0, scope: scope, regions: regions, performedFullScan: fullScan) }
             status.phase = .complete
             status.currentPath = nil
             status.agent = nil

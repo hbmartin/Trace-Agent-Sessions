@@ -1,0 +1,6 @@
+{
+  "candidate": "3b861a4991864c5a996be51d9e4803d663586ff6",
+  "verifiedEntries": 517,
+  "mismatches": [],
+  "method": "SHA-256 of regular-file Git blobs and matching checkout bytes; symlinks and gitlinks excluded"
+}

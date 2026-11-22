@@ -1,0 +1,3654 @@
+{
+  "status": "passed",
+  "tolerancePercent": 10,
+  "units": {
+    "cpuSeconds": "seconds",
+    "clockSeconds": "seconds",
+    "footprintAndGrowth": "bytes",
+    "updateDurations": "nanoseconds",
+    "pairedChanges": "percent",
+    "growthChanges": "percent of baseline median starting footprint"
+  },
+  "pairs": [
+    {
+      "metadata": {
+        "candidate_commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+        "baseline_commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+        "locale": "en_US",
+        "instrumentation_overlay": "Sources/TraceCore/Diagnostics/TracePerformance.swift",
+        "toolchain": {
+          "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434",
+          "xcode": "Xcode 27.2\nBuild version 27B52",
+          "swift": "Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9 clang-2100.4.1.1)\nTarget: arm64-apple-macosx27.0.0",
+          "architecture": "arm64",
+          "cpu": "Apple M2 Pro",
+          "memory_bytes": "34359738368"
+        },
+        "identical_harness_files": {
+          "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+          "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+          "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+          "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+          "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+          "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+          "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+          "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+          "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+          "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+          "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+        },
+        "baseline_build_inputs": {
+          ".": {
+            "commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+            "tracked_files_sha256": "95dc3759f957ae6e1bc9761e8a8e2ee696062fde49eca0db5d49c21b9a8bb041"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "Trace.xcodeproj/project.pbxproj": "baa9212bd936ea432b2725c94a6d1ff9dcfc1c1b99e6014ac0e4012dbb7bec20",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "8cbbde6fce205d9d33282475d4a6b2f204f3d9d922ea93e1f257256c791a61bf"
+          },
+          "production_sources_sha256": "aade463acbc73506f26a72ecbac434d38ea77a01df07f747ee39680b597d91ba",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "candidate_build_inputs": {
+          ".": {
+            "commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+            "tracked_files_sha256": "9f46489cd1dad39f4158fe53f7133af662ab106a0681cbb718d3ea063f2cb95b"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Trace.xcodeproj/project.pbxproj": "c7779952b6de25fc86d65194d5e70647006b773e5758c92e53bff4bd89163d2a",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "3325c74322ea5e78355d55ffed5baf71fd1d78d36486c60246d3b4b92e745bda"
+          },
+          "production_sources_sha256": "e5868bff451f91ff8bf0726029684ee94a62b7b93df5220f64652276ad6116fd",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "build_inputs_validated": true,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_build_inputs_after": {
+          ".": {
+            "commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+            "tracked_files_sha256": "95dc3759f957ae6e1bc9761e8a8e2ee696062fde49eca0db5d49c21b9a8bb041"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "Trace.xcodeproj/project.pbxproj": "baa9212bd936ea432b2725c94a6d1ff9dcfc1c1b99e6014ac0e4012dbb7bec20",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "8cbbde6fce205d9d33282475d4a6b2f204f3d9d922ea93e1f257256c791a61bf"
+          },
+          "production_sources_sha256": "aade463acbc73506f26a72ecbac434d38ea77a01df07f747ee39680b597d91ba",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "candidate_build_inputs_after": {
+          ".": {
+            "commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+            "tracked_files_sha256": "9f46489cd1dad39f4158fe53f7133af662ab106a0681cbb718d3ea063f2cb95b"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Trace.xcodeproj/project.pbxproj": "c7779952b6de25fc86d65194d5e70647006b773e5758c92e53bff4bd89163d2a",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "3325c74322ea5e78355d55ffed5baf71fd1d78d36486c60246d3b4b92e745bda"
+          },
+          "production_sources_sha256": "e5868bff451f91ff8bf0726029684ee94a62b7b93df5220f64652276ad6116fd",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        }
+      },
+      "workloads": {
+        "scroll": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                0.9204851780000001,
+                0.9359412760000001,
+                0.9190529660000001,
+                0.93245767,
+                0.920090348
+              ],
+              [
+                0.917548102,
+                0.9701999330000001,
+                0.929132857,
+                0.961403424,
+                0.910018206
+              ]
+            ],
+            "clockSeconds": [
+              [
+                1.3532059840000001,
+                1.344770644,
+                1.352318949,
+                1.3453253330000001,
+                1.351697635
+              ],
+              [
+                1.2960773220000001,
+                1.400118758,
+                1.3559866040000002,
+                1.3515631140000002,
+                1.310152417
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                16941056.0,
+                19546112.0,
+                17416192.0,
+                16891928.0,
+                16302080.0
+              ],
+              [
+                16908288.0,
+                16269312.0,
+                19480600.0,
+                17219584.0,
+                18923520.0
+              ]
+            ],
+            "updateCount": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                506038072,
+                508774200,
+                511477560,
+                514557752,
+                517588816
+              ],
+              [
+                496535400,
+                499369832,
+                501761896,
+                504661888,
+                507496320
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                524289848,
+                529401656,
+                530204472,
+                532793168,
+                535463760
+              ],
+              [
+                514754408,
+                517015400,
+                522323840,
+                522962816,
+                527763328
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                522979128,
+                528320312,
+                528893752,
+                531449680,
+                533890896
+              ],
+              [
+                513443688,
+                515639144,
+                521242496,
+                521881472,
+                526419840
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                508774200,
+                511477560,
+                514557752,
+                517588816,
+                520603472
+              ],
+              [
+                499369832,
+                501761896,
+                504661888,
+                507496320,
+                510576512
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                30,
+                30,
+                30,
+                29,
+                30
+              ],
+              [
+                28,
+                31,
+                29,
+                30,
+                28
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                2736128,
+                2703360,
+                3080192,
+                3031064,
+                3014656
+              ],
+              [
+                2834432,
+                2392064,
+                2899992,
+                2834432,
+                3080192
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                11829272
+              ],
+              [
+                11206680
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              0.9204851780000001,
+              0.929132857
+            ],
+            "clockSeconds": [
+              1.351697635,
+              1.3515631140000002
+            ],
+            "xctestGrowthBytes": [
+              16941056.0,
+              17219584.0
+            ],
+            "updateCount": [
+              0,
+              0
+            ],
+            "totalUpdateNanoseconds": [
+              0,
+              0
+            ],
+            "maximumUpdateNanoseconds": [
+              0,
+              0
+            ],
+            "startingFootprintBytes": [
+              511477560,
+              501761896
+            ],
+            "sampledPeakFootprintBytes": [
+              530204472,
+              522323840
+            ],
+            "endingFootprintBytes": [
+              528893752,
+              521242496
+            ],
+            "retainedFootprintBytes": [
+              514557752,
+              504661888
+            ],
+            "footprintSampleCount": [
+              30,
+              29
+            ],
+            "retainedGrowthBytes": [
+              3014656,
+              2834432
+            ],
+            "retainedDriftBytes": [
+              11829272,
+              11206680
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              16.15625,
+              16.421875
+            ],
+            "startingFootprintBytes": [
+              487.7830123901367,
+              478.5174331665039
+            ],
+            "sampledPeakFootprintBytes": [
+              505.6423873901367,
+              498.1268310546875
+            ],
+            "endingFootprintBytes": [
+              504.3923873901367,
+              497.0955810546875
+            ],
+            "retainedFootprintBytes": [
+              490.7205123901367,
+              481.2830810546875
+            ],
+            "retainedGrowthBytes": [
+              2.875,
+              2.703125
+            ],
+            "retainedDriftBytes": [
+              11.281272888183594,
+              10.687522888183594
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": 0.9394696630302464,
+            "clockSeconds": -0.009952003800013124,
+            "sampledPeakFootprintBytes": -1.4863382744157616,
+            "retainedFootprintBytes": -1.9231784890105008,
+            "xctestGrowthBytes": 0.054455565948973404,
+            "retainedGrowthBytes": -0.03523595443757103,
+            "retainedDriftBytes": -0.12172420623888174
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        },
+        "streaming": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                0.26586650900000003,
+                0.282628949,
+                0.268672467
+              ],
+              [
+                0.254536364,
+                0.249865152,
+                0.25391804300000004
+              ]
+            ],
+            "clockSeconds": [
+              [
+                1.056861592,
+                1.04362917,
+                1.0512753830000001
+              ],
+              [
+                1.043990503,
+                1.0557328620000002,
+                1.039326261
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                11403264.0,
+                7684096.0,
+                9371648.0
+              ],
+              [
+                13303808.0,
+                13271040.0,
+                14696448.0
+              ]
+            ],
+            "updateCount": [
+              [
+                11,
+                11,
+                11
+              ],
+              [
+                7,
+                7,
+                7
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                31841250,
+                33503124,
+                30751542
+              ],
+              [
+                26918666,
+                28099333,
+                26174334
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                12152583,
+                12910417,
+                11447792
+              ],
+              [
+                11981291,
+                13322292,
+                12417292
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                133514392,
+                133956760,
+                134005912
+              ],
+              [
+                133514344,
+                133842024,
+                134055016
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                146506904,
+                143557784,
+                145278104
+              ],
+              [
+                148489320,
+                148784232,
+                150586472
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                144917656,
+                141640856,
+                143377560
+              ],
+              [
+                146818152,
+                147113064,
+                148751464
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                133956760,
+                134005912,
+                134956184
+              ],
+              [
+                133842024,
+                134055016,
+                135021672
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                24,
+                24,
+                23
+              ],
+              [
+                24,
+                24,
+                23
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                442368,
+                49152,
+                950272
+              ],
+              [
+                327680,
+                212992,
+                966656
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                999424
+              ],
+              [
+                1179648
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              0.268672467,
+              0.25391804300000004
+            ],
+            "clockSeconds": [
+              1.0512753830000001,
+              1.043990503
+            ],
+            "xctestGrowthBytes": [
+              9371648.0,
+              13303808.0
+            ],
+            "updateCount": [
+              11,
+              7
+            ],
+            "totalUpdateNanoseconds": [
+              31841250,
+              26918666
+            ],
+            "maximumUpdateNanoseconds": [
+              12152583,
+              12417292
+            ],
+            "startingFootprintBytes": [
+              133956760,
+              133842024
+            ],
+            "sampledPeakFootprintBytes": [
+              145278104,
+              148784232
+            ],
+            "endingFootprintBytes": [
+              143377560,
+              147113064
+            ],
+            "retainedFootprintBytes": [
+              134005912,
+              134055016
+            ],
+            "footprintSampleCount": [
+              24,
+              24
+            ],
+            "retainedGrowthBytes": [
+              442368,
+              327680
+            ],
+            "retainedDriftBytes": [
+              999424,
+              1179648
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              8.9375,
+              12.6875
+            ],
+            "startingFootprintBytes": [
+              127.7511215209961,
+              127.6417007446289
+            ],
+            "sampledPeakFootprintBytes": [
+              138.5479965209961,
+              141.8917007446289
+            ],
+            "endingFootprintBytes": [
+              136.7354965209961,
+              140.2979507446289
+            ],
+            "retainedFootprintBytes": [
+              127.7979965209961,
+              127.8448257446289
+            ],
+            "retainedGrowthBytes": [
+              0.421875,
+              0.3125
+            ],
+            "retainedDriftBytes": [
+              0.953125,
+              1.125
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": -5.491602531791986,
+            "clockSeconds": -0.6929563954224207,
+            "sampledPeakFootprintBytes": 2.4133905271781355,
+            "retainedFootprintBytes": 0.03664315944508478,
+            "xctestGrowthBytes": 2.935394973721371,
+            "retainedGrowthBytes": -0.08561568673353999,
+            "retainedDriftBytes": 0.13453893629556285
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        },
+        "watcher": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                4.073942573,
+                4.719000944,
+                2.776083432,
+                3.4293400810000003,
+                3.6214546420000002
+              ],
+              [
+                4.355175595,
+                3.9464686120000003,
+                3.355441845,
+                3.947357246,
+                4.187029101
+              ]
+            ],
+            "clockSeconds": [
+              [
+                7.476186779000001,
+                7.4257310720000005,
+                7.466386918,
+                7.3403334430000005,
+                7.399690168
+              ],
+              [
+                7.421161499,
+                7.173601039,
+                7.36857289,
+                7.23773656,
+                7.332765868
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                6193152.0,
+                5242880.0,
+                5586944.0,
+                4751360.0,
+                6635520.0
+              ],
+              [
+                9535488.0,
+                8634368.0,
+                6586368.0,
+                1048576.0,
+                7225344.0
+              ]
+            ],
+            "updateCount": [
+              [
+                214,
+                236,
+                121,
+                177,
+                189
+              ],
+              [
+                223,
+                195,
+                137,
+                201,
+                208
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                1495216,
+                7676289,
+                1001332,
+                1182998,
+                1232458
+              ],
+              [
+                2372502,
+                8815001,
+                1990462,
+                1856372,
+                2199582
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                446125,
+                6354125,
+                343750,
+                322750,
+                345459
+              ],
+              [
+                682333,
+                7053834,
+                690000,
+                646417,
+                626250
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                132138088,
+                140428416,
+                148292736,
+                155452544,
+                161612928
+              ],
+              [
+                123733144,
+                132220056,
+                140215448,
+                149095576,
+                149783704
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                141821056,
+                149619840,
+                156992640,
+                163480704,
+                171263104
+              ],
+              [
+                137151640,
+                144098456,
+                147293336,
+                154371224,
+                160416920
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                141821056,
+                149619840,
+                156992640,
+                163480704,
+                171263104
+              ],
+              [
+                137151640,
+                144098456,
+                146654360,
+                149783704,
+                160416920
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                140428416,
+                148292736,
+                155452544,
+                161612928,
+                169952384
+              ],
+              [
+                132220056,
+                140215448,
+                149095576,
+                149783704,
+                154895512
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                155,
+                155,
+                155,
+                153,
+                154
+              ],
+              [
+                155,
+                149,
+                155,
+                151,
+                153
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                8290328,
+                7864320,
+                7159808,
+                6160384,
+                8339456
+              ],
+              [
+                8486912,
+                7995392,
+                8880128,
+                688128,
+                5111808
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                29523968
+              ],
+              [
+                22675456
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              3.6214546420000002,
+              3.947357246
+            ],
+            "clockSeconds": [
+              7.4257310720000005,
+              7.332765868
+            ],
+            "xctestGrowthBytes": [
+              5586944.0,
+              7225344.0
+            ],
+            "updateCount": [
+              189,
+              201
+            ],
+            "totalUpdateNanoseconds": [
+              1232458,
+              2199582
+            ],
+            "maximumUpdateNanoseconds": [
+              345459,
+              682333
+            ],
+            "startingFootprintBytes": [
+              148292736,
+              140215448
+            ],
+            "sampledPeakFootprintBytes": [
+              156992640,
+              147293336
+            ],
+            "endingFootprintBytes": [
+              156992640,
+              146654360
+            ],
+            "retainedFootprintBytes": [
+              155452544,
+              149095576
+            ],
+            "footprintSampleCount": [
+              155,
+              153
+            ],
+            "retainedGrowthBytes": [
+              7864320,
+              7995392
+            ],
+            "retainedDriftBytes": [
+              29523968,
+              22675456
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              5.328125,
+              6.890625
+            ],
+            "startingFootprintBytes": [
+              141.4229736328125,
+              133.7198715209961
+            ],
+            "sampledPeakFootprintBytes": [
+              149.7198486328125,
+              140.4698715209961
+            ],
+            "endingFootprintBytes": [
+              149.7198486328125,
+              139.8604965209961
+            ],
+            "retainedFootprintBytes": [
+              148.2510986328125,
+              142.1886215209961
+            ],
+            "retainedGrowthBytes": [
+              7.5,
+              7.625
+            ],
+            "retainedDriftBytes": [
+              28.15625,
+              21.625
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": 8.999218165549507,
+            "clockSeconds": -1.2519333530747128,
+            "sampledPeakFootprintBytes": -6.178190264206016,
+            "retainedFootprintBytes": -4.089330310348604,
+            "xctestGrowthBytes": 1.104841709846125,
+            "retainedGrowthBytes": 0.08838733678769,
+            "retainedDriftBytes": -4.618238347156802
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        }
+      }
+    },
+    {
+      "metadata": {
+        "candidate_commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+        "baseline_commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+        "locale": "en_US",
+        "instrumentation_overlay": "Sources/TraceCore/Diagnostics/TracePerformance.swift",
+        "toolchain": {
+          "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434",
+          "xcode": "Xcode 27.2\nBuild version 27B52",
+          "swift": "Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9 clang-2100.4.1.1)\nTarget: arm64-apple-macosx27.0.0",
+          "architecture": "arm64",
+          "cpu": "Apple M2 Pro",
+          "memory_bytes": "34359738368"
+        },
+        "identical_harness_files": {
+          "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+          "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+          "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+          "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+          "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+          "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+          "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+          "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+          "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+          "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+          "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+        },
+        "baseline_build_inputs": {
+          ".": {
+            "commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+            "tracked_files_sha256": "95dc3759f957ae6e1bc9761e8a8e2ee696062fde49eca0db5d49c21b9a8bb041"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "Trace.xcodeproj/project.pbxproj": "baa9212bd936ea432b2725c94a6d1ff9dcfc1c1b99e6014ac0e4012dbb7bec20",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "8cbbde6fce205d9d33282475d4a6b2f204f3d9d922ea93e1f257256c791a61bf"
+          },
+          "production_sources_sha256": "aade463acbc73506f26a72ecbac434d38ea77a01df07f747ee39680b597d91ba",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "candidate_build_inputs": {
+          ".": {
+            "commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+            "tracked_files_sha256": "9f46489cd1dad39f4158fe53f7133af662ab106a0681cbb718d3ea063f2cb95b"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Trace.xcodeproj/project.pbxproj": "c7779952b6de25fc86d65194d5e70647006b773e5758c92e53bff4bd89163d2a",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "3325c74322ea5e78355d55ffed5baf71fd1d78d36486c60246d3b4b92e745bda"
+          },
+          "production_sources_sha256": "e5868bff451f91ff8bf0726029684ee94a62b7b93df5220f64652276ad6116fd",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "build_inputs_validated": true,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_build_inputs_after": {
+          ".": {
+            "commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+            "tracked_files_sha256": "95dc3759f957ae6e1bc9761e8a8e2ee696062fde49eca0db5d49c21b9a8bb041"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "Trace.xcodeproj/project.pbxproj": "baa9212bd936ea432b2725c94a6d1ff9dcfc1c1b99e6014ac0e4012dbb7bec20",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "8cbbde6fce205d9d33282475d4a6b2f204f3d9d922ea93e1f257256c791a61bf"
+          },
+          "production_sources_sha256": "aade463acbc73506f26a72ecbac434d38ea77a01df07f747ee39680b597d91ba",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "candidate_build_inputs_after": {
+          ".": {
+            "commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+            "tracked_files_sha256": "9f46489cd1dad39f4158fe53f7133af662ab106a0681cbb718d3ea063f2cb95b"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Trace.xcodeproj/project.pbxproj": "c7779952b6de25fc86d65194d5e70647006b773e5758c92e53bff4bd89163d2a",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "3325c74322ea5e78355d55ffed5baf71fd1d78d36486c60246d3b4b92e745bda"
+          },
+          "production_sources_sha256": "e5868bff451f91ff8bf0726029684ee94a62b7b93df5220f64652276ad6116fd",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        }
+      },
+      "workloads": {
+        "scroll": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                0.964848244,
+                0.9327679170000001,
+                0.93075699,
+                0.9641001170000001,
+                0.961469926
+              ],
+              [
+                0.9635033620000001,
+                0.9381583920000001,
+                0.930689545,
+                0.9451891950000001,
+                0.97369424
+              ]
+            ],
+            "clockSeconds": [
+              [
+                1.36247018,
+                1.314574308,
+                1.301820561,
+                1.332782449,
+                1.3478426510000001
+              ],
+              [
+                1.40636355,
+                1.347632403,
+                1.298259588,
+                1.3462962950000001,
+                1.3491726910000001
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                17137664.0,
+                16547840.0,
+                20676608.0,
+                19873816.0,
+                17399808.0
+              ],
+              [
+                16662527.999999998,
+                16138240.0,
+                18120704.0,
+                20643864.0,
+                17154048.0
+              ]
+            ],
+            "updateCount": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                485132088,
+                487720760,
+                490096440,
+                492881720,
+                495732560
+              ],
+              [
+                489703296,
+                492554112,
+                495077248,
+                498108288,
+                501090200
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                503613240,
+                505612088,
+                511854392,
+                513951568,
+                514443088
+              ],
+              [
+                507971456,
+                510068608,
+                513197952,
+                519309208,
+                519063448
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                502269752,
+                504268600,
+                510773048,
+                512755536,
+                513132368
+              ],
+              [
+                506365824,
+                508692352,
+                513197952,
+                518752152,
+                518244248
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                487720760,
+                490096440,
+                492881720,
+                495732560,
+                498517840
+              ],
+              [
+                492554112,
+                495077248,
+                498108288,
+                501090200,
+                503875480
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                29,
+                29,
+                28,
+                30,
+                30
+              ],
+              [
+                30,
+                30,
+                29,
+                30,
+                29
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                2588672,
+                2375680,
+                2785280,
+                2850840,
+                2785280
+              ],
+              [
+                2850816,
+                2523136,
+                3031040,
+                2981912,
+                2785280
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                10797080
+              ],
+              [
+                11321368
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              0.961469926,
+              0.9451891950000001
+            ],
+            "clockSeconds": [
+              1.332782449,
+              1.347632403
+            ],
+            "xctestGrowthBytes": [
+              17399808.0,
+              17154048.0
+            ],
+            "updateCount": [
+              0,
+              0
+            ],
+            "totalUpdateNanoseconds": [
+              0,
+              0
+            ],
+            "maximumUpdateNanoseconds": [
+              0,
+              0
+            ],
+            "startingFootprintBytes": [
+              490096440,
+              495077248
+            ],
+            "sampledPeakFootprintBytes": [
+              511854392,
+              513197952
+            ],
+            "endingFootprintBytes": [
+              510773048,
+              513197952
+            ],
+            "retainedFootprintBytes": [
+              492881720,
+              498108288
+            ],
+            "footprintSampleCount": [
+              29,
+              30
+            ],
+            "retainedGrowthBytes": [
+              2785280,
+              2850816
+            ],
+            "retainedDriftBytes": [
+              10797080,
+              11321368
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              16.59375,
+              16.359375
+            ],
+            "startingFootprintBytes": [
+              467.3923873901367,
+              472.1424560546875
+            ],
+            "sampledPeakFootprintBytes": [
+              488.1423873901367,
+              489.4237060546875
+            ],
+            "endingFootprintBytes": [
+              487.1111373901367,
+              489.4237060546875
+            ],
+            "retainedFootprintBytes": [
+              470.0486373901367,
+              475.0330810546875
+            ],
+            "retainedGrowthBytes": [
+              2.65625,
+              2.71875
+            ],
+            "retainedDriftBytes": [
+              10.296897888183594,
+              10.796897888183594
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": -1.6933167184680031,
+            "clockSeconds": 1.114206899343705,
+            "sampledPeakFootprintBytes": 0.26248871182881245,
+            "retainedFootprintBytes": 1.0604101933421268,
+            "xctestGrowthBytes": -0.05014523264033503,
+            "retainedGrowthBytes": 0.013372062037422675,
+            "retainedDriftBytes": 0.1069764962993814
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        },
+        "streaming": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                0.242245958,
+                0.26395845100000004,
+                0.24677162000000002
+              ],
+              [
+                0.24727842100000003,
+                0.254893802,
+                0.253016412
+              ]
+            ],
+            "clockSeconds": [
+              [
+                1.054296468,
+                1.054131648,
+                1.0571976280000002
+              ],
+              [
+                1.055366896,
+                1.0523871390000001,
+                1.046300648
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                11452416.0,
+                10764288.0,
+                11829248.0
+              ],
+              [
+                13516800.0,
+                13254656.0,
+                14548992.0
+              ]
+            ],
+            "updateCount": [
+              [
+                11,
+                11,
+                11
+              ],
+              [
+                7,
+                7,
+                7
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                32184585,
+                31175416,
+                30906458
+              ],
+              [
+                29094251,
+                28019124,
+                26621708
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                12506083,
+                11411583,
+                11360625
+              ],
+              [
+                13578625,
+                12486416,
+                12148833
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                132416664,
+                132678808,
+                132826264
+              ],
+              [
+                136070344,
+                136266952,
+                136545480
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                145425560,
+                144884888,
+                146736280
+              ],
+              [
+                150471880,
+                151192776,
+                153437384
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                143869080,
+                143443096,
+                144655512
+              ],
+              [
+                149587144,
+                149521608,
+                151094472
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                132678808,
+                132826264,
+                133743768
+              ],
+              [
+                136266952,
+                136545480,
+                137413832
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                23,
+                23,
+                24
+              ],
+              [
+                23,
+                23,
+                23
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                262144,
+                147456,
+                917504
+              ],
+              [
+                196608,
+                278528,
+                868352
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                1064960
+              ],
+              [
+                1146880
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              0.24677162000000002,
+              0.253016412
+            ],
+            "clockSeconds": [
+              1.054296468,
+              1.0523871390000001
+            ],
+            "xctestGrowthBytes": [
+              11452416.0,
+              13516800.0
+            ],
+            "updateCount": [
+              11,
+              7
+            ],
+            "totalUpdateNanoseconds": [
+              31175416,
+              28019124
+            ],
+            "maximumUpdateNanoseconds": [
+              11411583,
+              12486416
+            ],
+            "startingFootprintBytes": [
+              132678808,
+              136266952
+            ],
+            "sampledPeakFootprintBytes": [
+              145425560,
+              151192776
+            ],
+            "endingFootprintBytes": [
+              143869080,
+              149587144
+            ],
+            "retainedFootprintBytes": [
+              132826264,
+              136545480
+            ],
+            "footprintSampleCount": [
+              23,
+              23
+            ],
+            "retainedGrowthBytes": [
+              262144,
+              278528
+            ],
+            "retainedDriftBytes": [
+              1064960,
+              1146880
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              10.921875,
+              12.890625
+            ],
+            "startingFootprintBytes": [
+              126.5323715209961,
+              129.95429229736328
+            ],
+            "sampledPeakFootprintBytes": [
+              138.6886215209961,
+              144.18866729736328
+            ],
+            "endingFootprintBytes": [
+              137.2042465209961,
+              142.65741729736328
+            ],
+            "retainedFootprintBytes": [
+              126.6729965209961,
+              130.21991729736328
+            ],
+            "retainedGrowthBytes": [
+              0.25,
+              0.265625
+            ],
+            "retainedDriftBytes": [
+              1.015625,
+              1.09375
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": 2.530595698160104,
+            "clockSeconds": -0.18109981944849393,
+            "sampledPeakFootprintBytes": 3.9657512750853425,
+            "retainedFootprintBytes": 2.8000606867930875,
+            "xctestGrowthBytes": 1.5559259471188498,
+            "retainedGrowthBytes": 0.012348618627927379,
+            "retainedDriftBytes": 0.061743093139636884
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        },
+        "watcher": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                4.671755127,
+                5.152574304000001,
+                2.7022274260000003,
+                5.557906372000001,
+                2.2771409840000003
+              ],
+              [
+                4.691254645,
+                4.261111796000001,
+                3.9537351650000003,
+                4.322199787000001,
+                3.9666857120000003
+              ]
+            ],
+            "clockSeconds": [
+              [
+                7.389822821,
+                7.261024806000001,
+                7.3372575410000005,
+                7.376387080000001,
+                7.2333318890000005
+              ],
+              [
+                7.512404047,
+                7.278193064000001,
+                7.256040723000001,
+                7.248106321000001,
+                7.155482483
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                6930432.0,
+                6291456.0,
+                5406720.0,
+                6635520.0,
+                5799936.0
+              ],
+              [
+                9453568.0,
+                5308416.0,
+                9519104.0,
+                9289728.0,
+                7094272.0
+              ]
+            ],
+            "updateCount": [
+              [
+                211,
+                184,
+                113,
+                190,
+                81
+              ],
+              [
+                211,
+                211,
+                190,
+                211,
+                195
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                1312245,
+                8067708,
+                949417,
+                8237207,
+                783080
+              ],
+              [
+                2782877,
+                9024545,
+                2110253,
+                9271111,
+                2166595
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                349958,
+                6863917,
+                341417,
+                7101083,
+                332250
+              ],
+              [
+                889875,
+                7044458,
+                621208,
+                7395958,
+                624375
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                131089512,
+                138757224,
+                146818152,
+                153732224,
+                162333824
+              ],
+              [
+                132105368,
+                138871960,
+                145802392,
+                153027736,
+                160122008
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                140674152,
+                149816424,
+                155550824,
+                164267136,
+                171263104
+              ],
+              [
+                142787736,
+                150668440,
+                160056472,
+                164971672,
+                170853528
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                140674152,
+                148636776,
+                155550824,
+                164267136,
+                171263104
+              ],
+              [
+                141821080,
+                147293336,
+                160056472,
+                164480152,
+                170853528
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                138757224,
+                146818152,
+                153732224,
+                162333824,
+                169444480
+              ],
+              [
+                138871960,
+                145802392,
+                153027736,
+                160122008,
+                169313432
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                154,
+                153,
+                153,
+                155,
+                151
+              ],
+              [
+                158,
+                152,
+                152,
+                151,
+                149
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                7667712,
+                8060928,
+                6914072,
+                8601600,
+                7110656
+              ],
+              [
+                6766592,
+                6930432,
+                7225344,
+                7094272,
+                9191424
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                30687256
+              ],
+              [
+                30441472
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              4.671755127,
+              4.261111796000001
+            ],
+            "clockSeconds": [
+              7.3372575410000005,
+              7.256040723000001
+            ],
+            "xctestGrowthBytes": [
+              6291456.0,
+              9289728.0
+            ],
+            "updateCount": [
+              184,
+              211
+            ],
+            "totalUpdateNanoseconds": [
+              1312245,
+              2782877
+            ],
+            "maximumUpdateNanoseconds": [
+              349958,
+              889875
+            ],
+            "startingFootprintBytes": [
+              146818152,
+              145802392
+            ],
+            "sampledPeakFootprintBytes": [
+              155550824,
+              160056472
+            ],
+            "endingFootprintBytes": [
+              155550824,
+              160056472
+            ],
+            "retainedFootprintBytes": [
+              153732224,
+              153027736
+            ],
+            "footprintSampleCount": [
+              153,
+              152
+            ],
+            "retainedGrowthBytes": [
+              7667712,
+              7094272
+            ],
+            "retainedDriftBytes": [
+              30687256,
+              30441472
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              6.0,
+              8.859375
+            ],
+            "startingFootprintBytes": [
+              140.0167007446289,
+              139.0479965209961
+            ],
+            "sampledPeakFootprintBytes": [
+              148.3448257446289,
+              152.6417465209961
+            ],
+            "endingFootprintBytes": [
+              148.3448257446289,
+              152.6417465209961
+            ],
+            "retainedFootprintBytes": [
+              146.6104736328125,
+              145.9386215209961
+            ],
+            "retainedGrowthBytes": [
+              7.3125,
+              6.765625
+            ],
+            "retainedDriftBytes": [
+              29.265647888183594,
+              29.03125
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": -8.789915563568862,
+            "clockSeconds": -1.10690973495433,
+            "sampledPeakFootprintBytes": 2.8965761055691996,
+            "retainedFootprintBytes": -0.4582565591453357,
+            "xctestGrowthBytes": 2.042167102062421,
+            "retainedGrowthBytes": -0.3905784074982772,
+            "retainedDriftBytes": -0.16740709282323618
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        }
+      }
+    },
+    {
+      "metadata": {
+        "candidate_commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+        "baseline_commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+        "locale": "en_US",
+        "instrumentation_overlay": "Sources/TraceCore/Diagnostics/TracePerformance.swift",
+        "toolchain": {
+          "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434",
+          "xcode": "Xcode 27.2\nBuild version 27B52",
+          "swift": "Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9 clang-2100.4.1.1)\nTarget: arm64-apple-macosx27.0.0",
+          "architecture": "arm64",
+          "cpu": "Apple M2 Pro",
+          "memory_bytes": "34359738368"
+        },
+        "identical_harness_files": {
+          "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+          "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+          "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+          "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+          "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+          "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+          "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+          "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+          "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+          "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+          "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+        },
+        "baseline_build_inputs": {
+          ".": {
+            "commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+            "tracked_files_sha256": "95dc3759f957ae6e1bc9761e8a8e2ee696062fde49eca0db5d49c21b9a8bb041"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "Trace.xcodeproj/project.pbxproj": "baa9212bd936ea432b2725c94a6d1ff9dcfc1c1b99e6014ac0e4012dbb7bec20",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "8cbbde6fce205d9d33282475d4a6b2f204f3d9d922ea93e1f257256c791a61bf"
+          },
+          "production_sources_sha256": "aade463acbc73506f26a72ecbac434d38ea77a01df07f747ee39680b597d91ba",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "candidate_build_inputs": {
+          ".": {
+            "commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+            "tracked_files_sha256": "9f46489cd1dad39f4158fe53f7133af662ab106a0681cbb718d3ea063f2cb95b"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Trace.xcodeproj/project.pbxproj": "c7779952b6de25fc86d65194d5e70647006b773e5758c92e53bff4bd89163d2a",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "3325c74322ea5e78355d55ffed5baf71fd1d78d36486c60246d3b4b92e745bda"
+          },
+          "production_sources_sha256": "e5868bff451f91ff8bf0726029684ee94a62b7b93df5220f64652276ad6116fd",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "build_inputs_validated": true,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_build_inputs_after": {
+          ".": {
+            "commit": "61c00dec21762408980afe1a476cfcdb3f859437",
+            "tracked_files_sha256": "95dc3759f957ae6e1bc9761e8a8e2ee696062fde49eca0db5d49c21b9a8bb041"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "Trace.xcodeproj/project.pbxproj": "baa9212bd936ea432b2725c94a6d1ff9dcfc1c1b99e6014ac0e4012dbb7bec20",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "8cbbde6fce205d9d33282475d4a6b2f204f3d9d922ea93e1f257256c791a61bf"
+          },
+          "production_sources_sha256": "aade463acbc73506f26a72ecbac434d38ea77a01df07f747ee39680b597d91ba",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        },
+        "candidate_build_inputs_after": {
+          ".": {
+            "commit": "3b861a4991864c5a996be51d9e4803d663586ff6",
+            "tracked_files_sha256": "9f46489cd1dad39f4158fe53f7133af662ab106a0681cbb718d3ea063f2cb95b"
+          },
+          "Vendor/GRDB.swift/": {
+            "commit": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+            "tracked_files_sha256": "b85c7712ffcee4cadde64d0375cb6c2f4d0d13a6ec16a173964ec177e98101df"
+          },
+          "Vendor/GRDB.swift/SQLiteCustom/src/": {
+            "commit": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+            "tracked_files_sha256": "7257dfbd24fa4fd9c1547e130abee2f697f3ae29a6a5a6befb2ced28b6c6adf3"
+          },
+          "build_input_sha256": {
+            ".gitmodules": "bb55583b5a67afd6ac9a1a22f160425c403f2c8692bdd1bf1e30f1f3610692a3",
+            ".mise.toml": "5a6c47c44465ed062c53e87fc296c0cfa712ab7363a463cedb735689f325ea2f",
+            "Config/Base.xcconfig": "a5b38bca4c3a80e37bd86229640b7183e9edfa695cff11bdb85897191a71927f",
+            "Config/DeveloperIDExportOptions.plist": "dceff10b8a44041a57959acd5e5efa78ff6ae5408011bffbe003707264b698f6",
+            "Config/Signing.xcconfig.example": "4427b1250657c48d7e745525239fcc2876f4a13dde6f48da2be5cbb24c0f46ae",
+            "Config/Trace-Info.plist": "63b5e30e04b8d9e3cbed9d2a58b19ae06b6783f5940f54a06a45af0a6b3b39ca",
+            "Config/Trace.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "Config/TraceUITests.entitlements": "97704a8960b4facceef54397a08fb5d0a456247c3627359215aa2a27df22656c",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "GRDBCustomSQLite/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "GRDBCustomSQLite/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "GRDBCustomSQLite/SQLiteLib-macOS15.patch": "4a7752d3ebbb64336f70edadb0e1c49fefd7458cac08fbdafc32d38ca87ecbb3",
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Trace.xcodeproj/project.pbxproj": "c7779952b6de25fc86d65194d5e70647006b773e5758c92e53bff4bd89163d2a",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.h": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e",
+            "Vendor/GRDB.swift/SQLiteCustom/GRDBCustomSQLite-USER.xcconfig": "ff421cc025125088516d62ea4a3f28693c5fd31faf4afd632a0f5db1afc2b1f3",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib-USER.xcconfig": "cdde91f82ece6039b521bf7207fc438b371d504fc6d65efdbe0d17270df7f839",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcconfig": "daa2bb097efc305c9436bf924f6eb796345a24e604346c315a9a46596988a8a9",
+            "Vendor/GRDB.swift/SQLiteCustom/src/SQLiteLib.xcodeproj/project.pbxproj": "2170ff4cd86ec76f688139e1dec0f4b8ff77f0500852d60d51f08ba1b091b59c",
+            "Vendor/GRDB.swift/SQLiteCustom/src/sqlite/src/os_unix.c": "e71494df824e736f64348c397a3bdfbf6d1c11897e5fe8449891278e846480c9",
+            "project.yml": "3325c74322ea5e78355d55ffed5baf71fd1d78d36486c60246d3b4b92e745bda"
+          },
+          "production_sources_sha256": "e5868bff451f91ff8bf0726029684ee94a62b7b93df5220f64652276ad6116fd",
+          "harness_sha256": {
+            "GRDBCustomSQLite/SQLiteNoControllingTerminal.patch": "e2722e4f8d53c16dd4e4cb4b04a1374d7dcd37f0dc714ad9a8cbc19f318f0510",
+            "GRDBCustomSQLite/SQLiteRegularFiles-v1.patch": "7d37fdf75e7b9f88988ab23ced23c1e859bcc01991a6f4e45933d1fb8fcc7dde",
+            "GRDBCustomSQLite/SQLiteRegularFiles.patch": "b018b3c02a598091ed14f6bea1d0c5517a1a57a189936c5edbb6aa716c329ea4",
+            "Scripts/compare-transcript-scroll-metrics.py": "c001848ca773b1c4cf13b79781df5f06779d8d1fa0e4dcda57ee399cb197ec8a",
+            "Scripts/configure-grdb.sh": "a69e9a3a5c78a90e83b60cfe69d3be85f3f61cc671b3696b78ea7ae1b7aecdde",
+            "Scripts/export-benchmark-samples.py": "d10ad99e5bdcd4f849d879535a42a4b82a380e48ff44a0d2c9b32b82cbb94345",
+            "Scripts/measure-transcript-scroll.sh": "f8f8110788c6c50009db83af28e9e410e16ecfe7c52ab92a899e6157c78a9230",
+            "Scripts/synchronize-benchmark-harness.py": "41eeb4de0c526e1eab5c8526b058e0cc16da2ef97288d1ee35b8038e4353ee5c",
+            "Scripts/validate-benchmark-baseline.py": "13a01219e7cc68c2b52be26cd7ad22238b3aded1d58579809344b8b536ef6afc",
+            "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+            "Tests/TracePerformanceTests/TracePerformanceTests.swift": "f698ce9db38e0f47febeeadf245b1b31226c721734b27620148a849b497edcee"
+          }
+        }
+      },
+      "workloads": {
+        "scroll": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                0.916044304,
+                0.9171999300000001,
+                0.9687263930000001,
+                0.9594953660000001,
+                0.925335109
+              ],
+              [
+                0.9044094060000001,
+                0.933875655,
+                0.9061282490000001,
+                0.9393306640000001,
+                0.983030268
+              ]
+            ],
+            "clockSeconds": [
+              [
+                1.292732829,
+                1.2981657800000002,
+                1.3863819130000001,
+                1.3341695610000002,
+                1.303349123
+              ],
+              [
+                1.3012646010000002,
+                1.336042277,
+                1.300275271,
+                1.339754171,
+                1.389738665
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                17055744.0,
+                16416768.0,
+                18677760.0,
+                17694744.0,
+                19644416.0
+              ],
+              [
+                19972096.0,
+                19693568.0,
+                19808256.0,
+                18399256.0,
+                20447232.0
+              ]
+            ],
+            "updateCount": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                493766456,
+                496437048,
+                498779960,
+                501516088,
+                504203088
+              ],
+              [
+                501434216,
+                504121192,
+                506824552,
+                509839208,
+                512804736
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                512165688,
+                514721592,
+                519178040,
+                519735120,
+                525076304
+              ],
+              [
+                521963368,
+                525338472,
+                527943528,
+                528795520,
+                534103936
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                510822200,
+                512853816,
+                517457720,
+                519210832,
+                523847504
+              ],
+              [
+                521406312,
+                523814760,
+                526632808,
+                528238464,
+                533251968
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                496437048,
+                498779960,
+                501516088,
+                504203088,
+                506857296
+              ],
+              [
+                504121192,
+                506824552,
+                509822824,
+                512804736,
+                515852160
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                29,
+                29,
+                30,
+                29,
+                28
+              ],
+              [
+                29,
+                29,
+                28,
+                29,
+                30
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                2670592,
+                2342912,
+                2736128,
+                2687000,
+                2654208
+              ],
+              [
+                2686976,
+                2703360,
+                2998272,
+                2965528,
+                3047424
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                10420248
+              ],
+              [
+                11730968
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              0.925335109,
+              0.933875655
+            ],
+            "clockSeconds": [
+              1.303349123,
+              1.336042277
+            ],
+            "xctestGrowthBytes": [
+              17694744.0,
+              19808256.0
+            ],
+            "updateCount": [
+              0,
+              0
+            ],
+            "totalUpdateNanoseconds": [
+              0,
+              0
+            ],
+            "maximumUpdateNanoseconds": [
+              0,
+              0
+            ],
+            "startingFootprintBytes": [
+              498779960,
+              506824552
+            ],
+            "sampledPeakFootprintBytes": [
+              519178040,
+              527943528
+            ],
+            "endingFootprintBytes": [
+              517457720,
+              526632808
+            ],
+            "retainedFootprintBytes": [
+              501516088,
+              509822824
+            ],
+            "footprintSampleCount": [
+              29,
+              29
+            ],
+            "retainedGrowthBytes": [
+              2670592,
+              2965528
+            ],
+            "retainedDriftBytes": [
+              10420248,
+              11730968
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              16.875022888183594,
+              18.890625
+            ],
+            "startingFootprintBytes": [
+              475.6736373901367,
+              483.3455581665039
+            ],
+            "sampledPeakFootprintBytes": [
+              495.1267623901367,
+              503.4861831665039
+            ],
+            "endingFootprintBytes": [
+              493.4861373901367,
+              502.2361831665039
+            ],
+            "retainedFootprintBytes": [
+              478.2830123901367,
+              486.2049331665039
+            ],
+            "retainedGrowthBytes": [
+              2.546875,
+              2.8281478881835938
+            ],
+            "retainedDriftBytes": [
+              9.937522888183594,
+              11.187522888183594
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": 0.9229678974603763,
+            "clockSeconds": 2.5083957493099067,
+            "sampledPeakFootprintBytes": 1.6883395145141347,
+            "retainedFootprintBytes": 1.6563249312951254,
+            "xctestGrowthBytes": 0.4237363505943583,
+            "retainedGrowthBytes": 0.05913148555527372,
+            "retainedDriftBytes": 0.26278521695218066
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        },
+        "streaming": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                0.271277402,
+                0.23895497000000002,
+                0.248403953
+              ],
+              [
+                0.256313878,
+                0.253251096,
+                0.24954309700000002
+              ]
+            ],
+            "clockSeconds": [
+              [
+                1.046553577,
+                1.048931167,
+                1.043246476
+              ],
+              [
+                1.066006068,
+                1.040424528,
+                1.057662896
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                10223616.0,
+                11534336.0,
+                9076736.0
+              ],
+              [
+                12599296.0,
+                12648448.0,
+                13090816.0
+              ]
+            ],
+            "updateCount": [
+              [
+                11,
+                11,
+                11
+              ],
+              [
+                7,
+                7,
+                7
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                32876205,
+                31589291,
+                31156251
+              ],
+              [
+                26852377,
+                28502376,
+                27210582
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                12497500,
+                12586542,
+                11046042
+              ],
+              [
+                12146667,
+                13328084,
+                12413542
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                132220032,
+                132367488,
+                132695168
+              ],
+              [
+                136217776,
+                136447152,
+                136725680
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                143377536,
+                145409152,
+                143131776
+              ],
+              [
+                151782576,
+                151356592,
+                152159408
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                142443648,
+                143901824,
+                141771904
+              ],
+              [
+                148817072,
+                149095600,
+                149816496
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                132367488,
+                132695168,
+                133563520
+              ],
+              [
+                136447152,
+                136725680,
+                137708720
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                23,
+                23,
+                23
+              ],
+              [
+                23,
+                23,
+                24
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                147456,
+                327680,
+                868352
+              ],
+              [
+                229376,
+                278528,
+                983040
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                1196032
+              ],
+              [
+                1261568
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              0.248403953,
+              0.253251096
+            ],
+            "clockSeconds": [
+              1.046553577,
+              1.057662896
+            ],
+            "xctestGrowthBytes": [
+              10223616.0,
+              12648448.0
+            ],
+            "updateCount": [
+              11,
+              7
+            ],
+            "totalUpdateNanoseconds": [
+              31589291,
+              27210582
+            ],
+            "maximumUpdateNanoseconds": [
+              12497500,
+              12413542
+            ],
+            "startingFootprintBytes": [
+              132367488,
+              136447152
+            ],
+            "sampledPeakFootprintBytes": [
+              143377536,
+              151782576
+            ],
+            "endingFootprintBytes": [
+              142443648,
+              149095600
+            ],
+            "retainedFootprintBytes": [
+              132695168,
+              136725680
+            ],
+            "footprintSampleCount": [
+              23,
+              23
+            ],
+            "retainedGrowthBytes": [
+              327680,
+              278528
+            ],
+            "retainedDriftBytes": [
+              1196032,
+              1261568
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              9.75,
+              12.0625
+            ],
+            "startingFootprintBytes": [
+              126.2354736328125,
+              130.1261444091797
+            ],
+            "sampledPeakFootprintBytes": [
+              136.7354736328125,
+              144.7511444091797
+            ],
+            "endingFootprintBytes": [
+              135.8448486328125,
+              142.1886444091797
+            ],
+            "retainedFootprintBytes": [
+              126.5479736328125,
+              130.3917694091797
+            ],
+            "retainedGrowthBytes": [
+              0.3125,
+              0.265625
+            ],
+            "retainedDriftBytes": [
+              1.140625,
+              1.203125
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": 1.9513147602767809,
+            "clockSeconds": 1.0615145984064611,
+            "sampledPeakFootprintBytes": 5.862173555556151,
+            "retainedFootprintBytes": 3.037421829858944,
+            "xctestGrowthBytes": 1.8318939466464754,
+            "retainedGrowthBytes": -0.03713298540499613,
+            "retainedDriftBytes": 0.0495106472066615
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        },
+        "watcher": {
+          "individualSamples": {
+            "cpuSeconds": [
+              [
+                4.939270410000001,
+                4.613278467000001,
+                4.771011248000001,
+                4.665430139000001,
+                4.558062906
+              ],
+              [
+                4.629889043,
+                4.442360086,
+                4.144830548,
+                4.783642405,
+                4.2702191670000005
+              ]
+            ],
+            "clockSeconds": [
+              [
+                7.672471204000001,
+                7.394282104,
+                7.4051897030000005,
+                7.285375854000001,
+                7.323213770000001
+              ],
+              [
+                7.57334124,
+                7.380932135,
+                7.565031565000001,
+                7.6402557820000006,
+                7.285116939000001
+              ]
+            ],
+            "xctestGrowthBytes": [
+              [
+                7208984.0,
+                5275648.0,
+                5439488.0,
+                5701632.0,
+                5783552.0
+              ],
+              [
+                9732096.0,
+                8912920.0,
+                8224768.0,
+                9158680.0,
+                9682944.0
+              ]
+            ],
+            "updateCount": [
+              [
+                204,
+                239,
+                219,
+                259,
+                253
+              ],
+              [
+                218,
+                216,
+                204,
+                202,
+                200
+              ]
+            ],
+            "totalUpdateNanoseconds": [
+              [
+                1439131,
+                7872709,
+                1378499,
+                8352957,
+                1385913
+              ],
+              [
+                2461512,
+                51755621,
+                2342959,
+                10450511,
+                2320085
+              ]
+            ],
+            "maximumUpdateNanoseconds": [
+              [
+                374542,
+                6592000,
+                335333,
+                6979333,
+                289750
+              ],
+              [
+                787917,
+                49848542,
+                727084,
+                8094375,
+                737041
+              ]
+            ],
+            "startingFootprintBytes": [
+              [
+                133579856,
+                141739112,
+                148243560,
+                155649128,
+                162907240
+              ],
+              [
+                130925696,
+                139445376,
+                146457752,
+                152093848,
+                158975152
+              ]
+            ],
+            "sampledPeakFootprintBytes": [
+              [
+                143295592,
+                150127720,
+                157582440,
+                164856936,
+                173065344
+              ],
+              [
+                140919936,
+                151733400,
+                157779096,
+                164299952,
+                169411760
+              ]
+            ],
+            "endingFootprintBytes": [
+              [
+                143295592,
+                150127720,
+                157582440,
+                164856936,
+                172115072
+              ],
+              [
+                137184384,
+                151733400,
+                157779096,
+                164299952,
+                168363184
+              ]
+            ],
+            "retainedFootprintBytes": [
+              [
+                141739112,
+                148243560,
+                155649128,
+                162907240,
+                169870464
+              ],
+              [
+                139445376,
+                146457752,
+                152093848,
+                158975152,
+                169084080
+              ]
+            ],
+            "footprintSampleCount": [
+              [
+                159,
+                155,
+                154,
+                152,
+                153
+              ],
+              [
+                157,
+                154,
+                158,
+                158,
+                152
+              ]
+            ],
+            "retainedGrowthBytes": [
+              [
+                8159256,
+                6504448,
+                7405568,
+                7258112,
+                6963224
+              ],
+              [
+                8519680,
+                7012376,
+                5636096,
+                6881304,
+                10108928
+              ]
+            ],
+            "retainedDriftBytes": [
+              [
+                28131352
+              ],
+              [
+                29638704
+              ]
+            ]
+          },
+          "medians": {
+            "cpuSeconds": [
+              4.665430139000001,
+              4.442360086
+            ],
+            "clockSeconds": [
+              7.394282104,
+              7.565031565000001
+            ],
+            "xctestGrowthBytes": [
+              5701632.0,
+              9158680.0
+            ],
+            "updateCount": [
+              239,
+              204
+            ],
+            "totalUpdateNanoseconds": [
+              1439131,
+              2461512
+            ],
+            "maximumUpdateNanoseconds": [
+              374542,
+              787917
+            ],
+            "startingFootprintBytes": [
+              148243560,
+              146457752
+            ],
+            "sampledPeakFootprintBytes": [
+              157582440,
+              157779096
+            ],
+            "endingFootprintBytes": [
+              157582440,
+              157779096
+            ],
+            "retainedFootprintBytes": [
+              155649128,
+              152093848
+            ],
+            "footprintSampleCount": [
+              154,
+              157
+            ],
+            "retainedGrowthBytes": [
+              7258112,
+              7012376
+            ],
+            "retainedDriftBytes": [
+              28131352,
+              29638704
+            ]
+          },
+          "medianMiB": {
+            "xctestGrowthBytes": [
+              5.4375,
+              8.734397888183594
+            ],
+            "startingFootprintBytes": [
+              141.3760757446289,
+              139.6729965209961
+            ],
+            "sampledPeakFootprintBytes": [
+              150.2823257446289,
+              150.4698715209961
+            ],
+            "endingFootprintBytes": [
+              150.2823257446289,
+              150.4698715209961
+            ],
+            "retainedFootprintBytes": [
+              148.4385757446289,
+              145.0479965209961
+            ],
+            "retainedGrowthBytes": [
+              6.921875,
+              6.687522888183594
+            ],
+            "retainedDriftBytes": [
+              26.828147888183594,
+              28.265670776367188
+            ]
+          },
+          "pairedChangePercent": {
+            "cpuSeconds": -4.781339476831477,
+            "clockSeconds": 2.309209448576925,
+            "sampledPeakFootprintBytes": 0.12479563078221152,
+            "retainedFootprintBytes": -2.284163133891762,
+            "xctestGrowthBytes": 2.3320055184859294,
+            "retainedGrowthBytes": -0.1657650423397819,
+            "retainedDriftBytes": 1.0168077453077895
+          },
+          "unavailableHardwareCounters": [],
+          "hardwareCounterAvailability": {
+            "baseline": {
+              "cycles": "available",
+              "instructions": "available"
+            },
+            "candidate": {
+              "cycles": "available",
+              "instructions": "available"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "aggregateMedians": {
+    "scroll": {
+      "cpuSeconds": [
+        0.925335109,
+        0.933875655
+      ],
+      "clockSeconds": [
+        1.332782449,
+        1.347632403
+      ],
+      "xctestGrowthBytes": [
+        17399808.0,
+        17219584.0
+      ],
+      "updateCount": [
+        0,
+        0
+      ],
+      "totalUpdateNanoseconds": [
+        0,
+        0
+      ],
+      "maximumUpdateNanoseconds": [
+        0,
+        0
+      ],
+      "startingFootprintBytes": [
+        498779960,
+        501761896
+      ],
+      "sampledPeakFootprintBytes": [
+        519178040,
+        522323840
+      ],
+      "endingFootprintBytes": [
+        517457720,
+        521242496
+      ],
+      "retainedFootprintBytes": [
+        501516088,
+        504661888
+      ],
+      "footprintSampleCount": [
+        29,
+        29
+      ],
+      "retainedGrowthBytes": [
+        2785280,
+        2850816
+      ],
+      "retainedDriftBytes": [
+        10797080,
+        11321368
+      ]
+    },
+    "streaming": {
+      "cpuSeconds": [
+        0.248403953,
+        0.253251096
+      ],
+      "clockSeconds": [
+        1.0512753830000001,
+        1.0523871390000001
+      ],
+      "xctestGrowthBytes": [
+        10223616.0,
+        13303808.0
+      ],
+      "updateCount": [
+        11,
+        7
+      ],
+      "totalUpdateNanoseconds": [
+        31589291,
+        27210582
+      ],
+      "maximumUpdateNanoseconds": [
+        12152583,
+        12417292
+      ],
+      "startingFootprintBytes": [
+        132678808,
+        136266952
+      ],
+      "sampledPeakFootprintBytes": [
+        145278104,
+        151192776
+      ],
+      "endingFootprintBytes": [
+        143377560,
+        149095600
+      ],
+      "retainedFootprintBytes": [
+        132826264,
+        136545480
+      ],
+      "footprintSampleCount": [
+        23,
+        23
+      ],
+      "retainedGrowthBytes": [
+        327680,
+        278528
+      ],
+      "retainedDriftBytes": [
+        1064960,
+        1179648
+      ]
+    },
+    "watcher": {
+      "cpuSeconds": [
+        4.665430139000001,
+        4.261111796000001
+      ],
+      "clockSeconds": [
+        7.394282104,
+        7.332765868
+      ],
+      "xctestGrowthBytes": [
+        5701632.0,
+        9158680.0
+      ],
+      "updateCount": [
+        189,
+        204
+      ],
+      "totalUpdateNanoseconds": [
+        1312245,
+        2461512
+      ],
+      "maximumUpdateNanoseconds": [
+        349958,
+        787917
+      ],
+      "startingFootprintBytes": [
+        148243560,
+        145802392
+      ],
+      "sampledPeakFootprintBytes": [
+        156992640,
+        157779096
+      ],
+      "endingFootprintBytes": [
+        156992640,
+        157779096
+      ],
+      "retainedFootprintBytes": [
+        155452544,
+        152093848
+      ],
+      "footprintSampleCount": [
+        154,
+        153
+      ],
+      "retainedGrowthBytes": [
+        7667712,
+        7094272
+      ],
+      "retainedDriftBytes": [
+        29523968,
+        29638704
+      ]
+    }
+  },
+  "aggregateMedianMiB": {
+    "scroll": {
+      "xctestGrowthBytes": [
+        16.59375,
+        16.421875
+      ],
+      "startingFootprintBytes": [
+        475.6736373901367,
+        478.5174331665039
+      ],
+      "sampledPeakFootprintBytes": [
+        495.1267623901367,
+        498.1268310546875
+      ],
+      "endingFootprintBytes": [
+        493.4861373901367,
+        497.0955810546875
+      ],
+      "retainedFootprintBytes": [
+        478.2830123901367,
+        481.2830810546875
+      ],
+      "retainedGrowthBytes": [
+        2.65625,
+        2.71875
+      ],
+      "retainedDriftBytes": [
+        10.296897888183594,
+        10.796897888183594
+      ]
+    },
+    "streaming": {
+      "xctestGrowthBytes": [
+        9.75,
+        12.6875
+      ],
+      "startingFootprintBytes": [
+        126.5323715209961,
+        129.95429229736328
+      ],
+      "sampledPeakFootprintBytes": [
+        138.5479965209961,
+        144.18866729736328
+      ],
+      "endingFootprintBytes": [
+        136.7354965209961,
+        142.1886444091797
+      ],
+      "retainedFootprintBytes": [
+        126.6729965209961,
+        130.21991729736328
+      ],
+      "retainedGrowthBytes": [
+        0.3125,
+        0.265625
+      ],
+      "retainedDriftBytes": [
+        1.015625,
+        1.125
+      ]
+    },
+    "watcher": {
+      "xctestGrowthBytes": [
+        5.4375,
+        8.734397888183594
+      ],
+      "startingFootprintBytes": [
+        141.3760757446289,
+        139.0479965209961
+      ],
+      "sampledPeakFootprintBytes": [
+        149.7198486328125,
+        150.4698715209961
+      ],
+      "endingFootprintBytes": [
+        149.7198486328125,
+        150.4698715209961
+      ],
+      "retainedFootprintBytes": [
+        148.2510986328125,
+        145.0479965209961
+      ],
+      "retainedGrowthBytes": [
+        7.3125,
+        6.765625
+      ],
+      "retainedDriftBytes": [
+        28.15625,
+        28.265670776367188
+      ]
+    }
+  },
+  "aggregatePairedChangePercent": {
+    "scroll": {
+      "cpuSeconds": 0.9229678974603763,
+      "clockSeconds": 1.114206899343705,
+      "sampledPeakFootprintBytes": 0.26248871182881245,
+      "retainedFootprintBytes": 1.0604101933421268,
+      "xctestGrowthBytes": 0.054455565948973404,
+      "retainedGrowthBytes": 0.013372062037422675,
+      "retainedDriftBytes": 0.1069764962993814
+    },
+    "streaming": {
+      "cpuSeconds": 1.9513147602767809,
+      "clockSeconds": -0.18109981944849393,
+      "sampledPeakFootprintBytes": 3.9657512750853425,
+      "retainedFootprintBytes": 2.8000606867930875,
+      "xctestGrowthBytes": 1.8318939466464754,
+      "retainedGrowthBytes": -0.03713298540499613,
+      "retainedDriftBytes": 0.061743093139636884
+    },
+    "watcher": {
+      "cpuSeconds": -4.781339476831477,
+      "clockSeconds": -1.10690973495433,
+      "sampledPeakFootprintBytes": 0.12479563078221152,
+      "retainedFootprintBytes": -2.284163133891762,
+      "xctestGrowthBytes": 2.042167102062421,
+      "retainedGrowthBytes": -0.1657650423397819,
+      "retainedDriftBytes": -0.16740709282323618
+    }
+  },
+  "regressions": []
+}

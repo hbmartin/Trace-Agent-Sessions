@@ -1,0 +1,15 @@
+{
+  "test": "testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+  "candidate": "3b861a4991864c5a996be51d9e4803d663586ff6",
+  "runtimeCandidate": "3b861a4991864c5a996be51d9e4803d663586ff6",
+  "baseline": "9e91cba925975d221fada13acef40eae69a0851a",
+  "candidateReceipt": "accepted-v7-known-transcript.json",
+  "baselineReceipt": "baseline-v2-known-transcript.json",
+  "failedTestsPerRun": 1,
+  "assertionIssuesPerRun": 2,
+  "matchingMessages": [
+    "failed - Timed out waiting for app state",
+    "failed: caught error: \"CancellationError()\""
+  ],
+  "classification": "Matching pinned-baseline and final-runtime failures; excluded from passing affected group and retained as an explicit limitation."
+}

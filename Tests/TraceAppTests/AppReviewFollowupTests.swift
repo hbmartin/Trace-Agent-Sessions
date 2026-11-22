@@ -12,6 +12,183 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testSourceReplacementRemapsReaderAndBookmarkWhenItsSessionRowChanges() async throws {
+        try await assertSourceReplacementRemapsReader(replaceWhileResolving: false)
+    }
+
+    func testNewSourceReplacementDuringRestorationKeepsLatestDemandAndBookmark() async throws {
+        try await assertSourceReplacementRemapsReader(replaceWhileResolving: true)
+    }
+
+    private func assertSourceReplacementRemapsReader(replaceWhileResolving: Bool) async throws {
+        let f = try await fixture(count: 1)
+        try line(99, project: "OtherReview").write(to: f.root.appendingPathComponent("unrelated.jsonl"))
+        await f.coordinator.indexAll(scope: .proseOnly)
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        let selected = try XCTUnwrap(f.model.sessions.first { $0.projectID == f.project.id })
+        f.model.selectSession(selected.id)
+        try await wait { !f.model.messages.isEmpty }
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.updateTranscriptBookmark(sessionID: selected.id, bookmark: .init(messageID: message.id, offset: -17, index: 0))
+        let captured = try await f.database.captureNavigationReference(sessionID: selected.id)
+        let reference = try XCTUnwrap(captured)
+        f.model.suppressLiveWatcherIngressForTesting = true
+        let file = f.root.appendingPathComponent("sessions.jsonl"), original = try String(contentsOf: file, encoding: .utf8)
+        var rewritten = Data()
+        for line in original.split(separator: "\n") {
+            var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            object["message"] = ["content": "Rewritten source body"]
+            rewritten += try JSONSerialization.data(withJSONObject: object) + Data([10])
+        }
+        let gate = replaceWhileResolving ? ReviewReadGate() : nil
+        let held = gate.map { gate in Task { await gate.wait() } }
+        f.model.automaticNavigationRestoreGateForTesting = held
+        defer { held?.cancel(); if let gate { Task { await gate.open() } } }
+        let resetCount = await f.database.committedResetCountForTesting
+        try rewritten.write(to: file, options: .atomic)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        if let gate {
+            try await wait { f.model.automaticNavigationRestoreWaitingForTesting }
+            f.model.updateTranscriptBookmark(sessionID: selected.id, bookmark: .init(messageID: message.id, offset: -29, index: 0))
+            let latest = String(decoding: rewritten, as: UTF8.self).replacingOccurrences(of: "Rewritten source body", with: "Latest source body")
+            try Data(latest.utf8).write(to: file, options: .atomic)
+            _ = try await f.model.deliverSourceChangesForTesting(changes)
+                var refreshed = false
+            let refresh = Task { await f.model.refreshSummariesForTesting(lightweight: false); refreshed = true }
+            defer { refresh.cancel() }
+            try await wait { refreshed }
+            await gate.open()
+            f.model.automaticNavigationRestoreGateForTesting = nil
+        }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let resolvedValue = try await f.database.resolveNavigationReference(reference)
+        let resolved = try XCTUnwrap(resolvedValue)
+        XCTAssertNotEqual(resolved.session.id, selected.id, "The surviving unrelated source must force a new session row")
+        try await wait { f.model.selectedSessionID == resolved.session.id && !f.model.messages.isEmpty
+            && (!replaceWhileResolving || f.model.messages.first?.prefix.contains("Latest source body") == true) }
+        XCTAssertEqual(f.model.settings.lastSessionID, resolved.session.id)
+        XCTAssertEqual(f.model.scrollPositions[resolved.session.id]?.offset, replaceWhileResolving ? -29 : -17)
+        if replaceWhileResolving { XCTAssertTrue(f.model.messages.first?.prefix.contains("Latest source body") == true) }
+        let resetsAfter = await f.database.committedResetCountForTesting
+        XCTAssertEqual(resetsAfter, resetCount, "A source remap cannot submit or fulfill a rebuild")
+        XCTAssertNil(f.model.scrollPositions[selected.id])
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    func testSafetyResetWithoutFileEventsSettlesDeletedSelection() async throws {
+        let f = try await deferredResetFixture(count: 1)
+        let sessions = try await f.database.sessions(), session = try XCTUnwrap(sessions.first)
+        f.model.selectSession(session.id); try await wait { !f.model.messages.isEmpty }
+        try FileManager.default.removeItem(at: f.root.appendingPathComponent("sessions.jsonl"))
+        let delivered = await f.model.admitSafetyRecoveryForTesting()
+        XCTAssertTrue(delivered)
+        try await wait { !f.model.pendingRebuildForTesting && f.model.selectedSessionID == nil }
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    func testSafetyResetWithoutFileEventsSettlesMissingTargetAndRemapsBookmark() async throws {
+        let (f, _) = try await pendingSearchBookmarkFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl"), original = try String(contentsOf: file, encoding: .utf8)
+        try Data((original.split(separator: "\n").filter { !$0.contains("intent-target") }.joined(separator: "\n") + "\n").utf8).write(to: file)
+        let delivered = await f.model.admitSafetyRecoveryForTesting()
+        XCTAssertTrue(delivered)
+        try await wait { !f.model.pendingRebuildForTesting && !f.model.pendingMessageIntentForTesting && f.model.messages.count == 2 }
+        XCTAssertNil(f.model.requestedMessageID)
+        let id = try XCTUnwrap(f.model.selectedSessionID)
+        XCTAssertEqual(f.model.scrollPositions[id]?.offset, -40)
+        XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    func testManualRebuildWithoutEventsPaysTheModelsStartupNavigationLedger() async throws {
+        let f = try await fixture(count: 1)
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        let sessions = try await f.database.sessions(), session = try XCTUnwrap(sessions.first)
+        let captured = try await f.database.captureNavigationReference(sessionID: session.id)
+        let reference = try XCTUnwrap(captured)
+        f.model.suppressLiveWatcherIngressForTesting = true
+        try FileManager.default.removeItem(at: f.root.appendingPathComponent("sessions.jsonl"))
+        f.model.rebuildIndex()
+        try await wait { !f.model.pendingRebuildForTesting && f.model.progress.phase == .complete }
+        try await wait { f.model.navigationSourceCoveredForTesting(reference) }
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0)
+    }
+
+    func testSourceRewriteRejectsOldRendererOwnerAndAcceptsReissuedOwner() async throws {
+        let f = try await fixture(count: 1)
+        f.model.settings.onboardingComplete = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+
+        let sessions = try await f.database.sessions(), session = try XCTUnwrap(sessions.first)
+        f.model.selectSession(session.id); try await wait { !f.model.messages.isEmpty }
+        let owner = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: session.id))
+        let file = f.root.appendingPathComponent("sessions.jsonl"), original = try String(contentsOf: file, encoding: .utf8)
+        var rewritten = Data()
+        for line in original.split(separator: "\n") {
+            var row = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            row["message"] = ["content": "Rewritten source body"]
+            rewritten += try JSONSerialization.data(withJSONObject: row) + Data([10])
+        }
+        try rewritten.write(to: file)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        _ = try await f.model.deliverSourceChangesForTesting(changes)
+        try await wait { !f.model.transcriptRestoreOwnerIsCurrent(owner) }
+        XCTAssertTrue(f.model.transcriptRestoreOwnerMayRefreshSource(owner))
+        let current = try XCTUnwrap(f.model.transcriptRestoreOwner(sessionID: session.id)), row = try XCTUnwrap(f.model.messages.first)
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: .init(messageID: row.id, offset: -17, index: 0), origin: .restoration(current))
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: .init(messageID: row.id, offset: -99, index: 0), origin: .restoration(owner))
+        XCTAssertEqual(f.model.scrollPositions[session.id]?.offset, -17)
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: nil)
+        XCTAssertFalse(f.model.transcriptRestoreOwnerMayRefreshSource(owner), "A user clear cannot be adopted by the stale renderer")
+    }
+
+    func testFailedTargetLookupOffersRetryJumpWithoutAnotherFileEvent() async throws {
+        let (f, _) = try await provisionalSearchFixture()
+        let rows = f.model.messages
+        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.requestPendingMessageResolutionForTesting()
+        try await wait { f.model.targetLookupFailureIsVisible }
+        XCTAssertNil(f.model.transcriptBanner)
+        XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
+        let before = await f.database.navigationReadCountsForTesting()
+        f.model.retrySearchTarget()
+        try await wait { !f.model.targetLookupFailureIsVisible }
+        let after = await f.database.navigationReadCountsForTesting()
+        XCTAssertGreaterThan(after.resolution, before.resolution)
+        XCTAssertTrue(f.model.pendingMessageIntentForTesting, "A successful provisional lookup clears the failure, not the retained intent")
+        XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
+    }
+
+    func testRetryJumpDemandDuringIndexingResolvesAtIdleAndNavigationRetiresNotice() async throws {
+        let (f, _) = try await provisionalSearchFixture()
+        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.requestPendingMessageResolutionForTesting()
+        try await wait { f.model.targetLookupFailureIsVisible }
+        let before = await f.database.navigationReadCountsForTesting()
+        await f.model.receiveProgress(.init(phase: .indexing))
+        f.model.retrySearchTarget()
+        await Task.yield()
+        XCTAssertTrue(f.model.targetLookupFailureIsVisible)
+        let held = await f.database.navigationReadCountsForTesting()
+        XCTAssertEqual(held.resolution, before.resolution)
+        await f.model.receiveProgress(.init(phase: .complete))
+        try await wait { !f.model.targetLookupFailureIsVisible }
+        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.requestPendingMessageResolutionForTesting()
+        try await wait { f.model.targetLookupFailureIsVisible }
+        f.model.returnFromSession()
+        XCTAssertFalse(f.model.targetLookupFailureIsVisible)
+    }
+
     func testProvisionalTargetFollowsMovedSourceCoverage() async throws {
         let (f, original) = try await provisionalSearchFixture()
         let old = f.root.appendingPathComponent("sessions.jsonl"), moved = f.root.appendingPathComponent("moved-session.jsonl")

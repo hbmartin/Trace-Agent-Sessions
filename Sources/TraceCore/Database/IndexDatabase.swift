@@ -2472,6 +2472,10 @@ public actor IndexDatabase {
     private var navigationResolutionErrorForTesting: Error?
     func failNavigationCaptureOnceForTesting(_ error: DatabaseError) { navigationCaptureErrorForTesting = error }
     func failNavigationResolutionOnceForTesting(_ error: DatabaseError) { navigationResolutionErrorForTesting = error }
+    public func failTargetResolutionForUITesting() {
+        guard TraceTestHooks.isUITesting else { return }
+        navigationResolutionErrorForTesting = DatabaseError(resultCode: .SQLITE_BUSY)
+    }
     func cancelNavigationResolutionOnceForTesting() { navigationResolutionErrorForTesting = CancellationError() }
     func failSessionReadOnceForTesting(_ error: DatabaseError) { nextSessionReadError = error }
     func sessionReadCountForTesting() -> Int { sessionReadAttempts }

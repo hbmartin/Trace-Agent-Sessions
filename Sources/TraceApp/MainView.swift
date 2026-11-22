@@ -289,6 +289,8 @@ private struct SessionSidebar: View {
                                     if TraceTestHooks.environment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] == "1" {
                                         Button("Reset again") { model.resetAgainForNavigationUITesting() }
                                             .accessibilityIdentifier("testResetAgainWithNavigation")
+                                        Button("Fail jump") { model.failTargetLookupForUITesting() }
+                                            .accessibilityIdentifier("testFailTargetLookup")
                                         Button("Reader Retry") { model.retryReaderDuringIndexingForUITesting() }
                                             .accessibilityIdentifier("testReaderRetryDuringIndexing")
                                     }
@@ -510,6 +512,18 @@ struct TranscriptView: View {
                     Button("Retry") { model.retrySelectedTranscript() }
                         .accessibilityIdentifier("retrySelectedTranscript")
                 }
+                .padding(12)
+                Divider()
+            }
+            if model.targetLookupFailureIsVisible {
+                HStack {
+                    Text("Could not locate the search target.")
+                        .accessibilityIdentifier("searchTargetLookupFailure")
+                    Spacer()
+                    Button("Retry jump") { model.retrySearchTarget() }
+                        .accessibilityIdentifier("retrySearchTarget")
+                }
+                .font(.callout)
                 .padding(12)
                 Divider()
             }
@@ -923,6 +937,7 @@ struct TranscriptRenderer: NSViewRepresentable {
             let sessionID: Int64
             let invocation: UUID
             let messageRevision: Int
+            let renderedMessageCount: Int
             let inputGeneration: UInt64
             let messageID: Int64
             let bookmarkIndex: Int
@@ -1330,10 +1345,19 @@ struct TranscriptRenderer: NSViewRepresentable {
                     refreshesRowHeights: refreshesRowHeights
                 )
             }
-            if refinementChanged, pendingRestore != nil {
-                pendingRestore?.resetRefinement()
-                if restoreGateTask == nil, let pendingRestore {
-                    applyRestore(token: pendingRestore.token)
+            if refinementChanged, let active = pendingRestore {
+                if model.transcriptRestoreOwnerIsCurrent(active.bookmarkOwner) != true,
+                   active.sessionID == sessionID, active.inputGeneration == userInputGeneration,
+                   model.transcriptRestoreOwnerMayRefreshSource(active.bookmarkOwner) {
+                    let targetIsCurrent: Bool
+                    if case .search(let target) = active.reason { targetIsCurrent = model.requestedMessageID == target }
+                    else { targetIsCurrent = true }
+                    if targetIsCurrent {
+                        beginRestore(.init(bookmark: active.effectiveBookmark, reason: active.reason, refreshesRowHeights: true))
+                    } else { cancelPendingRestore(reportCancellation: false) }
+                } else {
+                    pendingRestore?.resetRefinement()
+                    if restoreGateTask == nil, let pendingRestore { applyRestore(token: pendingRestore.token) }
                 }
             }
             refreshDeferredContentRestore()
@@ -1692,7 +1716,14 @@ struct TranscriptRenderer: NSViewRepresentable {
                     active.refreshesRowHeights = true
                     active.resetRefinement()
                 }
-                pendingRestore = active
+                if model?.transcriptRestoreOwnerIsCurrent(active.bookmarkOwner) != true {
+                    // A rewrite changes locator/row geometry. Reissue only the
+                    // still-current restore intent, rather than adopting its old owner.
+                    guard let model, model.transcriptRestoreOwnerMayRefreshSource(active.bookmarkOwner) else { return }
+                    if case .search(let target) = active.reason, model.requestedMessageID != target { return }
+                    beginRestore(.init(bookmark: active.effectiveBookmark, reason: active.reason,
+                        refreshesRowHeights: active.refreshesRowHeights || refreshesRowHeights))
+                } else { pendingRestore = active }
                 return
             }
             beginRestore(request)
@@ -1773,7 +1804,7 @@ struct TranscriptRenderer: NSViewRepresentable {
                   model?.transcriptMessageRevision == messageRevision,
                   model?.transcriptRestoreOwnerIsCurrent(request.bookmarkOwner) == true else { return }
             let receipt = NativeRestorationReceipt(generation: generation, sessionID: sessionID,
-                invocation: request.token, messageRevision: messageRevision,
+                invocation: request.token, messageRevision: messageRevision, renderedMessageCount: items.count,
                 inputGeneration: request.inputGeneration, messageID: bookmark.messageID,
                 bookmarkIndex: bookmark.index, bookmarkOffset: Double(bookmark.offset))
             guard let data = try? JSONEncoder().encode(receipt) else { return }
@@ -2547,6 +2578,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func sampleEstablishedAnchorForUITest() {
+            #if DEBUG
             guard TraceTestHooks.isUITesting,
                   TraceTestHooks.environment["TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH"] != nil,
                   positionEstablished, let table, let scrollView,
@@ -2557,8 +2589,11 @@ struct TranscriptRenderer: NSViewRepresentable {
             let viewport = scrollView.documentVisibleRect
             let waiting = deferredContentRestore != nil && model?.hydratedMessages[items[row].summary.id] == nil
             let phase = waiting ? "waiting" : pendingRestore != nil ? "refining" : "established"
-            TraceTestHooks.appendLine("\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(sessionID),\(phase),\(rect.height),\(rect.minY),\(table.frame.height),\(viewport.height)",
+            let generation = renderedContentGeneration.flatMap { try? JSONEncoder().encode($0) }
+                .map { String(decoding: $0, as: UTF8.self) } ?? "null"
+            TraceTestHooks.appendLine("\(index),\(rect.minY - viewport.minY),\(rect.intersects(viewport)),\(sessionID),\(phase),\(rect.height),\(rect.minY),\(table.frame.height),\(viewport.height),\(generation)",
                 pathKey: "TRACE_TEST_TRANSCRIPT_ANCHOR_SAMPLES_PATH")
+            #endif
         }
 
         private func simulateTranscriptScrollForUITest() {
