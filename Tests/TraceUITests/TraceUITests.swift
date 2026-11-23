@@ -5106,6 +5106,85 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "search-target-survives-automatic-reset")
     }
 
+    func testVisibilityRefreshCannotReapplyRetiredSearchTarget() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let name = "Retired target reader", project = "RetiredTargetProject"
+        try addLongSession(name, project: project, directory: directory, count: 50)
+        let started = directory.appendingPathComponent("search-started"), release = directory.appendingPathComponent("search-release")
+        let receipts = directory.appendingPathComponent("restoration-receipts")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = started.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = receipts.path
+        app.launch()
+        XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20))
+        app.staticTexts[project].firstMatch.click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10)); query.click(); query.typeText("Retired target reader message 35")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Retired target reader message 35")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(waitForFile(started, timeout: 10))
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        let old = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
+        app.buttons["testRetireSearchTarget"].click()
+        app.checkBoxes["System"].click()
+        try Data().write(to: release)
+        XCTAssertNotNil(poll(timeout: 15) { self.nativeRestorationRecords(in: receipts).first {
+            !old.contains($0.invocation) && $0.bookmarkIndex == 0
+        } })
+        for _ in 0..<5 {
+            XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).isHittable)
+            XCTAssertFalse(transcriptMessage(name, index: 35, in: scroll).isHittable)
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    func testDeferredResetAllowsRecreatedSourceReaderRetry() throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        installNativeAnchorProbe(app: app, directory: directory)
+        let name = "Deferred recreated reader", project = "DeferredRecreatedProject"
+        try addLongSession(name, project: project, directory: directory, count: 40)
+        let deferred = directory.appendingPathComponent("deferred"), committed = directory.appendingPathComponent("committed")
+        let receipts = directory.appendingPathComponent("restoration-receipts"), saved = directory.appendingPathComponent("bookmark"), idle = directory.appendingPathComponent("idle")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "3"
+        app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
+        app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_RESTORE_RECEIPTS_PATH"] = receipts.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_BOOKMARK_SAVED_PATH"] = saved.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SCROLL_IDLE_AUDIT_PATH"] = idle.path
+        app.launchEnvironment["TRACE_TEST_SAFETY_START_DELAY_MS"] = "120000"
+        app.launch()
+        XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20))
+        app.buttons["testRebuildSidebarIndex"].click()
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 1 ? true : nil })
+        app.staticTexts[project].firstMatch.click(); openSidebarSession(name, in: app)
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        scroll.scroll(byDeltaX: 0, deltaY: -400)
+        XCTAssertTrue(waitForLineCount(idle, line: "finished", count: 1, timeout: 10))
+        let bookmark = try XCTUnwrap(waitForStableBookmarkIndex(saved))
+        let y = try XCTUnwrap(savedAnchorY(index: bookmark, in: scroll, timeout: 10))
+        let prior = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
+        let file = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+        let text = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "Transcript fixture content.", with: "Recreated reader content.")
+        try Data(text.utf8).write(to: file, options: .atomic)
+        XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 2 ? true : nil })
+        XCTAssertTrue(fileLines(in: committed).isEmpty)
+        XCTAssertNotNil(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
+            !prior.contains($0.invocation) && $0.bookmarkIndex == bookmark
+        } })
+        assertSavedAnchorOnScreen(index: bookmark, in: scroll, expectedY: y, stage: "deferred reset source recreation")
+        XCTAssertTrue(app.windows[name].exists)
+        XCTAssertTrue(scroll.staticTexts.containing(NSPredicate(format: "value CONTAINS %@", "Recreated reader content.")).firstMatch.waitForExistence(timeout: 10))
+    }
+
     func testAutomaticResetFailureKeepsReaderAndIndexesLiveChange() throws {
         try assertAutomaticResetPreservesReader(failRecoveryFirst: true)
     }

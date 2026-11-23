@@ -291,6 +291,9 @@ private struct SessionSidebar: View {
                                             .accessibilityIdentifier("testResetAgainWithNavigation")
                                         Button("Fail jump") { model.failTargetLookupForUITesting() }
                                             .accessibilityIdentifier("testFailTargetLookup")
+                                        Button("Retire jump") {
+                                            if let target = model.requestedMessageID { model.consumeRequestedMessageID(target) }
+                                        }.accessibilityIdentifier("testRetireSearchTarget")
                                         Button("Reader Retry") { model.retryReaderDuringIndexingForUITesting() }
                                             .accessibilityIdentifier("testReaderRetryDuringIndexing")
                                     }
@@ -1223,6 +1226,7 @@ struct TranscriptRenderer: NSViewRepresentable {
             renderedContentGeneration = transcript.session?.contentGeneration
             #endif
             self.model = model
+            retireObsoleteSearchRestore()
             if self.sessionID != sessionID || self.visibility != visibility || self.density != density
                 || self.messageRevision != messageRevision || self.contentRevision != contentRevision {
                 invalidateDocumentExtent()
@@ -1386,16 +1390,16 @@ struct TranscriptRenderer: NSViewRepresentable {
 
         #if DEBUG
         /// Narrow invariant fixture; exercise the actual priority/refresh path.
-        func refreshCapturedSearchForTesting(model: TraceModel, sessionID: Int64,
-                                             bookmark: TranscriptBookmark) -> Bool {
+        func captureSearchForTesting(model: TraceModel, sessionID: Int64, bookmark: TranscriptBookmark) {
             self.model = model; self.sessionID = sessionID
-            var captured = RestoreRequest(bookmark: bookmark, reason: .search(messageID: bookmark.messageID),
-                refreshesRowHeights: false)
+            var captured = RestoreRequest(bookmark: bookmark, reason: .search(messageID: bookmark.messageID), refreshesRowHeights: false)
             captured.sessionID = sessionID; captured.inputGeneration = userInputGeneration
             captured.bookmarkOwner = model.transcriptRestoreOwner(sessionID: sessionID)
             pendingRestore = captured
-            requestRestore(bookmark, reason: .visibility, refreshesRowHeights: true)
-            return pendingRestore == nil
+        }
+        var hasPendingSearchForTesting: Bool {
+            if case .search = pendingRestore?.reason { return true }
+            return false
         }
 
         func updateRowsForTesting(_ messages: [MessageSummary], generation: Int64) {
@@ -1703,6 +1707,17 @@ struct TranscriptRenderer: NSViewRepresentable {
             )
         }
 
+        @discardableResult
+        private func retireObsoleteSearchRestore() -> Bool {
+            let reasons = [pendingRestore?.reason, deferredContentRestore?.reason].compactMap { $0 }
+            guard reasons.contains(where: {
+                if case .search(let target) = $0 { return model?.requestedMessageID != target }
+                return false
+            }) else { return false }
+            cancelPendingRestore(reportCancellation: false)
+            return true
+        }
+
         private func requestRestore(
             _ bookmark: TranscriptBookmark, reason: RestoreRequest.Reason,
             refreshesRowHeights: Bool = false
@@ -1719,13 +1734,7 @@ struct TranscriptRenderer: NSViewRepresentable {
                     return
                 }
             }
-            if !reason.isExplicitNavigation, let active = pendingRestore,
-               case .search(let target) = active.reason, model?.requestedMessageID != target {
-                // Retire before priority arbitration: an obsolete search has a
-                // higher priority than every passive geometry refresh.
-                cancelPendingRestore(reportCancellation: false)
-                return
-            }
+            retireObsoleteSearchRestore()
             let activePriority = max(pendingRestore?.reason.priority ?? -1,
                                      deferredContentRestore?.reason.priority ?? -1)
             if activePriority > reason.priority, !reason.isExplicitNavigation { return }
@@ -1863,6 +1872,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func refreshDeferredContentRestore() {
+            retireObsoleteSearchRestore()
             guard let deferred = deferredContentRestore else { return }
             guard deferred.sessionID == sessionID, deferred.inputGeneration == userInputGeneration,
                   !isUserInteracting else {
@@ -1915,6 +1925,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func applyRestore(token: UUID) {
+            guard !retireObsoleteSearchRestore() else { return }
             guard !items.isEmpty else {
                 cancelPendingRestore(reportCancellation: true, cause: .lifecycle)
                 return
@@ -2966,6 +2977,7 @@ struct TranscriptRenderer: NSViewRepresentable {
             _ snapshot: PositionSnapshot, reason: RestoreRequest.Reason,
             refreshesRowHeights: Bool = false
         ) {
+            retireObsoleteSearchRestore()
             guard !items.isEmpty else { return }
             let activePriority = max(pendingRestore?.reason.priority ?? -1,
                                      deferredContentRestore?.reason.priority ?? -1)

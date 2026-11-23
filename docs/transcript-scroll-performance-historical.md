@@ -158,3 +158,6 @@ Run `Scripts/measure-transcript-scroll.sh` for the complete pair of tests and
 `Scripts/compare-transcript-scroll-metrics.py baseline/metrics.json candidate/metrics.json`
 for a median comparison. Use `--test 'testStreamingTranscriptFollowPerformance()'`
 for streaming. Test failures are propagated by the measurement script.
+
+The benchmark workflow described above was retired in PR #100. These are historical
+commands and results; current performance acceptance runs locally under AGENTS.md.

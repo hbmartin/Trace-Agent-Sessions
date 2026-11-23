@@ -72,3 +72,15 @@ can count as successful verification.
 Receipts include actual tracked input hashes, relevant untracked inputs and
 submodule state, including permitted vendor modifications. Inputs are rechecked
 at the end; changes reject acceptance even if the selected tests passed.
+
+Explicit `--derived-data` is reuse-only: prepare the full Debug test build first.
+The runner pins the active SDK/arm64 test manifest and verifies shared manifest
+hashes at completion. Missing compatible products fail without rebuilding. Without
+that option each attempt builds privately. Paths remain invocation-relative.
+
+Summary exports retain stdout and stderr separately. Interruptions received during
+timeout cleanup are propagated after bounded TERM/KILL process-group cleanup. If
+cleanup cannot be confirmed, the batch aborts and records the remaining group; do
+not resume desktop work until remaining validation processes are checked. Vendor
+provenance recursively hashes initialized submodule inputs and identifies missing
+checkouts explicitly.

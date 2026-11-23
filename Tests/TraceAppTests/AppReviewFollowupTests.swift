@@ -12,6 +12,32 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testDeferredResetAllowsRecreatedSourceRestorationAndRetry() async throws {
+        let f = try await deferredResetFixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id); try await wait { !f.model.messages.isEmpty }
+        let before = f.model.selectedSession?.transcriptIdentity
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        await f.database.setResetFaultForTesting(.rollback)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        let transferred = try await f.model.deliverSourceChangesForTesting(changes)
+        XCTAssertEqual(transferred, .recoveryTransferred)
+        try await wait { f.model.isRebuildPendingRecovery && !f.model.rebuildClaimedForTesting }
+        await (try XCTUnwrap(f.model.schedulerForTesting)).waitUntilIdle()
+        try Data(text.replacingOccurrences(of: "NavigationNeedle", with: "RecreatedReaderNeedle").utf8).write(to: file, options: .atomic)
+        await (try XCTUnwrap(f.model.coordinatorForTesting)).refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        try await wait { f.model.selectedSession?.transcriptIdentity != before && !f.model.messages.isEmpty }
+        let message = try XCTUnwrap(f.model.messages.first)
+        f.model.hydrate(message); try await wait { f.model.hydratedMessages[message.id] != nil }
+        XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RecreatedReaderNeedle"))
+        f.model.retrySelectedTranscript()
+        await f.clock.advance()
+        XCTAssertFalse(f.model.messages.isEmpty)
+        XCTAssertTrue(f.model.isRebuildPendingRecovery, "reader restoration cannot consume reset debt")
+    }
+
     func testSameDatabaseReloadUsesCommittedScopeCacheDespiteReadFailure() async throws {
         let f = try await fixture(count: 2)
         XCTAssertEqual(f.database.committedIndexScope, .proseOnly)
@@ -146,8 +172,11 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertNil(f.model.requestedMessageID)
         let renderer = TranscriptRenderer.Coordinator()
         defer { renderer.detach() }
-        XCTAssertTrue(renderer.refreshCapturedSearchForTesting(model: f.model, sessionID: session.id, bookmark: bookmark),
-            "The captured search cannot retain priority after its target was retired")
+        renderer.captureSearchForTesting(model: f.model, sessionID: session.id, bookmark: bookmark)
+        XCTAssertTrue(renderer.hasPendingSearchForTesting)
+        renderer.update(model: f.model, sessionID: session.id, visibility: TranscriptVisibility(), density: .comfortable,
+            messageRevision: f.model.transcriptMessageRevision, contentRevision: 0, scrollRequest: UUID())
+        XCTAssertFalse(renderer.hasPendingSearchForTesting, "update must retire the obsolete search before geometry/refinement")
         XCTAssertEqual(f.model.scrollPositions[session.id]?.offset, -31)
         XCTAssertEqual(f.model.selectedSessionID, session.id)
     }
@@ -2379,7 +2408,7 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.database.setResetFaultForTesting(.rollback)
         // Failure progress precedes retry bookkeeping; join that pass before
         // moving virtual time so its five-second deadline is already fixed.
-        await f.model.schedulerForTesting?.waitUntilIdle()
+        await (try XCTUnwrap(f.model.schedulerForTesting)).waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting
             && f.model.safetyVerificationActiveForTesting }
@@ -2835,7 +2864,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
         f.model.startReadyStartupForTesting(sources: [source])
         await f.database.setResetFaultForTesting(.rollback)
-        await f.model.schedulerForTesting?.waitUntilIdle()
+        await (try XCTUnwrap(f.model.schedulerForTesting)).waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -2881,7 +2910,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
         f.model.startReadyStartupForTesting(sources: [source])
         await f.database.setResetFaultForTesting(.rollback)
-        await f.model.schedulerForTesting?.waitUntilIdle()
+        await (try XCTUnwrap(f.model.schedulerForTesting)).waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -2939,7 +2968,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.rebuildIndex()
         try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
         await f.database.setResetFaultForTesting(.rollback)
-        await f.model.schedulerForTesting?.waitUntilIdle()
+        await (try XCTUnwrap(f.model.schedulerForTesting)).waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -2973,7 +3002,7 @@ final class AppReviewFollowupTests: XCTestCase {
                 : f.model.objectWillChange.sink { observe() }
             defer { subscription.cancel() }
             await f.database.setResetFaultForTesting(.rollback)
-            await f.model.schedulerForTesting?.waitUntilIdle()
+            await (try XCTUnwrap(f.model.schedulerForTesting)).waitUntilIdle()
             await f.clock.advance(by: .seconds(5))
             try await wait { replaced && f.model.rebuildRequestIDForTesting != old }
             let newer = try XCTUnwrap(f.model.rebuildRequestIDForTesting)
@@ -9196,6 +9225,9 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.hydratedMessages[message.id] != nil }
         let rows = f.model.messages, project = f.model.selectedProjectID
         await f.model.receiveProgress(.init(phase: .indexing))
+        let startGate = ReviewReadGate(), startHold = Task { await startGate.wait() }
+        defer { startHold.cancel(); Task { await startGate.open() } }
+        f.model.transcriptRecoveryStartGateForTesting = startHold
         await f.database.failTranscriptReadOnceForTesting()
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
         let gate = ReviewReadGate(), held = Task { await gate.wait() }
@@ -9204,10 +9236,10 @@ final class AppReviewFollowupTests: XCTestCase {
         _ = try await f.database.synchronizeConfiguredRoots([])
         // Wait on this recovery's gate rather than assuming its initial sleep
         // was registered before the summary call returned.
-        try await wait {
-            await f.clock.advance(by: .milliseconds(250))
-            return f.model.transcriptRecoveryPublicationWaitingForTesting
-        }
+        try await wait { f.model.transcriptRecoveryStartWaitingForTesting }
+        await startGate.open()
+        await f.clock.advance(by: .milliseconds(250))
+        try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
         XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
@@ -10092,6 +10124,9 @@ final class AppReviewFollowupTests: XCTestCase {
 
     func testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead() async throws {
         let f = try await fixture(count: 2)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id)
+        try await wait { !f.model.messages.isEmpty }
         var pass = IndexProgress(phase: .indexing)
         await f.model.receiveProgress(pass)
         let before = await f.database.transcriptReadCountForTesting()
@@ -10113,6 +10148,8 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.model.receiveProgress(terminal)
         XCTAssertEqual(f.model.progress.phase, .complete)
         XCTAssertFalse(f.model.indexingPassActiveForTesting)
+        let accepted = await f.database.transcriptReadCountForTesting()
+        XCTAssertGreaterThan(accepted, rejected, "positive control: accepted terminal delivery must read the selected session")
     }
 
     func testSettlementPublishesCurrentErrorRatherThanCapturedEpisode() async throws {

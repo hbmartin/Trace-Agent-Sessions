@@ -17,5 +17,16 @@
   "uiReceipts": [
     "ui-local-signed-28.json",
     "ui-focus-recovery-2.json"
+  ],
+  "additionalAcceptedUIRevisions": [
+    {
+      "revision": "74ca740484b8678775b11f7ba6a77244d5a0fb21",
+      "finalImplementation": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "changedPaths": [
+        "Tests/TraceAppTests/AppReviewFollowupTests.swift"
+      ],
+      "uiTargetInputsChanged": false,
+      "receipt": "ui-focus-recovery-2.json"
+    }
   ]
 }

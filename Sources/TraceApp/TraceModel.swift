@@ -1349,7 +1349,16 @@ final class TraceModel: ObservableObject {
     }
     private var rebuildRequest: RebuildRequest?
     private var pendingRebuild: Bool { rebuildRequest != nil }
+    private func retireUncommittedNavigation(reset: RebuildResetReceipt, navigation: AutomaticNavigation? = nil) {
+        guard !reset.isCommitted else { return }
+        if let current = automaticNavigation, current.reset === reset,
+           navigation == nil || current === navigation { automaticNavigation = nil }
+        if let current = preparedResetNavigation, current.reset === reset,
+           navigation == nil || current === navigation { preparedResetNavigation = nil }
+    }
+
     private func discardRebuildRequest() {
+        if let request = rebuildRequest { retireUncommittedNavigation(reset: request.reset) }
         if let request = rebuildRequest, !terminating, request.database === database, !request.reset.isCommitted,
            request.recoveryInputs.changes.hasIndexWork || !request.recoveryInputs.changes.watermarks.isEmpty || request.recoveryInputs.safety {
             let obligations: [BufferedOrdinaryWork] = request.recoveryInputs.safety
@@ -2226,7 +2235,7 @@ final class TraceModel: ObservableObject {
         let reset = claim.reset, enrollment = claim.id, admission = claim.admission
         // Preserve exact reset-only identities; coalesced work is an execution
         // ceiling and cannot identify which admissions deferral must retire.
-        let resetWork = claim.navigationWork
+        let resetWork = claim.navigationWork, navigation = claim.navigation
         let requestID = admission.requestID
         return { [weak self] in
             guard reset.deferEnrollment(enrollment) else { return }
@@ -2243,6 +2252,7 @@ final class TraceModel: ObservableObject {
                 self.settings.retirePreparedNavigation(owner: enrollment, committed: false)
                 guard self.rebuildRequest?.id == requestID, reset.isDeferred else { return }
                 ModelPublicationBatch.perform {
+                    self.retireUncommittedNavigation(reset: reset, navigation: navigation)
                     self.retireRebuildAdmission(admission)
                     self.updateRebuildPresentation()
                     self.updateCostsTotalsUpdating()
@@ -2973,6 +2983,8 @@ final class TraceModel: ObservableObject {
     var configuredRootsPublicationGateForTesting: Task<Void, Never>?
     private(set) var configuredRootsPublicationWaitingForTesting = false
     var transcriptRecoveryReadGateForTesting: Task<Void, Never>?
+    var transcriptRecoveryStartGateForTesting: Task<Void, Never>?
+    private(set) var transcriptRecoveryStartWaitingForTesting = false
     var transcriptRecoveryPublicationGateForTesting: Task<Void, Never>?
     var transcriptSettlementGateForTesting: Task<Void, Never>?
     private(set) var transcriptSettlementWaitingForTesting = false
@@ -5926,7 +5938,7 @@ final class TraceModel: ObservableObject {
         guard !indexWorkflow.isActive,
               let source = selectionSourceIdentity, source.sessionID == sessionID,
               source.generation == database.contentGeneration, let reference = source.reference else { return .unchanged }
-        if let navigation = automaticNavigation, automaticNavigationIsCurrent(navigation) {
+        if let navigation = automaticNavigation, automaticNavigationIsCurrent(navigation), !navigation.reset.isDeferred {
             // A current unsent rebuild owns its captured navigation too. Its
             // eventual restoration uses the same stable source reference.
             return .handled
@@ -6183,6 +6195,14 @@ final class TraceModel: ObservableObject {
             defer {
                 if transcriptRecoveryEpisode?.id == episode.id { transcriptRecoveryTask = nil }
             }
+            #if DEBUG
+            if let gate = transcriptRecoveryStartGateForTesting {
+                transcriptRecoveryStartGateForTesting = nil
+                transcriptRecoveryStartWaitingForTesting = true
+                await gate.value
+                transcriptRecoveryStartWaitingForTesting = false
+            }
+            #endif
             var lastError = error
             let delays: [Duration] = immediately ? [.zero, .milliseconds(250), .seconds(1), .seconds(4)]
                                                  : [.milliseconds(250), .seconds(1), .seconds(4)]

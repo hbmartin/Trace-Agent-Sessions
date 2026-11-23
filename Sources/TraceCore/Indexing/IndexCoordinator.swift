@@ -530,6 +530,12 @@ public actor IndexCoordinator {
                      onIndexReset: @escaping @Sendable (IndexContentGeneration) -> Void = { _ in }, activity: IndexActivity,
                      satisfiesSafetyReconciliation: Bool,
                      progress: @escaping @Sendable (IndexProgress) async -> Void) async -> ScheduledExecutionResult {
+        // Directory notifications require discovery, not negative leaf evidence.
+        let directoryInputs = Set((paths ?? []).filter { path in
+            var directory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &directory) && directory.boolValue
+        })
+        let reconciliationPaths = reconciliationPaths.union(directoryInputs)
         var performedFullScan = false
         var status = IndexProgress(phase: .discovering)
         status.checkpointContentGeneration = database.contentGeneration
@@ -789,17 +795,19 @@ public actor IndexCoordinator {
                         }
                     }
                 }
-                for path in (paths ?? []).sorted() {
+                for path in (paths ?? []).subtracting(directoryInputs).sorted() {
                     try Task.checkCancellation()
                     let url = URL(fileURLWithPath: pathsAreCanonical ? path : TraceFileIO.canonicalPath(path).path)
-                    let matches = classifications(url: url, mappingContexts: mappingContexts)
+                    let accepted = classifications(url: url, mappingContexts: mappingContexts, includeAllRoots: true)
+                    let matches = preferredClassifications(accepted)
+                    let regularFile = (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
                     // Negative classification is source-owned evidence too. A
                     // provider/root which definitively does not claim this input
                     // must not retain debt until an unrelated full discovery.
                     for root in rootsByID.values {
                         guard let context = mappingContexts[root.id],
                               let relative = root.relativeScope(forStoredPath: url.path, in: context),
-                              !matches.contains(where: { $0.2.id == root.id }) else { continue }
+                              regularFile, !accepted.contains(where: { $0.2.id == root.id }) else { continue }
                         unclaimedInputs[root.id, default: []].insert(relative)
                     }
                     if !FileManager.default.fileExists(atPath: url.path) {
@@ -1128,7 +1136,8 @@ public actor IndexCoordinator {
                         for failure in attempt.failures { facts[failure.relativeScope] = .init(order: 0, covered: false) }
                     }
                 }
-                for file in allFiles where file.agent == root.agent && file.root.path == root.url.path {
+                // Routing selects one reader; every accepting root shares its outcome.
+                for file in allFiles where file.agent == root.agent && sourceFormat(for: file.url, agent: root.agent) != nil {
                     guard let relative = root.relativeScope(forStoredPath: file.url.path, in: context) else { continue }
                     let key = SourceFileKey(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey)
                     let failed = failedSourceFiles.contains(key) || incompleteFiles.contains(key)
@@ -1757,10 +1766,10 @@ public actor IndexCoordinator {
 
     private func classifications(
         url: URL, mappingContexts: [String: SourceRootPathContext],
-        agent requestedAgent: AgentKind? = nil
+        agent requestedAgent: AgentKind? = nil, includeAllRoots: Bool = false
     ) -> [(any SessionSource, DiscoveredSourceFile, SourceRoot)] {
         let candidate = TraceFileIO.canonicalPath(url.path)
-        var matches: [AgentKind: (any SessionSource, DiscoveredSourceFile, SourceRoot)] = [:]
+        var accepted: [(any SessionSource, DiscoveredSourceFile, SourceRoot)] = []
         for source in sources where requestedAgent == nil || source.agent == requestedAgent {
             for root in source.roots {
                 guard let context = mappingContexts[root.id],
@@ -1774,12 +1783,19 @@ public actor IndexCoordinator {
                         ),
                         root
                     )
-                    if let existing = matches[source.agent] {
-                        if !Self.prefers(root, over: existing.2) { continue }
-                    }
-                    matches[source.agent] = match
+                    accepted.append(match)
                 }
             }
+        }
+        return includeAllRoots ? accepted : preferredClassifications(accepted)
+    }
+
+    private func preferredClassifications(_ accepted: [(any SessionSource, DiscoveredSourceFile, SourceRoot)])
+        -> [(any SessionSource, DiscoveredSourceFile, SourceRoot)] {
+        var matches: [AgentKind: (any SessionSource, DiscoveredSourceFile, SourceRoot)] = [:]
+        for match in accepted {
+            if let existing = matches[match.1.agent], !Self.prefers(match.2, over: existing.2) { continue }
+            matches[match.1.agent] = match
         }
         return matches.values.sorted { $0.1.agent.rawValue < $1.1.agent.rawValue }
     }

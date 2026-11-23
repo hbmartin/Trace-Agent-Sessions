@@ -72,3 +72,6 @@ credential persistence disabled. Raw xcresults, logs, and metrics are retained.
 
 The scroll reduction applies to this workload and these runs. Virtual-runner timing,
 hardware variation, and the historical slower samples limit generalization.
+
+The benchmark workflow described above was retired in PR #100. These are historical
+commands and results; current performance acceptance runs locally under AGENTS.md.

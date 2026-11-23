@@ -1258,6 +1258,11 @@ public final class IndexNavigationWorkLedger: Sendable {
             var remaining: NavigationAdmissions?
             let captured = snapshot.sequence
             snapshot.pending?.visit { admission, inputs in
+                // This execution cannot classify work admitted after its boundary.
+                guard admission <= sequence else {
+                    remaining = NavigationAdmissions.merge(remaining, .init(admission, inputs))
+                    return
+                }
                 var required = NavigationScopeIndex()
                 if inputs.fullScan, coverage.performedFullScan, admission <= sequence {
                     for key in IndexNavigationCoverage.qualifying([], roots: roots) where !observed.fullyCovered(key, through: admission) {
@@ -1269,7 +1274,9 @@ public final class IndexNavigationWorkLedger: Sendable {
                         // full scan. Ordinary admissions qualify against every
                         // configured overlapping source, including empty regions.
                         let qualified = key.isEmpty ? [] : IndexNavigationCoverage.qualifying(key, roots: roots)
-                        if key.isEmpty {
+                        // An unmatched generic path is not evidence of source removal.
+                        // Only a previously qualified identity can be retired by a roster.
+                        if key.isEmpty || (qualified.isEmpty && key.first != 0) {
                             required = required.setting(key, .init(rank: .init(admission: admission), covered: false))
                         } else {
                             for key in qualified where !observed.fullyCovered(key, through: admission) {
