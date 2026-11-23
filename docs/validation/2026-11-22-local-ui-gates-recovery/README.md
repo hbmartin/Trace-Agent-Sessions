@@ -20,6 +20,8 @@ Final checks passed against the frozen implementation:
 - Debug/Release builds, external-client compatibility, project drift, signing, runtime network-surface and pinned whitespace checks.
 - Final compiled discovery verified all 28 UI and 20 ownership selectors.
 
+[Full CI also passed for the frozen implementation](ci-completion.json), including the unit tests and both CLI build stages. This completion record appends to the earlier in-progress snapshot; documentation-only refresh checks run separately.
+
 [Machine-readable verification](verification.json) records exact commands, hashes and limitations. Every selected UI identifier must be present in compiled discovery and execute successfully without skips. Each local case has a separate log, XCResult and exported summary; failures remain evidence rather than being retried automatically. Accepted UI summaries contain 21 SwiftUI “Publishing changes from within view updates” warnings and one QoS inversion warning. These entries are retained in the per-case evidence; their baseline status was not investigated and no warning-free claim is made.
 
 The UI batch runs the frozen UI revision `5de596b90e2fcb63c67b1ddc5519c44169eb7aa4`. Its differences from the final implementation are non-UI test-fixture synchronization changes. Runtime, UI-test, project, configuration and runner inputs are byte-identical, as verified in ui-input-equivalence.json.
