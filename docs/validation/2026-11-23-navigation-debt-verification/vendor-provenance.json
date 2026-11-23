@@ -1,0 +1,12 @@
+{
+  "head": "f98b062810da814e2a756b22674d9394b349f17b",
+  "vendorHead": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+  "vendorStatus": " m SQLiteCustom/src\n",
+  "vendorDiffSHA256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410",
+  "final": {
+    "vendorHead": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+    "vendorStatus": " m SQLiteCustom/src\n",
+    "vendorDiffSHA256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410",
+    "unchanged": true
+  }
+}

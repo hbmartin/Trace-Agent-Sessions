@@ -1080,7 +1080,9 @@ public struct IndexNavigationCoverage: Sendable {
         absoluteKey(reference).map { Self.sourcePrefix(reference.agent + ":" + reference.root) + $0 }
     }
     fileprivate static func qualifying(_ key: [UInt8], roots: [String: [UInt8]]) -> [[UInt8]] {
-        if key.first == 0 { return [key] }
+        if key.first == 0 {
+            return roots.keys.contains { key.starts(with: sourcePrefix($0)) } ? [key] : []
+        }
         return roots.compactMap { id, root in
             if key.starts(with: root) { return sourcePrefix(id) + key }
             if root.starts(with: key) { return sourcePrefix(id) + root }
@@ -1248,7 +1250,11 @@ public final class IndexNavigationWorkLedger: Sendable {
             // sources with no observations. Older executions cannot reinstall
             // a displaced roster or retain obsolete configured-root metadata.
             let roots = execution >= snapshot.contextExecution ? coverage.sourceRoots : snapshot.sourceRoots
-            observations.visit { key, fact in observed = observed.setting(key, fact) }
+            observations.visit { key, fact in
+                if !IndexNavigationCoverage.qualifying(key, roots: roots).isEmpty {
+                    observed = observed.setting(key, fact)
+                }
+            }
             var remaining: NavigationAdmissions?
             let captured = snapshot.sequence
             snapshot.pending?.visit { admission, inputs in
@@ -1263,7 +1269,7 @@ public final class IndexNavigationWorkLedger: Sendable {
                         // full scan. Ordinary admissions qualify against every
                         // configured overlapping source, including empty regions.
                         let qualified = key.isEmpty ? [] : IndexNavigationCoverage.qualifying(key, roots: roots)
-                        if qualified.isEmpty {
+                        if key.isEmpty {
                             required = required.setting(key, .init(rank: .init(admission: admission), covered: false))
                         } else {
                             for key in qualified where !observed.fullyCovered(key, through: admission) {

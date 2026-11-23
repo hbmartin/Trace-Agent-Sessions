@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("navigation_benchmark", ROOT / "Scripts/prepare-navigation-recovery-benchmark.py")
@@ -25,6 +26,12 @@ class NavigationRecoveryBenchmarkTests(unittest.TestCase):
             self.assertEqual(first.count("public static func benchmarkFixture("), 1)
             self.assertIn("snapshotReads += 1", output.read_text())
             self.assertIn("pending.demand != demand", output.read_text())
+            # The extracted resolver and its fixture must agree on every state
+            # field it writes, including genuine reader failures after lookup.
+            assigned = set(re.findall(r"\$0\.(\w+)\s*=(?!=)", output.read_text()))
+            state = re.search(r"struct TranscriptState \{([^}]+)\}", MODULE.HEADER).group(1)
+            declared = set(re.findall(r"var (\w+)", state))
+            self.assertTrue(assigned <= declared, f"Fixture lacks resolver state: {assigned - declared}")
 
     def test_workload_keeps_setup_and_correctness_outside_measurement(self):
         source = (ROOT / "Scripts/benchmark-navigation-recovery.swift").read_text()

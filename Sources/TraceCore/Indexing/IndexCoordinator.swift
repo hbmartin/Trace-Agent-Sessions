@@ -687,6 +687,7 @@ public actor IndexCoordinator {
             }
             var missingSources: Set<MissingSourceFile> = []
             var discoveryAttempts: [RootDiscoveryAttempt] = []
+            var unclaimedInputs: [String: Set<RootRelativeScope>] = [:]
 
             func absorbDiscoveryResult(
                 _ result: VerifiedDiscoveryResult, source: any SessionSource,
@@ -791,21 +792,28 @@ public actor IndexCoordinator {
                 for path in (paths ?? []).sorted() {
                     try Task.checkCancellation()
                     let url = URL(fileURLWithPath: pathsAreCanonical ? path : TraceFileIO.canonicalPath(path).path)
+                    let matches = classifications(url: url, mappingContexts: mappingContexts)
+                    // Negative classification is source-owned evidence too. A
+                    // provider/root which definitively does not claim this input
+                    // must not retain debt until an unrelated full discovery.
+                    for root in rootsByID.values {
+                        guard let context = mappingContexts[root.id],
+                              let relative = root.relativeScope(forStoredPath: url.path, in: context),
+                              !matches.contains(where: { $0.2.id == root.id }) else { continue }
+                        unclaimedInputs[root.id, default: []].insert(relative)
+                    }
                     if !FileManager.default.fileExists(atPath: url.path) {
-                        missingSources.formUnion(classifications(
-                            url: url, mappingContexts: mappingContexts
-                        ).map {
+                        missingSources.formUnion(matches.map {
                             MissingSourceFile(agent: $0.1.agent, path: url.path)
                         })
                     } else {
-                        allFiles += classifications(
-                            url: url, mappingContexts: mappingContexts
-                        ).map(\.1)
+                        allFiles += matches.map(\.1)
                     }
                 }
             }
             var discoveryErrorReplacements: [DiscoveryErrorReplacement] = []
             var attemptsByRootID: [Int64: RootDiscoveryAttempt] = [:]
+            var absentOptionalRoots: Set<String> = []
             discoveryAttempts.sort { lhs, rhs in
                 (
                     lhs.source.agent.rawValue, lhs.root.scanPath.comparisonKey,
@@ -824,7 +832,9 @@ public actor IndexCoordinator {
                     suppressNeverSeenDefault = !(try await database.rootHasBeenScanned(rootID: rootID))
                 }
                 if suppressNeverSeenDefault {
-                    // Optional default roots that have never existed stay quiet.
+                    // The same authoritative optional absence which suppresses
+                    // diagnostics must discharge navigation requirements.
+                    absentOptionalRoots.insert(attempt.root.id)
                     continue
                 }
                 attemptsByRootID[rootID] = attempt
@@ -847,6 +857,7 @@ public actor IndexCoordinator {
                 status.failedReconciliationPaths
             )
             var incompleteFiles: Set<SourceFileKey> = []
+            var failedSourceFiles: Set<SourceFileKey> = []
             var uniqueFiles: [SourceFileKey: DiscoveredSourceFile] = [:]
             for file in allFiles {
                 let key = SourceFileKey(
@@ -919,6 +930,7 @@ public actor IndexCoordinator {
                     if firstFileError == nil { firstFileError = message }
                     status.error = firstFileError ?? firstDiscoveryError
                     status.failedPaths.insert(file.url.path)
+                    failedSourceFiles.insert(.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey))
                     try await database.recordSourceError(
                         file: file, rootID: rootID, error: message
                     )
@@ -1109,14 +1121,17 @@ public actor IndexCoordinator {
             let regions = rootsByID.values.compactMap { root -> IndexNavigationCoverage.Region? in
                 guard let context = mappingContexts[root.id] else { return nil }
                 var facts: [RootRelativeScope: IndexNavigationCoverage.Fact] = [:]
+                for relative in unclaimedInputs[root.id] ?? [] { facts[relative] = .init(order: 0, covered: true) }
                 for attempt in discoveryAttempts where attempt.root.id == root.id {
                     for scope in attempt.scannedScopes { facts[scope] = .init(order: 0, covered: true) }
-                    for failure in attempt.failures { facts[failure.relativeScope] = .init(order: 0, covered: false) }
+                    if !absentOptionalRoots.contains(root.id) {
+                        for failure in attempt.failures { facts[failure.relativeScope] = .init(order: 0, covered: false) }
+                    }
                 }
                 for file in allFiles where file.agent == root.agent && file.root.path == root.url.path {
                     guard let relative = root.relativeScope(forStoredPath: file.url.path, in: context) else { continue }
-                    let failed = status.failedPaths.contains(file.url.path)
-                        || incompleteFiles.contains(.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey))
+                    let key = SourceFileKey(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey)
+                    let failed = failedSourceFiles.contains(key) || incompleteFiles.contains(key)
                     facts[relative] = .init(order: 0, covered: !failed)
                 }
                 for missing in missingSources where missing.agent == root.agent {

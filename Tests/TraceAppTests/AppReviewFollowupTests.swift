@@ -12,6 +12,172 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testSameDatabaseReloadUsesCommittedScopeCacheDespiteReadFailure() async throws {
+        let f = try await fixture(count: 2)
+        XCTAssertEqual(f.database.committedIndexScope, .proseOnly)
+        await f.database.failScopeReadOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        let original = f.model.schedulerForTesting
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.pendingDatabaseForTesting == nil && f.model.schedulerForTesting !== original }
+        XCTAssertNil(f.model.sourceReloadRecovery.error)
+        XCTAssertNotNil(f.model.schedulerForTesting)
+        do {
+            _ = try await f.database.storedIndexScope()
+            XCTFail("Reload should not consume a database read needed only for bookkeeping")
+        } catch let error as DatabaseError { XCTAssertEqual(error.resultCode, .SQLITE_BUSY) }
+    }
+
+    func testPreparedSourceWorkSurvivesSameDatabaseSourceReload() async throws {
+        let f = try await fixture(count: 2)
+        f.model.settings.onboardingComplete = true
+        f.model.suppressLiveWatcherIngressForTesting = true
+        let sources = [ClaudeCodeSource(roots: [f.root])]
+        try await prepareStartup(f.model, sources: sources)
+        f.model.startReadyStartupForTesting(sources: sources)
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.sourcePreparationGateForTesting = held
+        var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        let completed = OSAllocatedUnfairLock(initialState: 0)
+        let task = Task { await f.model.bufferOrdinaryWorkForTesting(changes, safety: true, completion: { completed.withLock { $0 += 1 } }) }
+        try await wait { f.model.sourcePreparationWaitingForTesting }
+        let previous = f.model.schedulerForTesting
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.pendingDatabaseForTesting == nil && f.model.schedulerForTesting !== previous }
+        await gate.open()
+        let delivery = await task.value
+        let delivered = await delivery.value
+        XCTAssertTrue(delivered)
+        try await wait { completed.withLock { $0 } == 1 }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertEqual(completed.withLock { $0 }, 1)
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0)
+    }
+
+    func testPreparedSourceWorkRetiresWaiterOnDatabaseReplacement() async throws {
+        let f = try await fixture(count: 2), replacement = try await fixture(count: 1)
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.sourcePreparationGateForTesting = held
+        var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        let completed = OSAllocatedUnfairLock(initialState: 0)
+        let task = Task { await f.model.bufferOrdinaryWorkForTesting(changes, safety: true, completion: { completed.withLock { $0 += 1 } }) }
+        try await wait { f.model.sourcePreparationWaitingForTesting }
+        _ = await f.model.attach(database: replacement.database, coordinator: replacement.coordinator)
+        await gate.open()
+        let delivery = await task.value
+        let delivered = await delivery.value
+        XCTAssertFalse(delivered)
+        XCTAssertEqual(completed.withLock { $0 }, 0)
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0)
+    }
+
+    func testDeferredStartupWithDifferentRequestedScopeCreatesNoSpeculativeDebt() async throws {
+        let f = try await deferredResetFixture(count: 1)
+        f.model.suppressLiveWatcherIngressForTesting = true
+        f.model.settings.indexScope = .everything
+        let sources = [ClaudeCodeSource(roots: [f.root])]
+        try await prepareStartup(f.model, sources: sources)
+        f.model.startReadyStartupForTesting(sources: sources)
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        XCTAssertTrue(f.model.isRebuildPendingRecovery)
+        XCTAssertEqual(f.database.committedIndexScope, .proseOnly)
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0,
+            "Committed-scope fallback cannot enroll the desired scope transition")
+    }
+
+    func testPendingTargetTranscriptFailureUsesReaderErrorAndReaderRetry() async throws {
+        let (f, _) = try await provisionalSearchFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        // Complete the previous partial tail and append another partial record.
+        // The same session row survives, but the cached reader lacks the new row.
+        let append = "\"user\",\"uuid\":\"later-row\",\"sessionId\":\"s-0\",\"message\":{\"content\":\"Later tail\"}}\n{\"type\":"
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data(append.utf8)); try handle.close()
+        await f.model.coordinatorForTesting?.refresh(paths: [file.path], scope: .proseOnly)
+        await f.database.failTranscriptReadOnceForTesting()
+        await f.model.requestPendingMessageResolutionForTesting()
+        XCTAssertEqual(f.model.transcriptBanner?.details, "Could not refresh this session. Try again.")
+        XCTAssertFalse(f.model.targetLookupFailureIsVisible)
+        XCTAssertFalse(f.model.messages.isEmpty)
+        f.model.retrySelectedTranscript()
+        try await wait { f.model.transcriptRecoveryPendingForTesting }
+        await f.clock.advance()
+        try await wait { f.model.transcriptBanner == nil }
+        XCTAssertTrue(f.model.pendingMessageIntentForTesting)
+    }
+
+    func testRecreatedSourceRefreshCannotReplaceCapturedUnsentRecoveryNavigation() async throws {
+        let (f, _) = try await pendingSearchBookmarkFixture()
+        let file = f.root.appendingPathComponent("sessions.jsonl")
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.rebuildSubmissionGateForTesting = held
+        let text = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "Intent tail", with: "Recreated tail")
+        try Data(text.utf8).write(to: file, options: .atomic)
+        var changes = SourceChanges(); changes.paths = [file.path]
+        let transfer = try await f.model.deliverSourceChangesForTesting(changes)
+        XCTAssertEqual(transfer, .recoveryTransferred)
+        try await wait { f.model.rebuildSubmissionWaitingForTesting }
+        let owner = try XCTUnwrap(f.model.settings.preparedNavigationRecovery?.owner)
+        await f.model.coordinatorForTesting?.refresh(paths: [file.path], scope: .proseOnly)
+        await f.model.refreshSummariesForTesting(lightweight: false)
+        XCTAssertEqual(f.model.settings.preparedNavigationRecovery?.owner, owner,
+            "Source recreation must not replace navigation owned by the unsent reset")
+        await gate.open()
+        try await wait { !f.model.pendingRebuildForTesting && !f.model.messages.isEmpty }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let resets = await f.database.committedResetCountForTesting
+        XCTAssertEqual(resets, 1)
+        XCTAssertEqual(f.model.scrollPositions[try XCTUnwrap(f.model.selectedSessionID)]?.offset, -40)
+    }
+
+    func testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration() async throws {
+        let f = try await fixture(count: 1)
+        let session = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(session.id)
+        try await wait { !f.model.messages.isEmpty }
+        let row = try XCTUnwrap(f.model.messages.first)
+        let bookmark = TranscriptBookmark(messageID: row.id, offset: -31, index: 0)
+        f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: bookmark)
+        XCTAssertNil(f.model.requestedMessageID)
+        let renderer = TranscriptRenderer.Coordinator()
+        defer { renderer.detach() }
+        XCTAssertTrue(renderer.refreshCapturedSearchForTesting(model: f.model, sessionID: session.id, bookmark: bookmark),
+            "The captured search cannot retain priority after its target was retired")
+        XCTAssertEqual(f.model.scrollPositions[session.id]?.offset, -31)
+        XCTAssertEqual(f.model.selectedSessionID, session.id)
+    }
+
+    func testRetiredSafetyPreparationPreservesWorkWithoutEnrollingAnotherReset() async throws {
+        let f = try await deferredResetFixture(count: 1)
+        f.model.suppressLiveWatcherIngressForTesting = true
+        let before = await f.database.resetAttemptCountForTesting
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.sourcePreparationGateForTesting = held
+        let admission = Task { await f.model.admitSafetyRecoveryForTesting() }
+        try await wait { f.model.sourcePreparationWaitingForTesting }
+        let sources = [ClaudeCodeSource(roots: [f.root])]
+        let previous = f.model.watcherGenerationForTesting
+        let restarted = await f.model.restartWatchingForTesting(sources)
+        XCTAssertTrue(restarted)
+        XCTAssertGreaterThan(f.model.watcherGenerationForTesting, previous)
+        await gate.open()
+        let enrolled = await admission.value
+        XCTAssertFalse(enrolled, "The previous watcher episode cannot enroll a reset for its replacement")
+        f.model.startReadyStartupForTesting(sources: sources)
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let after = await f.database.resetAttemptCountForTesting
+        XCTAssertEqual(after, before)
+        XCTAssertTrue(f.model.isRebuildPendingRecovery)
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0)
+    }
+
     func testMatchingScopeWithoutCoverageCacheDoesNotEnrollGlobalNavigationDebt() async throws {
         let f = try await fixture(count: 1)
         f.model.settings.onboardingComplete = true
@@ -131,7 +297,8 @@ final class AppReviewFollowupTests: XCTestCase {
     }
 
     func testRecreatedSearchSelectionReadFailureShowsRequestedWindowOnlyForCurrentOwner() async throws {
-        for superseded in [false, true] {
+        for scenario in 0..<3 {
+            let superseded = scenario == 1
             let f = try await fixture(count: 1)
             try line(99, project: "OtherReview").write(to: f.root.appendingPathComponent("unrelated.jsonl"))
             await f.coordinator.indexAll(scope: .proseOnly)
@@ -155,12 +322,19 @@ final class AppReviewFollowupTests: XCTestCase {
             f.model.openSearchResult(result)
             try await wait { f.model.automaticNavigationRestoreWaitingForTesting }
             if superseded { f.model.returnFromSession() }
-            await f.database.failTranscriptReadOnceForTesting()
+            if scenario == 2 {
+                let state = try await f.database.sourceState(agent: .claudeCode, path: file.path)
+                try await f.database.deleteSource(id: XCTUnwrap(state).id)
+            } else { await f.database.failTranscriptReadOnceForTesting() }
             f.model.automaticNavigationRestoreGateForTesting = nil
             await gate.open()
             try await wait { !f.model.automaticNavigationRestoreWaitingForTesting }
             if superseded {
                 XCTAssertEqual(shown.withLock { $0 }, 0)
+                XCTAssertNil(f.model.transcriptBanner)
+            } else if scenario == 2 {
+                try await wait { shown.withLock { $0 } == 1 }
+                XCTAssertEqual(shown.withLock { $0 }, 1)
                 XCTAssertNil(f.model.transcriptBanner)
             } else {
                 try await wait { f.model.transcriptBanner != nil }
@@ -316,9 +490,7 @@ final class AppReviewFollowupTests: XCTestCase {
     func testFailedTargetLookupOffersRetryJumpWithoutAnotherFileEvent() async throws {
         let (f, _) = try await provisionalSearchFixture()
         let rows = f.model.messages
-        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-        await f.model.requestPendingMessageResolutionForTesting()
-        try await wait { f.model.targetLookupFailureIsVisible }
+        try await showOwnedTargetLookupFailure(f)
         XCTAssertNil(f.model.transcriptBanner)
         XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
         let before = await f.database.navigationReadCountsForTesting()
@@ -332,21 +504,18 @@ final class AppReviewFollowupTests: XCTestCase {
 
     func testRetryJumpDemandDuringIndexingResolvesAtIdleAndNavigationRetiresNotice() async throws {
         let (f, _) = try await provisionalSearchFixture()
-        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-        await f.model.requestPendingMessageResolutionForTesting()
-        try await wait { f.model.targetLookupFailureIsVisible }
+        try await showOwnedTargetLookupFailure(f)
         let before = await f.database.navigationReadCountsForTesting()
         await f.model.receiveProgress(.init(phase: .indexing))
+        let demand = f.model.pendingMessageIndexingDemandForTesting
         f.model.retrySearchTarget()
-        await Task.yield()
+        try await wait { f.model.pendingMessageIndexingDemandForTesting > demand }
         XCTAssertTrue(f.model.targetLookupFailureIsVisible)
         let held = await f.database.navigationReadCountsForTesting()
         XCTAssertEqual(held.resolution, before.resolution)
         await f.model.receiveProgress(.init(phase: .complete))
         try await wait { !f.model.targetLookupFailureIsVisible }
-        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-        await f.model.requestPendingMessageResolutionForTesting()
-        try await wait { f.model.targetLookupFailureIsVisible }
+        try await showOwnedTargetLookupFailure(f)
         f.model.returnFromSession()
         XCTAssertFalse(f.model.targetLookupFailureIsVisible)
     }
@@ -405,6 +574,20 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.clock.advance()
         try await wait { await f.database.transcriptReadCountForTesting() > reads }
         XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    private func showOwnedTargetLookupFailure(_ f: Fixture) async throws {
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.pendingMessageResolutionGateForTesting = held
+        let lookup = Task { await f.model.requestPendingMessageResolutionForTesting() }
+        try await wait { f.model.pendingMessageResolutionWaitingForTesting }
+        // Fault the successor while a known lookup owns the resolver. A fixture's
+        // asynchronous terminal tail cannot consume or bypass this expectation.
+        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.requestPendingMessageResolutionForTesting()
+        await gate.open(); await lookup.value
+        try await wait { f.model.targetLookupFailureIsVisible }
     }
 
     private func provisionalSearchFixture() async throws -> (Fixture, String) {

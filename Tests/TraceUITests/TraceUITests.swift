@@ -4866,6 +4866,11 @@ final class TraceUITests: XCTestCase {
         try assertMissingSearchTargetShowsReader(openAfterReset: false, provisional: true, retryJump: true)
     }
 
+    func testFailedTargetRetryDuringIndexingKeepsReaderAndBookmark() throws {
+        try assertMissingSearchTargetShowsReader(openAfterReset: false, provisional: true,
+            retryDuringIndex: true, retryJump: true)
+    }
+
     private func assertMissingSearchTargetShowsReader(openAfterReset: Bool, provisional: Bool = false,
                                                      secondReset: Bool = false, retryDuringIndex: Bool = false,
                                                      retryJump: Bool = false) throws {
@@ -4957,9 +4962,11 @@ final class TraceUITests: XCTestCase {
             XCTAssertTrue(notice.waitForExistence(timeout: 5))
             XCTAssertTrue(transcriptMessage(name, index: saved, in: scroll).exists)
             XCTAssertFalse(app.staticTexts["transcriptLoadError"].exists)
-            app.buttons["retrySearchTarget"].click()
-            XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
-            assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "target-only Retry", generation: generation)
+            if !retryDuringIndex {
+                app.buttons["retrySearchTarget"].click()
+                XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
+                assertSavedAnchorOnScreen(index: saved, in: scroll, expectedY: y, stage: "target-only Retry", generation: generation)
+            }
         }
         if provisional {
             var latestGeneration = generation
@@ -4980,11 +4987,17 @@ final class TraceUITests: XCTestCase {
                 try? FileManager.default.removeItem(at: batchCommitted)
                 try addLongSession("Held unrelated indexing", project: "HeldReaderIndexing", directory: directory, count: 300, contentRepeats: 0)
                 XCTAssertTrue(waitForFile(batchCommitted, timeout: 15))
+                if retryJump {
+                    app.buttons["retrySearchTarget"].click()
+                    XCTAssertTrue(app.staticTexts["searchTargetLookupFailure"].exists,
+                        "Held indexing must retain the failed jump while its retry demand is queued")
+                }
                 app.buttons["testReaderRetryDuringIndexing"].click()
                 XCTAssertTrue(waitForFile(retried, timeout: 10), "Reader Retry must finish while indexing is held")
                 XCTAssertTrue(transcriptMessage(name, index: saved, in: scroll).exists)
                 XCTAssertTrue(app.staticTexts["transcriptLoadError"].waitForNonExistence(timeout: 5))
                 try Data().write(to: batchRelease)
+                if retryJump { XCTAssertTrue(app.staticTexts["searchTargetLookupFailure"].waitForNonExistence(timeout: 10)) }
             }
             let beforeTarget = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
             // Replace the append-only source rather than simulating an append

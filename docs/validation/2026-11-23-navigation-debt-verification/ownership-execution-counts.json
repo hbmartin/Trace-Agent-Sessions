@@ -1,0 +1,25 @@
+{
+  "uniqueCases": 19,
+  "executions": 95,
+  "repetitionsPerCase": {
+    "testScheduledCoveragePaysDefinitivelyUnclaimedProvider": 5,
+    "testNavigationRemovedSourceDebtRetiresAndOlderRosterCannotReturn": 5,
+    "testMissingNeverScannedDefaultRootPaysButPreviouslyScannedRootDoesNot": 5,
+    "testIncrementalAliasClassificationPaysBothConfiguredRoots": 5,
+    "testNavigationObservationDoesNotBlockOrConsumeNewAdmission": 5,
+    "testNavigationObservationsQualifyProviderAndConfiguredRoot": 5,
+    "testDeferredResetPreservesMixedOrdinaryNavigationDebt": 5,
+    "testDeferredStartupWithDifferentRequestedScopeCreatesNoSpeculativeDebt": 5,
+    "testIngressReceiptMatchesRetirementAfterTransfer": 5,
+    "testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration": 5,
+    "testPendingTargetTranscriptFailureUsesReaderErrorAndReaderRetry": 5,
+    "testPreparedSourceWorkRetiresWaiterOnDatabaseReplacement": 5,
+    "testPreparedSourceWorkSurvivesSameDatabaseSourceReload": 5,
+    "testRecreatedSearchSelectionReadFailureShowsRequestedWindowOnlyForCurrentOwner": 5,
+    "testRecreatedSourceRefreshCannotReplaceCapturedUnsentRecoveryNavigation": 5,
+    "testRetiredSafetyPreparationPreservesWorkWithoutEnrollingAnotherReset": 5,
+    "testRetryJumpDemandDuringIndexingResolvesAtIdleAndNavigationRetiresNotice": 5,
+    "testSameDatabaseReloadUsesCommittedScopeCacheDespiteReadFailure": 5,
+    "testSelectionReentryWhileClearingTargetFailurePreservesSuccessor": 5
+  }
+}
