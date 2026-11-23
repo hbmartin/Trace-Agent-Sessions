@@ -10164,7 +10164,8 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.startReadyStartupForTesting(sources: [source])
         f.model.startReadyStartupForTesting(sources: [source])
         try await wait { (try f.model.startupSubmissionsForTesting(in: f.model.startupReceiptScopeForTesting())).count == 2 && f.model.progress.phase == .complete
-            && f.model.safetyVerificationActiveForTesting }
+            && f.model.safetyVerificationActiveForTesting && !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
         XCTAssertTrue(f.model.monitoringWarnings.isEmpty)
         let reconciled = try await f.database.sessions(limit: 100)
         XCTAssertTrue(reconciled.contains { $0.title == "NavigationNeedle 98" }, "the retry scans changes from the monitoring gap")
