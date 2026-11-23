@@ -1586,8 +1586,14 @@ final class TraceModel: ObservableObject {
     @discardableResult
     private func routeLiveSourceChanges(_ changes: SourceChanges, acceptsCheckpoints: Bool,
                                         recoveryEligible: Bool, safety: Bool = false) async -> RecoveryEnrollment? {
+        let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
+        let watcher = watcherGeneration
         guard let changes = await prepareSourceWork(changes) else { return nil }
-        if recoveryEligible, let enrollment = enrollDeferredRebuildRecovery(changes: changes, safety: safety) {
+        // Compatible ordinary work survives preparation across replacement, but
+        // an old ingress episode cannot enroll a new reset for its successor.
+        if recoveryEligible, attachment == attachmentGeneration,
+           configuration == sourceConfigurationRevision, watcher == watcherGeneration,
+           let enrollment = enrollDeferredRebuildRecovery(changes: changes, safety: safety) {
             return enrollment
         }
         if safety {

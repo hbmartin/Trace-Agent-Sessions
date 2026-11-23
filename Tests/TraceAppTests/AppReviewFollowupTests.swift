@@ -151,6 +151,29 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(f.model.selectedSessionID, session.id)
     }
 
+    func testRetiredSafetyPreparationPreservesWorkWithoutEnrollingAnotherReset() async throws {
+        let f = try await deferredResetFixture(count: 1)
+        f.model.suppressLiveWatcherIngressForTesting = true
+        let before = await f.database.resetAttemptCountForTesting
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.sourcePreparationGateForTesting = held
+        let admission = Task { await f.model.admitSafetyRecoveryForTesting() }
+        try await wait { f.model.sourcePreparationWaitingForTesting }
+        let sources = [ClaudeCodeSource(roots: [f.root])]
+        try await prepareStartup(f.model, sources: sources)
+        await gate.open()
+        let enrolled = await admission.value
+        XCTAssertFalse(enrolled, "The previous watcher episode cannot enroll a reset for its replacement")
+        f.model.startReadyStartupForTesting(sources: sources)
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        await f.model.schedulerForTesting?.waitUntilIdle()
+        let after = await f.database.resetAttemptCountForTesting
+        XCTAssertEqual(after, before)
+        XCTAssertTrue(f.model.isRebuildPendingRecovery)
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0)
+    }
+
     func testMatchingScopeWithoutCoverageCacheDoesNotEnrollGlobalNavigationDebt() async throws {
         let f = try await fixture(count: 1)
         f.model.settings.onboardingComplete = true
