@@ -5134,8 +5134,11 @@ final class TraceUITests: XCTestCase {
         app.buttons["testRetireSearchTarget"].click()
         app.checkBoxes["System"].click()
         try Data().write(to: release)
+        let database = directory.appendingPathComponent("index.sqlite")
+        let generation = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
+        let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Retired target reader';")
         XCTAssertNotNil(poll(timeout: 15) { self.nativeRestorationRecords(in: receipts).first {
-            !old.contains($0.invocation) && $0.bookmarkIndex == 0
+            $0.matches(generation: generation, sessionID: selected, bookmark: 0, excluding: old)
         } })
         for _ in 0..<5 {
             XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).isHittable)
@@ -5153,6 +5156,10 @@ final class TraceUITests: XCTestCase {
         let receipts = directory.appendingPathComponent("restoration-receipts"), saved = directory.appendingPathComponent("bookmark"), idle = directory.appendingPathComponent("idle")
         app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
         app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] = "1"
+        let retried = directory.appendingPathComponent("reader-retried")
+        app.launchEnvironment["TRACE_TEST_READER_RETRY_COMPLETED_PATH"] = retried.path
         app.launchEnvironment["TRACE_TEST_REBUILD_RESET_FAILURE_COUNT"] = "3"
         app.launchEnvironment["TRACE_TEST_REBUILD_DEFERRED_PATH"] = deferred.path
         app.launchEnvironment["TRACE_TEST_REBUILD_RESET_COMMITTED_PATH"] = committed.path
@@ -5173,14 +5180,25 @@ final class TraceUITests: XCTestCase {
         let y = try XCTUnwrap(savedAnchorY(index: bookmark, in: scroll, timeout: 10))
         let prior = Set(nativeRestorationRecords(in: receipts).map(\.invocation))
         let file = directory.appendingPathComponent("Sources/Claude/\(name).jsonl")
+        let database = directory.appendingPathComponent("index.sqlite")
+        let sourceBefore = try sqliteInteger(database, sql: "SELECT content_generation FROM source_file WHERE path LIKE '%Deferred recreated reader.jsonl';")
         let text = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "Transcript fixture content.", with: "Recreated reader content.")
         try Data(text.utf8).write(to: file, options: .atomic)
         XCTAssertNotNil(poll(timeout: 20) { self.fileLines(in: deferred).count == 2 ? true : nil })
         XCTAssertTrue(fileLines(in: committed).isEmpty)
+        XCTAssertNotNil(poll(timeout: 20) { () -> Bool? in
+            guard let value = try? self.sqliteInteger(database, sql: "SELECT content_generation FROM source_file WHERE path LIKE '%Deferred recreated reader.jsonl';"), value > sourceBefore else { return nil }
+            return true
+        })
+        let generation = try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';")
+        let selected = try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Deferred recreated reader';")
         XCTAssertNotNil(poll(timeout: 20) { self.nativeRestorationRecords(in: receipts).first {
-            !prior.contains($0.invocation) && $0.bookmarkIndex == bookmark
+            $0.matches(generation: generation, sessionID: selected, bookmark: bookmark, excluding: prior)
         } })
         assertSavedAnchorOnScreen(index: bookmark, in: scroll, expectedY: y, stage: "deferred reset source recreation")
+        app.buttons["testReaderRetryDuringIndexing"].click()
+        XCTAssertTrue(waitForFile(retried, timeout: 10))
+        XCTAssertTrue(fileLines(in: committed).isEmpty)
         XCTAssertTrue(app.windows[name].exists)
         XCTAssertTrue(scroll.staticTexts.containing(NSPredicate(format: "value CONTAINS %@", "Recreated reader content.")).firstMatch.waitForExistence(timeout: 10))
     }
