@@ -8,6 +8,116 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
 
+    func testCoverageUsesAdapterDiscoveryForNonstandardFilename() async throws {
+        let root = try directory(), file = root.appendingPathComponent("declared.trace")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = DeclaredFormatSource(base: ClaudeCodeSource(roots: [root]), file: file, fails: true)
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        let terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
+        await coordinator.indexAll(scope: .proseOnly, progress: { update in
+            if update.phase == .complete { terminal.withLock { $0 = update } }
+        })
+        let result = try XCTUnwrap(terminal.withLock { $0 }), coverage = try XCTUnwrap(result.navigationCoverage)
+        XCTAssertEqual(result.failedFiles, 1)
+        let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path,
+            path: file.path, externalSessionID: "one", anchorSourceKey: nil, anchorExternalID: nil)
+        XCTAssertFalse(coverage.covers(reference), "discovered file failures override broad successful discovery regardless of filename")
+    }
+
+    func testAcceptingAliasesShareFailureAndRecovery() async throws {
+        for nested in [false, true] {
+            let root = try directory(), target = root.appendingPathComponent("target"), alias = root.appendingPathComponent("alias")
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            if !nested { try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target) }
+            let file = target.appendingPathComponent("one.jsonl")
+            try Data(line(1).utf8).write(to: file)
+            let configured = nested ? [root, target] : [target, alias]
+            let failures = MutableFailureSelection(["one.jsonl"])
+            let sources = configured.map { MutableSelectiveReadFailureSource(base: ClaudeCodeSource(roots: [$0]), failures: failures) }
+            let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let coordinator = IndexCoordinator(database: database, sources: sources)
+            let ledger = IndexNavigationWorkLedger(), terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
+            let work = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(file.path)], canonicalReconciliationPaths: [])
+            for fail in [true, false] {
+                failures.replace(with: fail ? ["one.jsonl"] : [])
+                let execution = IndexNavigationWork.begin(work)
+                await coordinator.refresh(paths: [file.path], scope: .proseOnly, progress: { update in
+                    if update.phase == .complete { terminal.withLock { $0 = update } }
+                })
+                let result = try XCTUnwrap(terminal.withLock { $0 }), coverage = try XCTUnwrap(result.navigationCoverage)
+                IndexNavigationWork.observe(coverage, executions: execution); IndexNavigationWork.finish(execution)
+                XCTAssertEqual(result.failedFiles, fail ? 1 : 0, "only one reader ingests overlapping roots")
+                for root in configured {
+                    let reference = SessionNavigationReference(agent: AgentKind.claudeCode.rawValue, root: root.path,
+                        path: file.path, externalSessionID: "one", anchorSourceKey: nil, anchorExternalID: nil)
+                    XCTAssertEqual(coverage.covers(reference), !fail)
+                    XCTAssertEqual(ledger.permitsAbsence(reference, coverage: coverage), !fail)
+                }
+            }
+            #if DEBUG
+            XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+            #endif
+        }
+    }
+
+    func testDirectoryInputDiscoversDescendantsInsteadOfPayingUnscannedWork() async throws {
+        for symlink in [false, true] {
+            let root = try directory(), target = root.appendingPathComponent("target"), alias = root.appendingPathComponent("alias")
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            if symlink { try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target) }
+            let file = target.appendingPathComponent("one.jsonl")
+            try Data(line(1).utf8).write(to: file)
+            let failures = MutableFailureSelection(["one.jsonl"])
+            let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+            let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(base: ClaudeCodeSource(roots: [root]), failures: failures)])
+            let ledger = IndexNavigationWorkLedger(), terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
+            let work = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(file.path)], canonicalReconciliationPaths: [])
+            let reference = SessionNavigationReference(agent: AgentKind.claudeCode.rawValue, root: root.path,
+                path: file.path, externalSessionID: "one", anchorSourceKey: nil, anchorExternalID: nil)
+            for fail in [true, false] {
+                failures.replace(with: fail ? ["one.jsonl"] : [])
+                let execution = IndexNavigationWork.begin(work)
+                await coordinator.refresh(paths: [(symlink ? alias : target).path], scope: .proseOnly, progress: { update in
+                    if update.phase == .complete { terminal.withLock { $0 = update } }
+                })
+                let result = try XCTUnwrap(terminal.withLock { $0 }), coverage = try XCTUnwrap(result.navigationCoverage)
+                IndexNavigationWork.observe(coverage, executions: execution); IndexNavigationWork.finish(execution)
+                XCTAssertGreaterThan(result.totalFiles, 0, "directory notification must actually discover files")
+                XCTAssertEqual(result.failedFiles, fail ? 1 : 0)
+                XCTAssertEqual(ledger.permitsAbsence(reference, coverage: coverage), !fail)
+            }
+        }
+    }
+
+    func testOlderRosterPreservesNewerAndUnmatchedGenericAdmissions() throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let a = SourceRoot(agent: .claudeCode, url: root.appendingPathComponent("old"))
+        let b = SourceRoot(agent: .claudeCode, url: root.appendingPathComponent("new"))
+        let ledger = IndexNavigationWorkLedger()
+        let first = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(a.url.appendingPathComponent("a.jsonl").path)], canonicalReconciliationPaths: [])
+        let old = IndexNavigationWork.begin(first)
+        let next = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(b.url.appendingPathComponent("b.jsonl").path)], canonicalReconciliationPaths: [])
+        func coverage(_ roots: [SourceRoot]) -> IndexNavigationCoverage {
+            .init(contentGeneration: database.contentGeneration, scope: .proseOnly,
+                regions: roots.map { .init(root: $0, context: $0.mappingContext, facts: [$0.rootScope.relativeScope: .init(order: 0, covered: true)]) })
+        }
+        IndexNavigationWork.observe(coverage([a]), executions: old); IndexNavigationWork.finish(old)
+        #if DEBUG
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 1)
+        #endif
+        let unmatched = IndexNavigationWork.begin(next)
+        IndexNavigationWork.observe(coverage([a]), executions: unmatched); IndexNavigationWork.finish(unmatched)
+        #if DEBUG
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 1, "unknown generic input is not a removed source")
+        #endif
+        let current = IndexNavigationWork.begin(next)
+        IndexNavigationWork.observe(coverage([a, b]), executions: current); IndexNavigationWork.finish(current)
+        #if DEBUG
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+        #endif
+    }
+
     func testNavigationRemovedSourceDebtRetiresAndOlderRosterCannotReturn() throws {
         let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
         let a = SourceRoot(agent: .claudeCode, url: root), b = SourceRoot(agent: .codex, url: root)
@@ -7622,4 +7732,28 @@ private actor CheckpointFailureGate {
         await withCheckedContinuation { waiter = $0 }
     }
     func open() { released = true; waiter?.resume(); waiter = nil }
+}
+
+private struct DeclaredFormatSource: SessionSource {
+    let base: ClaudeCodeSource
+    let file: URL
+    let fails: Bool
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    func discover() throws -> [DiscoveredSourceFile] {
+        [.init(agent: agent, root: roots[0].url, url: file, format: .claudeJSONL)]
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialContext: .init(fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialContext: .init(sessionID: initialSessionID, fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        if fails { return AsyncThrowingStream { $0.finish(throwing: SessionSourceError.malformedRecord("declared source failure")) } }
+        return base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
+        try base.hydrate(fileURL: fileURL, format: format, locator: locator)
+    }
 }

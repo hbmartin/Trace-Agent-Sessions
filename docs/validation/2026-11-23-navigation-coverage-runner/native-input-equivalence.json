@@ -1,0 +1,9 @@
+{
+  "candidate": "5235d472894bd9db137d32f9bad16df34f2726c2",
+  "nativeValidationCommit": "2177005106c1d98465212b7dbb4cfd05d149e12a",
+  "changedPaths": [
+    "Tests/Scripts/test_background_ui_verification.py"
+  ],
+  "nativeRuntimeCoreAppUIViewportProjectInputsUnchanged": true,
+  "reason": "Final-only change synchronizes Python watchdog fixtures before their short timeouts; native source/build/test inputs are byte-identical. Script acceptance runs at the final candidate."
+}

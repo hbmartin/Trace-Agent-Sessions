@@ -1,0 +1,12 @@
+{
+  "supplements": "raw-artifacts.json",
+  "localOnly": true,
+  "root": "/Volumes/Pro2T/TraceValidation/local-ui-gates-recovery-followup",
+  "inventory": [
+    {
+      "path": "ci-candidate-success.log",
+      "bytes": 4835980,
+      "sha256": "f2e7f571c8272bd88ce773ad1dcd2f40c9a50a2f3b90922ec1f6ca014ebf3d3f"
+    }
+  ]
+}

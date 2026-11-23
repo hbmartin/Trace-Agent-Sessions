@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import plistlib
 import signal
 import subprocess
 import sys
@@ -80,10 +81,10 @@ class RunInterrupted(Exception):
 
 
 def error_description(error: BaseException) -> str:
-    return f"{type(error).__name__}: {str(error) or 'Interrupted by SIGINT'}"
+    return f"{type(error).__name__}: {str(error) or ('Interrupted by SIGINT' if isinstance(error, KeyboardInterrupt) else 'No further details')}"
 
 
-def capture_inputs(repo: Path) -> dict:
+def capture_inputs(repo: Path, *, vendor: bool = False) -> dict:
     def git(*args: str) -> bytes:
         return subprocess.check_output(["git", *args], cwd=repo)
     files, submodules = {}, {}
@@ -97,11 +98,13 @@ def capture_inputs(repo: Path) -> dict:
         if stage != "0":
             raise ValueError("Unmerged input: " + name)
         if mode == "160000":
-            submodules[name] = {
-                "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip(),
-                "status": subprocess.check_output(["git", "status", "--short"], cwd=path, text=True),
-                "diffSHA256": hashlib.sha256(subprocess.check_output(["git", "diff", "HEAD", "--binary"], cwd=path)).hexdigest(),
-            }
+            initialized = path.is_dir() and (path / ".git").exists()
+            if initialized:
+                boundary = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=path, text=True).strip())
+                initialized = boundary.resolve() == path.resolve()
+            submodules[name] = {"initialized": initialized, "gitlink": blob}
+            if initialized:
+                submodules[name]["inputs"] = capture_inputs(path, vendor=True)
         else:
             data = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes() if path.is_file() else b""
             files[name] = {"mode": mode, "present": path.exists() or path.is_symlink(), "sha256": hashlib.sha256(data).hexdigest()}
@@ -111,12 +114,55 @@ def capture_inputs(repo: Path) -> dict:
             continue
         name = os.fsdecode(raw)
         path = repo / name
-        if name.split("/")[0] in ("Sources", "Tests", "Scripts") and "__pycache__" not in path.parts:
+        if (vendor or name.split("/")[0] in ("Sources", "Tests", "Scripts")) and "__pycache__" not in path.parts:
             if path.is_file() and not path.is_symlink():
                 untracked[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"revision": git("rev-parse", "HEAD").decode().strip(), "files": files,
             "untrackedInputs": untracked, "submodules": submodules,
             "trackedDiffSHA256": hashlib.sha256(git("diff", "HEAD", "--binary")).hexdigest()}
+
+
+class CleanupFailed(Exception):
+    """Cleanup could not be confirmed; do not start another desktop command."""
+
+
+def process_group_exists(pid: int) -> bool:
+    try:
+        os.killpg(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def cleanup_child(child: subprocess.Popen) -> None:
+    for signum, allowance in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(child.pid, signum)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + allowance
+        while time.monotonic() < deadline:
+            child.poll()  # Reap the leader without blocking, including after SIGKILL.
+            if child.returncode is not None and not process_group_exists(child.pid):
+                return
+            time.sleep(.02)
+    raise CleanupFailed("Command or process group remains after bounded SIGKILL cleanup")
+
+
+def prepared_manifest(derived: Path, sdk: str) -> Path:
+    expected = derived / "Build/Products" / f"Trace_macosx{sdk}-arm64.xctestrun"
+    if not expected.is_file():
+        raise ValueError("Compatible prepared UI manifest not found: " + str(expected) + "; prepare the full build first")
+    value = plistlib.loads(expected.read_bytes())
+    targets = list(value) + [t.get("BlueprintName", "") for c in value.get("TestConfigurations", []) for t in c.get("TestTargets", [])]
+    if "TraceUITests" not in targets:
+        raise ValueError("Prepared manifest has no TraceUITests target: " + str(expected))
+    return expected
+
+
+def manifest_hashes(derived: Path) -> dict[str, str]:
+    return {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted((derived / "Build/Products").glob("*.xctestrun"))}
 
 
 class Runner:
@@ -137,9 +183,10 @@ class Runner:
         print(f"Starting {label}", flush=True)
         start = time.monotonic()
         interrupted = False
-        with (self.output / phase["log"]).open("w") as log:
+        # Structured exports keep stdout pure; diagnostics always have their own log.
+        with (self.output / phase["log"]).open("w") as log, (self.output / (label + ".stderr.log")).open("w") as diagnostics:
             try:
-                child = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                child = subprocess.Popen(args, stdout=log, stderr=diagnostics, start_new_session=True)
             except OSError as error:
                 phase.update(status="launch-failed", error=str(error), elapsedSeconds=time.monotonic() - start)
                 self.save()
@@ -148,24 +195,25 @@ class Runner:
                 code = child.wait(timeout=timeout)
             except (subprocess.TimeoutExpired, KeyboardInterrupt, RunInterrupted) as error:
                 interrupted = not isinstance(error, subprocess.TimeoutExpired)
-                # A second signal cannot interrupt bounded child cleanup.
-                handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+                pending_signals = []
+                handlers = {sig: signal.signal(sig, lambda signum, frame: pending_signals.append(signum))
+                            for sig in (signal.SIGINT, signal.SIGTERM)}
+                cleanup_error = None
                 try:
-                    try:
-                        os.killpg(child.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        child.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(child.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        child.wait()
+                    cleanup_child(child)
+                except CleanupFailed as failure:
+                    cleanup_error = failure
                 finally:
                     for sig, handler in handlers.items():
                         signal.signal(sig, handler)
+                if pending_signals:
+                    error = RunInterrupted(pending_signals[0])
+                    interrupted = True
+                if cleanup_error:
+                    phase.update(status="cleanup-failed", error=error_description(error), cleanupError=str(cleanup_error),
+                                 elapsedSeconds=time.monotonic() - start)
+                    self.save()
+                    raise cleanup_error
                 phase["status"] = "interrupted" if interrupted else "timeout"
                 phase["error"] = error_description(error)
                 code = (128 + error.signum if isinstance(error, RunInterrupted) else 130) if interrupted else 124
@@ -209,8 +257,8 @@ def run_case(runner: Runner, base: list[str], selector: str, index: int, timeout
         require_executed(summary)
         test["passed"] = code == 0
         test["status"] = "passed" if test["passed"] else "failed"
-    except (RunInterrupted, KeyboardInterrupt) as error:
-        test.update(status="interrupted", error=error_description(error))
+    except (RunInterrupted, KeyboardInterrupt, CleanupFailed) as error:
+        test.update(status="interrupted" if not isinstance(error, CleanupFailed) else "cleanup-failed", error=error_description(error))
         raise
     except Exception as error:
         test.update(status="failed", error=error_description(error))
@@ -223,7 +271,7 @@ def main() -> int:
     parser.add_argument("--selection", type=Path, required=True, help="Repository-relative selection, or an absolute path within it")
     parser.add_argument("--output", type=Path, required=True, help="New attempt directory; relative to the invocation directory")
     parser.add_argument("--test-timeout", type=int, default=360, help="Outer per-case watchdog, at least 360 seconds")
-    parser.add_argument("--derived-data", type=Path, help="Prepared products; relative to the invocation directory")
+    parser.add_argument("--derived-data", type=Path, help="Reuse-only prepared products; relative to the invocation directory; never rebuilds")
     args = parser.parse_args()
     try:
         require_local_execution(dict(os.environ))
@@ -244,6 +292,7 @@ def main() -> int:
         raise RunInterrupted(signum)
     original_cwd = Path.cwd()
     initial_inputs = None
+    original_manifests = None
     exit_code = 1
     try:
         handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGINT, signal.SIGTERM)}
@@ -267,8 +316,17 @@ def main() -> int:
             "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(derived_data), "-parallel-testing-enabled", "NO"]
         if runner.command("gui-session", ["launchctl", "print", f"gui/{os.getuid()}"], 15):
             raise ValueError("Runner has no GUI login session; log in locally before testing")
-        if runner.command("build", base + ["build-for-testing", "-only-testing:TraceUITests"], 1800):
-            raise ValueError("UI build failed; inspect build.log")
+        if args.derived_data:
+            sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-version"], text=True).strip()
+            manifest = prepared_manifest(derived_data, sdk)
+            original_manifests = manifest_hashes(derived_data)
+            runner.receipt.update(preparedManifest=str(manifest), preparedManifests=original_manifests, buildMode="reuse-only")
+            base = ["xcodebuild", "-xctestrun", str(manifest), "-destination", "platform=macOS,arch=arm64",
+                    "-parallel-testing-enabled", "NO"]
+        else:
+            runner.receipt["buildMode"] = "private-build"
+            if runner.command("build", base + ["build-for-testing", "-only-testing:TraceUITests"], 1800):
+                raise ValueError("UI build failed; inspect build.log")
         discovery = runner.output / "discovery.json"
         if runner.command("discovery", base + ["test-without-building", "-enumerate-tests", "-only-testing:TraceUITests",
                 "-test-enumeration-format", "json", "-test-enumeration-output-path", str(discovery)], 180):
@@ -303,6 +361,12 @@ def main() -> int:
                     exit_code = exit_code or 1
             except Exception as error:
                 runner.receipt.update(status="failed", inputError=error_description(error))
+                exit_code = exit_code or 1
+        if original_manifests is not None:
+            unchanged = original_manifests == manifest_hashes(derived_data)
+            runner.receipt["preparedManifestsUnchanged"] = unchanged
+            if not unchanged:
+                runner.receipt.update(status="failed", inputError="Shared prepared test manifests changed during verification")
                 exit_code = exit_code or 1
         runner.save()
         for sig, handler in handlers.items():

@@ -13,9 +13,9 @@ verification. Use no additional macOS account or virtual-machine setup.
 
 # Performance verification
 
-Performance regression acceptance runs locally, not in CI. CI comparison jobs
-report differences and reject failed builds or missing/invalid measurements;
-do not add performance thresholds to CI.
+Performance regression acceptance runs locally, not in CI. Local comparison scripts
+reject failed builds or missing/invalid measurements. CI runs noninteractive
+checks only; do not add performance thresholds or interactive benchmarks to CI.
 
 Freeze the candidate commit, then run three Release pairs against `61c00de` on
 one quiet local Mac in baseline-first, candidate-first, baseline-first order.

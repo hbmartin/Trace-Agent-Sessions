@@ -1,0 +1,245 @@
+{
+  "candidate": "5235d472894bd9db137d32f9bad16df34f2726c2",
+  "base": "853f19f72a4cf45c63d36d0d835d89714485d161",
+  "checks": {
+    "accepted-debug-build": {
+      "exitCode": 0,
+      "validatedCommit": "2177005106c1d98465212b7dbb4cfd05d149e12a",
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "build-for-testing"
+      ],
+      "log": "accepted-debug-build.log",
+      "nativeInputEquivalence": true
+    },
+    "accepted-discovery": {
+      "exitCode": 0,
+      "validatedCommit": "2177005106c1d98465212b7dbb4cfd05d149e12a",
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "test-without-building",
+        "-enumerate-tests",
+        "-test-enumeration-format",
+        "json",
+        "-test-enumeration-output-path",
+        "/Volumes/Pro2T/TraceValidation/navigation-coverage-runner-followup/compiled-identifiers-final.json"
+      ],
+      "log": "accepted-discovery.log",
+      "nativeInputEquivalence": true
+    },
+    "accepted-affected-groups": {
+      "exitCode": 0,
+      "validatedCommit": "2177005106c1d98465212b7dbb4cfd05d149e12a",
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "test-without-building",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests",
+        "-only-testing:TraceCoreTests/SidecarDependencyTests",
+        "-only-testing:TraceCoreTests/TranscriptViewportPolicyTests",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/navigation-coverage-runner-followup/accepted-affected-groups.xcresult"
+      ],
+      "log": "accepted-affected-groups.log",
+      "nativeInputEquivalence": true
+    },
+    "accepted-ownership-races": {
+      "exitCode": 0,
+      "validatedCommit": "5235d472894bd9db137d32f9bad16df34f2726c2",
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "test-without-building",
+        "-test-iterations",
+        "5",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testAcceptingAliasesShareFailureAndRecovery",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testDirectoryInputDiscoversDescendantsInsteadOfPayingUnscannedWork",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testOlderRosterPreservesNewerAndUnmatchedGenericAdmissions",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testNavigationRemovedSourceDebtRetiresAndOlderRosterCannotReturn",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testNavigationObservationDoesNotBlockOrConsumeNewAdmission",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testDeferredResetAllowsRecreatedSourceRestorationAndRetry",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testRecreatedSourceRefreshCannotReplaceCapturedUnsentRecoveryNavigation",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testTransientSummaryPreservesCacheAndFencesOlderRecovery",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/navigation-coverage-runner-followup/accepted-ownership-races.xcresult"
+      ],
+      "log": "accepted-ownership-races.log",
+      "nativeInputEquivalence": false
+    },
+    "accepted-release-build": {
+      "exitCode": 0,
+      "validatedCommit": "2177005106c1d98465212b7dbb4cfd05d149e12a",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/NavigationCoverageRelease"
+      ],
+      "log": "accepted-release-build.log",
+      "nativeInputEquivalence": true
+    },
+    "accepted-external-client": {
+      "exitCode": 0,
+      "validatedCommit": "5235d472894bd9db137d32f9bad16df34f2726c2",
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ExternalCoverageFixture"
+      ],
+      "log": "accepted-external-client.log",
+      "nativeInputEquivalence": false
+    },
+    "accepted-project-drift": {
+      "exitCode": 0,
+      "validatedCommit": "5235d472894bd9db137d32f9bad16df34f2726c2",
+      "command": [
+        "Scripts/check-project-drift.sh"
+      ],
+      "log": "accepted-project-drift.log",
+      "nativeInputEquivalence": false
+    },
+    "accepted-signing": {
+      "exitCode": 0,
+      "validatedCommit": "5235d472894bd9db137d32f9bad16df34f2726c2",
+      "command": [
+        "Scripts/check-signing-settings.sh"
+      ],
+      "log": "accepted-signing.log",
+      "nativeInputEquivalence": false
+    },
+    "accepted-network": {
+      "exitCode": 0,
+      "validatedCommit": "5235d472894bd9db137d32f9bad16df34f2726c2",
+      "command": [
+        "Scripts/check-network-surface.sh",
+        "build/NavigationCoverageRelease/Build/Products/Release/Trace.app"
+      ],
+      "log": "accepted-network.log",
+      "nativeInputEquivalence": false
+    },
+    "accepted-whitespace": {
+      "exitCode": 0,
+      "validatedCommit": "5235d472894bd9db137d32f9bad16df34f2726c2",
+      "command": [
+        "git",
+        "diff",
+        "853f19f...HEAD",
+        "--check"
+      ],
+      "log": "accepted-whitespace.log",
+      "nativeInputEquivalence": false
+    },
+    "verified-script-tests": {
+      "exitCode": 0,
+      "validatedCommit": "5235d472894bd9db137d32f9bad16df34f2726c2",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "Tests/Scripts"
+      ],
+      "log": "verified-script-tests.log",
+      "nativeInputEquivalence": false
+    }
+  },
+  "affectedTests": 723,
+  "affectedFailures": 0,
+  "affectedSkipped": 0,
+  "ownershipUniqueCases": 11,
+  "ownershipExecutions": 55,
+  "scriptTests": 114,
+  "uiSelected": 31,
+  "uiIdentifiersVerified": true,
+  "uiRuns": [],
+  "uiAccepted": false,
+  "uiLimitation": "Skip UI and publish with that limitation",
+  "performanceMeasurements": "omitted by selected plan",
+  "localPerformanceAcceptanceClaim": false,
+  "vendorUnchanged": true,
+  "rawPayloads": "local-only; not downloadable repository/CI artifacts",
+  "failedAttempts": [
+    {
+      "name": "initial-debug-build",
+      "cause": "A new test placed an async call inside an XCTest autoclosure; corrected to await the result first."
+    },
+    {
+      "name": "initial-script-tests",
+      "cause": "New warning-export fixture had incorrect Python string quoting; corrected without changing its assertions."
+    },
+    {
+      "name": "ui-regression-build",
+      "cause": "A new UI fixture used a Swift floating literal without the leading zero; corrected."
+    }
+  ],
+  "supersededValidation": "Earlier passing native/script runs are retained. Final coverage acceptance was rerun after replacing filename inference with actual adapter/root acceptance; final watchdog fixtures add child-readiness handshakes."
+}
