@@ -6705,11 +6705,20 @@ final class AppReviewFollowupTests: XCTestCase {
                 XCTAssertTrue(committed)
                 XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
             } else {
+                let usageGate = ReviewReadGate(), usageHeld = Task { await usageGate.wait() }
+                defer { usageHeld.cancel(); Task { await usageGate.open() } }
+                f.model.usageSnapshotGateForTesting = usageHeld
                 f.model.failSourceConfigurationForTesting = true
                 f.model.reloadSourcesAndRebuild()
                 try await wait { f.model.sourceReloadRecovery.error != nil }
+                try await wait { f.model.usageSnapshotWaitingForTesting }
                 XCTAssertTrue(f.model.rootSummaryRefreshPendingForTesting)
-                XCTAssertFalse(f.model.costsTotalsUpdating, "installed database debt is not active work after attachment failure")
+                XCTAssertTrue(f.model.costsTotalsUpdating, "a running Costs refresh remains active independently of retained metadata debt")
+                f.model.usageSnapshotGateForTesting = nil
+                await usageGate.open()
+                try await wait { !f.model.usageRefreshWaitingForTesting && !f.model.usageRefreshRunningForTesting && !f.model.usagePendingForTesting }
+                XCTAssertTrue(f.model.rootSummaryRefreshPendingForTesting)
+                XCTAssertFalse(f.model.costsTotalsUpdating, "retained metadata debt alone is not active work")
                 await f.model.refreshSummariesForTesting(lightweight: false)
                 try await wait { !f.model.rootSummaryRefreshPendingForTesting }
                 XCTAssertFalse(f.model.rootSummaryRefreshPendingForTesting)
@@ -9861,22 +9870,53 @@ final class AppReviewFollowupTests: XCTestCase {
             f.model.summaryTranscriptGateForTesting = held
             pass.phase = cancelledDelivery ? .cancelled : .complete
             let terminalPass = pass
-            let delivery = Task {
+            var delivery: Task<Void, Never>?
+            let terminalPublication = f.model.progressChanges.sink { progress in
+                // Cancellation after admission must not cancel workflow-owned rereading.
+                if cancelledDelivery, progress.phase == terminalPass.phase { delivery?.cancel() }
+            }
+            defer { terminalPublication.cancel() }
+            delivery = Task {
                 await deliveryGate.wait()
-                XCTAssertEqual(Task.isCancelled, cancelledDelivery)
+                XCTAssertFalse(Task.isCancelled)
                 await f.model.receiveProgress(terminalPass)
             }
-            if cancelledDelivery { delivery.cancel() }
             await deliveryGate.open()
             try await wait { f.model.summaryTranscriptWaitingForTesting }
             XCTAssertEqual(f.model.transcriptBanner?.feedback, .updating)
             XCTAssertFalse(feedback.contains(.readError))
             await publicationGate.open()
-            await delivery.value
+            await delivery?.value
+            XCTAssertEqual(delivery?.isCancelled, cancelledDelivery)
             XCTAssertNil(f.model.transcriptBanner?.feedback)
             XCTAssertEqual(f.model.selectedSessionID, session.id)
             XCTAssertFalse(feedback.contains(.readError), "even synchronous publications must not expose the old error")
         }
+    }
+
+    func testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead() async throws {
+        let f = try await fixture(count: 2)
+        var pass = IndexProgress(phase: .indexing)
+        await f.model.receiveProgress(pass)
+        let before = await f.database.transcriptReadCountForTesting()
+        let gate = ReviewReadGate()
+        pass.phase = .complete
+        let terminal = pass
+        let delivery = Task {
+            await gate.wait()
+            XCTAssertTrue(Task.isCancelled)
+            await f.model.receiveProgress(terminal)
+        }
+        delivery.cancel()
+        await gate.open()
+        await delivery.value
+        XCTAssertEqual(f.model.progress.phase, .indexing)
+        XCTAssertTrue(f.model.indexingPassActiveForTesting)
+        let rejected = await f.database.transcriptReadCountForTesting()
+        XCTAssertEqual(rejected, before)
+        await f.model.receiveProgress(terminal)
+        XCTAssertEqual(f.model.progress.phase, .complete)
+        XCTAssertFalse(f.model.indexingPassActiveForTesting)
     }
 
     func testSettlementPublishesCurrentErrorRatherThanCapturedEpisode() async throws {

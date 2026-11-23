@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run an explicit UI selection on an isolated Mac; retain every attempt."""
+"""Run an explicit UI selection on the local desktop; retain every attempt."""
 from __future__ import annotations
 
 import argparse
@@ -104,12 +104,23 @@ class Runner:
         return code
 
 
+def require_local_execution(environment: dict[str, str]) -> None:
+    if environment.get("GITHUB_ACTIONS", "").lower() in ("true", "1") or environment.get("CI", "").lower() in ("true", "1"):
+        raise ValueError("UI verification is local-only; CI execution is prohibited")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--test-timeout", type=int, default=360)
+    parser.add_argument("--derived-data", type=Path, help="Reuse test products prepared before the exclusive desktop window")
     args = parser.parse_args()
+    try:
+        require_local_execution(dict(os.environ))
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     repo = Path(__file__).resolve().parent.parent
     os.chdir(repo)
     try:
@@ -122,7 +133,7 @@ def main() -> int:
         runner = Runner(args.output.resolve(), {
             "revision": revision, "selection": str(selection.relative_to(repo)),
             "selectionSHA256": hashlib.sha256(selection.read_bytes()).hexdigest(),
-            "selectedTests": tests, "uiExecution": "isolated-runner", "performanceAcceptance": False,
+            "selectedTests": tests, "uiExecution": "local-current-desktop", "performanceAcceptance": False,
             "githubRunID": os.environ.get("GITHUB_RUN_ID"),
             "toolchain": subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
             "macOS": subprocess.check_output(["sw_vers"], text=True).strip(),
@@ -131,13 +142,16 @@ def main() -> int:
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
         return 2
+    derived_data = args.derived_data.resolve() if args.derived_data else runner.output / "DerivedData"
+    runner.receipt["derivedData"] = str(derived_data)
+    runner.save()
     base = ["xcodebuild", "-project", "Trace.xcodeproj", "-scheme", "Trace", "-configuration", "Debug",
-            "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(runner.output / "DerivedData"),
+            "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(derived_data),
             "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO"]
     try:
-        # A logged-in guest desktop is required; the host desktop is never used.
+        # A logged-in local desktop is required; this runner performs real input.
         if runner.command("gui-session", ["launchctl", "print", f"gui/{os.getuid()}"], 15):
-            raise ValueError("Runner has no GUI login session; provision the isolated guest before testing")
+            raise ValueError("Runner has no GUI login session; log in locally before testing")
         if runner.command("build", base + ["build-for-testing", "-only-testing:TraceUITests"], 1800):
             raise ValueError("UI build failed; inspect build.log")
         discovery = runner.output / "discovery.json"
