@@ -1,0 +1,17 @@
+{
+  "uniqueCases": 11,
+  "executions": 55,
+  "perSelector": {
+    "TraceAppTests/AppReviewFollowupTests/testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead": 5,
+    "TraceAppTests/AppReviewFollowupTests/testDeferredResetAllowsRecreatedSourceRestorationAndRetry": 5,
+    "TraceAppTests/AppReviewFollowupTests/testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration": 5,
+    "TraceAppTests/AppReviewFollowupTests/testRecreatedSourceRefreshCannotReplaceCapturedUnsentRecoveryNavigation": 5,
+    "TraceAppTests/AppReviewFollowupTests/testTransientSummaryPreservesCacheAndFencesOlderRecovery": 5,
+    "TraceCoreTests/IndexingRegressionTests/testAcceptingAliasesShareFailureAndRecovery": 5,
+    "TraceCoreTests/IndexingRegressionTests/testDirectoryInputDiscoversDescendantsInsteadOfPayingUnscannedWork": 5,
+    "TraceCoreTests/IndexingRegressionTests/testNavigationObservationDoesNotBlockOrConsumeNewAdmission": 5,
+    "TraceCoreTests/IndexingRegressionTests/testNavigationRemovedSourceDebtRetiresAndOlderRosterCannotReturn": 5,
+    "TraceCoreTests/IndexingRegressionTests/testOlderRosterPreservesNewerAndUnmatchedGenericAdmissions": 5,
+    "TraceCoreTests/IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider": 5
+  }
+}
