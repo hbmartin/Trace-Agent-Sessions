@@ -27,6 +27,9 @@ serially. Follow AGENTS.md's permission-dialog policy. The runner performs real
 mouse, keyboard and window-focus actions; a background shell or another Space
 cannot make that input independent of the user's desktop.
 
+Keep the normal Debug signing settings for UI products; disabling signing can
+prevent XCTest from launching the app before any test assertion executes.
+
 The runner rechecks build/discovery using the prepared products, executes one
 exact selector per invocation, and retains logs, command receipts, summaries and
 XCResults. Missing selectors, skipped or zero-test runs, failures and timeouts

@@ -147,7 +147,7 @@ def main() -> int:
     runner.save()
     base = ["xcodebuild", "-project", "Trace.xcodeproj", "-scheme", "Trace", "-configuration", "Debug",
             "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(derived_data),
-            "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO"]
+            "-parallel-testing-enabled", "NO"]
     try:
         # A logged-in local desktop is required; this runner performs real input.
         if runner.command("gui-session", ["launchctl", "print", f"gui/{os.getuid()}"], 15):
