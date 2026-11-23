@@ -2650,6 +2650,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
         f.model.startReadyStartupForTesting(sources: [source])
         await f.database.setResetFaultForTesting(.rollback)
+        await f.model.schedulerForTesting?.waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -2695,6 +2696,7 @@ final class AppReviewFollowupTests: XCTestCase {
         try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
         f.model.startReadyStartupForTesting(sources: [source])
         await f.database.setResetFaultForTesting(.rollback)
+        await f.model.schedulerForTesting?.waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -2752,6 +2754,7 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.rebuildIndex()
         try await wait { f.model.progress.phase == .failed && f.model.rebuildAcceptedForTesting }
         await f.database.setResetFaultForTesting(.rollback)
+        await f.model.schedulerForTesting?.waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery }
         await f.model.schedulerForTesting?.waitUntilIdle()
@@ -2785,6 +2788,7 @@ final class AppReviewFollowupTests: XCTestCase {
                 : f.model.objectWillChange.sink { observe() }
             defer { subscription.cancel() }
             await f.database.setResetFaultForTesting(.rollback)
+            await f.model.schedulerForTesting?.waitUntilIdle()
             await f.clock.advance(by: .seconds(5))
             try await wait { replaced && f.model.rebuildRequestIDForTesting != old }
             let newer = try XCTUnwrap(f.model.rebuildRequestIDForTesting)
