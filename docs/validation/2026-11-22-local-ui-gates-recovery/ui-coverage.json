@@ -1,0 +1,389 @@
+{
+  "selected": 28,
+  "accepted": 28,
+  "missing": [],
+  "skipped": 0,
+  "attempts": [
+    {
+      "path": "ui-local-signed-28",
+      "status": "failed",
+      "revision": "5de596b90e2fcb63c67b1ddc5519c44169eb7aa4",
+      "passed": 26,
+      "failed": 2
+    },
+    {
+      "path": "ui-focus-recovery-2",
+      "status": "passed",
+      "revision": "74ca740484b8678775b11f7ba6a77244d5a0fb21",
+      "passed": 2,
+      "failed": 0
+    }
+  ],
+  "acceptedCases": {
+    "TraceUITests/TraceUITests/testAutomaticResetCommitRestoresReaderAndBookmark": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-001.xcresult",
+      "summary": "ui-001-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testCachedCostsFailureShowsSafeTextAndProductionRetryRecoversWithoutFileChanges": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-002.xcresult",
+      "summary": "ui-002-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": []
+    },
+    "TraceUITests/TraceUITests/testCheckpointReadFailureKeepsLiveUpdatesUntilMonitoringRestart": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-003.xcresult",
+      "summary": "ui-003-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": []
+    },
+    "TraceUITests/TraceUITests/testFailedBookmarkLoadKeepsIntentUntilManualRetry": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-004.xcresult",
+      "summary": "ui-004-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testFailedRebuildRetainsAndUnblocksGlobalProjectFilter": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-005.xcresult",
+      "summary": "ui-005-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "[Internal] Thread running at User-interactive quality-of-service class waiting on a lower QoS thread running at Default quality-of-service class. Investigate ways to avoid priority inversions"
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testFailedSearchTargetOffersRetryJumpWhileReaderRemainsAvailable": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-006.xcresult",
+      "summary": "ui-006-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testFinalRowBookmarkWaitsWithoutFollowingProvisionalBottom": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-007.xcresult",
+      "summary": "ui-007-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testFinalRowFailedLoadKeepsIntentUntilManualRetry": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-008.xcresult",
+      "summary": "ui-008-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testHydrationTimeoutPreservesBookmarkAndLateCompletionResumes": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-009.xcresult",
+      "summary": "ui-009-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testLateDensityAndVisibilityChangesPreserveHydrationIntent": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-010.xcresult",
+      "summary": "ui-010-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testLatestScrollWhileAutomaticResetPreparesSurvivesCommit": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-011.xcresult",
+      "summary": "ui-011-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testMissingSearchTargetWithUnrelatedFailureShowsReader": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-012.xcresult",
+      "summary": "ui-012-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testNativeAnchorSampleParserPreservesGenerationAndRejectsMalformedGeometry": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-013.xcresult",
+      "summary": "ui-013-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": []
+    },
+    "TraceUITests/TraceUITests/testNativeRestorationPredicateRejectsCachedAndUnrelatedReceipts": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-014.xcresult",
+      "summary": "ui-014-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": []
+    },
+    "TraceUITests/TraceUITests/testOldGenerationSearchResultAfterRebuildShowsReader": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-015.xcresult",
+      "summary": "ui-015-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testPaginationFailureShowsSafeTextAndRetryRecovers": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-016.xcresult",
+      "summary": "ui-016-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testPendingLaunchRestorationResumesWithoutUserIntent": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-017.xcresult",
+      "summary": "ui-017-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testPendingSearchTargetSurvivesSecondResetWithoutNumericTarget": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-018.xcresult",
+      "summary": "ui-018-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testQueuedSidebarRetryBecomesUsableAfterRebuildReset": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-021.xcresult",
+      "summary": "ui-021-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testReadableRetryDuringIndexingKeepsProvisionalSearchTarget": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-022.xcresult",
+      "summary": "ui-022-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testRebuildDuringHeldRetryKeepsResumingFeedbackUntilWatcherStartupCompletes": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-023.xcresult",
+      "summary": "ui-023-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": []
+    },
+    "TraceUITests/TraceUITests/testRebuildShowsPreparationBeforeClearingIndex": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-024.xcresult",
+      "summary": "ui-024-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": []
+    },
+    "TraceUITests/TraceUITests/testResetWithoutFileEventsSettlesDeletedSelection": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-025.xcresult",
+      "summary": "ui-025-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testSessionNavigationScrollRestorationAndRestart": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-026.xcresult",
+      "summary": "ui-026-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testSourceRewriteReissuesHeldNativeRestoreWithCurrentOwnership": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-027.xcresult",
+      "summary": "ui-027-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testSourceRewriteRemapsSessionRowWithoutLosingHeldRestoration": {
+      "attempt": "ui-local-signed-28",
+      "result": "ui-028.xcresult",
+      "summary": "ui-028-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testPendingSearchWithBookmarkSurvivesAutomaticReset": {
+      "attempt": "ui-focus-recovery-2",
+      "result": "ui-001.xcresult",
+      "summary": "ui-001-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    },
+    "TraceUITests/TraceUITests/testProgrammaticRestoreSaveKeepsProvisionalSearchTarget": {
+      "attempt": "ui-focus-recovery-2",
+      "result": "ui-002.xcresult",
+      "summary": "ui-002-summary.json",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Publishing changes from within view updates is not allowed, this will cause undefined behavior."
+        }
+      ]
+    }
+  },
+  "initialFailuresPreserved": true,
+  "rerunReason": "Unrelated applications interrupted the two actions; windows were hidden before the single focused rerun",
+  "performanceAcceptance": false
+}

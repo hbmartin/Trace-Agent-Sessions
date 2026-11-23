@@ -1,0 +1,27 @@
+{
+  "uniqueCases": 20,
+  "executions": 100,
+  "repetitions": 5,
+  "counts": {
+    "testActualScopeTransitionEnrollsOnceAndRetiresAfterQualifiedScan": 5,
+    "testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead": 5,
+    "testDeferredEventsCoalesceBeforeAdmissionAndActiveEventsDoNotReplayReset": 5,
+    "testDeferredPublicationReentryCannotDiscardNewManualRebuild": 5,
+    "testDeferredRebuildDoesNotRetainReplacedScheduler": 5,
+    "testEmptyReplacementDoesNotScheduleTranscriptSettlement": 5,
+    "testEventRecoveryInputsSurviveAcknowledgedSchedulerReplacement": 5,
+    "testExhaustedRecoveryRetiresAfterSupersedingNonterminalFailure": 5,
+    "testFailedMonitoringRetriesOneOwnedReconciliationAndRestoresDelivery": 5,
+    "testFailedResetResumesStartupAndRecoversOnOneLaterEvent": 5,
+    "testFailedSuccessorRetainsRootRefreshDebtAndDatabaseReplacementDiscardsIt": 5,
+    "testMatchingScopeWithoutCoverageCacheDoesNotEnrollGlobalNavigationDebt": 5,
+    "testObsoleteSettlementCannotReadOrPublish": 5,
+    "testRootRefreshDebtRetainsFailedPartsAndOrdinarySummaryFinishesThem": 5,
+    "testRootRefreshDebtSurvivesSupersededSynchronizationBeforeBookkeeping": 5,
+    "testSettlementPublishesCurrentErrorRatherThanCapturedEpisode": 5,
+    "testSynchronousTerminalPublicationRejectsReplacedConfiguration": 5,
+    "testTerminalReadRecoveryRetiresTemporaryFeedbackAfterBudget": 5,
+    "testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData": 5,
+    "testTransientSummaryPreservesCacheAndFencesOlderRecovery": 5
+  }
+}
