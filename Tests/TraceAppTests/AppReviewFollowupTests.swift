@@ -463,9 +463,7 @@ final class AppReviewFollowupTests: XCTestCase {
     func testFailedTargetLookupOffersRetryJumpWithoutAnotherFileEvent() async throws {
         let (f, _) = try await provisionalSearchFixture()
         let rows = f.model.messages
-        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-        await f.model.requestPendingMessageResolutionForTesting()
-        try await wait { f.model.targetLookupFailureIsVisible }
+        try await showOwnedTargetLookupFailure(f)
         XCTAssertNil(f.model.transcriptBanner)
         XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
         let before = await f.database.navigationReadCountsForTesting()
@@ -479,9 +477,7 @@ final class AppReviewFollowupTests: XCTestCase {
 
     func testRetryJumpDemandDuringIndexingResolvesAtIdleAndNavigationRetiresNotice() async throws {
         let (f, _) = try await provisionalSearchFixture()
-        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-        await f.model.requestPendingMessageResolutionForTesting()
-        try await wait { f.model.targetLookupFailureIsVisible }
+        try await showOwnedTargetLookupFailure(f)
         let before = await f.database.navigationReadCountsForTesting()
         await f.model.receiveProgress(.init(phase: .indexing))
         let demand = f.model.pendingMessageIndexingDemandForTesting
@@ -492,9 +488,7 @@ final class AppReviewFollowupTests: XCTestCase {
         XCTAssertEqual(held.resolution, before.resolution)
         await f.model.receiveProgress(.init(phase: .complete))
         try await wait { !f.model.targetLookupFailureIsVisible }
-        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-        await f.model.requestPendingMessageResolutionForTesting()
-        try await wait { f.model.targetLookupFailureIsVisible }
+        try await showOwnedTargetLookupFailure(f)
         f.model.returnFromSession()
         XCTAssertFalse(f.model.targetLookupFailureIsVisible)
     }
@@ -553,6 +547,20 @@ final class AppReviewFollowupTests: XCTestCase {
         await f.clock.advance()
         try await wait { await f.database.transcriptReadCountForTesting() > reads }
         XCTAssertNil(f.model.transcriptBanner)
+    }
+
+    private func showOwnedTargetLookupFailure(_ f: Fixture) async throws {
+        let gate = ReviewReadGate(), held = Task { await gate.wait() }
+        defer { held.cancel(); Task { await gate.open() } }
+        f.model.pendingMessageResolutionGateForTesting = held
+        let lookup = Task { await f.model.requestPendingMessageResolutionForTesting() }
+        try await wait { f.model.pendingMessageResolutionWaitingForTesting }
+        // Fault the successor while a known lookup owns the resolver. A fixture's
+        // asynchronous terminal tail cannot consume or bypass this expectation.
+        await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
+        await f.model.requestPendingMessageResolutionForTesting()
+        await gate.open(); await lookup.value
+        try await wait { f.model.targetLookupFailureIsVisible }
     }
 
     private func provisionalSearchFixture() async throws -> (Fixture, String) {
