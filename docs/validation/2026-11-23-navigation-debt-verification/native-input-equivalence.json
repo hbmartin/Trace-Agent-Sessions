@@ -1,0 +1,10 @@
+{
+  "candidate": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+  "nativeValidationCommit": "6cf451c6db9e958cafdab3681a9997dcfcb275b5",
+  "onlyChangedFiles": [
+    "Scripts/prepare-navigation-recovery-benchmark.py",
+    "Tests/Scripts/test_navigation_recovery_benchmark.py"
+  ],
+  "nativeRuntimeTestsUIBuildInputsUnchanged": true,
+  "reason": "Only the unused extracted benchmark fixture and its Python contract assertion changed. Runtime/Core/App/UI test sources, native project/configuration inputs, and vendor state are identical."
+}

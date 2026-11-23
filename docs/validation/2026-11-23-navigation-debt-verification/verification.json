@@ -1,0 +1,260 @@
+{
+  "candidate": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+  "base": "f98b062810da814e2a756b22674d9394b349f17b",
+  "checks": {
+    "verified-debug-build": {
+      "exitCode": 0,
+      "validatedCommit": "6cf451c6db9e958cafdab3681a9997dcfcb275b5",
+      "nativeInputEquivalence": true,
+      "command": [
+        "xcodebuild",
+        "build-for-testing",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-debug-build.log"
+    },
+    "verified-discovery": {
+      "exitCode": 0,
+      "validatedCommit": "6cf451c6db9e958cafdab3681a9997dcfcb275b5",
+      "nativeInputEquivalence": true,
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-enumerate-tests",
+        "-test-enumeration-format",
+        "json",
+        "-test-enumeration-output-path",
+        "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/compiled-identifiers-verified.json"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-discovery.log"
+    },
+    "verified-ownership-races": {
+      "exitCode": 0,
+      "validatedCommit": "6cf451c6db9e958cafdab3681a9997dcfcb275b5",
+      "nativeInputEquivalence": true,
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-test-iterations",
+        "5",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testNavigationRemovedSourceDebtRetiresAndOlderRosterCannotReturn",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testIncrementalAliasClassificationPaysBothConfiguredRoots",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testMissingNeverScannedDefaultRootPaysButPreviouslyScannedRootDoesNot",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testNavigationObservationsQualifyProviderAndConfiguredRoot",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testSameDatabaseReloadUsesCommittedScopeCacheDespiteReadFailure",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testPreparedSourceWorkSurvivesSameDatabaseSourceReload",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testPreparedSourceWorkRetiresWaiterOnDatabaseReplacement",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testRetryJumpDemandDuringIndexingResolvesAtIdleAndNavigationRetiresNotice",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testDeferredStartupWithDifferentRequestedScopeCreatesNoSpeculativeDebt",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testPendingTargetTranscriptFailureUsesReaderErrorAndReaderRetry",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testRecreatedSourceRefreshCannotReplaceCapturedUnsentRecoveryNavigation",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testRecreatedSearchSelectionReadFailureShowsRequestedWindowOnlyForCurrentOwner",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testSelectionReentryWhileClearingTargetFailurePreservesSuccessor",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testDeferredResetPreservesMixedOrdinaryNavigationDebt",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testNavigationObservationDoesNotBlockOrConsumeNewAdmission",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testIngressReceiptMatchesRetirementAfterTransfer",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testRetiredSafetyPreparationPreservesWorkWithoutEnrollingAnotherReset",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-ownership-races.xcresult"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-ownership-races.log"
+    },
+    "verified-affected-groups": {
+      "exitCode": 0,
+      "validatedCommit": "6cf451c6db9e958cafdab3681a9997dcfcb275b5",
+      "nativeInputEquivalence": true,
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests",
+        "-only-testing:TraceCoreTests/SidecarDependencyTests",
+        "-only-testing:TraceCoreTests/TranscriptViewportPolicyTests",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-affected-groups.xcresult"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-affected-groups.log"
+    },
+    "accepted-script-tests": {
+      "exitCode": 0,
+      "validatedCommit": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+      "nativeInputEquivalence": false,
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "Tests/Scripts"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/accepted-script-tests.log"
+    },
+    "verified-release-build": {
+      "exitCode": 0,
+      "validatedCommit": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+      "nativeInputEquivalence": false,
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/NavigationRecoveryAppRelease"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-release-build.log"
+    },
+    "verified-external-client": {
+      "exitCode": 0,
+      "validatedCommit": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+      "nativeInputEquivalence": false,
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-external-client.log"
+    },
+    "verified-project-drift": {
+      "exitCode": 0,
+      "validatedCommit": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+      "nativeInputEquivalence": false,
+      "command": [
+        "Scripts/check-project-drift.sh"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-project-drift.log"
+    },
+    "verified-signing": {
+      "exitCode": 0,
+      "validatedCommit": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+      "nativeInputEquivalence": false,
+      "command": [
+        "Scripts/check-signing-settings.sh"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-signing.log"
+    },
+    "verified-network": {
+      "exitCode": 0,
+      "validatedCommit": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+      "nativeInputEquivalence": false,
+      "command": [
+        "Scripts/check-network-surface.sh",
+        "build/NavigationRecoveryAppRelease/Build/Products/Release/Trace.app"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-network.log"
+    },
+    "verified-whitespace": {
+      "exitCode": 0,
+      "validatedCommit": "593ad7b07296c99fdb102e837fe17ba5753acef8",
+      "nativeInputEquivalence": false,
+      "command": [
+        "git",
+        "diff",
+        "f98b062810da814e2a756b22674d9394b349f17b...HEAD",
+        "--check"
+      ],
+      "log": "/Volumes/Pro2T/TraceValidation/navigation-debt-verification-followup/verified-whitespace.log"
+    }
+  },
+  "affectedTests": 718,
+  "affectedFailures": 0,
+  "affectedSkipped": 0,
+  "ownershipUniqueCases": 19,
+  "ownershipExecutions": 95,
+  "scriptTests": 102,
+  "uiSelected": 29,
+  "uiIdentifiersVerified": true,
+  "uiRuns": [],
+  "uiAccepted": false,
+  "uiLimitation": "Skip UI and publish with that limitation",
+  "performanceMeasurements": "omitted by selected plan",
+  "localPerformanceAcceptanceClaim": false,
+  "vendorUnchanged": true,
+  "rawPayloads": "local-only; not downloadable repository/CI artifacts",
+  "failedAttempts": [
+    {
+      "name": "focused-regressions",
+      "cause": "Alias fixture configured one adapter, which intentionally deduplicates equivalent roots; corrected to two source instances."
+    },
+    {
+      "name": "extended-regressions",
+      "cause": "The new standalone recovery transition waited on the startup-only pre-handoff gate; corrected to its actual submission gate."
+    },
+    {
+      "name": "frozen-affected-groups",
+      "cause": "The transfer-result refactor failed the existing database-retirement receipt test. Actual database retirement must return retired even after ordinary transfer; fixed without weakening the test. The same broad run exposed an initial target-failure injection racing an existing resolver tail; the fixture now holds a known lookup and faults its coalesced successor."
+    },
+    {
+      "name": "final-discovery",
+      "cause": "XCTest enumeration refused the existing prior-candidate catalog path (exit 64); resumed with a new output path, preserving the failed receipt."
+    },
+    {
+      "name": "candidate-ownership-races",
+      "cause": "New safety setup reused readiness rather than replacing the watcher. Corrected to explicit restart plus generation assertion; the ordinary work fixture also now performs actual same-database source reload."
+    },
+    {
+      "name": "verified-script-tests",
+      "cause": "Cross-interface schema assertion incorrectly treated an equality comparison as assignment; its pattern now excludes ==."
+    }
+  ]
+}
