@@ -27,7 +27,7 @@ final class AppReviewFollowupTests: XCTestCase {
         } catch let error as DatabaseError { XCTAssertEqual(error.resultCode, .SQLITE_BUSY) }
     }
 
-    func testPreparedSourceWorkSurvivesSameDatabaseWatcherReplacement() async throws {
+    func testPreparedSourceWorkSurvivesSameDatabaseSourceReload() async throws {
         let f = try await fixture(count: 2)
         f.model.settings.onboardingComplete = true
         f.model.suppressLiveWatcherIngressForTesting = true
@@ -43,8 +43,9 @@ final class AppReviewFollowupTests: XCTestCase {
         let completed = OSAllocatedUnfairLock(initialState: 0)
         let task = Task { await f.model.bufferOrdinaryWorkForTesting(changes, safety: true, completion: { completed.withLock { $0 += 1 } }) }
         try await wait { f.model.sourcePreparationWaitingForTesting }
-        try await prepareStartup(f.model, sources: sources)
-        f.model.startReadyStartupForTesting(sources: sources)
+        let previous = f.model.schedulerForTesting
+        f.model.reloadSourcesAndRebuild()
+        try await wait { f.model.pendingDatabaseForTesting == nil && f.model.schedulerForTesting !== previous }
         await gate.open()
         let delivery = await task.value
         let delivered = await delivery.value
@@ -161,7 +162,10 @@ final class AppReviewFollowupTests: XCTestCase {
         let admission = Task { await f.model.admitSafetyRecoveryForTesting() }
         try await wait { f.model.sourcePreparationWaitingForTesting }
         let sources = [ClaudeCodeSource(roots: [f.root])]
-        try await prepareStartup(f.model, sources: sources)
+        let previous = f.model.watcherGenerationForTesting
+        let restarted = await f.model.restartWatchingForTesting(sources)
+        XCTAssertTrue(restarted)
+        XCTAssertGreaterThan(f.model.watcherGenerationForTesting, previous)
         await gate.open()
         let enrolled = await admission.value
         XCTAssertFalse(enrolled, "The previous watcher episode cannot enroll a reset for its replacement")
