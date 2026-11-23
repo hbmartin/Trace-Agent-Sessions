@@ -8,6 +8,23 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
 
+    func testCoverageUsesAdapterDiscoveryForNonstandardFilename() async throws {
+        let root = try directory(), file = root.appendingPathComponent("declared.trace")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = DeclaredFormatSource(base: ClaudeCodeSource(roots: [root]), file: file, fails: true)
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        let terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
+        await coordinator.indexAll(scope: .proseOnly, progress: { update in
+            if update.phase == .complete { terminal.withLock { $0 = update } }
+        })
+        let result = try XCTUnwrap(terminal.withLock { $0 }), coverage = try XCTUnwrap(result.navigationCoverage)
+        XCTAssertEqual(result.failedFiles, 1)
+        let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path,
+            path: file.path, externalSessionID: "one", anchorSourceKey: nil, anchorExternalID: nil)
+        XCTAssertFalse(coverage.covers(reference), "discovered file failures override broad successful discovery regardless of filename")
+    }
+
     func testAcceptingAliasesShareFailureAndRecovery() async throws {
         for nested in [false, true] {
             let root = try directory(), target = root.appendingPathComponent("target"), alias = root.appendingPathComponent("alias")
@@ -7715,4 +7732,28 @@ private actor CheckpointFailureGate {
         await withCheckedContinuation { waiter = $0 }
     }
     func open() { released = true; waiter?.resume(); waiter = nil }
+}
+
+private struct DeclaredFormatSource: SessionSource {
+    let base: ClaudeCodeSource
+    let file: URL
+    let fails: Bool
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    func discover() throws -> [DiscoveredSourceFile] {
+        [.init(agent: agent, root: roots[0].url, url: file, format: .claudeJSONL)]
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialContext: .init(fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        records(in: file, from: offset, through: boundary, initialContext: .init(sessionID: initialSessionID, fallbackTimestampMilliseconds: 0))
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        if fails { return AsyncThrowingStream { $0.finish(throwing: SessionSourceError.malformedRecord("declared source failure")) } }
+        return base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
+        try base.hydrate(fileURL: fileURL, format: format, locator: locator)
+    }
 }

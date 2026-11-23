@@ -694,6 +694,7 @@ public actor IndexCoordinator {
             var missingSources: Set<MissingSourceFile> = []
             var discoveryAttempts: [RootDiscoveryAttempt] = []
             var unclaimedInputs: [String: Set<RootRelativeScope>] = [:]
+            var acceptedRootsByFile: [SourceFileKey: Set<String>] = [:]
 
             func absorbDiscoveryResult(
                 _ result: VerifiedDiscoveryResult, source: any SessionSource,
@@ -800,6 +801,9 @@ public actor IndexCoordinator {
                     let url = URL(fileURLWithPath: pathsAreCanonical ? path : TraceFileIO.canonicalPath(path).path)
                     let accepted = classifications(url: url, mappingContexts: mappingContexts, includeAllRoots: true)
                     let matches = preferredClassifications(accepted)
+                    for (_, file, root) in accepted {
+                        acceptedRootsByFile[.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey), default: []].insert(root.id)
+                    }
                     let regularFile = (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
                     // Negative classification is source-owned evidence too. A
                     // provider/root which definitively does not claim this input
@@ -871,6 +875,7 @@ public actor IndexCoordinator {
                 let key = SourceFileKey(
                     agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey
                 )
+                acceptedRootsByFile[key, default: []].insert("\(file.agent.rawValue):\(file.root.path)")
                 guard let existing = uniqueFiles[key] else {
                     uniqueFiles[key] = file
                     continue
@@ -1137,9 +1142,10 @@ public actor IndexCoordinator {
                     }
                 }
                 // Routing selects one reader; every accepting root shares its outcome.
-                for file in allFiles where file.agent == root.agent && sourceFormat(for: file.url, agent: root.agent) != nil {
-                    guard let relative = root.relativeScope(forStoredPath: file.url.path, in: context) else { continue }
+                for file in allFiles where file.agent == root.agent {
                     let key = SourceFileKey(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey)
+                    guard acceptedRootsByFile[key]?.contains(root.id) == true,
+                          let relative = root.relativeScope(forStoredPath: file.url.path, in: context) else { continue }
                     let failed = failedSourceFiles.contains(key) || incompleteFiles.contains(key)
                     facts[relative] = .init(order: 0, covered: !failed)
                 }
