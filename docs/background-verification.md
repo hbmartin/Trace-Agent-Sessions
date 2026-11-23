@@ -54,3 +54,21 @@ before creating an attempt or launching tools.
 This follow-up performs no performance acceptance. The existing quiet-Mac,
 paired Release protocol and 10% local rule remain unchanged. Neither background
 builds nor an active working desktop establish valid performance measurements.
+
+## Attempt and interruption contracts
+
+Selection paths are repository-relative. Relative output and DerivedData paths
+are resolved from the invocation directory. Each new attempt starts its receipt
+before setup checks; an unusable output path or CI rejection fails on stderr
+without creating an attempt. The outer per-case watchdog is at least 360 seconds
+for XCTest's 300-second allowance plus launch/reporting overhead.
+
+Every case is registered before launch. Export/schema failures retain that case
+and continue the selection; interruption stops the batch, terminates and joins
+the active process group, and records the signal. Export logs retain errors;
+summary files contain JSON only. No failed, missing, skipped or interrupted case
+can count as successful verification.
+
+Receipts include actual tracked input hashes, relevant untracked inputs and
+submodule state, including permitted vendor modifications. Inputs are rechecked
+at the end; changes reject acceptance even if the selected tests passed.

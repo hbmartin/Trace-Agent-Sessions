@@ -150,3 +150,8 @@ func compilePreparedNavigationClient(_ ledger: IndexNavigationWorkLedger) {
     _ = ledger.reserve(canonicalPaths: [], canonicalReconciliationPaths: [], fullScan: true)
     for work in prepared { work.retire() }
 }
+
+func compileCommittedScopeClient(_ database: IndexDatabase) async throws {
+    let _: IndexScope = database.committedIndexScope
+    let _: IndexScope = try await database.storedIndexScope()
+}

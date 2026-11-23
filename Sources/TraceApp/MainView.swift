@@ -1385,6 +1385,19 @@ struct TranscriptRenderer: NSViewRepresentable {
         }
 
         #if DEBUG
+        /// Narrow invariant fixture; exercise the actual priority/refresh path.
+        func refreshCapturedSearchForTesting(model: TraceModel, sessionID: Int64,
+                                             bookmark: TranscriptBookmark) -> Bool {
+            self.model = model; self.sessionID = sessionID
+            var captured = RestoreRequest(bookmark: bookmark, reason: .search(messageID: bookmark.messageID),
+                refreshesRowHeights: false)
+            captured.sessionID = sessionID; captured.inputGeneration = userInputGeneration
+            captured.bookmarkOwner = model.transcriptRestoreOwner(sessionID: sessionID)
+            pendingRestore = captured
+            requestRestore(bookmark, reason: .visibility, refreshesRowHeights: true)
+            return pendingRestore == nil
+        }
+
         func updateRowsForTesting(_ messages: [MessageSummary], generation: Int64) {
             updateRows(with: messages.enumerated().map {
                 Item(summary: $0.element, sourceIndex: $0.offset, sourceGeneration: generation)
@@ -1706,6 +1719,13 @@ struct TranscriptRenderer: NSViewRepresentable {
                     return
                 }
             }
+            if !reason.isExplicitNavigation, let active = pendingRestore,
+               case .search(let target) = active.reason, model?.requestedMessageID != target {
+                // Retire before priority arbitration: an obsolete search has a
+                // higher priority than every passive geometry refresh.
+                cancelPendingRestore(reportCancellation: false)
+                return
+            }
             let activePriority = max(pendingRestore?.reason.priority ?? -1,
                                      deferredContentRestore?.reason.priority ?? -1)
             if activePriority > reason.priority, !reason.isExplicitNavigation { return }
@@ -1720,7 +1740,6 @@ struct TranscriptRenderer: NSViewRepresentable {
                     // A rewrite changes locator/row geometry. Reissue only the
                     // still-current restore intent, rather than adopting its old owner.
                     guard let model, model.transcriptRestoreOwnerMayRefreshSource(active.bookmarkOwner) else { return }
-                    if case .search(let target) = active.reason, model.requestedMessageID != target { return }
                     beginRestore(.init(bookmark: active.effectiveBookmark, reason: active.reason,
                         refreshesRowHeights: active.refreshesRowHeights || refreshesRowHeights))
                 } else { pendingRestore = active }

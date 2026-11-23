@@ -1557,17 +1557,26 @@ final class TraceModel: ObservableObject {
     private func prepareSourceWork(_ changes: SourceChanges) async -> SourceChanges? {
         let filtered = SourceIngressMailbox.checkpointable(changes, excluding: unavailableCheckpointStreams)
         guard filtered.navigationWork.isEmpty || (!filtered.watermarks.isEmpty && filtered.checkpointReservations.isEmpty) else { return filtered }
-        let owner = database, attachment = attachmentGeneration, configuration = sourceConfigurationRevision
-        let (prepared, navigationInputs, checkpointInputs) = await Task.detached {
+        guard let owner = database, !terminating else { return nil }
+        let (canonical, navigationInputs) = await Task.detached {
             let prepared = SourceIngressMailbox.Prepared(changes: filtered, recoveryEligible: false)
-            return (prepared, prepared.navigationInputs, prepared.checkpointInputs)
+            return (prepared, prepared.navigationInputs)
         }.value
-        guard !terminating, database === owner, attachment == attachmentGeneration,
-              configuration == sourceConfigurationRevision else { return nil }
+        var prepared = canonical
+        #if DEBUG
+        if let gate = sourcePreparationGateForTesting {
+            sourcePreparationGateForTesting = nil
+            sourcePreparationWaitingForTesting = true
+            await gate.value
+            sourcePreparationWaitingForTesting = false
+        }
+        #endif
+        guard !terminating, database === owner else { return nil }
+        prepared.changes = SourceIngressMailbox.checkpointable(prepared.changes, excluding: unavailableCheckpointStreams)
         var changes = prepared.changes
         if changes.navigationWork.isEmpty { changes.navigationWork = navigationWorkLedger.reserve(navigationInputs) }
         if !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty {
-            changes.checkpointReservations = checkpointInputs.map { [checkpointLedger.reserve($0)] } ?? []
+            changes.checkpointReservations = prepared.checkpointInputs.map { [checkpointLedger.reserve($0)] } ?? []
         }
         return changes
     }
@@ -1873,6 +1882,8 @@ final class TraceModel: ObservableObject {
             }
             guard let oldSessionID = navigation.sessionID else { return }
             guard let resolved else {
+                showPendingSelectionWindow(restoration: navigation)
+                guard isCurrent() else { return }
                 for (id, bookmark) in bookmarks { storeBookmark(id, bookmark) }
                 updateTranscript {
                     $0.absence = .init(database: navigation.database, sessionID: oldSessionID,
@@ -1897,7 +1908,12 @@ final class TraceModel: ObservableObject {
                 automaticNavigationTranscriptWaitingForTesting = false
             }
             #endif
-            guard isCurrent(), snapshot.session != nil, acceptTranscript(snapshot) == .accepted else { return }
+            guard isCurrent() else { return }
+            guard snapshot.session != nil else {
+                showPendingSelectionWindow(restoration: navigation)
+                return
+            }
+            guard acceptTranscript(snapshot) == .accepted else { return }
             let rows = snapshot.messages ?? []
             // No suspension follows this snapshot of intent. Resolve the active
             // anchor against the accepted rows, not an older awaited bookmark.
@@ -2033,6 +2049,9 @@ final class TraceModel: ObservableObject {
         guard let pending = pendingMessageRestore, pendingMessageIsCurrent(pending), pending.lastEvent != event else { return }
         pending.lastEvent = event
         pending.demand &+= 1
+        #if DEBUG
+        if indexWorkflow.isActive { pendingMessageIndexingDemandForTesting &+= 1 }
+        #endif
         guard !pending.running, !indexWorkflow.isActive else { return }
         let demand = pending.demand
         pending.running = true
@@ -2049,6 +2068,7 @@ final class TraceModel: ObservableObject {
                 Task { [weak self] in await self?.restorePendingMessageIntent(event: UUID()) }
             }
         }
+        var readingTranscript = false
         do {
             let resolved = try await pending.database.resolveNavigationReference(pending.intent.reference!)
             #if DEBUG
@@ -2090,6 +2110,7 @@ final class TraceModel: ObservableObject {
                 } else if navigationSourceCovered(reference, database: pending.database) { setRequestedMessage(nil) }
                 return
             }
+            readingTranscript = true
             let snapshot = try await pending.database.transcriptSnapshot(sessionID: resolved.session.id,
                 expectedGeneration: pending.generation, expectedReference: reference)
             guard isCurrent(), pending.demand == demand, snapshot.session != nil, acceptTranscript(snapshot) == .accepted else { return }
@@ -2106,11 +2127,13 @@ final class TraceModel: ObservableObject {
             }
         } catch is CancellationError { return }
         catch {
-            guard isCurrent() else { return }
+            guard isCurrent(), pending.demand == demand else { return }
             recordSummaryReadFailure(error, operation: .restoration)
-            // The readable transcript remains healthy. This distinct notice
-            // offers an actual user action without creating a reader episode.
-            updateTranscript { $0.targetLookupFailed = true }
+            if readingTranscript {
+                updateTranscript { $0.readError = "Could not refresh this session. Try again." }
+            } else {
+                updateTranscript { $0.targetLookupFailed = true }
+            }
         }
     }
 
@@ -3172,6 +3195,9 @@ final class TraceModel: ObservableObject {
             delivery: delivery, safety: safety)
         return Task { await delivery.waitForDelivery() }
     }
+    private(set) var pendingMessageIndexingDemandForTesting: UInt64 = 0
+    var sourcePreparationGateForTesting: Task<Void, Never>?
+    private(set) var sourcePreparationWaitingForTesting = false
     var checkpointReadGateForTesting: Task<Void, Never>?
     private(set) var checkpointReadWaitingForTesting = false
     func capturedBookmarkCleanupForTesting(_ id: Int64) -> () -> Void {
@@ -3790,9 +3816,13 @@ final class TraceModel: ObservableObject {
         let database = pending.database
         let sameDatabase = self.database === database
         let committedScope: IndexScope
-        do { committedScope = try await database.storedIndexScope() }
+        do {
+            if sameDatabase { committedScope = database.committedIndexScope }
+            else { committedScope = try await database.storedIndexScope() }
+        }
         catch {
-            failAttachment(pending, error: indexErrorMessage(error, prefix: "Could not load index scope: "))
+            failAttachment(pending, error: indexErrorMessage(error, sourceReload: pending.intent == .sourceReload,
+                                                            prefix: "Could not load index scope: "))
             return false
         }
         var counts = SourceFailureCounts(fileFailures: progress.unresolvedFailedFiles,
@@ -4337,7 +4367,9 @@ final class TraceModel: ObservableObject {
                     ? self.startupActivity : self.activity(for: buffered))
                 : self.startupActivity
             let startupWork = self.navigationWorkLedger.reserve(preparedStartup)
-            let scopeWork = self.navigationWorkForScope(self.settings.indexScope,
+            let usesCommittedScope = !includesRebuild && self.rebuildRequest?.database === self.database
+                && self.rebuildRequest?.reset.isCommitted == false
+            let scopeWork = usesCommittedScope ? [] : self.navigationWorkForScope(self.settings.indexScope,
                 resetWork: includesRebuild ? rebuild?.navigationWork ?? [] : [],
                 resetOwner: includesRebuild ? rebuild?.id : nil)
             let payload = StartupHandoff(
@@ -4381,8 +4413,6 @@ final class TraceModel: ObservableObject {
                 onOrdinary()
                 for work in bufferedOrdinary { work.completion() }
             }
-            let usesCommittedScope = !includesRebuild && self.rebuildRequest?.database === self.database
-                && self.rebuildRequest?.reset.isCommitted == false
             if includesRebuild { rebuild?.phase = .submitting }
             // No callbacks between consuming buffered intent and scheduler handoff.
             self.pendingStartupRecovery = .init()
@@ -5890,7 +5920,9 @@ final class TraceModel: ObservableObject {
         guard !indexWorkflow.isActive,
               let source = selectionSourceIdentity, source.sessionID == sessionID,
               source.generation == database.contentGeneration, let reference = source.reference else { return .unchanged }
-        if let navigation = automaticNavigation, automaticNavigationIsCurrent(navigation), navigation.reset.isCommitted {
+        if let navigation = automaticNavigation, automaticNavigationIsCurrent(navigation) {
+            // A current unsent rebuild owns its captured navigation too. Its
+            // eventual restoration uses the same stable source reference.
             return .handled
         }
         let attachment = attachmentGeneration, configuration = sourceConfigurationRevision
@@ -7280,7 +7312,7 @@ final class TraceModel: ObservableObject {
         }
         var changes = delivery.changes; changes.checkpointReservations = reservations
         changes.navigationWork = navigationWork
-        await routeSourceChanges(changes, acceptsCheckpoints: acceptsCheckpoints, safety: safety)
+        let outcome = await routeSourceChanges(changes, acceptsCheckpoints: acceptsCheckpoints, safety: safety)
         #if DEBUG
         if let gate = sourceIngressAfterTransferGateForTesting {
             sourceIngressAfterTransferGateForTesting = nil
@@ -7291,21 +7323,27 @@ final class TraceModel: ObservableObject {
         #endif
         // Delivery has transferred to the scheduler or same-database buffer.
         // Later watcher freshness cannot turn that fact into rejection.
-        return self.database === database && !terminating ? .ordinaryTransferred : .retired
+        return outcome
     }
 
+    @discardableResult
     private func routeSourceChanges(_ changes: SourceChanges, acceptsCheckpoints: Bool,
                                     completion: (@Sendable () -> Void)? = nil,
-                                    delivery: RecoveryEnrollment? = nil, safety: Bool = false) async {
+                                    delivery: RecoveryEnrollment? = nil, safety: Bool = false) async -> SourceIngressMailbox.Transfer {
+        guard let owner = database, !terminating else { delivery?.retire(); return .retired }
         guard changes.hasIndexWork || (acceptsCheckpoints && !changes.watermarks.isEmpty)
-                || !changes.checkpointReservations.isEmpty || completion != nil || delivery != nil || safety else { return }
-        guard let changes = await prepareSourceWork(changes) else { delivery?.retire(); return }
+                || !changes.checkpointReservations.isEmpty || completion != nil || delivery != nil || safety else { return .ordinaryTransferred }
         let obligations: [BufferedOrdinaryWork]
         if completion != nil || delivery != nil || safety {
             let once = BufferedCompletion(completion ?? {})
             obligations = [.init(completion: { once.complete() }, delivery: delivery, safety: safety)]
         } else { obligations = [] }
-        await routeBufferedSourceWork(.init(database: database, changes: changes, obligations: obligations))
+        guard let changes = await prepareSourceWork(changes), !terminating, database === owner else {
+            obligations.forEach { $0.delivery?.retire() }
+            return .retired
+        }
+        await routeBufferedSourceWork(.init(database: owner, changes: changes, obligations: obligations))
+        return !terminating && database === owner ? .ordinaryTransferred : .retired
     }
 
     private func submitSourceChanges(_ changes: SourceChanges,

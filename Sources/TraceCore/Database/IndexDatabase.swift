@@ -153,7 +153,10 @@ public actor IndexDatabase {
     private struct CheckpointContext: Sendable { var generation: IndexContentGeneration; var scope: IndexScope }
     private nonisolated let generationState: OSAllocatedUnfairLock<CheckpointContext>
     public nonisolated var contentGeneration: IndexContentGeneration { generationState.withLock { $0.generation } }
-    nonisolated var checkpointScope: IndexScope { generationState.withLock { $0.scope } }
+    /// Scope published only after its database transaction commits. This read
+    /// remains available during same-database monitoring replacement.
+    public nonisolated var committedIndexScope: IndexScope { generationState.withLock { $0.scope } }
+    nonisolated var checkpointScope: IndexScope { committedIndexScope }
     nonisolated var checkpointContext: (generation: IndexContentGeneration, scope: IndexScope) {
         generationState.withLock { ($0.generation, $0.scope) }
     }
