@@ -15,11 +15,12 @@ final class AppReviewFollowupTests: XCTestCase {
     func testMatchingScopeWithoutCoverageCacheDoesNotEnrollGlobalNavigationDebt() async throws {
         let f = try await fixture(count: 1)
         f.model.settings.onboardingComplete = true
+        // Exclude uncontrolled live admission before installing the real watcher.
+        f.model.suppressLiveWatcherIngressForTesting = true
         try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         try await wait { !f.model.watcherStartupPendingForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
-        f.model.suppressLiveWatcherIngressForTesting = true
         f.model.discardNavigationCoverageCacheForTesting()
         XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0)
         var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
@@ -39,11 +40,12 @@ final class AppReviewFollowupTests: XCTestCase {
     func testActualScopeTransitionEnrollsOnceAndRetiresAfterQualifiedScan() async throws {
         let f = try await fixture(count: 1)
         f.model.settings.onboardingComplete = true
+        // Exclude uncontrolled live admission before installing the real watcher.
+        f.model.suppressLiveWatcherIngressForTesting = true
         try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
         f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
         try await wait { !f.model.watcherStartupPendingForTesting }
         await f.model.schedulerForTesting?.waitUntilIdle()
-        f.model.suppressLiveWatcherIngressForTesting = true
         f.model.discardNavigationCoverageCacheForTesting()
         let gate = ReviewReadGate(), held = Task { await gate.wait() }
         defer { held.cancel(); Task { await gate.open() } }
