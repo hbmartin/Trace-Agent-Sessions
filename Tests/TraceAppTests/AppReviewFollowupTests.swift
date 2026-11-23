@@ -9017,8 +9017,12 @@ final class AppReviewFollowupTests: XCTestCase {
         defer { held.cancel(); Task { await gate.open() } }
         f.model.transcriptRecoveryPublicationGateForTesting = held
         _ = try await f.database.synchronizeConfiguredRoots([])
-        await f.clock.advance(by: .milliseconds(250))
-        try await wait { f.model.transcriptRecoveryPublicationWaitingForTesting }
+        // Wait on this recovery's gate rather than assuming its initial sleep
+        // was registered before the summary call returned.
+        try await wait {
+            await f.clock.advance(by: .milliseconds(250))
+            return f.model.transcriptRecoveryPublicationWaitingForTesting
+        }
         await f.model.refreshSummariesForTesting(terminalProjectReconciliation: false)
         XCTAssertTrue((f.model.transcriptBanner?.feedback == .updating))
         XCTAssertEqual(f.model.messages.map(\.id), rows.map(\.id))
