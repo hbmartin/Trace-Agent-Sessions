@@ -2192,6 +2192,9 @@ final class AppReviewFollowupTests: XCTestCase {
         f.model.startReadyStartupForTesting(sources: [source])
         XCTAssertTrue(try f.model.startupSubmissionsForTesting(in: f.model.startupReceiptScopeForTesting()).isEmpty)
         await f.database.setResetFaultForTesting(.rollback)
+        // Failure progress precedes retry bookkeeping; join that pass before
+        // moving virtual time so its five-second deadline is already fixed.
+        await f.model.schedulerForTesting?.waitUntilIdle()
         await f.clock.advance(by: .seconds(5))
         try await wait { f.model.isRebuildPendingRecovery && !f.model.watcherStartupPendingForTesting
             && f.model.safetyVerificationActiveForTesting }
