@@ -7322,8 +7322,9 @@ final class TraceModel: ObservableObject {
         }
         #endif
         // Delivery has transferred to the scheduler or same-database buffer.
-        // Later watcher freshness cannot turn that fact into rejection.
-        return outcome
+        // Later watcher freshness cannot turn that fact into rejection. Actual
+        // database retirement still retires this boundary's obsolete ownership.
+        return self.database === database && !terminating ? outcome : .retired
     }
 
     @discardableResult
