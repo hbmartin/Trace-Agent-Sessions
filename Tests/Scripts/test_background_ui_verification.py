@@ -305,6 +305,15 @@ spec=importlib.util.spec_from_file_location('runner',sys.argv[1]);m=importlib.ut
 def stop(n,f):raise m.RunInterrupted(n)
 signal.signal(signal.SIGTERM,stop)
 r=m.Runner(pathlib.Path(sys.argv[2]),{})
+spawn=m.subprocess.Popen
+def ready_spawn(*args,**kwargs):
+ import time
+ child=spawn(*args,**kwargs);deadline=time.monotonic()+5
+ while not (r.output/'held.log').exists() or 'ready' not in (r.output/'held.log').read_text():
+  if child.poll() is not None or time.monotonic()>deadline:raise RuntimeError('child-ready handshake failed')
+  time.sleep(.005)
+ return child
+m.subprocess.Popen=ready_spawn
 try:
  r.command('held',[sys.executable,'-u','-c','import signal,time,sys; signal.signal(signal.SIGTERM,lambda n,f:(print("cleanup",flush=True),time.sleep(.4),sys.exit(0))); print("ready",flush=True); time.sleep(30)'],.2)
  print('BAD_CONTINUATION',flush=True)
@@ -353,6 +362,15 @@ except m.RunInterrupted as e:
 import importlib.util,pathlib,sys
 s=importlib.util.spec_from_file_location('runner',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 r=m.Runner(pathlib.Path(sys.argv[2]),{})
+spawn=m.subprocess.Popen
+def ready_spawn(*args,**kwargs):
+ import time
+ child=spawn(*args,**kwargs);deadline=time.monotonic()+5
+ while not (r.output/'held.log').exists() or not (r.output/'held.log').read_text().strip():
+  if child.poll() is not None or time.monotonic()>deadline:raise RuntimeError('descendant-ready handshake failed')
+  time.sleep(.005)
+ return child
+m.subprocess.Popen=ready_spawn
 leader="import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-u','-c','import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print(os.getpid(),flush=True); time.sleep(30)']); time.sleep(30)"
 code=r.command('held',[sys.executable,'-u','-c',leader],.3)
 sys.exit(code)
