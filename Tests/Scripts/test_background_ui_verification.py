@@ -328,6 +328,50 @@ except m.RunInterrupted as e:
             finally:
                 if child.poll() is None: child.kill();child.wait(timeout=2)
 
+    def test_yaml_workflow_is_actually_inspected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); workflows=root/'.github/workflows';workflows.mkdir(parents=True)
+            (workflows/'ci.yml').write_text('run: xcodebuild test -only-testing:TraceCoreTests -only-testing:TraceAppTests\n# TraceExternalClientFixture\n')
+            (workflows/'unsafe.yaml').write_text('run: xcodebuild test -scheme Trace\n')
+            with patch.dict(globals(), ROOT=root), self.assertRaises(AssertionError):
+                self.test_ci_has_no_ui_execution_entrypoints()
+
+    def test_fixture_commit_ignores_global_signing_and_hooks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); hooks=root/'hooks';hooks.mkdir()
+            marker=root/'hook-ran'; hook=hooks/'pre-commit'
+            hook.write_text('#!/bin/sh\ntouch "'+str(marker)+'"\nexit 13\n');hook.chmod(0o755)
+            config=root/'gitconfig';config.write_text('[commit]\n gpgSign = true\n[core]\n hooksPath = '+str(hooks)+'\n[gpg]\n program = /usr/bin/false\n')
+            with patch.dict(os.environ, GIT_CONFIG_GLOBAL=str(config)):
+                self.test_actual_dirty_and_untracked_input_bytes_are_recorded()
+            self.assertFalse(marker.exists())
+
+    def test_timeout_cleans_term_resistant_descendant_after_leader_exits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output=Path(temp)/'attempt'
+            worker="""
+import importlib.util,pathlib,sys
+s=importlib.util.spec_from_file_location('runner',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+r=m.Runner(pathlib.Path(sys.argv[2]),{})
+leader="import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-u','-c','import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print(os.getpid(),flush=True); time.sleep(30)']); time.sleep(30)"
+code=r.command('held',[sys.executable,'-u','-c',leader],.3)
+sys.exit(code)
+"""
+            child=subprocess.Popen([sys.executable,'-c',worker,str(ROOT/'Scripts/run-selected-ui-verification.py'),str(output)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            try:
+                stdout,stderr=child.communicate(timeout=20)
+                self.assertEqual(child.returncode,124,stdout+stderr)
+                descendant=int((output/'held.log').read_text().strip())
+                with self.assertRaises(ProcessLookupError):os.kill(descendant,0)
+                receipt=json.loads((output/'verification.json').read_text())
+                self.assertEqual(receipt['phases'][0]['status'],'timeout')
+            finally:
+                if child.poll() is None:child.kill();child.wait(timeout=2)
+                log=output/'held.log'
+                if log.exists() and log.read_text().strip().isdigit():
+                    try:os.kill(int(log.read_text().strip()),signal.SIGKILL)
+                    except ProcessLookupError:pass
+
     def test_exact_nonempty_selection(self):
         self.assertEqual(self.selection(["TraceUITests/TraceUITests/testExample"]),
                          ["TraceUITests/TraceUITests/testExample"])
