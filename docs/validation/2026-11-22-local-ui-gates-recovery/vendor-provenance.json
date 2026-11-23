@@ -1,0 +1,39 @@
+{
+  "initial": {
+    "Vendor/GRDB.swift": {
+      "head": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+      "status": [
+        " m SQLiteCustom/src"
+      ],
+      "diffSHA256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410"
+    },
+    "Vendor/GRDB.swift/SQLiteCustom/src/sqlite": {
+      "head": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+      "status": [
+        " M ../SQLiteLib.xcconfig",
+        " M ../SQLiteLib.xcodeproj/project.pbxproj",
+        " M src/os_unix.c"
+      ],
+      "diffSHA256": "edb046d0948b71b7ec74d9a3102b5d2449a0c6040990823b692be8fb6137f11a"
+    }
+  },
+  "final": {
+    "Vendor/GRDB.swift": {
+      "head": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+      "status": [
+        " m SQLiteCustom/src"
+      ],
+      "diffSHA256": "6cce62f2a0c0d4f016bcbb01a188151e0e97db1e9a6b3f7b5201170235504410"
+    },
+    "Vendor/GRDB.swift/SQLiteCustom/src/sqlite": {
+      "head": "69395d1f72e61f37cf2e5164c054d85c80d5481c",
+      "status": [
+        " M ../SQLiteLib.xcconfig",
+        " M ../SQLiteLib.xcodeproj/project.pbxproj",
+        " M src/os_unix.c"
+      ],
+      "diffSHA256": "edb046d0948b71b7ec74d9a3102b5d2449a0c6040990823b692be8fb6137f11a"
+    }
+  },
+  "unchanged": true
+}

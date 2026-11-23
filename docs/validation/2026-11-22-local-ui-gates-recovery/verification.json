@@ -1,0 +1,575 @@
+{
+  "candidate": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+  "base": "8f6c816732eda0b11752f662fc88dfe50bbf8c74",
+  "sourceManifest": "source-hashes.json",
+  "verifiedRegularFiles": 544,
+  "productionSourcesChanged": false,
+  "checks": {
+    "frozen-debug-build": {
+      "command": [
+        "xcodebuild",
+        "build-for-testing",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:46:48.909229+00:00",
+      "finishedAtUTC": "2026-11-23T01:47:19.498821+00:00"
+    },
+    "frozen-ownership-races": {
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-test-iterations",
+        "5",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testRootRefreshDebtSurvivesSupersededSynchronizationBeforeBookkeeping",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testRootRefreshDebtRetainsFailedPartsAndOrdinarySummaryFinishesThem",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testFailedSuccessorRetainsRootRefreshDebtAndDatabaseReplacementDiscardsIt",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testTerminalRereadNeverPublishesExhaustedErrorBeforePresentData",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testTerminalReadRecoveryRetiresTemporaryFeedbackAfterBudget",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testSettlementPublishesCurrentErrorRatherThanCapturedEpisode",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testObsoleteSettlementCannotReadOrPublish",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testEmptyReplacementDoesNotScheduleTranscriptSettlement",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testExhaustedRecoveryRetiresAfterSupersedingNonterminalFailure",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testSynchronousTerminalPublicationRejectsReplacedConfiguration",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testFailedResetResumesStartupAndRecoversOnOneLaterEvent",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testDeferredEventsCoalesceBeforeAdmissionAndActiveEventsDoNotReplayReset",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testEventRecoveryInputsSurviveAcknowledgedSchedulerReplacement",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testDeferredRebuildDoesNotRetainReplacedScheduler",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testDeferredPublicationReentryCannotDiscardNewManualRebuild",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testFailedMonitoringRetriesOneOwnedReconciliationAndRestoresDelivery",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testTransientSummaryPreservesCacheAndFencesOlderRecovery",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testMatchingScopeWithoutCoverageCacheDoesNotEnrollGlobalNavigationDebt",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testActualScopeTransitionEnrollsOnceAndRetiresAfterQualifiedScan",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/local-ui-gates-recovery-followup/frozen-ownership-races.xcresult"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:47:19.587241+00:00",
+      "finishedAtUTC": "2026-11-23T01:47:40.013212+00:00"
+    },
+    "frozen-core-app-groups": {
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-parallel-testing-enabled",
+        "NO",
+        "-only-testing:TraceCoreTests",
+        "-only-testing:TraceAppTests",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/local-ui-gates-recovery-followup/frozen-core-app-groups.xcresult"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:47:40.102194+00:00",
+      "finishedAtUTC": "2026-11-23T01:50:50.616501+00:00"
+    },
+    "frozen-script-groups": {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "Tests/Scripts"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:50:50.710845+00:00",
+      "finishedAtUTC": "2026-11-23T01:52:59.694492+00:00"
+    },
+    "frozen-release-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/NavigationRecoveryAppRelease"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:52:59.888767+00:00",
+      "finishedAtUTC": "2026-11-23T01:55:42.228634+00:00"
+    },
+    "frozen-external-client": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:55:42.377399+00:00",
+      "finishedAtUTC": "2026-11-23T01:56:13.249201+00:00"
+    },
+    "frozen-project-drift": {
+      "command": [
+        "Scripts/check-project-drift.sh"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:56:13.342575+00:00",
+      "finishedAtUTC": "2026-11-23T01:56:13.566443+00:00"
+    },
+    "frozen-signing": {
+      "command": [
+        "Scripts/check-signing-settings.sh"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:56:13.655151+00:00",
+      "finishedAtUTC": "2026-11-23T01:56:18.976538+00:00"
+    },
+    "frozen-network": {
+      "command": [
+        "Scripts/check-network-surface.sh",
+        "build/NavigationRecoveryAppRelease/Build/Products/Release/Trace.app"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:56:19.065397+00:00",
+      "finishedAtUTC": "2026-11-23T01:56:19.153110+00:00"
+    },
+    "frozen-whitespace": {
+      "command": [
+        "git",
+        "diff",
+        "8f6c816732eda0b11752f662fc88dfe50bbf8c74...HEAD",
+        "--check"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:56:19.240408+00:00",
+      "finishedAtUTC": "2026-11-23T01:56:19.267082+00:00"
+    },
+    "frozen-discovery": {
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/DerivedData",
+        "-enumerate-tests",
+        "-test-enumeration-format",
+        "json",
+        "-test-enumeration-output-path",
+        "/Volumes/Pro2T/TraceValidation/local-ui-gates-recovery-followup/compiled-identifiers-final.json"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:57:20.582460+00:00",
+      "finishedAtUTC": "2026-11-23T01:57:28.935580+00:00"
+    },
+    "publication-whitespace": {
+      "command": [
+        "git",
+        "diff",
+        "8f6c816732eda0b11752f662fc88dfe50bbf8c74",
+        "--check"
+      ],
+      "head": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "exitCode": 0,
+      "startedAtUTC": "2026-11-23T01:59:45.809054+00:00",
+      "finishedAtUTC": "2026-11-23T01:59:45.848947+00:00"
+    }
+  },
+  "coreApp": {
+    "passed": 834,
+    "failed": 0,
+    "skipped": 0
+  },
+  "ownership": {
+    "uniqueCases": 20,
+    "repetitions": 5,
+    "passedExecutions": 100,
+    "counts": "frozen-ownership-counts.json"
+  },
+  "scriptTests": 93,
+  "ui": {
+    "selected": 28,
+    "accepted": 28,
+    "skipped": 0,
+    "perCase": "ui-coverage.json",
+    "inputEquivalence": "ui-input-equivalence.json",
+    "desktopConfirmation": "desktop-confirmation.json",
+    "execution": "local-current-desktop",
+    "runtimeWarnings": {
+      "Publishing changes from within view updates is not allowed, this will cause undefined behavior.": 21,
+      "[Internal] Thread running at User-interactive quality-of-service class waiting on a lower QoS thread running at Default quality-of-service class. Investigate ways to avoid priority inversions": 1
+    },
+    "warningBaselineStatus": "Not established; not claimed resolved"
+  },
+  "failedAttempts": [
+    {
+      "receipt": "baseline-focused-1.json",
+      "head": "8f6c816732eda0b11752f662fc88dfe50bbf8c74",
+      "exitCode": 65,
+      "disposition": "Unchanged baseline terminal fixture waited for a read after cancelling before admission"
+    },
+    {
+      "receipt": "diagnostic-terminal.json",
+      "head": "8f6c816732eda0b11752f662fc88dfe50bbf8c74",
+      "exitCode": 65,
+      "disposition": "Temporary diagnostic build confirmed the before-admission cancellation boundary; diagnostic source removed"
+    },
+    {
+      "receipt": "fixed-focused-build.json",
+      "head": "8f6c816732eda0b11752f662fc88dfe50bbf8c74",
+      "exitCode": 65,
+      "disposition": "Accessor typo; corrected to existing Costs worker state controls"
+    },
+    {
+      "receipt": "ui-discovery.json",
+      "head": "51fd45be6a85af8552ccb752353e86b5476dca3e",
+      "exitCode": 64,
+      "disposition": "Discovery output collided with receipt filename; corrected to distinct paths"
+    },
+    {
+      "receipt": "ui-local-28.json",
+      "head": "70f2f4c975039cf2e3732ae9efa1409a945fee25",
+      "exitCode": 1,
+      "disposition": "Unsigned launch failed before application code; second case interrupted for diagnosis"
+    },
+    {
+      "receipt": "ui-signed-launch.json",
+      "head": "70f2f4c975039cf2e3732ae9efa1409a945fee25",
+      "exitCode": 65,
+      "disposition": "Diagnostic signed launch; external focus change and failed deferred-marker assertion followed by symbolication timeout"
+    },
+    {
+      "receipt": "ui-local-signed-28.json",
+      "head": "5de596b90e2fcb63c67b1ddc5519c44169eb7aa4",
+      "exitCode": 1,
+      "disposition": "26 passed; two unrelated-window interruptions preserved; both passed the single focused rerun"
+    }
+  ],
+  "failedCIRuns": [
+    45090156353,
+    45090811748,
+    45091664316,
+    45091661211,
+    45093398012,
+    45095220123
+  ],
+  "failedCILogs": [
+    "ci-push-failed.log",
+    "ci-pr-v1-failed.log",
+    "ci-45091664316-failed.log",
+    "ci-45091661211-failed.log",
+    "ci-45093398012-failed.log",
+    "ci-45095220123-failed.log"
+  ],
+  "githubAlert": {
+    "dismissed_at": "2026-11-23T00:33:19Z",
+    "dismissed_reason": "false positive",
+    "html_url": "https://github.com/hbmartin/Trace-Agent-Sessions/security/code-scanning/122",
+    "number": 122,
+    "state": "dismissed"
+  },
+  "workflowState": [
+    {
+      "id": 427048690,
+      "name": "Background UI verification",
+      "state": "disabled_manually"
+    },
+    {
+      "id": 358153917,
+      "name": "CI",
+      "state": "active"
+    },
+    {
+      "id": 375987397,
+      "name": "Transcript scroll benchmark",
+      "state": "disabled_manually"
+    }
+  ],
+  "sonarCloud": {
+    "issue": "AaIFfB2dBLOuwLylZxaf",
+    "updateHTTP": 401,
+    "userDecision": "Leave upstream gate as a limitation",
+    "claimedGreen": false
+  },
+  "limitations": [
+    "SonarCloud false-positive disposition remains unauthenticated",
+    "22 runtime-warning entries retained; baseline status not investigated",
+    "Raw local payloads are local-only, not downloadable repository or CI attachments",
+    "No performance measurements or local 10% performance-acceptance claim",
+    "Complete UI/performance suites omitted"
+  ],
+  "rawRoot": "/Volumes/Pro2T/TraceValidation/local-ui-gates-recovery-followup",
+  "performanceAcceptance": false,
+  "ciAtEvidenceFreeze": [
+    {
+      "conclusion": "",
+      "databaseId": 45096428391,
+      "headSha": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "status": "in_progress",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45096428391"
+    },
+    {
+      "conclusion": "",
+      "databaseId": 45096426027,
+      "headSha": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+      "status": "in_progress",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45096426027"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 45095224243,
+      "headSha": "74ca740484b8678775b11f7ba6a77244d5a0fb21",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45095224243"
+    },
+    {
+      "conclusion": "failure",
+      "databaseId": 45095220123,
+      "headSha": "74ca740484b8678775b11f7ba6a77244d5a0fb21",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45095220123"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 45093935825,
+      "headSha": "5de596b90e2fcb63c67b1ddc5519c44169eb7aa4",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45093935825"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 45093931754,
+      "headSha": "5de596b90e2fcb63c67b1ddc5519c44169eb7aa4",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45093931754"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 45093400872,
+      "headSha": "70f2f4c975039cf2e3732ae9efa1409a945fee25",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45093400872"
+    },
+    {
+      "conclusion": "failure",
+      "databaseId": 45093398012,
+      "headSha": "70f2f4c975039cf2e3732ae9efa1409a945fee25",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45093398012"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 45092649380,
+      "headSha": "d85d8cb4d998d7e055002380bab1ecc70cf0dfe6",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45092649380"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 45092646309,
+      "headSha": "d85d8cb4d998d7e055002380bab1ecc70cf0dfe6",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45092646309"
+    },
+    {
+      "conclusion": "failure",
+      "databaseId": 45091664316,
+      "headSha": "8788310c837c6bd30ee6b12069b0d6905f695083",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45091664316"
+    },
+    {
+      "conclusion": "failure",
+      "databaseId": 45091661211,
+      "headSha": "8788310c837c6bd30ee6b12069b0d6905f695083",
+      "status": "completed",
+      "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45091661211"
+    }
+  ],
+  "ciUnitGate": {
+    "conclusion": "",
+    "databaseId": 45096426027,
+    "headSha": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+    "jobs": [
+      {
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "databaseId": 137437117726,
+        "name": "build-and-test",
+        "startedAt": "2026-11-23T01:47:32Z",
+        "status": "in_progress",
+        "steps": [
+          {
+            "completedAt": "2026-11-23T01:47:35Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-23T01:47:33Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:47:46Z",
+            "conclusion": "success",
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "number": 2,
+            "startedAt": "2026-11-23T01:47:35Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:47:47Z",
+            "conclusion": "success",
+            "name": "Run maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90",
+            "number": 3,
+            "startedAt": "2026-11-23T01:47:46Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:47:51Z",
+            "conclusion": "success",
+            "name": "Run jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac",
+            "number": 4,
+            "startedAt": "2026-11-23T01:47:47Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:47:51Z",
+            "conclusion": "success",
+            "name": "Configure custom SQLite",
+            "number": 5,
+            "startedAt": "2026-11-23T01:47:51Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:49:50Z",
+            "conclusion": "success",
+            "name": "Test scheme normalization",
+            "number": 6,
+            "startedAt": "2026-11-23T01:47:51Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:49:51Z",
+            "conclusion": "success",
+            "name": "Verify generated project",
+            "number": 7,
+            "startedAt": "2026-11-23T01:49:50Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:50:27Z",
+            "conclusion": "success",
+            "name": "Check Debug and Release signing settings",
+            "number": 8,
+            "startedAt": "2026-11-23T01:49:51Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:50:27Z",
+            "conclusion": "success",
+            "name": "Audit first-party network surface",
+            "number": 9,
+            "startedAt": "2026-11-23T01:50:27Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:58:19Z",
+            "conclusion": "success",
+            "name": "Build and run unit tests",
+            "number": 10,
+            "startedAt": "2026-11-23T01:50:27Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T01:58:22Z",
+            "conclusion": "success",
+            "name": "Save unit-test diagnostics",
+            "number": 11,
+            "startedAt": "2026-11-23T01:58:19Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-23T02:00:26Z",
+            "conclusion": "success",
+            "name": "Build benchmark CLI",
+            "number": 12,
+            "startedAt": "2026-11-23T01:58:22Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "0001-01-01T00:00:00Z",
+            "conclusion": "",
+            "name": "Compile external client and refresh benchmark",
+            "number": 13,
+            "startedAt": "2026-11-23T02:00:26Z",
+            "status": "in_progress"
+          },
+          {
+            "completedAt": "0001-01-01T00:00:00Z",
+            "conclusion": "",
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "number": 26,
+            "startedAt": "0001-01-01T00:00:00Z",
+            "status": "pending"
+          }
+        ],
+        "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45096426027/job/137437117726"
+      }
+    ],
+    "status": "in_progress",
+    "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45096426027"
+  }
+}

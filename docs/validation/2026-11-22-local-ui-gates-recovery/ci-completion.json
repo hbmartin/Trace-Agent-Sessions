@@ -1,0 +1,16 @@
+{
+  "candidate": "cbb8faeb1b8d09c6e738f6b6ec93d3bd574b02da",
+  "run": 45096426027,
+  "url": "https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45096426027",
+  "status": "completed",
+  "conclusion": "success",
+  "updatedAt": "2026-11-23T02:02:57Z",
+  "requiredSteps": [
+    "Build and run unit tests",
+    "Build benchmark CLI",
+    "Compile external client and refresh benchmark"
+  ],
+  "logPath": "ci-candidate-success.log",
+  "logSHA256": "f2e7f571c8272bd88ce773ad1dcd2f40c9a50a2f3b90922ec1f6ca014ebf3d3f",
+  "note": "Appended after the earlier in-progress evidence snapshot; later commits change validation documentation only."
+}

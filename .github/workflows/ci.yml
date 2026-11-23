@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
@@ -8,13 +11,14 @@ jobs:
   build-and-test:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
-      - uses: maxim-lobanov/setup-xcode@v1
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: "26.3"
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
       - name: Configure custom SQLite
         run: Scripts/configure-grdb.sh
       - name: Test scheme normalization
@@ -34,24 +38,16 @@ jobs:
           -destination 'platform=macOS,arch=arm64'
           -only-testing:TraceCoreTests
           -only-testing:TraceAppTests
+          -resultBundlePath build/TraceUnitTests.xcresult
           CODE_SIGNING_ALLOWED=NO
-      - name: Run complete UI suite
-        run: >-
-          xcodebuild test
-          -project Trace.xcodeproj
-          -scheme Trace
-          -configuration Debug
-          -destination 'platform=macOS,arch=arm64'
-          -only-testing:TraceUITests
-          -resultBundlePath build/TraceUITests.xcresult
-      - name: Save UI test diagnostics
+      - name: Save unit-test diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: trace-ui-results
-          path: build/TraceUITests*.xcresult
+          name: trace-unit-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/TraceUnitTests.xcresult
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 14
       - name: Build benchmark CLI
         run: >-
           xcodebuild build

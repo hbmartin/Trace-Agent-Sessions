@@ -1,94 +1,56 @@
-# Verification without taking over the working desktop
+# Local verification without repeated desktop interruptions
 
-Use the **Background UI verification** workflow for selected native UI tests.
-It runs on a GitHub-hosted Apple Silicon Mac with its own desktop. The local
-Mac can remain in use; no local desktop-idle confirmation is needed for this
-route. A unit-test failure in the separate CI workflow cannot skip this job.
+Builds, script checks, and noninteractive Core/App tests can run in the
+background. Native UI tests run on the current physical Mac, with one exclusive
+desktop window after preparation. No VM, UTM, extra account or CI UI execution
+is part of this setup.
 
-The existing CI workflow put its UI step after unit tests in the same job.
-[Run 45046415571](https://github.com/hbmartin/Trace-Agent-Sessions/actions/runs/45046415571)
-failed unit tests and skipped UI execution. That is one concrete cause of
-missing background verification, separate from local desktop interruptions.
+## Prepare first
 
-## Run a selection
+Freeze the candidate and preserve its source/toolchain/dependency hashes. Build
+the UI target and verify the selected identifiers through compiled XCTest
+discovery before requesting desktop time. Reuse that DerivedData directory for
+the selected run so compilation is already complete.
 
-Once this workflow is available on the default branch:
+For the previously skipped selection:
 
 ```sh
-gh workflow run background-ui-verification.yml \
-  --ref YOUR_REVIEW_BRANCH \
-  -f selection=docs/validation/2026-11-22-navigation-source-ownership/selected-ui-tests.json
-gh run list --workflow background-ui-verification.yml --limit 5
-gh run watch RUN_ID --exit-status
-gh run download RUN_ID --dir /tmp/trace-verification-RUN_ID
+python3 Scripts/run-selected-ui-verification.py \
+  --selection docs/validation/2026-11-22-navigation-source-ownership/selected-ui-tests.json \
+  --derived-data build/DerivedData \
+  --output /absolute/path/to/a/new/local-ui-attempt
 ```
 
-The branch must contain both the workflow and the selected JSON file. The
-selection is an explicit nonempty list of exact XCTest identifiers. Builds
-and compiled test discovery precede serial execution, one result bundle per
-case. Missing selectors, zero executed tests, skipped cases, timeout, and test
-failures fail verification. There is no automatic retry that could hide a
-failure. Every run records its source revision and selection hash. Logs,
-discovery, per-test summaries, and XCResults are downloadable artifacts.
-Infrastructure pushes run the two-case smoke selection automatically, allowing
-this workflow to be tested before default-branch installation. Other branches
-can use manual dispatch after installation; normal source pushes do not start
-a second complete UI suite.
+Obtain one fresh desktop-idle confirmation for the complete batch. Keep the Mac
+unlocked and input-free, wait for competing native checks, and run cases
+serially. Follow AGENTS.md's permission-dialog policy. The runner performs real
+mouse, keyboard and window-focus actions; a background shell or another Space
+cannot make that input independent of the user's desktop.
 
-This is functional UI evidence. It does not establish physical-Mac performance
-acceptance, external-volume permission behavior, or results on a different
-macOS version. Historical PR omissions remain historical omissions; a later
-hosted run is new evidence against its recorded revision.
+Keep the normal Debug signing settings for UI products; disabling signing can
+prevent XCTest from launching the app before any test assertion executes.
 
-## Local virtual desktop alternatives
+The runner rechecks build/discovery using the prepared products, executes one
+exact selector per invocation, and retains logs, command receipts, summaries and
+XCResults. Missing selectors, skipped or zero-test runs, failures and timeouts
+fail verification. Each attempt uses a new output directory. Preserve failed
+attempts; rerun after an identified correction rather than automatically retrying
+a failure until it passes.
 
-A separate macOS **guest** supplies its own WindowServer, focus, input, and
-permission state. Keep a display device configured and a guest user logged in;
-run Xcode inside the guest over SSH. Hide the guest viewer while tests run.
-Do not confuse hiding the viewer with deleting the virtual display, which UI
-testing still needs.
+Raw local UI payloads remain local-only. Commit source hashes, result counts,
+provenance paths and limitations as the review evidence. The earlier hosted UI
+proofs remain historical evidence; they do not complete a later local selection.
 
-UTM is already installed on the inspected host, and its CLI offers `start
---hide`. The host has hardware virtualization, ten logical CPUs, and 32 GiB
-RAM. An initial guest allocation of four vCPUs and 8–12 GiB is a provisioning
-starting point, not measured acceptance. A ready macOS/Xcode guest was not
-confirmed or provisioned during this investigation; the read-only UTM guest
-listing did not complete. No existing guest was started or altered.
+## CI policy
 
-An alternative is Tart's macOS/Xcode image with `tart run --no-graphics`:
-the guest retains its graphical desktop while its host viewer is suppressed.
-Pin the image/toolchain, provision a guest-only test account, keep fixtures on
-the guest's own disk, and collect XCResults over SSH. Restrict guest access;
-avoid inheriting published images' default credentials. This requires a large
-image download and guest setup. It is an option, not an already-verified local
-installation.
+CI retains builds, noninteractive Core/App tests, script checks and CLI fixtures.
+It does not launch TraceUITests or interactive TracePerformanceTests. The former
+hosted UI and transcript-scroll workflows are retired; their local scripts and
+historical results remain available. The selected runner rejects CI environments
+before creating an attempt or launching tools.
 
-Apple also supports a separate logged-in account's virtual desktop through
-Remote Desktop. This is an account/session setup task and requires a functional
-GUI login, permissions, and an actual XCTest smoke test before treating it as
-supported here. A second Space or an extra monitor within the same login is
-not equivalent to an independent test session: Trace's tests explicitly
-activate the app, click controls, and type through XCTest.
+## Performance policy
 
-## Performance verification
-
-A VM or another user session on this Mac still competes with foreground work
-for CPU, memory, storage, and thermal headroom. Use a dedicated otherwise-idle
-physical Mac for the repository's local performance acceptance, queueing one
-native measurement job at a time. It can be controlled remotely without
-interrupting the daily-use desktop. Keep baseline and candidate on that same
-machine, preserve the established pairing protocol, and record its hardware,
-OS, toolchain and instrumentation.
-
-GitHub-hosted measurements can run in the background as report-only evidence.
-They do not satisfy the current AGENTS.md local 10% acceptance contract. The
-existing benchmark workflow already follows that distinction. Do not weaken
-the threshold or label busy-host/virtual-machine timing as local acceptance.
-
-## Sources checked November 22, 2026
-
-- [GitHub-hosted runner isolation and public-repository availability](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
-- [UTM CLI and guest provisioning](https://docs.getutm.app/scripting/scripting/)
-- [Tart macOS/Xcode images and SSH](https://tart.run/quick-start/)
-- [Tart's headless-host/keychain requirements](https://tart.run/faq/)
-- [Apple's separate-account virtual desktop](https://support.apple.com/en-az/guide/remote-desktop/apd4f46319e/mac)
+This follow-up performs no performance acceptance. The existing quiet-Mac,
+paired Release protocol and 10% local rule remain unchanged. Neither background
+builds nor an active working desktop establish valid performance measurements.

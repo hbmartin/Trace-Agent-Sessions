@@ -18,6 +18,28 @@ class BackgroundUIVerificationTests(unittest.TestCase):
             path.write_text(json.dumps(value))
             return module.load_selection(path)
 
+    def test_ci_environments_are_rejected(self):
+        for env in [{"CI": "true"}, {"CI": "1"}, {"GITHUB_ACTIONS": "true"}, {"GITHUB_ACTIONS": "TRUE"}]:
+            with self.subTest(environment=env), self.assertRaisesRegex(ValueError, "local-only"):
+                module.require_local_execution(env)
+        module.require_local_execution({})
+        module.require_local_execution({"CI": "false", "GITHUB_ACTIONS": "false"})
+
+    def test_ci_has_no_ui_execution_entrypoints(self):
+        directory = ROOT / ".github/workflows"
+        self.assertFalse((directory / "background-ui-verification.yml").exists())
+        self.assertFalse((directory / "transcript-scroll-benchmark.yml").exists())
+        for path in directory.glob("*.yml"):
+            text = path.read_text()
+            for forbidden in ["-only-testing:TraceUITests", "-only-testing:TracePerformanceTests",
+                              "run-selected-ui-verification.py", "benchmark-transcript-comparison.sh",
+                              "measure-transcript-scroll.sh"]:
+                self.assertNotIn(forbidden, text, str(path))
+        text = (directory / "ci.yml").read_text()
+        self.assertIn("-only-testing:TraceCoreTests", text)
+        self.assertIn("-only-testing:TraceAppTests", text)
+        self.assertIn("TraceExternalClientFixture", text)
+
     def test_exact_nonempty_selection(self):
         self.assertEqual(self.selection(["TraceUITests/TraceUITests/testExample"]),
                          ["TraceUITests/TraceUITests/testExample"])
