@@ -90,7 +90,7 @@ import TraceCore
     private enum ReadOperation { case restoration }
     private func recordSummaryReadFailure(_ error: Error, operation: ReadOperation) { lookupErrors += 1 }
     var transcriptReadError: String?
-    struct TranscriptState { var targetLookupFailed = false }
+    struct TranscriptState { var targetLookupFailed = false; var readError: String? }
     private struct StateStore {
         var value = TranscriptState()
         func read<T>(_ key: KeyPath<TranscriptState, T>) -> T { value[keyPath: key] }
