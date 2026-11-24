@@ -132,23 +132,29 @@ private struct StoredRecoveryRow: Sendable {
 /// walking its ancestors is independent of the number of requested scopes.
 private struct ReconciliationScopeMatcher: Sendable {
     let sensitive: Set<String>, insensitive: Set<String>
+    let minimumSensitiveLength: Int, minimumInsensitiveLength: Int
     init(_ scopes: [TraceFileIO.CanonicalPath]) {
         sensitive = Set(scopes.filter(\.isCaseSensitive).map { $0.path.precomposedStringWithCanonicalMapping })
         insensitive = Set(scopes.filter { !$0.isCaseSensitive }.map {
             TraceFileIO.comparisonKey($0.path, caseSensitive: false).precomposedStringWithCanonicalMapping
         })
+        minimumSensitiveLength = sensitive.map { $0.utf8.count }.min() ?? Int.max
+        minimumInsensitiveLength = insensitive.map { $0.utf8.count }.min() ?? Int.max
     }
-    private func contains(_ key: String, in scopes: Set<String>) -> Bool {
+    private func contains(_ key: String, in scopes: Set<String>, minimumLength: Int) -> Bool {
         var candidate = key
         while true {
             if scopes.contains(candidate) { return true }
             guard candidate != "/", let slash = candidate.lastIndex(of: "/") else { return false }
-            candidate = slash == candidate.startIndex ? "/" : String(candidate[..<slash])
+            if slash == candidate.startIndex { return scopes.contains("/") }
+            let parent = candidate[..<slash]
+            guard parent.utf8.count >= minimumLength else { return false }
+            candidate = String(parent)
         }
     }
     func contains(_ path: String) -> Bool {
-        if !sensitive.isEmpty, contains(path.precomposedStringWithCanonicalMapping, in: sensitive) { return true }
-        return !insensitive.isEmpty && contains(TraceFileIO.comparisonKey(path, caseSensitive: false).precomposedStringWithCanonicalMapping, in: insensitive)
+        if !sensitive.isEmpty, contains(path.precomposedStringWithCanonicalMapping, in: sensitive, minimumLength: minimumSensitiveLength) { return true }
+        return !insensitive.isEmpty && contains(TraceFileIO.comparisonKey(path, caseSensitive: false).precomposedStringWithCanonicalMapping, in: insensitive, minimumLength: minimumInsensitiveLength)
     }
 }
 

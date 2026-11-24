@@ -145,7 +145,8 @@ func verifiedDiscoveryResult(
             }
             continue
         }
-        files.append(.init(agent: agent, root: root.url, canonicalPath: file.canonicalPath, format: file.format))
+        if file.root.path == root.url.path { files.append(file) }
+        else { files.append(.init(agent: agent, root: root.url, canonicalPath: file.canonicalPath, format: file.format)) }
     }
     return .init(files: files, failures: deduplicatedNormalizedDiscoveryFailures(qualifiedFailures))
 }
@@ -379,14 +380,14 @@ public extension SessionSource {
                 if !startsAtRoot {
                     var ancestor = start.url.standardizedFileURL
                     var excluded = false
-                    while ancestor.path != root.scanURL.standardizedFileURL.path {
+                    // The captured relative depth bounds this walk without
+                    // resolving the configured root again for every ancestor.
+                    for _ in startScope.relativeScope.components {
                         let properties = try? ancestor.resourceValues(forKeys: [.isHiddenKey, .isPackageKey])
                         if ancestor.lastPathComponent.hasPrefix(".") || properties?.isHidden == true || properties?.isPackage == true {
                             excluded = true; break
                         }
-                        let parent = ancestor.deletingLastPathComponent()
-                        if parent.path == ancestor.path { break }
-                        ancestor = parent
+                        ancestor = ancestor.deletingLastPathComponent()
                     }
                     if excluded { continue }
                 }
