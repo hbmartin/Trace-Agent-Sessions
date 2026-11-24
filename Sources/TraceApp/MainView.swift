@@ -1406,6 +1406,8 @@ struct TranscriptRenderer: NSViewRepresentable {
         #if DEBUG
         /// Narrow invariant fixture; exercise the actual priority/refresh path.
         func captureSearchForTesting(model: TraceModel, sessionID: Int64, bookmark: TranscriptBookmark) {
+            // Explicit search replaces both pending and deferred navigation.
+            cancelPendingRestore(reportCancellation: false)
             self.model = model; self.sessionID = sessionID
             var captured = RestoreRequest(bookmark: bookmark, reason: .search(messageID: bookmark.messageID), refreshesRowHeights: false)
             captured.sessionID = sessionID; captured.inputGeneration = userInputGeneration
