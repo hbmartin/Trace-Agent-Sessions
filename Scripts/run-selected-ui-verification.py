@@ -152,9 +152,19 @@ def cleanup_child(child: subprocess.Popen) -> None:
 
 def _cleanup_child(child: subprocess.Popen) -> None:
     known = set()
+    if child.returncode is None:
+        # Do not reap the only proof that this PGID is still our setsid child's.
+        # Its zombie row remains trustworthy until poll(), even after descendants
+        # have been reparented. Never adopt an already-reaped group's strangers.
+        original = process_group_members(child.pid)
+        leader = next((member for member in original if member["pid"] == child.pid), None)
+        if leader is not None:
+            if any(member["uid"] != os.getuid() for member in original):
+                raise CleanupFailed("Process group contains a different user")
+            known.update((member["pid"], member["start"]) for member in original)
 
     def inspect() -> bool:
-        child.poll()  # Reap only our direct child before taking the snapshot.
+        child.poll()  # Reap only our direct child, then revalidate current members.
         members = process_group_members(child.pid)
         live = [member for member in members if not member["state"].startswith("Z")]
         if child.returncode is not None and not live:

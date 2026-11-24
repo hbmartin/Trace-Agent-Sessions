@@ -448,9 +448,13 @@ public struct DiscoveredSourceFile: Hashable, Sendable {
     let canonicalPath: TraceFileIO.CanonicalPath
 
     public init(agent: AgentKind, root: URL, url: URL, format: SourceFormat) {
+        self.init(agent: agent, root: root, canonicalPath: TraceFileIO.canonicalPath(url.path), format: format)
+    }
+
+    init(agent: AgentKind, root: URL, canonicalPath: TraceFileIO.CanonicalPath, format: SourceFormat) {
         self.agent = agent
         self.root = root.standardized
-        canonicalPath = TraceFileIO.canonicalPath(url.path)
+        self.canonicalPath = canonicalPath
         self.url = URL(fileURLWithPath: canonicalPath.path)
         self.format = format
     }

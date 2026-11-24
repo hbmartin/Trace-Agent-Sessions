@@ -8,6 +8,95 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
 
+    func testReconciliationLivePathsPreserveCapturedVolumePolicy() {
+        func path(_ name: String, _ sensitive: Bool) -> TraceFileIO.CanonicalPath {
+            .init(path: name, comparisonKey: TraceFileIO.comparisonKey(name, caseSensitive: sensitive),
+                isCaseSensitive: sensitive)
+        }
+        let sensitive = ReconciliationLivePaths([path("/root/mount/UPPER.jsonl", true)])
+        XCTAssertTrue(sensitive.contains(storedPath: "/root/mount/UPPER.jsonl"))
+        XCTAssertFalse(sensitive.contains(storedPath: "/root/mount/upper.jsonl"),
+            "A case-insensitive parent cannot collapse sensitive child names")
+        let insensitive = ReconciliationLivePaths([path("/ROOT/mount/UPPER.jsonl", false)])
+        XCTAssertTrue(insensitive.contains(storedPath: "/root/mount/upper.jsonl"),
+            "A sensitive parent cannot override an insensitive child's captured identity")
+        XCTAssertFalse(insensitive.contains(storedPath: "/root/mount/UPPER.jsonl.extra"))
+        let siblings = ReconciliationLivePaths([path("/root/A.jsonl", true), path("/root/a.jsonl", true)])
+        XCTAssertTrue(siblings.contains(storedPath: "/root/A.jsonl"))
+        XCTAssertTrue(siblings.contains(storedPath: "/root/a.jsonl"))
+    }
+
+    func testReconciliationPreservesLiveRowsAcrossCapturedCasePolicy() async throws {
+        let root = try directory(), file = root.appendingPathComponent("UPPER.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let base = ClaudeCodeSource(roots: [root])
+        let policy = !base.roots[0].scanPath.isCaseSensitive
+        let source = CapturedCasePolicySource(base: base, caseSensitive: policy)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let initial = try await database.sessions()
+        let selected = try XCTUnwrap(initial.first)
+        XCTAssertEqual(initial.count, 1, "Reconciliation must retain the row it just indexed")
+        let state = try await database.sourceState(agent: .claudeCode, path: file.path)
+        let sourceID = try XCTUnwrap(state?.id)
+        let writer = try FileHandle(forWritingTo: file)
+        try writer.seekToEnd(); try writer.write(contentsOf: Data(line(2).utf8)); try writer.close()
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let refreshed = try await database.sessions()
+        XCTAssertEqual(refreshed.first?.id, selected.id)
+        XCTAssertEqual(refreshed.first?.messageCount, 2)
+        let updated = try await database.sourceState(agent: .claudeCode, path: file.path)
+        XCTAssertEqual(updated?.id, sourceID)
+        try FileManager.default.removeItem(at: file)
+        await coordinator.indexAll(scope: .proseOnly)
+        let removed = try await database.sessions()
+        XCTAssertTrue(removed.isEmpty, "Exact live identity must not preserve genuinely deleted rows")
+    }
+
+    func testScopedStoredPathsCanonicalEquivalenceAndCapturedPolicies() async throws {
+        let root = try directory(), url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let rootID = try await database.register(root: SourceRoot(agent: .claudeCode, url: root))
+        let sourceID = try await database.createSource(rootID: rootID,
+            file: .init(agent: .claudeCode, root: root, url: root.appendingPathComponent("seed.jsonl"), format: .claudeJSONL),
+            fingerprint: .init(device: 0, inode: 0, size: 0, modificationNanoseconds: 0, headHash: Data(), headLength: 0))
+        let raw = try DatabaseQueue(path: url.path)
+        // Bypass Foundation URL normalization so both persisted spellings are tested.
+        for storedName in ["caf\u{00e9}", "cafe\u{0301}", "K", "\u{212a}"] {
+            let group = storedName == "K" || storedName == "\u{212a}" ? ["K", "\u{212a}"] : ["caf\u{00e9}", "cafe\u{0301}"]
+            let storedPath = root.path + "/" + storedName + "/one.jsonl"
+            try await raw.write { db in
+                try db.execute(sql: "UPDATE source_file SET path=? WHERE id=?", arguments: [storedPath, sourceID])
+            }
+            for spelling in group {
+                for exact in [false, true] {
+                    let scope = root.path + "/" + spelling + (exact ? "/one.jsonl" : "")
+                    for sensitive in [true, false] {
+                        let rows = try await database.paths(agent: .claudeCode, rootID: rootID,
+                            scopes: [scope], caseSensitive: sensitive)
+                        XCTAssertEqual(rows.map(\.id), [sourceID], "\(storedName) / \(spelling), exact=\(exact)")
+                    }
+                }
+            }
+            let sibling = try await database.paths(agent: .claudeCode, rootID: rootID,
+                scopes: [root.path + "/" + storedName + "extra"], caseSensitive: true)
+            XCTAssertTrue(sibling.isEmpty)
+        }
+        let storedPath = root.path + "/UPPER/one.jsonl"
+        try await raw.write { db in
+            try db.execute(sql: "UPDATE source_file SET path=? WHERE id=?", arguments: [storedPath, sourceID])
+        }
+        func scope(_ sensitive: Bool) -> TraceFileIO.CanonicalPath {
+            .init(path: root.path + "/upper", comparisonKey: root.path + "/upper", isCaseSensitive: sensitive)
+        }
+        let narrow = try await database.paths(agent: .claudeCode, rootID: rootID, capturedScopes: [scope(true)])
+        XCTAssertTrue(narrow.isEmpty)
+        let matching = try await database.paths(agent: .claudeCode, rootID: rootID,
+            capturedScopes: [scope(true), scope(false)])
+        XCTAssertEqual(matching.map(\.id), [sourceID])
+    }
+
     func testIncrementalReconciliationDecodesOnlyAttemptedScope() async throws {
         let root = try directory(), file = root.appendingPathComponent("selected.jsonl")
         try Data(line(1).utf8).write(to: file)
@@ -7871,6 +7960,37 @@ private struct DeclaredFormatSource: SessionSource {
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
         if fails { return AsyncThrowingStream { $0.finish(throwing: SessionSourceError.malformedRecord("declared source failure")) } }
         return base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
+        try base.hydrate(fileURL: fileURL, format: format, locator: locator)
+    }
+}
+
+// Forward durable context while injecting only a discovery-time volume policy.
+// The production coordinator and database still perform the complete read/reconcile.
+private struct CapturedCasePolicySource: SessionSource {
+    let base: ClaudeCodeSource
+    let caseSensitive: Bool
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    func discover() throws -> [DiscoveredSourceFile] { try discoverResult(scopedTo: nil).files }
+    func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
+        let result = try base.discoverResult(scopedTo: paths)
+        return .init(files: result.files.map { file in
+            .init(agent: file.agent, root: file.root,
+                canonicalPath: .init(path: file.canonicalPath.path,
+                    comparisonKey: TraceFileIO.comparisonKey(file.canonicalPath.path, caseSensitive: caseSensitive),
+                    isCaseSensitive: caseSensitive), format: file.format)
+        }, failures: result.failures)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
     }
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
         try base.hydrate(fileURL: fileURL, format: format, locator: locator)

@@ -1,0 +1,7 @@
+{
+  "TraceAppTests.AppReviewFollowupTests": 443,
+  "TraceCoreTests.FSEventsWatcherTests": 13,
+  "TraceCoreTests.IndexingRegressionTests": 245,
+  "TraceCoreTests.SidecarDependencyTests": 27,
+  "TraceCoreTests.TranscriptViewportPolicyTests": 4
+}

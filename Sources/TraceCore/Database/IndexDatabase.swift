@@ -192,11 +192,12 @@ public actor IndexDatabase {
             try db.execute(sql: "PRAGMA temp_store = MEMORY")
             try db.execute(sql: "PRAGMA mmap_size = 268435456")
             try db.execute(sql: "CREATE TEMP VIEW supported_agent(agent) AS \(supportedAgents)")
-            db.add(function: DatabaseFunction("trace_scope_contains", argumentCount: 2, pure: true) { values in
+            db.add(function: DatabaseFunction("trace_scope_contains", argumentCount: 3, pure: true) { values in
                 guard let path = String.fromDatabaseValue(values[0]),
-                      let scope = String.fromDatabaseValue(values[1]) else { return false }
-                let key = TraceFileIO.comparisonKey(path, caseSensitive: false)
-                let prefix = TraceFileIO.comparisonKey(scope, caseSensitive: false)
+                      let scope = String.fromDatabaseValue(values[1]),
+                      let caseSensitive = Bool.fromDatabaseValue(values[2]) else { return false }
+                let key = TraceFileIO.comparisonKey(path, caseSensitive: caseSensitive)
+                let prefix = TraceFileIO.comparisonKey(scope, caseSensitive: caseSensitive)
                 return key == prefix || key.hasPrefix(prefix == "/" ? prefix : prefix + "/")
             })
         }
@@ -1698,41 +1699,62 @@ public actor IndexDatabase {
         }
     }
 
-    // Scope predicates run inside SQLite; unrelated rows are never decoded and
-    // stored paths are never re-resolved against a potentially changed symlink.
-    // The case-sensitive range uses the existing (agent,path) unique index.
+    // Compatibility for internal callers with one captured policy. No filesystem
+    // lookup is needed to qualify a stored path or a prepared scope.
     func paths(agent: AgentKind, rootID: Int64, scopes: [String]?, caseSensitive: Bool) throws -> [IndexedSourcePath] {
-        if let scopes, scopes.isEmpty { return [] }
+        try paths(agent: agent, rootID: rootID, capturedScopes: scopes?.map {
+            TraceFileIO.CanonicalPath(path: $0,
+                comparisonKey: TraceFileIO.comparisonKey($0, caseSensitive: caseSensitive),
+                isCaseSensitive: caseSensitive)
+        })
+    }
+
+    // Binary ranges remain the fast query. A separate, root-filtered Unicode
+    // fallback must not exclude canonical equivalents before Swift sees them.
+    func paths(agent: AgentKind, rootID: Int64, capturedScopes: [TraceFileIO.CanonicalPath]?) throws -> [IndexedSourcePath] {
+        if let capturedScopes, capturedScopes.isEmpty { return [] }
         return try pool.read { db in
-            let uniqueScopes = scopes.map { Array(Set($0)).sorted() }
-            let batches: [[String]?] = uniqueScopes.map { values in
+            let uniqueScopes = capturedScopes.map { Array(Set($0)).sorted {
+                ($0.path, $0.isCaseSensitive ? 1 : 0) < ($1.path, $1.isCaseSensitive ? 1 : 0)
+            } }
+            let batches: [[TraceFileIO.CanonicalPath]?] = uniqueScopes.map { values in
                 stride(from: 0, to: values.count, by: 128).map { start in
                     Optional(Array(values[start..<min(start + 128, values.count)]))
                 }
             } ?? [nil]
             var rows: [Row] = [], seen: Set<Int64> = []
-            for batch in batches {
-                var sql = "SELECT id, root_id, path FROM source_file WHERE agent=? AND root_id=?"
-                var arguments: StatementArguments = [agent.rawValue, rootID]
-                if let batch {
-                    var predicates: [String] = []
-                    for scope in batch {
-                        if caseSensitive {
-                            let prefix = scope == "/" ? scope : scope + "/"
-                            predicates.append("(path=? OR (path>=? AND path<?))")
-                            arguments += [scope, prefix, String(prefix.dropLast()) + "0"]
-                        } else {
-                            // Unicode folding matches the frozen volume context, not
-                            // SQLite's ASCII-only NOCASE or filesystem state.
-                            predicates.append("trace_scope_contains(path, ?)")
-                            arguments += [scope]
-                        }
-                    }
-                    sql += " AND (" + predicates.joined(separator: " OR ") + ")"
-                }
+            let base = "SELECT id, root_id, path FROM source_file WHERE agent=? AND root_id=?"
+            func collect(_ predicates: [String], _ arguments: StatementArguments) throws {
+                let sql = base + (predicates.isEmpty ? "" : " AND (" + predicates.joined(separator: " OR ") + ")")
                 for row in try Row.fetchAll(db, sql: sql, arguments: arguments) {
                     if seen.insert(row["id"]).inserted { rows.append(row) }
                 }
+            }
+            for batch in batches {
+                var arguments: StatementArguments = [agent.rawValue, rootID]
+                var fallbackArguments = arguments
+                var predicates: [String] = [], fallback: [String] = []
+                for scope in batch ?? [] {
+                    if scope.isCaseSensitive {
+                        let prefix = scope.path == "/" ? scope.path : scope.path + "/"
+                        predicates.append("(path=? OR (path>=? AND path<?))")
+                        arguments += [scope.path, prefix, String(prefix.dropLast()) + "0"]
+                        if scope.path.utf8.allSatisfy({ $0 < 128 }) {
+                            fallback.append("(path GLOB ? AND trace_scope_contains(path, ?, 1))")
+                            fallbackArguments += ["*[^\u{1}-\u{7f}]*", scope.path]
+                        } else {
+                            // An ASCII candidate can also be canonically equivalent
+                            // to a non-ASCII scope (for example K and Kelvin sign).
+                            fallback.append("trace_scope_contains(path, ?, 1)")
+                            fallbackArguments += [scope.path]
+                        }
+                    } else {
+                        predicates.append("trace_scope_contains(path, ?, 0)")
+                        arguments += [scope.path]
+                    }
+                }
+                try collect(predicates, arguments)
+                if !fallback.isEmpty { try collect(fallback, fallbackArguments) }
             }
             #if DEBUG
             let rowCount = rows.count

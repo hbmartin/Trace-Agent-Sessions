@@ -1,0 +1,17 @@
+{
+  "native": {
+    "TraceCoreTests/IndexingRegressionTests/testReconciliationLivePathsPreserveCapturedVolumePolicy": 5,
+    "TraceCoreTests/IndexingRegressionTests/testReconciliationPreservesLiveRowsAcrossCapturedCasePolicy": 5,
+    "TraceCoreTests/IndexingRegressionTests/testScopedStoredPathsCanonicalEquivalenceAndCapturedPolicies": 5,
+    "TraceCoreTests/IndexingRegressionTests/testInodeRenameKeepsSourceAndMessageIDsForBothPathOrders": 5,
+    "TraceCoreTests/IndexingRegressionTests/testScopedStoredPathsBatchLargeInputWithoutDuplicateRows": 5
+  },
+  "scripts": {
+    "test_cleanup_admits_owned_descendants_before_reaping_exited_leader": 5,
+    "test_pre_reap_snapshot_does_not_adopt_recycled_leader": 5,
+    "test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity": 5,
+    "test_permission_probe_after_owned_group_exits_is_confirmed_from_state": 5,
+    "test_cleanup_benchmark_preserves_failure_and_retires_fixture": 5
+  },
+  "totalPassedExecutions": 50
+}

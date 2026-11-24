@@ -424,6 +424,67 @@ except m.RunInterrupted as e:
         with patch.object(module,"process_group_members",side_effect=TimeoutError("snapshot stalled")):
             with self.assertRaisesRegex(module.CleanupFailed,"snapshot stalled"):module.cleanup_child(child)
 
+    def test_cleanup_admits_owned_descendants_before_reaping_exited_leader(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pidfile, release = Path(temp)/"pid", Path(temp)/"exit"
+            code = """import os,sys,time,signal
+from pathlib import Path
+if os.fork()==0:
+ signal.signal(signal.SIGTERM,signal.SIG_IGN)
+ Path(sys.argv[1]).write_text(str(os.getpid()))
+ while True: time.sleep(.1)
+while not Path(sys.argv[2]).exists(): time.sleep(.005)
+os._exit(0)
+"""
+            child = subprocess.Popen([sys.executable,"-c",code,str(pidfile),str(release)],
+                start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            descendant = None
+            try:
+                deadline = time.monotonic()+5
+                while not pidfile.exists() and time.monotonic()<deadline: time.sleep(.005)
+                descendant = int(pidfile.read_text())
+                release.touch()
+                deadline = time.monotonic()+5
+                while time.monotonic()<deadline:
+                    members = module.process_group_members(child.pid)
+                    if any(m["pid"]==child.pid and m["state"].startswith("Z") for m in members): break
+                    time.sleep(.005)
+                else: self.fail("Leader did not reach unreaped exit")
+                self.assertIsNone(child.returncode)
+                module.cleanup_child(child)
+                self.assertIsNotNone(child.returncode)
+                self.assertFalse(any(not m["state"].startswith("Z") for m in module.process_group_members(child.pid)))
+            finally:
+                if descendant is not None:
+                    try: os.kill(descendant,signal.SIGKILL)
+                    except ProcessLookupError: pass
+                if child.poll() is None: child.kill()
+                child.wait(timeout=2)
+
+    def test_cleanup_benchmark_preserves_failure_and_retires_fixture(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = Path(temp)/"runner.py"
+            runner.write_text("def cleanup_child(child):\n raise RuntimeError('original probe failure')\n")
+            result = subprocess.run([sys.executable, str(ROOT/'Scripts/benchmark-process-cleanup.py'),
+                '--runner', str(runner), '--mode', 'live'], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            value = json.loads(result.stdout)
+            self.assertFalse(value['correct'])
+            self.assertIn('original probe failure', value['error'])
+            self.assertIn('original probe failure', result.stderr)
+            self.assertFalse(any(not m['state'].startswith('Z') for m in module.process_group_members(value['processGroupID'])))
+
+    def test_pre_reap_snapshot_does_not_adopt_recycled_leader(self):
+        from unittest.mock import Mock
+        original={"pid":123,"parent":os.getpid(),"uid":os.getuid(),"state":"Z","start":"original"}
+        recycled={**original,"state":"S","start":"replacement"}
+        child=Mock(pid=123,returncode=None)
+        def poll(): child.returncode=0
+        child.poll.side_effect=poll
+        with patch.object(module,"process_group_members",side_effect=[[original],[recycled]]), patch.object(module.os,"killpg") as kill:
+            with self.assertRaisesRegex(module.CleanupFailed,"recycled"): module.cleanup_child(child)
+            kill.assert_not_called()
+
     def test_permission_probe_after_owned_group_exits_is_confirmed_from_state(self):
         from unittest.mock import Mock
         member={"pid":123,"parent":1,"uid":os.getuid(),"state":"S","start":"original"}
@@ -435,7 +496,7 @@ except m.RunInterrupted as e:
             calls+=1
             if calls>1:child.returncode=0
         child.poll.side_effect=poll
-        with patch.object(module,"process_group_members",side_effect=[[member],[zombie]]), patch.object(module.os,"killpg",side_effect=PermissionError("zombie-only group")):
+        with patch.object(module,"process_group_members",side_effect=[[member],[member],[zombie]]), patch.object(module.os,"killpg",side_effect=PermissionError("zombie-only group")):
             module.cleanup_child(child)
         self.assertEqual(child.returncode,0)
 

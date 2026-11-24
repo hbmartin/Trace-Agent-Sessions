@@ -1,0 +1,11 @@
+{
+  "recordedAt": "2026-11-24T16:04:07.591649+00:00",
+  "approvedPlan": "Tests + targeted measurements; UI and full Release comparison pairs omitted",
+  "latestUserInstruction": "Skip measurements; publish with that limitation",
+  "questionItemId": "[\"request_user_input_async\",\"call_1e2337be4c2f415fb4adace197f86fe1\",0]",
+  "pairedTargetedMeasurements": "explicitly waived; no paired driver was launched",
+  "uiExecution": "omitted by approved plan",
+  "fullReleaseComparisonPairs": "omitted by approved plan",
+  "local10PercentAcceptance": false,
+  "correctnessOnlyProbes": "499, 500, and 1000 candidate sources; corrected baseline harness at 500; emitted timing and footprint are not accepted measurements"
+}
