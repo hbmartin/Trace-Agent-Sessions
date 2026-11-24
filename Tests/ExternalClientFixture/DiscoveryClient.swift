@@ -163,6 +163,7 @@ struct FileScopedDiscoveryClient: SessionSource {
     var supportsFileScopedDiscovery: Bool { true }
     func discover() throws -> [DiscoveredSourceFile] { [] }
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> { AsyncThrowingStream { $0.finish() } }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> { records(in: file, from: offset, through: boundary) }
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage { throw SessionSourceError.unsupportedLocator }
 }
 func compileDiscoveryCapabilities(_ legacy: ExternalDiscoverySource, _ current: FileScopedDiscoveryClient) -> (Bool, Bool) {
