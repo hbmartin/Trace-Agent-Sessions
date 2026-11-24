@@ -295,16 +295,20 @@ private struct SessionSidebar: View {
                                         Button("Retire jump") {
                                             if let target = model.requestedMessageID { model.consumeRequestedMessageID(target) }
                                         }.accessibilityIdentifier("testRetireSearchTarget")
-                                        Button("Retire and measure heights") {
-                                            NotificationCenter.default.post(name: .traceTestRetiredGeometry, object: false)
-                                        }.accessibilityIdentifier("testRetireSearchDuringHeights")
-                                        Button("Retire and correct anchor") {
-                                            NotificationCenter.default.post(name: .traceTestRetiredGeometry, object: true)
-                                        }.accessibilityIdentifier("testRetireSearchDuringCorrection")
                                         Button("Reader Retry") { model.retryReaderDuringIndexingForUITesting() }
                                             .accessibilityIdentifier("testReaderRetryDuringIndexing")
                                     }
                                 }.font(.caption)
+                                if TraceTestHooks.environment["TRACE_TEST_RETIRED_GEOMETRY_CONTROL"] == "1" {
+                                    HStack {
+                                        Button("Retire/height") {
+                                            NotificationCenter.default.post(name: .traceTestRetiredGeometry, object: false)
+                                        }.accessibilityIdentifier("testRetireSearchDuringHeights")
+                                        Button("Retire/anchor") {
+                                            NotificationCenter.default.post(name: .traceTestRetiredGeometry, object: true)
+                                        }.accessibilityIdentifier("testRetireSearchDuringCorrection")
+                                    }.font(.caption)
+                                }
                             }
                             HStack {
                                 Button("Fail") { model.cancelLaunchRestorationForUserIntent(); model.failSidebarSummaryForUITesting() }

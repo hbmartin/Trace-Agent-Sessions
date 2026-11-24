@@ -5124,6 +5124,7 @@ final class TraceUITests: XCTestCase {
         app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_RETIRED_GEOMETRY_CONTROL"] = "1"
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = started.path
         app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = release.path
         app.launchEnvironment["TRACE_TEST_RETIRED_GEOMETRY_RECEIPTS_PATH"] = receipts.path
