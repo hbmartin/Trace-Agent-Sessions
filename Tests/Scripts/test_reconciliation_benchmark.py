@@ -17,6 +17,8 @@ class ReconciliationInstrumentationTests(unittest.TestCase):
         self.assertEqual(result.count(MODULE.PROBE), 1)
         self.assertIn('#if TRACE_CHECKPOINT_BENCHMARK', result)
         self.assertIn('measureReconciliationRow('+MODULE.EXPRESSION+')', result)
+        self.assertIn('public func reconciliationBenchmarkQuery(', result)
+        self.assertIn('public func reconciliationBenchmarkRoot(', result)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); path = root/'Sources/TraceCore/Database/IndexDatabase.swift'
             path.parent.mkdir(parents=True); path.write_text(source)

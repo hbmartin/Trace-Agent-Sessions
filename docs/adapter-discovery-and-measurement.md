@@ -43,6 +43,10 @@ The preparer rejects Git checkouts, missing/duplicate anchors and conflicting
 instrumentation; identical second preparation is a no-op. Do not edit the primary
 checkout or silently reuse an instrumented framework from another revision.
 
+Use `query-insensitive` and `query-unicode` to isolate a single stored-path query
+over up to 1,000 scopes after corpus setup; `ascii` and `unicode` retain the
+100-append end-to-end refresh workload. Query mode reports the exact scope count.
+
 The counter counts materialized `IndexedSourcePath` values, not SQLite rows visited
 or physical I/O. Predicate-count assertions run separately from accepted timings.
 Reservation timing includes per-call latency sampling; validation and retirement

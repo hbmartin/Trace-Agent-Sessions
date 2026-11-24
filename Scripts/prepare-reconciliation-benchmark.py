@@ -15,6 +15,12 @@ PROBE = '''    #if TRACE_CHECKPOINT_BENCHMARK
         measuredReconciliationRows.withLock { $0 += 1 }
         return row
     }
+    public func reconciliationBenchmarkRoot(_ root: URL) throws -> Int64 {
+        try register(root: SourceRoot(agent: .claudeCode, url: root))
+    }
+    public func reconciliationBenchmarkQuery(rootID: Int64, scopes: [String], caseSensitive: Bool) throws -> Int {
+        try paths(agent: .claudeCode, rootID: rootID, scopes: scopes, caseSensitive: caseSensitive).count
+    }
     // END RECONCILIATION ROW MEASUREMENT
     #else
     private nonisolated func measureReconciliationRow(_ row: IndexedSourcePath) -> IndexedSourcePath { row }
