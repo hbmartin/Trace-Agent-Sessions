@@ -3108,6 +3108,13 @@ final class TraceModel: ObservableObject {
     var pendingMessageResolutionGateForTesting: Task<Void, Never>?
     private(set) var pendingMessageResolutionWaitingForTesting = false
     func requestPendingMessageResolutionForTesting() async { await restorePendingMessageIntent(event: UUID()) }
+    /// Seeds only the prerequisite for publication-reentry invariant tests.
+    /// Actual SQLite lookup failure and Retry behavior have separate regressions.
+    func primeCurrentTargetFailureForTesting() -> Bool {
+        guard let pending = pendingMessageRestore, pendingMessageIsCurrent(pending) else { return false }
+        updateTranscript { $0.targetLookupFailed = true }
+        return true
+    }
     var automaticNavigationRestoreGateForTesting: Task<Void, Never>?
     private(set) var automaticNavigationRestoreWaitingForTesting = false
     private(set) var automaticNavigationRestoreCompletionsForTesting = 0
@@ -3269,6 +3276,11 @@ final class TraceModel: ObservableObject {
         let mailbox = makeSourceIngress(database: database, generation: watcherGeneration,
             kind: .metadata, rootsByAgent: watcherRootsByAgent, unavailableStreams: [])
         let observe = mailbox.observationForTesting(); mailbox.close(); return observe
+    }
+    private weak var currentMetadataIngressForTesting: SourceIngressMailbox?
+    func enqueueCurrentMetadataForTesting(_ changes: SourceChanges) -> Bool {
+        guard let mailbox = currentMetadataIngressForTesting else { return false }
+        mailbox.enqueue(changes); return true
     }
     var sourceIngressAfterTransferGateForTesting: Task<Void, Never>?
     private(set) var sourceIngressAfterTransferWaitingForTesting = false
@@ -7227,8 +7239,11 @@ final class TraceModel: ObservableObject {
         }
         watchers = started
         let metadataIngress = makeSourceIngress(database: database, generation: generation,
-            kind: .metadata, rootsByAgent: [:], unavailableStreams: [])
+            kind: .metadata, rootsByAgent: rootsByAgent, unavailableStreams: [])
         sourceIngressMailboxes.append(metadataIngress)
+        #if DEBUG
+        currentMetadataIngressForTesting = metadataIngress
+        #endif
         let metadataWatcher = CodexMetadataWatcher(metadataDirectories: metadataRoots, mapping: sidecarMapping) { changes, diagnostics in
             metadataIngress.enqueue(changes, diagnostics: diagnostics)
         }

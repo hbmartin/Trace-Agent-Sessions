@@ -1,6 +1,7 @@
 import Foundation
 
 public struct CodexSource: SessionSource {
+    public var supportsFileScopedDiscovery: Bool { true }
     public let agent = AgentKind.codex
     public let roots: [SourceRoot]
 

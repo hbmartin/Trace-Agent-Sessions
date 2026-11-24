@@ -1,0 +1,9 @@
+{
+  "unchanged": true,
+  "revision": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+  "beforeSHA256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008",
+  "afterSHA256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008",
+  "rawBefore": "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/vendor-inputs-before.json",
+  "rawAfter": "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/vendor-inputs-final.json",
+  "unrelatedWorkingChangesPreserved": true
+}

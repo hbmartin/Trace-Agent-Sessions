@@ -40,13 +40,17 @@ from pathlib import Path
 mode=sys.argv[3]
 if mode=='early-exit':
  if os.fork()==0:
-  Path(sys.argv[1]).write_text(str(os.getpid()))
+  pending=Path(sys.argv[1]+'.tmp')
+  pending.write_text(str(os.getpid()))
+  pending.replace(sys.argv[1])
   time.sleep(60)
  else:
   while not Path(sys.argv[2]).exists():time.sleep(.005)
   os._exit(0)
 else:
- Path(sys.argv[1]).write_text('ready')
+ pending=Path(sys.argv[1]+'.tmp')
+ pending.write_text('ready')
+ pending.replace(sys.argv[1])
  if mode=='zombie':os._exit(0)
  time.sleep(60)
 '''
@@ -89,9 +93,20 @@ else:
                 except Exception as error: cleanup_errors.append(f'{type(error).__name__}: {error}')
             if child is not None:
                 try:
+                    if descendant is None and child.returncode is None:
+                        runner.cleanup_child(child)
                     if child.poll() is None: child.kill()
                     child.wait(timeout=2)
-                except Exception as error: cleanup_errors.append(f'{type(error).__name__}: {error}')
+                except Exception as error:
+                    cleanup_errors.append(f'{type(error).__name__}: {error}')
+                    # This is our fixed fixture, not an arbitrary desktop group.
+                    # Its original unreaped setsid child still owns this PGID.
+                    # A broken injected runner must not defeat fixture teardown.
+                    try:
+                        if child.returncode is None: os.killpg(child.pid, signal.SIGKILL)
+                        child.wait(timeout=2)
+                    except ProcessLookupError: pass
+                    except Exception as teardown: cleanup_errors.append(f'{type(teardown).__name__}: {teardown}')
         finally:
             for sig, handler in handlers.items(): signal.signal(sig, handler)
         if pending_signals and interrupted_signal is None: interrupted_signal = pending_signals[0]

@@ -1,0 +1,9 @@
+[
+  "TraceCoreTests/IndexingRegressionTests/testLegacyDirectoryAdapterPreservesFileRefreshAndDeletion",
+  "TraceCoreTests/IndexingRegressionTests/testDiscoveryCanonicalAliasBindsRootAndIncompatibleRootRemainsUncovered",
+  "TraceCoreTests/IndexingRegressionTests/testOverlappingConfiguredRootDiscoverySharesReadFailures",
+  "TraceCoreTests/IndexingRegressionTests/testReconciliationPreservesLiveRowsAcrossCapturedCasePolicy",
+  "TraceCoreTests/IndexingRegressionTests/testLifecycleResetReturnsDebtOnceAndLaterEnrollmentHasNoTimerRetry",
+  "TraceAppTests/AppReviewFollowupTests/testLiveMetadataIngressEnrollsConfiguredSourceBeforeFallbackPreparation",
+  "TraceAppTests/AppReviewFollowupTests/testSelectionReentryWhileClearingTargetFailurePreservesSuccessor"
+]

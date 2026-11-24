@@ -29,11 +29,12 @@ private func record(_ session: String, _ index: Int) -> Data {
     Data("{\"type\":\"user\",\"uuid\":\"\(session)-\(index)\",\"sessionId\":\"\(session)\",\"message\":{\"content\":\"message \(index)\"}}\n".utf8)
 }
 @main struct IncrementalReconciliationWorkload {
-    static func main() async {
+    static func main() async { exit(await run()) }
+    static func run() async -> Int32 {
         do {
             let mode = CommandLine.arguments.count == 4 ? CommandLine.arguments[3] : "ascii"
             guard (3...4).contains(CommandLine.arguments.count), let count = Int(CommandLine.arguments[1]),
-                  count > 0, count < Int.max, ["ascii", "unicode"].contains(mode) else {
+                  count > 0, count < Int.max, ["ascii", "unicode", "query-insensitive", "query-unicode"].contains(mode) else {
                 throw NSError(domain: "IncrementalReconciliation.arguments", code: 1)
             }
             let before = footprint()
@@ -43,7 +44,8 @@ private func record(_ session: String, _ index: Int) -> Data {
             let roots = [directory.appendingPathComponent("sessions"), directory.appendingPathComponent("other")]
             for root in roots { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
             for index in 0..<count {
-                try record("unrelated-\(index)", 0).write(to: roots[index % 2].appendingPathComponent("unrelated-\(index).jsonl"))
+                let prefix = mode == "query-unicode" ? "caf\u{00e9}-" : ""
+                try record("unrelated-\(index)", 0).write(to: roots[index % 2].appendingPathComponent(prefix + "unrelated-\(index).jsonl"))
             }
             let selected = roots[0].appendingPathComponent(mode == "unicode" ? "caf\u{00e9}.jsonl" : "selected.jsonl")
             try record("selected", 0).write(to: selected)
@@ -56,6 +58,13 @@ private func record(_ session: String, _ index: Int) -> Data {
                 throw NSError(domain: "IncrementalReconciliation.setup", code: 1)
             }
             initial = []
+            let queryMode = mode.hasPrefix("query-")
+            let queryCount = min((count + 1) / 2, 1000)
+            let queryScopes = (0..<queryCount).map { index in
+                roots[0].path + "/" + (mode == "query-unicode"
+                    ? "caf\u{00e9}-unrelated-\(index * 2).jsonl" : "UNRELATED-\(index * 2).JSONL")
+            }
+            let queryRoot = try await database.reconciliationBenchmarkRoot(roots[0])
             let setup = footprint(), rowsBefore = database.reconciliationBenchmarkDecodedRows
             let peak = OSAllocatedUnfairLock(initialState: setup)
             let sampler = Task.detached {
@@ -67,8 +76,15 @@ private func record(_ session: String, _ index: Int) -> Data {
             }
             var elapsed = 0.0, processCPU = 0.0, durations: [Double] = []
             var correct = expectedSessions == count + 1
-            let iterations = 100
-            for index in 1...iterations {
+            let iterations = queryMode ? 1 : 100
+            if queryMode {
+                let cpuStart = cpu(), start = ContinuousClock.now
+                let matches = try await database.reconciliationBenchmarkQuery(rootID: queryRoot,
+                    scopes: queryScopes, caseSensitive: mode == "query-unicode")
+                elapsed = seconds(start.duration(to: .now)); processCPU = cpu() - cpuStart
+                durations = [elapsed]; correct = correct && matches == queryCount
+            }
+            for index in queryMode ? [] : Array(1...iterations) {
                 // File production, validation and actor handshakes are outside execution timing.
                 let writer = try FileHandle(forWritingTo: selected)
                 try writer.seekToEnd(); try writer.write(contentsOf: record("selected", index)); try writer.close()
@@ -84,7 +100,7 @@ private func record(_ session: String, _ index: Int) -> Data {
             let decoded = database.reconciliationBenchmarkDecodedRows - rowsBefore
             let messages = try await database.messages(sessionID: selectedID)
             let final = try await database.statistics()
-            correct = correct && messages.count == iterations + 1 && final.sessionCount == count + 1
+            correct = correct && messages.count == (queryMode ? 1 : iterations + 1) && final.sessionCount == count + 1
             durations.sort()
             let p95 = durations[Int(ceil(0.95 * Double(durations.count))) - 1]
             durations = []
@@ -92,18 +108,18 @@ private func record(_ session: String, _ index: Int) -> Data {
             try await Task.sleep(for: .seconds(2))
             let retained = footprint()
             let output: [String: Any] = ["label": CommandLine.arguments[2], "mode": mode, "unrelatedSources": count,
-                "iterations": iterations, "elapsedSeconds": elapsed, "processCPUSeconds": processCPU,
-                "cpuDefinition": "process-wide CPU only during each coordinator refresh; setup, append, validation and idle excluded",
+                "iterations": iterations, "queryScopeCount": queryMode ? queryCount : 0, "elapsedSeconds": elapsed, "processCPUSeconds": processCPU,
+                "cpuDefinition": "process-wide CPU during coordinator refresh or one scoped-query await; includes executor entry, excludes setup, validation, retirement and idle",
                 "refreshP95Seconds": p95, "decodedReconciliationRows": decoded,
                 "prePayloadFootprintBytes": before, "postSetupFootprintBytes": setup,
                 "peakFootprintBytes": peak.withLock { $0 }, "retainedFootprintBytes": retained,
                 "retainedGrowthBytes": Int64(retained) - Int64(before), "correct": correct]
             withExtendedLifetime(database) {}
             print(String(decoding: try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), as: UTF8.self))
-            if !correct { exit(2) }
+            return correct ? 0 : 2
         } catch {
             FileHandle.standardError.write(Data(("Incremental reconciliation failed: \(error)\n").utf8))
-            exit(1)
+            return 1
         }
     }
 }

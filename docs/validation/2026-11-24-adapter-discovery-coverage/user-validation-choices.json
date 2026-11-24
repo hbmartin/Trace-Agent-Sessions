@@ -1,0 +1,25 @@
+{
+  "selected": "Tests + targeted pairs",
+  "freshDesktopConfirmation": {
+    "confirmedAt": "2026-11-24T17:32:52.754098+00:00",
+    "userReply": "Mac unlocked; windows minimized; desktop idle",
+    "questionItemId": "[\"request_user_input_async\",\"call_21b4e921928d41168647d09e0fdfd515\",0]",
+    "scope": "one serial targeted measurement batch after native checks; UI and full Release pairs omitted"
+  },
+  "ui": "omitted by approved plan",
+  "completeNativeSuites": "omitted by approved plan",
+  "threeFullReleaseComparisonPairs": "omitted by approved plan",
+  "local10PercentAcceptance": false,
+  "measurements": "three completed workloads retained as partial evidence; remaining measurements explicitly waived",
+  "measurementWaiver": {
+    "recordedAt": "2026-11-24T18:35:34.248438+00:00",
+    "questionItemId": "[\"request_user_input_async\",\"call_b180679073314560adea8c147d514f34\",0]",
+    "userReply": "Skip remaining measurements; publish with limitations",
+    "remainingTargetedMeasurements": "waived",
+    "completedTargetedWorkloads": "three complete 1000-input paired workloads retained as partial evidence",
+    "local10PercentAcceptance": false,
+    "crossChatMessagesSent": false,
+    "retiredOwnWaitingPID": 79788
+  },
+  "crossChatMessagesSent": false
+}

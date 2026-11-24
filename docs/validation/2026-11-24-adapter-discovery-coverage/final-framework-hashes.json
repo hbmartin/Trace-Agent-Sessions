@@ -1,0 +1,190 @@
+{
+  "baseline": {
+    "TraceCore.framework/Versions/A/TraceCore": {
+      "bytes": 3822248,
+      "sha256": "91b682b545837403b409c4dfe43e0f70dc1455cef535ebf3a3239e195acb0d49"
+    },
+    "TraceCore.framework/Versions/A/Resources/Info.plist": {
+      "bytes": 1226,
+      "sha256": "27432b18846b5d2cb3853f8fee98541f034bf5a92ed2c269bcc95bafc6ca7276"
+    },
+    "TraceCore.framework/Versions/A/Headers/TraceCore-Swift.h": {
+      "bytes": 12985,
+      "sha256": "b59fd085e89b2e9f7ef9a8ed542a5af8d7330c3145991bd188a3df39208dbd61"
+    },
+    "TraceCore.framework/Versions/A/Modules/module.modulemap": {
+      "bytes": 60,
+      "sha256": "639961183aa2b0e47045a4a5038de567d8c98f2087ae3d6527401de4076f52cd"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/arm64-apple-macos.swiftdoc": {
+      "bytes": 26500,
+      "sha256": "f2ecdc2c0013dfb99d7c1499b77becbd4409cd2d6a7631b9dbe48b40d5841fae"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/arm64-apple-macos.swiftmodule": {
+      "bytes": 1307408,
+      "sha256": "7fbb16b8180af390eaddf1d2f2f1146d860d31b73f5064a51eab7203b6532ffd"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/arm64-apple-macos.abi.json": {
+      "bytes": 149,
+      "sha256": "4277ac6b49f8511196028a5ac20f5b1b1dfa754c24615d34068089f0b1739728"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo": {
+      "bytes": 150804,
+      "sha256": "d26ee1d1dbf7928b6f49f2134acf53ea0d34f10b5658c7aa9aa1878d55aa7a49"
+    },
+    "GRDB.framework/Versions/A/GRDB": {
+      "bytes": 6252528,
+      "sha256": "4eefea9c284e5fdb686938427dcc403240e01c0145362dcb33333b1a5a1e32d7"
+    },
+    "GRDB.framework/Versions/A/_CodeSignature/CodeResources": {
+      "bytes": 4411,
+      "sha256": "59f47ff15b831192cbb12afdcb66fe0dc8d24317cb9f60d5ab6ecd6b4c6a2541"
+    },
+    "GRDB.framework/Versions/A/PrivateHeaders/grdb_config.h": {
+      "bytes": 1206,
+      "sha256": "de71fa78608cfba03d83087e8df728442f776426ce17a27f69a4e6a4adf1f75c"
+    },
+    "GRDB.framework/Versions/A/Resources/PrivacyInfo.xcprivacy": {
+      "bytes": 397,
+      "sha256": "17784da62e51f74c5859df32fe402e01e25cdf6f797a4add06e2a3ce15c911f4"
+    },
+    "GRDB.framework/Versions/A/Resources/Info.plist": {
+      "bytes": 1421,
+      "sha256": "6f45e1c67c3b9728ef2febb1d53cf18d018a13f5c0fe668c90f248857e8560b3"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDB.h": {
+      "bytes": 311,
+      "sha256": "ba9bffa124e2ee3c1625bfca8c68febc513df64222129c7c080390cb2a797eef"
+    },
+    "GRDB.framework/Versions/A/Headers/sqlite3.h": {
+      "bytes": 651186,
+      "sha256": "acdaec38977068ef70aab78d7cae6081effbc1056fac501a96b440441aa150dd"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDBCustomSQLite-USER.h": {
+      "bytes": 135,
+      "sha256": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDB-Swift.h": {
+      "bytes": 12965,
+      "sha256": "ba6c004cc4dc33cfbfa5ce7648986a91c4036b38026a2bfc83d6e14e6da8ea30"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDB-Bridging.h": {
+      "bytes": 47,
+      "sha256": "e1d253051256f2d261623eeb4c82bd341bb6a33c88c9b1bb7db875680dccd793"
+    },
+    "GRDB.framework/Versions/A/Modules/module.modulemap": {
+      "bytes": 178,
+      "sha256": "a4398c29d483a92187f5f0fc61e318b9b2ffe7d88ce3a5290fa5a6f01fbba708"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/arm64-apple-macos.swiftdoc": {
+      "bytes": 1435444,
+      "sha256": "9ddf16844357eef49db1ccd356e1804c22f8c6718937a7c38f1ce3888e030d40"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/arm64-apple-macos.swiftmodule": {
+      "bytes": 3082164,
+      "sha256": "f27d979f423654f39e014a522465d61f0e974e875c82d00838a13dab06701c6a"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/arm64-apple-macos.abi.json": {
+      "bytes": 149,
+      "sha256": "4277ac6b49f8511196028a5ac20f5b1b1dfa754c24615d34068089f0b1739728"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo": {
+      "bytes": 1557896,
+      "sha256": "157906d98ec28ec168d943e52679d3070e34bf2b1c0a79c4fcc20f26d0407d59"
+    }
+  },
+  "candidate": {
+    "TraceCore.framework/Versions/A/TraceCore": {
+      "bytes": 3843720,
+      "sha256": "fc30bb506b5b66ba91077f133a11d806bb461f1ddb8a68f2c7559391d7b82c16"
+    },
+    "TraceCore.framework/Versions/A/Resources/Info.plist": {
+      "bytes": 1226,
+      "sha256": "27432b18846b5d2cb3853f8fee98541f034bf5a92ed2c269bcc95bafc6ca7276"
+    },
+    "TraceCore.framework/Versions/A/Headers/TraceCore-Swift.h": {
+      "bytes": 12985,
+      "sha256": "b59fd085e89b2e9f7ef9a8ed542a5af8d7330c3145991bd188a3df39208dbd61"
+    },
+    "TraceCore.framework/Versions/A/Modules/module.modulemap": {
+      "bytes": 60,
+      "sha256": "639961183aa2b0e47045a4a5038de567d8c98f2087ae3d6527401de4076f52cd"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/arm64-apple-macos.swiftdoc": {
+      "bytes": 27056,
+      "sha256": "02bff346dd7855adef9c4a7a3206fb33eff470c878953f46617884dbf965d5de"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/arm64-apple-macos.swiftmodule": {
+      "bytes": 1311700,
+      "sha256": "d75c58493e5dd19f7b66bd05b04cd54495c52a5b111f1e15f192fbfceb32435e"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/arm64-apple-macos.abi.json": {
+      "bytes": 149,
+      "sha256": "4277ac6b49f8511196028a5ac20f5b1b1dfa754c24615d34068089f0b1739728"
+    },
+    "TraceCore.framework/Versions/A/Modules/TraceCore.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo": {
+      "bytes": 152512,
+      "sha256": "3d3e74388922fdd5b5985b4bfd3e86cd439456ec76e024d371caf50028e742e7"
+    },
+    "GRDB.framework/Versions/A/GRDB": {
+      "bytes": 6252864,
+      "sha256": "9ad124574eac900bfb954af82279424645a3746be8032a532421282b48e2ed90"
+    },
+    "GRDB.framework/Versions/A/_CodeSignature/CodeResources": {
+      "bytes": 4411,
+      "sha256": "b4dbe5afaa165f28c41ca902f2403538f0f1abd24e513e8f9199ccc76b533977"
+    },
+    "GRDB.framework/Versions/A/PrivateHeaders/grdb_config.h": {
+      "bytes": 1206,
+      "sha256": "de71fa78608cfba03d83087e8df728442f776426ce17a27f69a4e6a4adf1f75c"
+    },
+    "GRDB.framework/Versions/A/Resources/PrivacyInfo.xcprivacy": {
+      "bytes": 397,
+      "sha256": "17784da62e51f74c5859df32fe402e01e25cdf6f797a4add06e2a3ce15c911f4"
+    },
+    "GRDB.framework/Versions/A/Resources/Info.plist": {
+      "bytes": 1421,
+      "sha256": "6f45e1c67c3b9728ef2febb1d53cf18d018a13f5c0fe668c90f248857e8560b3"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDB.h": {
+      "bytes": 311,
+      "sha256": "ba9bffa124e2ee3c1625bfca8c68febc513df64222129c7c080390cb2a797eef"
+    },
+    "GRDB.framework/Versions/A/Headers/sqlite3.h": {
+      "bytes": 651186,
+      "sha256": "acdaec38977068ef70aab78d7cae6081effbc1056fac501a96b440441aa150dd"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDBCustomSQLite-USER.h": {
+      "bytes": 135,
+      "sha256": "d3b8994efe9e91383a7d4b145027a4020b438b8795b880a34f8c7684bc019e4e"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDB-Swift.h": {
+      "bytes": 12965,
+      "sha256": "ba6c004cc4dc33cfbfa5ce7648986a91c4036b38026a2bfc83d6e14e6da8ea30"
+    },
+    "GRDB.framework/Versions/A/Headers/GRDB-Bridging.h": {
+      "bytes": 47,
+      "sha256": "e1d253051256f2d261623eeb4c82bd341bb6a33c88c9b1bb7db875680dccd793"
+    },
+    "GRDB.framework/Versions/A/Modules/module.modulemap": {
+      "bytes": 178,
+      "sha256": "a4398c29d483a92187f5f0fc61e318b9b2ffe7d88ce3a5290fa5a6f01fbba708"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/arm64-apple-macos.swiftdoc": {
+      "bytes": 1435444,
+      "sha256": "9ddf16844357eef49db1ccd356e1804c22f8c6718937a7c38f1ce3888e030d40"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/arm64-apple-macos.swiftmodule": {
+      "bytes": 3082196,
+      "sha256": "5ea16047fcda3906321fbe8cf23f679454729c141f1ad25c0d59d8d1405095b9"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/arm64-apple-macos.abi.json": {
+      "bytes": 149,
+      "sha256": "4277ac6b49f8511196028a5ac20f5b1b1dfa754c24615d34068089f0b1739728"
+    },
+    "GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo": {
+      "bytes": 1558060,
+      "sha256": "66d7e15db32b53285403682fdb9911cb1dbc39e07d0912efa721b48b2572a5da"
+    }
+  }
+}

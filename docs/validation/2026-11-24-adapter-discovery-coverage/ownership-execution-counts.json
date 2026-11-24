@@ -1,0 +1,16 @@
+{
+  "nativeExecutions": 35,
+  "nativeCases": 7,
+  "nativeRepetitions": 5,
+  "scriptExecutions": 25,
+  "scriptCases": 5,
+  "scriptRepetitions": 5,
+  "nativeDetails": "final-native-races-execution-counts.json",
+  "scriptJobs": [
+    "final-cleanup-race-v2-1",
+    "final-cleanup-race-v2-2",
+    "final-cleanup-race-v2-3",
+    "final-cleanup-race-v2-4",
+    "final-cleanup-race-v2-5"
+  ]
+}

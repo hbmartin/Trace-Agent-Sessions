@@ -1,0 +1,7 @@
+[
+  "test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+  "test_pre_reap_snapshot_does_not_adopt_recycled_leader",
+  "test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity",
+  "test_permission_probe_after_owned_group_exits_is_confirmed_from_state",
+  "test_cleanup_benchmark_preserves_failure_and_retires_fixture"
+]

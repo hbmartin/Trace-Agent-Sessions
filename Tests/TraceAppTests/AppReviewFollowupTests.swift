@@ -12,6 +12,32 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testLiveMetadataIngressEnrollsConfiguredSourceBeforeFallbackPreparation() async throws {
+        let f = try await fixture(count: 1)
+        f.model.settings.onboardingComplete = true
+        let sources = [ClaudeCodeSource(roots: [f.root])]
+        try await prepareStartup(f.model, sources: sources)
+        f.model.startReadyStartupForTesting(sources: sources)
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        let coordinator = try XCTUnwrap(f.model.coordinatorForTesting)
+        await scheduler.waitUntilIdle()
+        let preparation = ReviewReadGate(), execution = ReviewReadGate()
+        let preparationTask = Task { await preparation.wait() }, executionTask = Task { await execution.wait() }
+        defer { preparationTask.cancel(); executionTask.cancel(); Task { await preparation.open(); await execution.open() } }
+        f.model.sourcePreparationGateForTesting = preparationTask
+        await coordinator.gatePreparationForTesting(executionTask)
+        var changes = SourceChanges(); changes.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        XCTAssertTrue(f.model.enqueueCurrentMetadataForTesting(changes))
+        try await wait { await coordinator.preparationWaitingForTesting }
+        XCTAssertFalse(f.model.sourcePreparationWaitingForTesting,
+            "Live metadata must use prepared configured membership, not recanonicalize through fallback")
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 1)
+        await execution.open(); await preparation.open()
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0)
+    }
+
     func testMetadataOutsideTranscriptRootsDoesNotAccumulateNavigationWork() async throws {
         let f = try await fixture(count: 1)
         let source = TraceFileIO.canonicalPath(f.root.path)
@@ -347,13 +373,14 @@ final class AppReviewFollowupTests: XCTestCase {
     func testSelectionReentryWhileClearingTargetFailurePreservesSuccessor() async throws {
         for grouped in [false, true] {
             let (f, _) = try await provisionalSearchFixture()
-            await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-            await f.model.requestPendingMessageResolutionForTesting()
-            try await wait { f.model.targetLookupFailureIsVisible }
             let selected = try XCTUnwrap(f.model.selectedSessionID)
             let available = try await f.database.sessions()
             let others = available.filter { $0.id != selected }
             let b = try XCTUnwrap(others.first), c = try XCTUnwrap(others.dropFirst().first)
+            // Prime after every suspension. This case tests synchronous selection
+            // publication, not which background resolver consumes a shared fault.
+            XCTAssertTrue(f.model.primeCurrentTargetFailureForTesting())
+            XCTAssertTrue(f.model.targetLookupFailureIsVisible)
             var reentered = false
             let observer: AnyCancellable
             let replace: () -> Void = {
