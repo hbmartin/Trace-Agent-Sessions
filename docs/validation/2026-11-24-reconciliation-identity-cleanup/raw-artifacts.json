@@ -1,0 +1,637 @@
+{
+  "availability": "local-only; not attached as downloadable repository/CI artifacts",
+  "root": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup",
+  "selection": "Selected completed top-level regular files; excludes DerivedData, XCResult, Git, cache, framework and source-export trees; this is not a tree digest",
+  "files": [
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-execution-counts.json",
+      "bytes": 244,
+      "sha256": "3b0f3caab96b6fffb8ebd004b5647fcf211729bb967854b442ba1c4f28a31579"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native-summary-export.json",
+      "bytes": 36,
+      "sha256": "e6a10e00d2c33708d71cc4e9d9250d129e14cd0f1488869e828680c4c9b24b41"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native-summary.json",
+      "bytes": 2026,
+      "sha256": "e1917e0f4ac945ff86ab92df5e1aa96318f94a1033ac2a29835ecffb020e5969"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native-v2-summary.json",
+      "bytes": 1692,
+      "sha256": "ae365ade0b9a7cf13204d3ab4c1d35be9c39e6da97c2c955e4553bd977ce3fc6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native-v2.json",
+      "bytes": 1146,
+      "sha256": "5cce70e2fed67be6bdc587ab69a9bc5072bb57bac115f1948ff3803d92916ff7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native-v2.log",
+      "bytes": 249227,
+      "sha256": "306393e6b4da95d24afe03d16b21ea4668df18e3c96acd102812104745e9fbd3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native-v2.stderr",
+      "bytes": 1760,
+      "sha256": "0ac6414a69f4c6cc592d9be28641677cad52909dd17662339391dfbf4769c327"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native.json",
+      "bytes": 992,
+      "sha256": "96274fe661eb6c07ebdd9bd68588f05e5fa400b4873e7cdfa6099cf55d731aee"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native.log",
+      "bytes": 95190,
+      "sha256": "b44d1fe3a059a27c268e4db69d42d0144f53d777d2b35f55c2582d0c828484e9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native.stderr",
+      "bytes": 1793,
+      "sha256": "9319223f84cabc6687d4f63bb5de513db8a89d7f1188ad1afaf0d5b00010cc0c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-stall-interruption.json",
+      "bytes": 894,
+      "sha256": "85ce3650950f35c1667c47171da219beede0a05b40a3ee82cc518532ec2b0350"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-stall.sample",
+      "bytes": 183788,
+      "sha256": "1b51a26e4ce6817b9a568e07167603c9aa48184e1ab8754c2a1aeb00e9d133e7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/assemble-evidence.py",
+      "bytes": 11493,
+      "sha256": "a75520218449ff30fde55759f1e19293535422042536ccd28e9e7403b40cbf8e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-admission-compile.json",
+      "bytes": 1496,
+      "sha256": "4501098e0bca20b4c26ddb47e0716bc7852939d40f21ccbab81d5218855ad752"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-cleanup-provenance.json",
+      "bytes": 196,
+      "sha256": "43abe0ec85c6a01d4a800a1e23cb959e433b6b8706cf292483a2d1deb2c2db0d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-cleanup-runner.py",
+      "bytes": 29764,
+      "sha256": "94ab7a45ba83ff1184de402529df81f2920c32d1967c928c498f82f85923f7f4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-idle-probe-compile.json",
+      "bytes": 1003,
+      "sha256": "27183e3544be50098cd4fd95995a9c7cdb79e42c5a2effb0ba4e517dfc0506a4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-idle-probe.json",
+      "bytes": 468,
+      "sha256": "8f27e9436d7e95940e25a3ec9643efe9f6b32928661f13b5ce4b5907db55a82b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-idle-probe.log",
+      "bytes": 60,
+      "sha256": "f6dda62a4613040588dbcf3bf61ec39509d0651c94d5915a612299fc0e8ad888"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-idle-probe.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-incremental-compile.json",
+      "bytes": 1242,
+      "sha256": "a39bb079b3596b632d643bf562e48a42273d2dfd4cbf348e9f432f9282da43f1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-session-cap-500-correctness.json",
+      "bytes": 422,
+      "sha256": "392472d1260ec4e29dec62094b8ef813aadec11b702bc0e92712ddfa0e961fa1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-session-cap-500-correctness.log",
+      "bytes": 549,
+      "sha256": "d2c6dcad300b99da1667d08afc119859f50ea616d5917da2fc74914f027e4521"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/baseline-session-cap-500-correctness.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-admission-compile.json",
+      "bytes": 1503,
+      "sha256": "65d912d2013bcc616368432335d7f8aa74ac1634b4e4280ad2ba77526102b551"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-incremental-compile.json",
+      "bytes": 1249,
+      "sha256": "78d50b1922d2af5817cda9e2bd1daf9b5db24ff0174934fcc10cd20a8058d0d4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-measurement-source-attempt1.swift",
+      "bytes": 150784,
+      "sha256": "7674a6cda931aed083657522e3868815abd4872f40f81019bc669cd2fe334ee8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-optimized-build-v2.json",
+      "bytes": 867,
+      "sha256": "dd134015794645faaf02e58b9145cac6a5a20ce0de64780ea5925d363cf3800a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-optimized-build-v2.log",
+      "bytes": 203650,
+      "sha256": "a79a2427fa42b4fda513c10e719b3cd0b96bcefb4b77b9695609e1a01096aa27"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-optimized-build-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-optimized-build.json",
+      "bytes": 868,
+      "sha256": "ff26efb5c4a667ef2a4136bb3b9266f108243b845ca501b238db9292790c394d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-optimized-build.log",
+      "bytes": 847468,
+      "sha256": "f7eca776ed61798a90ebe12c8e6aabf11a7bcfa733cfcedec617dcbd211068b8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-optimized-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-1000-correctness.json",
+      "bytes": 426,
+      "sha256": "ab0223424420382aeae0972174cfb98f1f3da1f4f2c8f3137e9a69a4f12bf97f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-1000-correctness.log",
+      "bytes": 555,
+      "sha256": "312272edb13c670fce42758b67ff0c6bee912d00089893ac7665c2569cd81a95"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-1000-correctness.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-499-correctness.json",
+      "bytes": 425,
+      "sha256": "ec403cd19a0701c3208b972f65b45d71d8cfd679dd00d70c990d09448c7ea955"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-499-correctness.log",
+      "bytes": 539,
+      "sha256": "397709672616d9eb4b38d5787d09f985046cb77eb70b89fe20b76e5fa94e17b5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-499-correctness.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-500-correctness.json",
+      "bytes": 423,
+      "sha256": "5d700a2fa4ecb853b93a83ac16a36a1cc221802c8e0a783c1bc0acc463574c3f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-500-correctness.log",
+      "bytes": 550,
+      "sha256": "88f101040acf39d1557f5aa251c06b146df2da6e04fa54621411ab09f7403e44"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-session-cap-500-correctness.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/checkpoint-idle-probe.swift",
+      "bytes": 2300,
+      "sha256": "5308aec252674dfdd1bcbc517d18b0f463a2394c2e0510661554172b0d5516e8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-focused.json",
+      "bytes": 737,
+      "sha256": "bf05d373b7557994165dfc0caeb95b40cbad3f3d4dcae9510966b4ea17879b37"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-focused.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-focused.stderr",
+      "bytes": 718,
+      "sha256": "80aedeb2b69155e6e4b9734a993ac713dff8fb08f0d41afed00056c0c6835fbf"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-1.json",
+      "bytes": 1042,
+      "sha256": "04be483d077aa5b444753736b1fa28168682335d4cf50a664b53bbaad36fae8d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-1.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-1.stderr",
+      "bytes": 1166,
+      "sha256": "46d0cf0b63f56c8bb0da2fc35c90963a200485206fa9acfad2f3b1eb5a35e49a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-2.json",
+      "bytes": 1042,
+      "sha256": "be57f59a5e4d9b7f08f2ff63e9c055b309ab0122f7783b5b62dc3c6886c5a80b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-2.stderr",
+      "bytes": 1166,
+      "sha256": "cb56603c81901d10710a7643da95964744f21b78fce46c73aee56e9554deba49"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-3.json",
+      "bytes": 1042,
+      "sha256": "0daf46f85a2174ffc2d7d9c78f87dd5075b7ca2f675724291a2287c55f914169"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-3.stderr",
+      "bytes": 1166,
+      "sha256": "2340874fc851e52937114523b3718d23bef01e91d66608f2589a8bb60e002b08"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-4.json",
+      "bytes": 1042,
+      "sha256": "5d2fb753dc598962e7ebd31c464695310a47f04e44307aaa0e24130d2c500830"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-4.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-4.stderr",
+      "bytes": 1166,
+      "sha256": "83475afc661586617f5d81f1d3096bd3e7a7ff917c809c1bfc0dcb8ce536342b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-5.json",
+      "bytes": 1040,
+      "sha256": "13ee100cd072e6d9fd04dbfb918ccc82171ea0fa82e8af8c24f6fb4102d23e55"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-5.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/cleanup-race-5.stderr",
+      "bytes": 1166,
+      "sha256": "de7781789f6891ace89178fe719701d461862f31443bc46ef762a5a504d0cabd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/debug-build-v2.json",
+      "bytes": 558,
+      "sha256": "791bbb3929a8c85c749b3107ed2672f121dcb04e787bbc5e2b77b0a4816418b4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/debug-build-v2.log",
+      "bytes": 287862,
+      "sha256": "20866f84514a410a422da9024e8573798fead839b4b3d940279074e6d0d9f43d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/debug-build-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/debug-build.json",
+      "bytes": 559,
+      "sha256": "3f9cfa96bffa1aa1effb3dde02e321b827ac74c25af3cff30be79f155ccd70fa"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/debug-build.log",
+      "bytes": 470487,
+      "sha256": "1eaa5f020fed3eee5a2bac7f563e372c5822e1f36c3f9ae09c1d78e9d96f3be4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/debug-build.stderr",
+      "bytes": 653,
+      "sha256": "9948f3c351d440953d2aa07c2e434c75a36c8ea39521fb1b3acfbf33ef7812b8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/external-client.json",
+      "bytes": 523,
+      "sha256": "18434ac73556d9fdc2562bbee0afbcdcf4b2a0a7d4bc9113c1907fc719e3927a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/external-client.log",
+      "bytes": 410469,
+      "sha256": "355d1f3155218fd2c2f8032e48ee898dcabd9bd3caba42c2ad26eb69fc0b729c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/external-client.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/focused-core-summary-export.json",
+      "bytes": 36,
+      "sha256": "e6a10e00d2c33708d71cc4e9d9250d129e14cd0f1488869e828680c4c9b24b41"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/focused-core-summary.json",
+      "bytes": 922,
+      "sha256": "a6b0c3a19d3bd618dcdf92f0f77f9b612d40cf63cb338501f046b53eb79532fd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/focused-core.json",
+      "bytes": 1045,
+      "sha256": "b889a542ce3a4dc245c130ef91bbc4dc1af08e3a8f49ce34a1e676b92763d43b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/focused-core.log",
+      "bytes": 4286,
+      "sha256": "1ef15d92c4415258746e26745cca0c4aa845c52058a0a9561404b6d108f4b55d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/focused-core.stderr",
+      "bytes": 1058,
+      "sha256": "b399182a74c8f6467becee0da62f652660cba57c7dd2e9f0c1e6c92b955537d0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-debug-build.json",
+      "bytes": 559,
+      "sha256": "9a225b1fead5f6e171a041b2ae094725bec0b0b94af91b2386ad2013b5b68a64"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-debug-build.log",
+      "bytes": 531010,
+      "sha256": "168453166f3a4d5819dddd2a8d6a27ec9ca2e3bb97fe89f14554ba577277ed5d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-debug-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-hosted-checks.json",
+      "bytes": 176,
+      "sha256": "48fed1b2590df0c61ebe1b32da310d2482c482d2aa28bb0acbe5f7394c236689"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-release-build.json",
+      "bytes": 508,
+      "sha256": "c696795ce347573090a1ff0a01b2bfb3ba65985a4988dc527e19cb37a43d6524"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-release-build.log",
+      "bytes": 415017,
+      "sha256": "c0b23735d14d0eba86a889b5a7e4d0091dffc3a42b98fa87d9d6a19c64e78475"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-release-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-script-tests.json",
+      "bytes": 352,
+      "sha256": "2cd366c8f48f44c51a8c45111dd75e4605a5ee10cb22b99f94a7b82477c226a9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-script-tests.log",
+      "bytes": 1536,
+      "sha256": "e49defa4777586349eb903ccbad1c01b842a2c92f8344e8a2d6f235e79f06d11"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/frozen-script-tests.stderr",
+      "bytes": 26695,
+      "sha256": "8598be351776b6fba6ff82734289bc24ee06e31753a455b5c6f30f5503aaf434"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/implementation-candidate.json",
+      "bytes": 1161,
+      "sha256": "c8076afcde9e4124717625dee92d3ddb5ec88a86159c95b217fc534ff330ae0d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/initial-script-tests.json",
+      "bytes": 352,
+      "sha256": "6d06eaf84c2ee9a07e12ed35bff5dda9dda01b1e3b858893fdf7f0ec32e7fc2c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/initial-script-tests.log",
+      "bytes": 1536,
+      "sha256": "81e6af9afec464c948fde0ef50114a487d380b352a6e596d5b7dcd22ebf9e333"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/initial-script-tests.stderr",
+      "bytes": 26502,
+      "sha256": "97bc3f5a745e36331720754c512dfd4412f855c4a1bdc54cf109a106c9baecee"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/initial-state.json",
+      "bytes": 324,
+      "sha256": "c9d3125fa24bb76e58c98c3fb68ab730cf051912c8bdf360618b48b975042ae2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/isolated-checkpoint-retry-summary-export.json",
+      "bytes": 36,
+      "sha256": "e6a10e00d2c33708d71cc4e9d9250d129e14cd0f1488869e828680c4c9b24b41"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/isolated-checkpoint-retry-summary.json",
+      "bytes": 922,
+      "sha256": "f9024b48743d66e1af717d41664ae7937170744dc0cb63e26857474c618ed7a6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/isolated-checkpoint-retry.json",
+      "bytes": 997,
+      "sha256": "691f9c7b0b4ee3a41c1074a610035b7763a264ea41855b87b0e87f222f2800e3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/isolated-checkpoint-retry.log",
+      "bytes": 3917,
+      "sha256": "d72c919ec4c957e9aaa6dffc430bdc85232dd1d7f4628947b918d1301050da10"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/isolated-checkpoint-retry.stderr",
+      "bytes": 1065,
+      "sha256": "68b67077c4d7c028c8e4b8e468d00ec1b680f903190a0dcf86ae9744a4fba162"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/native-races-summary.json",
+      "bytes": 1031,
+      "sha256": "a80f2e8445412359c43d706ce575e6f7d20f52436e11f095a43338d847f890ef"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/native-races.json",
+      "bytes": 1466,
+      "sha256": "601f85e576c8f0df34bb9913b6c56a1a124f9f1c4e04880dc3c7c61722e6c577"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/native-races.log",
+      "bytes": 10820,
+      "sha256": "6c7b4fc468e99991ce39b3de707963be67aecee19b146414f0f9fd99b3297f9f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/native-races.stderr",
+      "bytes": 1065,
+      "sha256": "025aa8496864ebcc2ec7b4f36094a07d250776571ba88df9fc1ec692fa1b0b1c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/network-surface.json",
+      "bytes": 370,
+      "sha256": "2efc801162795079d5cc64de635df8410d2c5ea58f2a2e61d794ed77c33190d0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/network-surface.log",
+      "bytes": 192,
+      "sha256": "7322e947689135a80db457dbec617c1ec0816f2c78cb65d0555c192520ee7ffe"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/network-surface.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/optimized-equivalence-attempt1.json",
+      "bytes": 229,
+      "sha256": "b1c5e77c431613a246947ddd28805be40099b542d635351a5e268448e5973d5e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/optimized-input-equivalence.json",
+      "bytes": 6429,
+      "sha256": "cf96399272e10af72c426b767927d8add84d028c1922be5c4a8354d928e6b4c6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/ownership-execution-counts.json",
+      "bytes": 978,
+      "sha256": "bef78b496dacda85a5cdbf9266822919ee9bedfab6b6d62931a87a788a6f25ca"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/pinned-whitespace.json",
+      "bytes": 349,
+      "sha256": "d362de202ec75c89f566290a57b64a46a79aad801f0c21c6cbe0086e8e781b55"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/pinned-whitespace.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/pinned-whitespace.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/project-drift.json",
+      "bytes": 294,
+      "sha256": "a25da265b09294b76878c48ade864965894feaa43e3c09e09a288c569d78f265"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/project-drift.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/project-drift.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/race-selectors.json",
+      "bytes": 915,
+      "sha256": "7ed61ecefb2d67bacb2e9a95c9275f7e543bd04e54bc780b86beec5c662892d7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/release-build.json",
+      "bytes": 507,
+      "sha256": "8054b4501ed3255316834e4fb2b4d77d82ef42ce55a3e038c5e3a078aa940359"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/release-build.log",
+      "bytes": 422816,
+      "sha256": "4c61f4e0c6978c1458b8fb2d87c5780b82aff9127a1f53d1a9c84b9a40a5965b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/release-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/run-targeted-pairs.py",
+      "bytes": 4343,
+      "sha256": "2fdd05e6ebf9aa60868849f86d9844bfb5d113e35f42fa9df224c6889948a22e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/shared-mailbox.swift",
+      "bytes": 22566,
+      "sha256": "1b91b186f193e65624d85665901e4637bf07590b9e5cc41cd93daf438dc49cd9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/signing.json",
+      "bytes": 293,
+      "sha256": "adf7224fdff1fa5ea541cb66fb2995a095da4cbb0a78ab90c2a99a111e93eec5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/signing.log",
+      "bytes": 61,
+      "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/signing.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/source-hashes.json",
+      "bytes": 44495,
+      "sha256": "e607f03c66721c90f62031299f9ad675a5e14ad08aa259b5131afbe01cac5329"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/user-validation-choices.json",
+      "bytes": 716,
+      "sha256": "9106f561e7bbc6007b41af87d1be78371f1fc57a9e09d5747e964c9c33399dbc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/vendor-inputs-after.json",
+      "bytes": 611462,
+      "sha256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/vendor-inputs-before.json",
+      "bytes": 611462,
+      "sha256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/vendor-provenance.json",
+      "bytes": 349,
+      "sha256": "20439afed37c50165b4a30d53052672bd5ba97f2a4fa7caefc5b86b8a02da5b4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/verification.json",
+      "bytes": 21416,
+      "sha256": "a445ca8d7078e9dad435ba2a408a3613c5734879805da507633ac5fd968a095d"
+    }
+  ]
+}

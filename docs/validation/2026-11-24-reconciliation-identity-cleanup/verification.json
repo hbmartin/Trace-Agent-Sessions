@@ -1,0 +1,468 @@
+{
+  "base": "5354f6e62b7835bfe3f4a6b021ccc748ae1d6dd8",
+  "baseline": "a3ef91b39cdeae6a64363febf265e5af1c650051",
+  "candidate": "27b17c8d6e25fddb0f7452fc6710e271d644ba69",
+  "assembledAt": "2026-11-24T16:11:07.847083+00:00",
+  "affectedNative": {
+    "passed": 732,
+    "failed": 0,
+    "skipped": 0,
+    "groups": {
+      "TraceCoreTests.IndexingRegressionTests": 245,
+      "TraceCoreTests.TranscriptViewportPolicyTests": 4,
+      "TraceCoreTests.SidecarDependencyTests": 27,
+      "TraceCoreTests.FSEventsWatcherTests": 13,
+      "TraceAppTests.AppReviewFollowupTests": 443
+    }
+  },
+  "scriptTests": {
+    "passed": 129
+  },
+  "additionalRepeatedExecutions": 50,
+  "jobs": {
+    "frozen-debug-build": {
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ScopedReconciliationDebug",
+        "-parallel-testing-enabled",
+        "NO",
+        "build-for-testing"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T16:07:51.574000+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 63.152132249902934
+    },
+    "frozen-release-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ScopedReconciliationRelease"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T16:08:54.774328+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 114.58544683363289
+    },
+    "external-client": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ExternalCoverageFixture"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:57:25.128560+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 39.338264792226255
+    },
+    "project-drift": {
+      "command": [
+        "Scripts/check-project-drift.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:57:30.252729+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.27645258279517293
+    },
+    "signing": {
+      "command": [
+        "Scripts/check-signing-settings.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:57:28.355077+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 8.0061602499336
+    },
+    "network-surface": {
+      "command": [
+        "Scripts/check-network-surface.sh",
+        "build/ScopedReconciliationRelease/Build/Products/Release/Trace.app"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:57:30.981206+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.10041812481358647
+    },
+    "pinned-whitespace": {
+      "command": [
+        "git",
+        "diff",
+        "5354f6e62b7835bfe3f4a6b021ccc748ae1d6dd8...HEAD",
+        "--check"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:57:31.122033+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.02693720767274499
+    },
+    "focused-core": {
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ScopedReconciliationDebug",
+        "-parallel-testing-enabled",
+        "NO",
+        "test-without-building",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testReconciliationLivePathsPreserveCapturedVolumePolicy",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testReconciliationPreservesLiveRowsAcrossCapturedCasePolicy",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testScopedStoredPathsCanonicalEquivalenceAndCapturedPolicies",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/focused-core.xcresult"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:50:12.135038+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 5.491235540714115
+    },
+    "cleanup-focused": {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+        "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_pre_reap_snapshot_does_not_adopt_recycled_leader",
+        "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_benchmark_preserves_failure_and_retires_fixture",
+        "-v"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:49:55.226873+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 10.526031957939267
+    },
+    "isolated-checkpoint-retry": {
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ScopedReconciliationDebug",
+        "-parallel-testing-enabled",
+        "NO",
+        "test-without-building",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testCheckpointOnlyRequestSkipsCoordinatorAndFailedWorkRetriesBeforeLaterWatermark",
+        "-test-timeouts-enabled",
+        "YES",
+        "-default-test-execution-time-allowance",
+        "30",
+        "-maximum-test-execution-time-allowance",
+        "60",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/isolated-checkpoint-retry.xcresult"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:55:36.515068+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 63.317088457755744
+    },
+    "affected-native-v2": {
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ScopedReconciliationDebug",
+        "-parallel-testing-enabled",
+        "NO",
+        "test-without-building",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests",
+        "-only-testing:TraceCoreTests/SidecarDependencyTests",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests",
+        "-only-testing:TraceCoreTests/TranscriptViewportPolicyTests",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests",
+        "-test-timeouts-enabled",
+        "YES",
+        "-default-test-execution-time-allowance",
+        "90",
+        "-maximum-test-execution-time-allowance",
+        "120",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/affected-native-v2.xcresult"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:58:33.744325+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 477.29774979176
+    },
+    "native-races": {
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/ScopedReconciliationDebug",
+        "-parallel-testing-enabled",
+        "NO",
+        "test-without-building",
+        "-test-iterations",
+        "5",
+        "-test-timeouts-enabled",
+        "YES",
+        "-default-test-execution-time-allowance",
+        "90",
+        "-maximum-test-execution-time-allowance",
+        "120",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testReconciliationLivePathsPreserveCapturedVolumePolicy",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testReconciliationPreservesLiveRowsAcrossCapturedCasePolicy",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testScopedStoredPathsCanonicalEquivalenceAndCapturedPolicies",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testInodeRenameKeepsSourceAndMessageIDsForBothPathOrders",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testScopedStoredPathsBatchLargeInputWithoutDuplicateRows",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/native-races.xcresult"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T16:06:31.255578+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 47.21696483390406
+    },
+    "frozen-script-tests": {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "Tests/Scripts",
+        "-v"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:53:03.714853+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 183.9791560829617
+    },
+    "candidate-optimized-build-v2": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-source/Trace.xcodeproj",
+        "-scheme",
+        "TraceBench",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-optimized",
+        "-clonedSourcePackagesDirPath",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/ScopedReconciliationDebug/SourcePackages",
+        "OTHER_SWIFT_FLAGS=$(inherited) -DTRACE_CHECKPOINT_BENCHMARK"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T15:56:08.243800+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 34.20753433322534
+    }
+  },
+  "correctnessOnlyProbes": {
+    "candidate-session-cap-499-correctness": {
+      "correct": true,
+      "sources": 499,
+      "selectedAppends": 100,
+      "performanceAccepted": false
+    },
+    "candidate-session-cap-500-correctness": {
+      "correct": true,
+      "sources": 500,
+      "selectedAppends": 100,
+      "performanceAccepted": false
+    },
+    "candidate-session-cap-1000-correctness": {
+      "correct": true,
+      "sources": 1000,
+      "selectedAppends": 100,
+      "performanceAccepted": false
+    },
+    "baseline-session-cap-500-correctness": {
+      "correct": true,
+      "sources": 500,
+      "selectedAppends": 100,
+      "performanceAccepted": false
+    }
+  },
+  "optimizedCompilation": {
+    "baseline": "a3ef91b39cdeae6a64363febf265e5af1c650051",
+    "candidate": "27b17c8d6e25fddb0f7452fc6710e271d644ba69",
+    "baselineProductReuse": "/Volumes/Pro2T/TraceValidation/scoped-reconciliation-cleanup-followup/candidate-optimized/Build/Products/Release",
+    "baselineFrameworkSHA256": "5681b94be720de5b537aed267c41a71f02e333f685e77b681c927b8c6fc07cd0",
+    "baselineSource": "/Volumes/Pro2T/TraceValidation/scoped-reconciliation-cleanup-followup/candidate-source",
+    "baselineBuildReceipt": "/Volumes/Pro2T/TraceValidation/scoped-reconciliation-cleanup-followup/candidate-optimized-build.json",
+    "candidateExport": "/Volumes/Pro2T/TraceValidation/reconciliation-identity-cleanup-followup/candidate-source",
+    "instrumentation": "identical lock-protected counter wraps each IndexedSourcePath initializer; no extra map or production-source change",
+    "normalizedCoreSourceHashes": {
+      "baseline": {
+        "Sources/TraceCore/SessionSource.swift": "53900d879bdf67c1c315d9a8c3d7fae1de39480c9179e43634df6ab5ff5d1e65",
+        "Sources/TraceCore/Models.swift": "73eb1142828ca54de7c69893da82a20a86d9693b9e4849de6c1e0b6132201c6a",
+        "Sources/TraceCore/Database/IndexDatabase.swift": "cf8d870a93a2a05dbeed401fddb93dd6b58a72c34efa99f909ee4d8b1775ce04",
+        "Sources/TraceCore/Search/FTSQueryParser.swift": "f0ef5959ed837936017299484859a9d0dd1a3fd3b3a64c3d9d86f9c89065556c",
+        "Sources/TraceCore/Adapters/CodexSource.swift": "a6204ddcf71008d3a58810e06871b8d1b20201d2cea90e5f7fee9ebccc4f3b09",
+        "Sources/TraceCore/Adapters/ClaudeCodeSource.swift": "ce47f61760ccdd7696c55a7e779339fe65069d08e753f4b6ea165d37d33830b2",
+        "Sources/TraceCore/Adapters/GeminiSource.swift": "8ce5e77676180f845f69ac8d795753feebbe548fc1fc06798b0308123115c2bc",
+        "Sources/TraceCore/Support/JSONHelpers.swift": "60abd12a48aa98b6e8c00d9c4214402197f5f98c20992f7fa8c69d030233ee94",
+        "Sources/TraceCore/Support/SidebarRevealProgress.swift": "e01f1aa175bd71e4c76c5aa33a8b3cf3c8a2fde3b4612fb14c55b1ea4c60bfbc",
+        "Sources/TraceCore/Support/TraceTestHooks.swift": "ecca22acd89ca106d9c0b68b48ac0797c71e23f07675253339721ec25868ebed",
+        "Sources/TraceCore/Support/TranscriptViewportPolicy.swift": "b05e2716f068c852bb9afd7a5cc9f672615aedea687fdce8ea84a13a695e690b",
+        "Sources/TraceCore/Support/FileIO.swift": "1f40e27732314b8cc0de52115245aeb7e7404c16d470d0358bdc16452aa99fab",
+        "Sources/TraceCore/Support/TranscriptMarkdown.swift": "382e24bb317f3c1c46f9bd2b6732a40df9b55ecaa6ce442c2da5ed8cfe1081d9",
+        "Sources/TraceCore/Support/ProjectCanonicalizer.swift": "7625dc884e070138f2073c0cf584fe46959bb2e5c76f9fd22ef0da23b2e5a29d",
+        "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+        "Sources/TraceCore/Diagnostics/DiagnosticsStore.swift": "6de38c29fa4f84c30153f9fcc3f4216b3fa007675c7aadee8e884ad2c74c197e",
+        "Sources/TraceCore/Indexing/IndexCoordinator.swift": "53281370b7638cd80e63c29d5e0d07deeaffdab04a4eb21dff18ea6734c62649",
+        "Sources/TraceCore/Indexing/CodexMetadataWatcher.swift": "4294a21fd5f0c1290d8e435b849627c23fedb7ca6ac7d45754e69004ebd4b9c4",
+        "Sources/TraceCore/Indexing/IndexScheduler.swift": "ffc08410f75e6f06a8647813c3f04ab65cc0a811667e29b4923ff77750d32cbc",
+        "Sources/TraceCore/Indexing/SessionMetadata.swift": "cdb4aa23feee374b8ff4cdfb9b379f9c214b309ee366f7f722086e1c53f8b3e8",
+        "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "b9ab6791ae8f3a54a372c994d36d3e8f674f667357df49a2b1ffb6f4e9795e6e",
+        "Sources/TraceCore/Pricing/PricingCatalog.swift": "f065d4cafe8f6ef815b688ff69a09099edd40963ccd1326df28773a5c9d949a4"
+      },
+      "candidate": {
+        "Sources/TraceCore/SessionSource.swift": "53900d879bdf67c1c315d9a8c3d7fae1de39480c9179e43634df6ab5ff5d1e65",
+        "Sources/TraceCore/Models.swift": "598ae3b2a69cf799878d63d50b3df8f1015335ff90ca6de2ae1dfb5d0038da70",
+        "Sources/TraceCore/Database/IndexDatabase.swift": "b992d2b0e2d450c17a5ec9134d5bc2ed6c69790922d27485bac3d9c2b472b347",
+        "Sources/TraceCore/Search/FTSQueryParser.swift": "f0ef5959ed837936017299484859a9d0dd1a3fd3b3a64c3d9d86f9c89065556c",
+        "Sources/TraceCore/Adapters/CodexSource.swift": "a6204ddcf71008d3a58810e06871b8d1b20201d2cea90e5f7fee9ebccc4f3b09",
+        "Sources/TraceCore/Adapters/ClaudeCodeSource.swift": "ce47f61760ccdd7696c55a7e779339fe65069d08e753f4b6ea165d37d33830b2",
+        "Sources/TraceCore/Adapters/GeminiSource.swift": "8ce5e77676180f845f69ac8d795753feebbe548fc1fc06798b0308123115c2bc",
+        "Sources/TraceCore/Support/JSONHelpers.swift": "60abd12a48aa98b6e8c00d9c4214402197f5f98c20992f7fa8c69d030233ee94",
+        "Sources/TraceCore/Support/SidebarRevealProgress.swift": "e01f1aa175bd71e4c76c5aa33a8b3cf3c8a2fde3b4612fb14c55b1ea4c60bfbc",
+        "Sources/TraceCore/Support/TraceTestHooks.swift": "ecca22acd89ca106d9c0b68b48ac0797c71e23f07675253339721ec25868ebed",
+        "Sources/TraceCore/Support/TranscriptViewportPolicy.swift": "b05e2716f068c852bb9afd7a5cc9f672615aedea687fdce8ea84a13a695e690b",
+        "Sources/TraceCore/Support/FileIO.swift": "1f40e27732314b8cc0de52115245aeb7e7404c16d470d0358bdc16452aa99fab",
+        "Sources/TraceCore/Support/TranscriptMarkdown.swift": "382e24bb317f3c1c46f9bd2b6732a40df9b55ecaa6ce442c2da5ed8cfe1081d9",
+        "Sources/TraceCore/Support/ProjectCanonicalizer.swift": "7625dc884e070138f2073c0cf584fe46959bb2e5c76f9fd22ef0da23b2e5a29d",
+        "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+        "Sources/TraceCore/Diagnostics/DiagnosticsStore.swift": "6de38c29fa4f84c30153f9fcc3f4216b3fa007675c7aadee8e884ad2c74c197e",
+        "Sources/TraceCore/Indexing/IndexCoordinator.swift": "08c0b6c400bb4fa6039ab07ea63f245a597ec051bdd9de0bd3940b686f59ffd7",
+        "Sources/TraceCore/Indexing/CodexMetadataWatcher.swift": "4294a21fd5f0c1290d8e435b849627c23fedb7ca6ac7d45754e69004ebd4b9c4",
+        "Sources/TraceCore/Indexing/IndexScheduler.swift": "ffc08410f75e6f06a8647813c3f04ab65cc0a811667e29b4923ff77750d32cbc",
+        "Sources/TraceCore/Indexing/SessionMetadata.swift": "cdb4aa23feee374b8ff4cdfb9b379f9c214b309ee366f7f722086e1c53f8b3e8",
+        "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "b9ab6791ae8f3a54a372c994d36d3e8f674f667357df49a2b1ffb6f4e9795e6e",
+        "Sources/TraceCore/Pricing/PricingCatalog.swift": "f065d4cafe8f6ef815b688ff69a09099edd40963ccd1326df28773a5c9d949a4"
+      }
+    }
+  },
+  "validationChoices": {
+    "recordedAt": "2026-11-24T16:04:07.591649+00:00",
+    "approvedPlan": "Tests + targeted measurements; UI and full Release comparison pairs omitted",
+    "latestUserInstruction": "Skip measurements; publish with that limitation",
+    "questionItemId": "[\"request_user_input_async\",\"call_1e2337be4c2f415fb4adace197f86fe1\",0]",
+    "pairedTargetedMeasurements": "explicitly waived; no paired driver was launched",
+    "uiExecution": "omitted by approved plan",
+    "fullReleaseComparisonPairs": "omitted by approved plan",
+    "local10PercentAcceptance": false,
+    "correctnessOnlyProbes": "499, 500, and 1000 candidate sources; corrected baseline harness at 500; emitted timing and footprint are not accepted measurements"
+  },
+  "sourceHashCount": 334,
+  "limitations": [
+    "Paired optimized measurements explicitly waived; no accepted timing or footprint comparisons",
+    "UI execution, complete suites, and three full Release comparison pairs omitted",
+    "No local 10 percent performance-acceptance claim",
+    "Unicode is defensive SQL-boundary hardening; normal URL-pipeline deletion scenario was not reproduced",
+    "Mixed-volume policies injected into the production pipeline; no new physical mixed-case mount created"
+  ],
+  "failedAndSupersededAttempts": [
+    {
+      "name": "debug-build",
+      "kind": "compile failure",
+      "reason": "Two new async GRDB fixture calls omitted await; corrected before candidate freeze"
+    },
+    {
+      "name": "affected-native",
+      "kind": "agent interruption; incomplete run",
+      "passed": 51,
+      "failed": 1,
+      "reason": "Stalled existing checkpoint-retry case; stack retained; isolated case and final bounded group passed; baseline held-clock probe did not reproduce; cause remains inconclusive"
+    },
+    {
+      "name": "optimized-equivalence-attempt1",
+      "kind": "collector assertion",
+      "reason": "Historical measurement wrapper syntax differed from collector assumption; corrected and verified both exports"
+    },
+    {
+      "name": "candidate-optimized-build",
+      "kind": "superseded preparation",
+      "reason": "Final synchronized instrumentation confirmed by candidate-optimized-build-v2; no measurement run used the first preparation"
+    }
+  ],
+  "rawPayloadAvailability": "local-only, not downloadable repository or CI artifacts",
+  "githubThreadsOrAlertsChanged": false
+}
