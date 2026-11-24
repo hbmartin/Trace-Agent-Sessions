@@ -135,6 +135,9 @@ final class IndexingRegressionTests: XCTestCase {
         #if DEBUG
         XCTAssertEqual(database.reconciliationPredicatesForTesting - before, 100)
         #endif
+        let wholeRoot = try await database.paths(agent: .claudeCode, rootID: rootID,
+            scopes: ["/"], caseSensitive: false)
+        XCTAssertEqual(wholeRoot.count, 100, "Length pruning must preserve the filesystem-root scope")
     }
 
 
