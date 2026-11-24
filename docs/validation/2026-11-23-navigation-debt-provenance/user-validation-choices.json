@@ -1,0 +1,10 @@
+{
+  "uiExecution": "waived",
+  "performanceMeasurements": "waived",
+  "userAnswer": "Skip UI and measurements; publish with limitations",
+  "questionItemId": "[\"request_user_input_async\",\"call_c895a4c24ac647499fc92932504a8376\",0]",
+  "recordedAtUTC": "2026-11-24T01:40:06.591571+00:00",
+  "fullSuites": "omitted by approved plan",
+  "fullReleaseComparisonPairs": "omitted by approved plan",
+  "local10PercentAcceptanceClaim": false
+}

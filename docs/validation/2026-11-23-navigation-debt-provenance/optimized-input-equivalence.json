@@ -1,0 +1,9 @@
+{
+  "optimizedCoreAndMailboxCandidate": "f4c8458",
+  "finalCandidate": "11c5d0a6860f14d71b22c6f3b8c8eba9339b8fac",
+  "coreAndTraceModelBytesIdentical": true,
+  "harnessCandidate": "4d3a1c6",
+  "finalHarnessBytesIdentical": true,
+  "baseline": "4dc188ded59990e9bc24d6e55be7765f0223ae82",
+  "execution": "waived; compiled only"
+}
