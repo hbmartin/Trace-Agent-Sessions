@@ -3108,6 +3108,13 @@ final class TraceModel: ObservableObject {
     var pendingMessageResolutionGateForTesting: Task<Void, Never>?
     private(set) var pendingMessageResolutionWaitingForTesting = false
     func requestPendingMessageResolutionForTesting() async { await restorePendingMessageIntent(event: UUID()) }
+    /// Seeds only the prerequisite for publication-reentry invariant tests.
+    /// Actual SQLite lookup failure and Retry behavior have separate regressions.
+    func primeCurrentTargetFailureForTesting() -> Bool {
+        guard let pending = pendingMessageRestore, pendingMessageIsCurrent(pending) else { return false }
+        updateTranscript { $0.targetLookupFailed = true }
+        return true
+    }
     var automaticNavigationRestoreGateForTesting: Task<Void, Never>?
     private(set) var automaticNavigationRestoreWaitingForTesting = false
     private(set) var automaticNavigationRestoreCompletionsForTesting = 0

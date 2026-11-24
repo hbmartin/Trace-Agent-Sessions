@@ -373,13 +373,14 @@ final class AppReviewFollowupTests: XCTestCase {
     func testSelectionReentryWhileClearingTargetFailurePreservesSuccessor() async throws {
         for grouped in [false, true] {
             let (f, _) = try await provisionalSearchFixture()
-            await f.database.failNavigationResolutionOnceForTesting(DatabaseError(resultCode: .SQLITE_BUSY))
-            await f.model.requestPendingMessageResolutionForTesting()
-            try await wait { f.model.targetLookupFailureIsVisible }
             let selected = try XCTUnwrap(f.model.selectedSessionID)
             let available = try await f.database.sessions()
             let others = available.filter { $0.id != selected }
             let b = try XCTUnwrap(others.first), c = try XCTUnwrap(others.dropFirst().first)
+            // Prime after every suspension. This case tests synchronous selection
+            // publication, not which background resolver consumes a shared fault.
+            XCTAssertTrue(f.model.primeCurrentTargetFailureForTesting())
+            XCTAssertTrue(f.model.targetLookupFailureIsVisible)
             var reentered = false
             let observer: AnyCancellable
             let replace: () -> Void = {
