@@ -102,6 +102,13 @@ func verifiedDiscoveryResult(
             failures: deduplicatedNormalizedDiscoveryFailures(failures)
         )
     }
+    // Containment uses the containing scope's captured policy. A file on a
+    // nested mount can have a different comparison key; its own policy is still
+    // retained for ingestion identity and live-row reconciliation.
+    func contains(_ scope: TraceFileIO.CanonicalPath, _ file: TraceFileIO.CanonicalPath) -> Bool {
+        let key = TraceFileIO.comparisonKey(file.path, caseSensitive: scope.isCaseSensitive)
+        return key == scope.comparisonKey || key.hasPrefix(scope.comparisonKey == "/" ? "/" : scope.comparisonKey + "/")
+    }
     var aliases: [String: TraceFileIO.CanonicalPath] = [:]
     func canonicalRoot(_ candidate: URL) -> TraceFileIO.CanonicalPath {
         if let cached = aliases[candidate.path] { return cached }
@@ -114,7 +121,7 @@ func verifiedDiscoveryResult(
         // A multi-root adapter can return the same source through both an outer
         // and an inner configured root. Share the eventual ingestion outcome.
         return configuredRoots.contains { configured in
-            configured.url.path == candidate.path && (file.map { configured.scanPath.contains($0) } ?? true)
+            configured.url.path == candidate.path && (file.map { contains(configured.scanPath, $0) } ?? true)
         }
     }
     let failures = normalizedDiscoveryFailures(
@@ -130,7 +137,7 @@ func verifiedDiscoveryResult(
     for file in result.files {
         // Some legacy implementations return a larger discovery. Only the
         // original requested scopes may contribute rows or coverage.
-        guard scopes.contains(where: { $0.scanPath.contains(file.canonicalPath) }) else { continue }
+        guard scopes.contains(where: { contains($0.scanPath, file.canonicalPath) }) else { continue }
         guard file.agent == agent, acceptsRoot(file.root, file: file.canonicalPath) else {
             for scope in scopes where scope.scanPath.contains(file.canonicalPath) {
                 qualifiedFailures.append(.init(failure: .init(agent: agent, root: root.url,
