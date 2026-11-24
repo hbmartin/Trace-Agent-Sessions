@@ -115,7 +115,9 @@ def extract(source, preparation_contract):
     }
 }
 '''.replace('OBSERVED', observed).replace('CONTRACT', preparation_contract)
-    return header + wrapper + preflight
+    metadata = "\nfunc benchmarkMetadataPrepared(_ input: SourceChanges, roots: [TraceFileIO.CanonicalPath]) -> SourceIngressMailbox.Prepared {\n    "
+    metadata += "SourceIngressMailbox.normalizeMetadata(input" + (", navigationRoots: roots" if "static func normalizeMetadata(_ changes: SourceChanges, navigationRoots:" in mailbox else "") + ")\n}\n"
+    return header + wrapper + preflight + (metadata if "struct Prepared: Sendable" in mailbox else "")
 
 
 

@@ -12,6 +12,41 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testMetadataOutsideTranscriptRootsDoesNotAccumulateNavigationWork() async throws {
+        let f = try await fixture(count: 1)
+        let source = TraceFileIO.canonicalPath(f.root.path)
+        let ledger = IndexNavigationWorkLedger()
+        for _ in 0..<1000 {
+            var changes = SourceChanges()
+            changes.paths = [f.root.deletingLastPathComponent().appendingPathComponent("session_index.jsonl").path]
+            let prepared = SourceIngressMailbox.normalizeMetadata(changes, navigationRoots: [source])
+            XCTAssertTrue(prepared.changes.hasIndexWork, "Metadata still reaches ordinary indexing")
+            let boundary = SourceIngressMailbox.Boundary(prepared)
+            XCTAssertTrue(boundary.navigation(in: ledger).isEmpty)
+        }
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+        f.model.settings.onboardingComplete = true
+        f.model.suppressLiveWatcherIngressForTesting = true
+        try await prepareStartup(f.model, sources: [ClaudeCodeSource(roots: [f.root])])
+        f.model.startReadyStartupForTesting(sources: [ClaudeCodeSource(roots: [f.root])])
+        try await wait { !f.model.watcherStartupPendingForTesting }
+        let scheduler = try XCTUnwrap(f.model.schedulerForTesting)
+        await scheduler.waitUntilIdle()
+        for _ in 0..<20 {
+            var changes = SourceChanges()
+            changes.paths = [f.root.deletingLastPathComponent().appendingPathComponent("session_index.jsonl").path]
+            let outcome = try await f.model.deliverSourceChangesForTesting(changes, metadata: true)
+            XCTAssertEqual(outcome, .ordinaryTransferred)
+        }
+        await scheduler.waitUntilIdle()
+        XCTAssertEqual(f.model.navigationWorkCountsForTesting["pendingReceipts"], 0,
+            "The production model ledger must remain empty too")
+        var current = SourceChanges(); current.paths = [f.root.appendingPathComponent("declared.trace").path]
+        let prepared = SourceIngressMailbox.normalizeMetadata(current, navigationRoots: [source])
+        XCTAssertFalse(SourceIngressMailbox.Boundary(prepared).navigation(in: ledger).isEmpty,
+            "Source membership cannot depend on built-in filename extensions")
+    }
+
     func testDeferredResetAllowsRecreatedSourceRestorationAndRetry() async throws {
         let f = try await deferredResetFixture(count: 2)
         let session = try XCTUnwrap(f.model.sessions.first)
@@ -32,8 +67,12 @@ final class AppReviewFollowupTests: XCTestCase {
         let message = try XCTUnwrap(f.model.messages.first)
         f.model.hydrate(message); try await wait { f.model.hydratedMessages[message.id] != nil }
         XCTAssertTrue(try XCTUnwrap(f.model.hydratedMessages[message.id]).sections.prose.contains("RecreatedReaderNeedle"))
+        let readsBeforeRetry = await f.database.transcriptReadCountForTesting()
         f.model.retrySelectedTranscript()
-        await f.clock.advance()
+        try await wait {
+            await f.clock.advance() // Zero elapsed time: service the immediate Retry without firing later timers.
+            return await f.database.transcriptReadCountForTesting() > readsBeforeRetry && !f.model.transcriptRecoveryPendingForTesting
+        }
         XCTAssertFalse(f.model.messages.isEmpty)
         XCTAssertTrue(f.model.isRebuildPendingRecovery, "reader restoration cannot consume reset debt")
     }
@@ -162,23 +201,30 @@ final class AppReviewFollowupTests: XCTestCase {
     }
 
     func testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration() async throws {
-        let f = try await fixture(count: 1)
-        let session = try XCTUnwrap(f.model.sessions.first)
-        f.model.selectSession(session.id)
-        try await wait { !f.model.messages.isEmpty }
-        let row = try XCTUnwrap(f.model.messages.first)
-        let bookmark = TranscriptBookmark(messageID: row.id, offset: -31, index: 0)
+        let (f, target) = try await pendingSearchBookmarkFixture()
+        f.model.consumeRequestedMessageID(target.id)
+        let session = try XCTUnwrap(f.model.selectedSession), first = try XCTUnwrap(f.model.messages.first)
+        let bookmark = TranscriptBookmark(messageID: first.id, offset: -31, index: 0)
         f.model.updateTranscriptBookmark(sessionID: session.id, bookmark: bookmark)
-        XCTAssertNil(f.model.requestedMessageID)
-        let renderer = TranscriptRenderer.Coordinator()
-        defer { renderer.detach() }
-        renderer.captureSearchForTesting(model: f.model, sessionID: session.id, bookmark: bookmark)
-        XCTAssertTrue(renderer.hasPendingSearchForTesting)
-        renderer.update(model: f.model, sessionID: session.id, visibility: TranscriptVisibility(), density: .comfortable,
-            messageRevision: f.model.transcriptMessageRevision, contentRevision: 0, scrollRequest: UUID())
-        XCTAssertFalse(renderer.hasPendingSearchForTesting, "update must retire the obsolete search before geometry/refinement")
-        XCTAssertEqual(f.model.scrollPositions[session.id]?.offset, -31)
-        XCTAssertEqual(f.model.selectedSessionID, session.id)
+        for correction in [false, true] {
+            let renderer = TranscriptRenderer.Coordinator(), scroll = NSScrollView(frame: .init(x: 0, y: 0, width: 600, height: 180))
+            let table = NSTableView(frame: .init(x: 0, y: 0, width: 600, height: 1000))
+            table.addTableColumn(NSTableColumn(identifier: .init("message")))
+            table.dataSource = renderer; table.delegate = renderer; table.rowHeight = 120
+            scroll.documentView = table; renderer.attach(table: table, scrollView: scroll)
+            defer { renderer.detach() }
+            let request = f.model.scrollRequest
+            renderer.update(model: f.model, sessionID: session.id, visibility: TranscriptVisibility(), density: .comfortable,
+                messageRevision: f.model.transcriptMessageRevision, contentRevision: f.model.transcriptContentRevision, scrollRequest: request)
+            renderer.captureSearchForTesting(model: f.model, sessionID: session.id,
+                bookmark: .init(messageID: target.id, offset: 0, index: 1))
+            XCTAssertTrue(renderer.hasPendingSearchForTesting)
+            renderer.exerciseRetiredGeometryForTesting(bookmark: bookmark, correction: correction)
+            XCTAssertFalse(renderer.hasPendingSearchForTesting)
+            XCTAssertEqual(renderer.acceptedGeometryBookmarkForTesting?.messageID, bookmark.messageID)
+            XCTAssertEqual(renderer.acceptedGeometryBookmarkForTesting?.offset, bookmark.offset)
+            XCTAssertEqual(f.model.scrollRequest, request, "No fresh explicit navigation can mask passive retirement")
+        }
     }
 
     func testRetiredSafetyPreparationPreservesWorkWithoutEnrollingAnotherReset() async throws {
