@@ -1,0 +1,7 @@
+{
+  "unchangedFromPrior": true,
+  "revision": "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+  "recursiveInputSHA256": "2e023e503a80e5ae32120cc660c65e68100e130c7791e70823b87f83a1223c02",
+  "priorCommittedManifest": "docs/validation/2026-11-23-navigation-debt-provenance/vendor-provenance.json",
+  "completeCurrentSnapshot": "/Volumes/Pro2T/TraceValidation/scoped-reconciliation-cleanup-followup/vendor-provenance.json"
+}
