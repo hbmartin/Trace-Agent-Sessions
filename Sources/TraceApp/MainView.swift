@@ -1425,10 +1425,12 @@ struct TranscriptRenderer: NSViewRepresentable {
                 flushHeightChanges()
             }
         }
-        var acceptedGeometryBookmarkForTesting: TranscriptBookmark? { pendingRestore?.bookmark ?? establishedBookmark }
+        var acceptedGeometryBookmarkForTesting: TranscriptBookmark? { capturePosition().bookmark }
 
         var hasPendingSearchForTesting: Bool {
-            if case .search = pendingRestore?.reason { return true }
+            for reason in [pendingRestore?.reason, deferredContentRestore?.reason] {
+                if case .search = reason { return true }
+            }
             return false
         }
 
