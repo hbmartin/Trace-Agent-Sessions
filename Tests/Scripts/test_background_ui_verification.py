@@ -292,14 +292,12 @@ except m.RunInterrupted as e:
         with tempfile.TemporaryDirectory() as temp:
             derived=Path(temp)/"derived";self.products(derived)
             module.record_preparation(derived,{"revision":"fixture"},self.context())
-            original=module.product_hashes;calls=0
-            def broken(path):
-                nonlocal calls
-                calls += 1
-                if calls == 6: raise PermissionError("final inventory denied")
-                return original(path)
+            original = module.finalize_verification
+            def finalize(*args, **kwargs):
+                with patch.object(module, "product_hashes", side_effect=PermissionError("final inventory denied")):
+                    return original(*args, **kwargs)
             cwd=Path.cwd();handlers={s:signal.getsignal(s) for s in (signal.SIGINT,signal.SIGTERM)}
-            with patch.object(module,"product_hashes",side_effect=broken):
+            with patch.object(module, "finalize_verification", side_effect=finalize):
                 self.assertEqual(self.invoke(Path(temp)/"attempt",derived=derived),1)
             receipt=json.loads((Path(temp)/"attempt/verification.json").read_text())
             self.assertEqual(receipt["status"],"failed");self.assertIn("denied",str(receipt["finalizationErrors"]))
@@ -330,7 +328,7 @@ except m.RunInterrupted as e:
     def test_permission_error_in_cleanup_is_batch_fatal(self):
         from unittest.mock import Mock
         child=Mock(pid=123,returncode=None)
-        with patch.object(module.os,"killpg",side_effect=PermissionError("denied")):
+        with patch.object(module.os,"killpg",side_effect=PermissionError("denied")), patch.object(module,"process_group_members",return_value=[{"pid":123,"parent":1,"uid":os.getuid(),"state":"S","start":"original"}]):
             with self.assertRaisesRegex(module.CleanupFailed,"123"): module.cleanup_child(child)
         with tempfile.TemporaryDirectory() as temp:
             self.assertEqual(self.invoke(Path(temp)/"attempt",[module.CleanupFailed("denied")]),1)
@@ -403,10 +401,68 @@ except m.RunInterrupted as e:
     def test_final_kill_join_is_bounded(self):
         from unittest.mock import Mock
         child = Mock(pid=123, returncode=None)
-        with patch.object(module.os, "killpg"), patch.object(module, "process_group_exists", return_value=True), \
+        with patch.object(module.os, "killpg"), patch.object(module, "process_group_members", return_value=[{"pid":123,"parent":1,"uid":os.getuid(),"state":"S","start":"original"}]), \
              patch.object(module.time, "monotonic", side_effect=[0, 20, 21, 40]):
             with self.assertRaises(module.CleanupFailed): module.cleanup_child(child)
         child.wait.assert_not_called()
+
+    def test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity(self):
+        from unittest.mock import Mock
+        def member(pid, state="S", start="original"):
+            return {"pid":pid,"parent":1,"uid":os.getuid(),"state":state,"start":start}
+        for records, reaped, expected in [([], True, True), ([member(124,"Z")], True, True),
+            ([member(123)], True, False), ([member(123)], False, False)]:
+            with self.subTest(records=records,reaped=reaped):
+                child=Mock(pid=123,returncode=0 if reaped else None)
+                with patch.object(module,"process_group_members",return_value=records), patch.object(module.os,"killpg",side_effect=PermissionError("denied")) as kill:
+                    if expected:
+                        module.cleanup_child(child)
+                        kill.assert_not_called()
+                    else:
+                        with self.assertRaises(module.CleanupFailed):module.cleanup_child(child)
+        child=Mock(pid=123,returncode=None)
+        with patch.object(module,"process_group_members",side_effect=TimeoutError("snapshot stalled")):
+            with self.assertRaisesRegex(module.CleanupFailed,"snapshot stalled"):module.cleanup_child(child)
+
+    def test_permission_probe_after_owned_group_exits_is_confirmed_from_state(self):
+        from unittest.mock import Mock
+        member={"pid":123,"parent":1,"uid":os.getuid(),"state":"S","start":"original"}
+        zombie={"pid":124,"parent":1,"uid":os.getuid(),"state":"Z","start":"descendant"}
+        child=Mock(pid=123,returncode=None)
+        calls=0
+        def poll():
+            nonlocal calls
+            calls+=1
+            if calls>1:child.returncode=0
+        child.poll.side_effect=poll
+        with patch.object(module,"process_group_members",side_effect=[[member],[zombie]]), patch.object(module.os,"killpg",side_effect=PermissionError("zombie-only group")):
+            module.cleanup_child(child)
+        self.assertEqual(child.returncode,0)
+
+    def test_sdk_is_captured_once_for_prepared_reuse(self):
+        with tempfile.TemporaryDirectory() as temp:
+            derived=Path(temp)/"derived";self.products(derived)
+            module.record_preparation(derived,{"revision":"fixture"},self.context())
+            original=module.prepared_manifest
+            observed=[]
+            def manifest(path,sdk):
+                observed.append(sdk)
+                return original(path,sdk)
+            with patch.object(module,"prepared_manifest",side_effect=manifest):
+                self.assertEqual(self.invoke(Path(temp)/"attempt",derived=derived),0)
+            self.assertEqual(observed,["fixture"])
+            source=(ROOT/'Scripts/run-selected-ui-verification.py').read_text()
+            self.assertEqual(source.count('subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-version"]'),1)
+
+    def test_finalization_seam_survives_extra_inventory_and_selection_size(self):
+        original=module.verify_preparation
+        def verify(*args,**kwargs):
+            module.product_hashes(args[0])
+            return original(*args,**kwargs)
+        selection=module.load_selection(ROOT/"Tests/Verification/ui-smoke.json")
+        for size in [1,len(selection)]:
+            with self.subTest(size=size), patch.object(module,"load_selection",return_value=selection[:size]), patch.object(module,"verify_preparation",side_effect=verify):
+                self.test_final_inventory_exception_still_saves_and_restores_process_state()
 
     def test_signal_during_timeout_cleanup_is_not_lost(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -492,7 +548,9 @@ sys.exit(code)
                 stdout,stderr=child.communicate(timeout=20)
                 self.assertEqual(child.returncode,124,stdout+stderr)
                 descendant=int((output/'held.log').read_text().strip())
-                with self.assertRaises(ProcessLookupError):os.kill(descendant,0)
+                phase = json.loads((output/'verification.json').read_text())['phases'][0]
+                remaining = module.process_group_members(phase['processGroupID'])
+                self.assertFalse(any(not m["state"].startswith("Z") for m in remaining))
                 receipt=json.loads((output/'verification.json').read_text())
                 self.assertEqual(receipt['phases'][0]['status'],'timeout')
             finally:

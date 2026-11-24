@@ -1,0 +1,66 @@
+{
+  "selected": 15,
+  "executions": 75,
+  "entries": [
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testIncrementalAdapterDeclarationOwnsReadAndFailure",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testDeletedNonSessionScopePaysWithoutFullScan",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testAcceptingAliasesShareFailureAndRecovery",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testDirectoryInputDiscoversDescendantsInsteadOfPayingUnscannedWork",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testOlderRosterPreservesNewerAndUnmatchedGenericAdmissions",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testNavigationRemovedSourceDebtRetiresAndOlderRosterCannotReturn",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testNavigationObservationDoesNotBlockOrConsumeNewAdmission",
+      "executions": 5
+    },
+    {
+      "selector": "TraceAppTests/AppReviewFollowupTests/testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration",
+      "executions": 5
+    },
+    {
+      "selector": "TraceAppTests/AppReviewFollowupTests/testDeferredResetAllowsRecreatedSourceRestorationAndRetry",
+      "executions": 5
+    },
+    {
+      "selector": "TraceAppTests/AppReviewFollowupTests/testMetadataOutsideTranscriptRootsDoesNotAccumulateNavigationWork",
+      "executions": 5
+    },
+    {
+      "selector": "TraceAppTests/AppReviewFollowupTests/testRecreatedSourceRefreshCannotReplaceCapturedUnsentRecoveryNavigation",
+      "executions": 5
+    },
+    {
+      "selector": "TraceAppTests/AppReviewFollowupTests/testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testIncrementalReconciliationDecodesOnlyAttemptedScope",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testScopedStoredPathsRespectCaseComponentsAndLiteralWildcards",
+      "executions": 5
+    },
+    {
+      "selector": "TraceCoreTests/IndexingRegressionTests/testScopedStoredPathsBatchLargeInputWithoutDuplicateRows",
+      "executions": 5
+    }
+  ]
+}

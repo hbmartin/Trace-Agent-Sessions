@@ -8,6 +8,78 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
 
+    func testIncrementalReconciliationDecodesOnlyAttemptedScope() async throws {
+        let root = try directory(), file = root.appendingPathComponent("selected.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [root])
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let rootID = try await database.register(root: XCTUnwrap(source.roots.first))
+        for index in 0..<1000 {
+            let unrelated = DiscoveredSourceFile(agent: .claudeCode, root: root,
+                url: root.appendingPathComponent("unrelated-\(index).jsonl"), format: .claudeJSONL)
+            _ = try await database.createSource(rootID: rootID, file: unrelated, fingerprint: .init(
+                device: 0, inode: UInt64(index), size: 0, modificationNanoseconds: 0, headHash: Data(), headLength: 0))
+        }
+        #if DEBUG
+        let before = database.reconciliationRowsForTesting
+        #endif
+        try Data(line(2).utf8).write(to: file, options: .atomic)
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        #if DEBUG
+        XCTAssertEqual(database.reconciliationRowsForTesting - before, 1)
+        #endif
+        let unrelated = try await database.sourceState(agent: .claudeCode, path: root.appendingPathComponent("unrelated-999.jsonl").path)
+        XCTAssertNotNil(unrelated, "A leaf append must not reconcile unrelated stored inventory")
+        try FileManager.default.removeItem(at: file)
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly)
+        let deleted = try await database.sourceState(agent: .claudeCode, path: file.path)
+        XCTAssertNil(deleted)
+        let sessions = try await database.sessions()
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
+    func testScopedStoredPathsBatchLargeInputWithoutDuplicateRows() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let rootID = try await database.register(root: SourceRoot(agent: .claudeCode, url: root))
+        var paths: [String] = []
+        for index in 0..<1100 {
+            let file = root.appendingPathComponent("file-\(index).jsonl")
+            paths.append(file.path)
+            _ = try await database.createSource(rootID: rootID,
+                file: .init(agent: .claudeCode, root: root, url: file, format: .claudeJSONL),
+                fingerprint: .init(device: 0, inode: 0, size: 0, modificationNanoseconds: 0, headHash: Data(), headLength: 0))
+        }
+        for sensitive in [true, false] {
+            let rows = try await database.paths(agent: .claudeCode, rootID: rootID,
+                scopes: paths + Array(paths.prefix(10)), caseSensitive: sensitive)
+            XCTAssertEqual(rows.count, 1100)
+            XCTAssertEqual(Set(rows.map(\.id)).count, 1100)
+        }
+    }
+
+    func testScopedStoredPathsRespectCaseComponentsAndLiteralWildcards() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = SourceRoot(agent: .claudeCode, url: root)
+        let rootID = try await database.register(root: source)
+        for name in ["Ä_%/one.jsonl", "Ä_%/two.jsonl", "Ä_%extra/other.jsonl", "unrelated.jsonl"] {
+            _ = try await database.createSource(rootID: rootID, file: .init(agent: .claudeCode, root: root,
+                url: root.appendingPathComponent(name), format: .claudeJSONL), fingerprint: .init(
+                    device: 0, inode: 0, size: 0, modificationNanoseconds: 0, headHash: Data(), headLength: 0))
+        }
+        for sensitive in [false, true] {
+            let scope = root.appendingPathComponent(sensitive ? "Ä_%" : "ä_%").path
+            let rows = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [scope], caseSensitive: sensitive)
+            XCTAssertEqual(Set(rows.map { URL(fileURLWithPath: $0.path).lastPathComponent }), ["one.jsonl", "two.jsonl"])
+            let exact = try await database.paths(agent: .claudeCode, rootID: rootID,
+                scopes: [scope + "/one.jsonl"], caseSensitive: sensitive)
+            XCTAssertEqual(exact.count, 1)
+        }
+        let empty = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [], caseSensitive: true)
+        XCTAssertTrue(empty.isEmpty)
+    }
+
     func testIncrementalAdapterDeclarationOwnsReadAndFailure() async throws {
         let root = try directory(), file = root.appendingPathComponent("declared.trace")
         try Data(line(1).utf8).write(to: file)

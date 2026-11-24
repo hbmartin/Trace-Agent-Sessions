@@ -1,0 +1,27 @@
+[
+  {
+    "group": "IndexingRegressionTests",
+    "tests": 242,
+    "failures": 0
+  },
+  {
+    "group": "SidecarDependencyTests",
+    "tests": 27,
+    "failures": 0
+  },
+  {
+    "group": "FSEventsWatcherTests",
+    "tests": 13,
+    "failures": 0
+  },
+  {
+    "group": "TranscriptViewportPolicyTests",
+    "tests": 4,
+    "failures": 0
+  },
+  {
+    "group": "AppReviewFollowupTests",
+    "tests": 443,
+    "failures": 0
+  }
+]

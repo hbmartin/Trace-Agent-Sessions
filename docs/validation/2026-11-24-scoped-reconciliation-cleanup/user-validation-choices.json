@@ -1,0 +1,9 @@
+{
+  "questionId": "[\"request_user_input_async\",\"call_0cce01e8ce95430ea53ada03aa9a44b9\",0]",
+  "answer": "Skip measurements; publish with that limitation",
+  "recordedAtUTC": "2026-11-24T15:10:13.735247+00:00",
+  "ui": "omitted by approved plan",
+  "pairedMeasurements": "waived by explicit user reply",
+  "fullReleasePairs": "omitted by approved plan",
+  "local10PercentAcceptanceClaim": false
+}

@@ -1,0 +1,12 @@
+{
+  "baseline": "387527b9bb00bca52902395a70d6a692792615e0",
+  "candidate": "a4f453a258e03ba3155d0fc269efc7f5137fcf77",
+  "candidateCoreMatchesFrozen": true,
+  "instrumentation": "one same lock-protected count increment per IndexedSourcePath object decoded, on both revisions",
+  "metricLimit": "Does not count internal SQLite rows visited or establish sublinear SQL execution.",
+  "harnessHashes": {
+    "benchmark-navigation-admission.swift": "3452b640e8ca704dfd7e43b45fb01194079ceaa7d8b231c3108921e91f0415c6",
+    "benchmark-incremental-reconciliation.swift": "c0a1f0af407a8eb0a4d49c557916847b0feb4b3c66a5bba6b1683f6d91cc7949",
+    "prepare-source-ingress-benchmark.py": "cd87667b355cb5f9e1a0cd5f7561927b895f4485ea6531daf322693da4769671"
+  }
+}

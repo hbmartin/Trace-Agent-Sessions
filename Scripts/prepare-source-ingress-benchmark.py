@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Extract the exact revision's mailbox for an isolated optimized workload."""
 import argparse
+import re
 from pathlib import Path
 
 
@@ -115,8 +116,17 @@ def extract(source, preparation_contract):
     }
 }
 '''.replace('OBSERVED', observed).replace('CONTRACT', preparation_contract)
-    metadata = "\nfunc benchmarkMetadataPrepared(_ input: SourceChanges, roots: [TraceFileIO.CanonicalPath]) -> SourceIngressMailbox.Prepared {\n    "
-    metadata += "SourceIngressMailbox.normalizeMetadata(input" + (", navigationRoots: roots" if "static func normalizeMetadata(_ changes: SourceChanges, navigationRoots:" in mailbox else "") + ")\n}\n"
+    metadata = ""
+    if "struct Prepared: Sendable" in mailbox:
+        signatures = re.findall(r"static\s+func\s+normalizeMetadata\s*\((.*?)\)\s*->\s*Prepared\s*\{", mailbox, re.S)
+        compact = [re.sub(r"\s+", "", value) for value in signatures]
+        current = "_changes:SourceChanges,navigationRoots:[TraceFileIO.CanonicalPath]=[]"
+        legacy = "_changes:SourceChanges"
+        if len(compact) != 1 or compact[0] not in (current, legacy):
+            raise ValueError("Unsupported or ambiguous normalizeMetadata signature")
+        arguments = ", navigationRoots: roots" if compact[0] == current else ""
+        metadata = "\nfunc benchmarkMetadataPrepared(_ input: SourceChanges, roots: [TraceFileIO.CanonicalPath]) -> SourceIngressMailbox.Prepared {\n    SourceIngressMailbox.normalizeMetadata(input" + arguments + ")\n}\n"
+
     return header + wrapper + preflight + (metadata if "struct Prepared: Sendable" in mailbox else "")
 
 

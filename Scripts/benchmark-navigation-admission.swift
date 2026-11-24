@@ -116,16 +116,22 @@ private final class PreparedPayload: Sendable {
                 preparedLifetime = payload
                 preparationElapsed = result.1; preparationCPU = result.2
                 raw = nil; setup = footprint()
-                let ledger = IndexNavigationWorkLedger(), startCPU = cpu(), start = ContinuousClock.now
+                let ledger = IndexNavigationWorkLedger()
+                var admissionCorrect = true
+                elapsed = 0; processCPU = 0
                 for (index, value) in payload!.values.enumerated() {
-                    let call = ContinuousClock.now
+                    let callCPU = cpu(), call = ContinuousClock.now
                     let work = ledger.reserve(value.navigationInputs)
-                    // This mode measures admission/owner retirement, not ingestion coverage.
-                    if mode == "mixed" && index.isMultiple(of: 2) { for item in work { item.retire() } }
-                    latencies.append(seconds(call.duration(to: .now)))
+                    let duration = seconds(call.duration(to: .now))
+                    processCPU += cpu() - callCPU; elapsed += duration
+                    latencies.append(duration)
+                    let expectedWork = mode == "mixed" && index.isMultiple(of: 2)
+                    admissionCorrect = admissionCorrect && (!work.isEmpty == expectedWork)
+                    // Validation and deliberate owner retirement are outside timing.
+                    for item in work { item.retire() }
                 }
-                elapsed = seconds(start.duration(to: .now)); processCPU = cpu() - startCPU
-                counts = ledger.benchmarkCounts; correct = counts["pendingReceipts"] == 0
+                counts = ledger.benchmarkCounts
+                correct = admissionCorrect && counts["pendingReceipts"] == 0
                 retained = ledger
                 payload = nil
                 let queryDatabase = try IndexDatabase(url: directory.appendingPathComponent("query.sqlite"))

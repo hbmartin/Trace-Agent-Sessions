@@ -241,6 +241,29 @@ private func cpuSeconds() -> Double { 0 }
         with self.assertRaisesRegex(ValueError, 'Missing unique'):
             extraction.extract(source + 'final class SourceIngressMailbox: Sendable {', 'consumed-topology')
 
+    def test_metadata_signature_is_explicit_and_format_independent(self):
+        spec = importlib.util.spec_from_file_location('metadata_signatures', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
+        extraction = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(extraction)
+        source = (ROOT / 'Sources/TraceApp/TraceModel.swift').read_text()
+        signature = 'static func normalizeMetadata(_ changes: SourceChanges, navigationRoots: [TraceFileIO.CanonicalPath] = [])'
+        for current in [source, source.replace(signature, 'static func normalizeMetadata(\n _ changes: SourceChanges,\n navigationRoots: [TraceFileIO.CanonicalPath] = [])')]:
+            generated = extraction.extract(current, 'consumed-topology')
+            self.assertIn('SourceIngressMailbox.normalizeMetadata(input, navigationRoots: roots)', generated)
+        legacy = source.replace(signature, 'static func normalizeMetadata(_ changes: SourceChanges)')
+        self.assertIn('SourceIngressMailbox.normalizeMetadata(input)', extraction.extract(legacy,'consumed-topology'))
+        for unknown in [source.replace(signature, 'static func normalizeMetadata(_ changes: SourceChanges, renamed: Bool = false)'),
+                        source.replace(signature, signature + ' -> Prepared { return Prepared() }\n    ' + signature)]:
+            with self.assertRaisesRegex(ValueError, 'Unsupported or ambiguous'):
+                extraction.extract(unknown,'consumed-topology')
+
+    def test_admission_correctness_checks_inputs_before_retirement(self):
+        source=(ROOT/'Scripts/benchmark-navigation-admission.swift').read_text()
+        admission=source[source.index('let work = ledger.reserve'):source.index('retained = ledger')]
+        self.assertLess(admission.index('let duration ='),admission.index('let expectedWork ='))
+        self.assertLess(admission.index('admissionCorrect ='),admission.index('item.retire()'))
+        self.assertIn('correct = admissionCorrect && counts["pendingReceipts"] == 0',admission)
+
     def test_both_mailbox_layouts_prepare_shared_setup_before_enqueue(self):
         spec = importlib.util.spec_from_file_location('ingress_setup', ROOT / 'Scripts/prepare-source-ingress-benchmark.py')
         extraction = importlib.util.module_from_spec(spec)
