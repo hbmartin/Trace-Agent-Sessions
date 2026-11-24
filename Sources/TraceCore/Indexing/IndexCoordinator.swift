@@ -755,7 +755,7 @@ public actor IndexCoordinator {
                                 try source.discoverResult(scopedTo: [scope.scanPath.path]),
                                 agent: source.agent, root: root,
                                 capturedContext: context,
-                                currentContext: root.mappingContext,
+                                currentContext: root.mappingContext, configuredRoots: source.roots,
                                 scopes: [scope]
                             )
                             absorbDiscoveryResult(
@@ -787,13 +787,22 @@ public actor IndexCoordinator {
                             )
                             guard !scopes.isEmpty else { continue }
                             do {
+                                // A legacy directory enumerator cannot classify a
+                                // file merely by returning no entries for that file.
+                                // Broaden discovery, never the accepted coverage.
+                                let discoveryScopes = source.supportsFileScopedDiscovery
+                                    ? Set(scopes.map(\.scanPath.path))
+                                    : Set(scopes.map { scope in
+                                        if scope.relativeScope.isRoot { return scope.scanPath.path }
+                                        let url = URL(fileURLWithPath: scope.scanPath.path)
+                                        let type = try? FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType
+                                        return type == .typeDirectory ? url.path : url.deletingLastPathComponent().path
+                                    })
                                 let result = verifiedDiscoveryResult(
-                                    try source.discoverResult(
-                                        scopedTo: Set(scopes.map(\.scanPath.path))
-                                    ),
+                                    try source.discoverResult(scopedTo: discoveryScopes),
                                     agent: source.agent, root: root,
                                     capturedContext: context,
-                                    currentContext: root.mappingContext,
+                                    currentContext: root.mappingContext, configuredRoots: source.roots,
                                     scopes: scopes
                                 )
                                 absorbDiscoveryResult(
@@ -995,8 +1004,10 @@ public actor IndexCoordinator {
             }
             try Task.checkCancellation()
             if !discoveryAttempts.isEmpty {
-                status.phase = .reconciling
-                await progress(status)
+                if fullScan || !reconciliationPaths.isEmpty {
+                    status.phase = .reconciling
+                    await progress(status)
+                }
                 let liveByAgent = Dictionary(grouping: allFiles, by: \.agent).mapValues { files in
                     ReconciliationLivePaths(files.map(\.canonicalPath))
                 }

@@ -3,6 +3,10 @@ import Foundation
 public protocol SessionSource: Sendable {
     var agent: AgentKind { get }
     var roots: [SourceRoot] { get }
+    /// Opt in only when scoped discovery accepts individual file paths, including
+    /// missing files, and reports authoritative empty results or failures for them.
+    /// Legacy adapters receive containing-directory requests instead.
+    var supportsFileScopedDiscovery: Bool { get }
 
     func discover() throws -> [DiscoveredSourceFile]
     /// Discovers files only below the supplied paths. Implementations may fall back to a
@@ -80,7 +84,7 @@ struct VerifiedDiscoveryResult: Sendable {
 func verifiedDiscoveryResult(
     _ result: DiscoveryResult, agent: AgentKind, root: SourceRoot,
     capturedContext: SourceRootPathContext, currentContext: SourceRootPathContext,
-    scopes: [SourceRootScope]
+    configuredRoots: [SourceRoot] = [], scopes: [SourceRootScope]
 ) -> VerifiedDiscoveryResult {
     let scannedScopes = Set(scopes.map(\.relativeScope))
     guard capturedContext == currentContext else {
@@ -98,13 +102,45 @@ func verifiedDiscoveryResult(
             failures: deduplicatedNormalizedDiscoveryFailures(failures)
         )
     }
+    var aliases: [String: TraceFileIO.CanonicalPath] = [:]
+    func canonicalRoot(_ candidate: URL) -> TraceFileIO.CanonicalPath {
+        if let cached = aliases[candidate.path] { return cached }
+        let canonical = TraceFileIO.canonicalPath(candidate.path)
+        aliases[candidate.path] = canonical
+        return canonical
+    }
+    func acceptsRoot(_ candidate: URL, file: TraceFileIO.CanonicalPath? = nil) -> Bool {
+        if candidate.path == root.url.path || canonicalRoot(candidate) == capturedContext.scanPath { return true }
+        // A multi-root adapter can return the same source through both an outer
+        // and an inner configured root. Share the eventual ingestion outcome.
+        return configuredRoots.contains { configured in
+            configured.url.path == candidate.path && (file.map { configured.scanPath.contains($0) } ?? true)
+        }
+    }
     let failures = normalizedDiscoveryFailures(
-        result.failures.filter { $0.root.path == root.url.path },
-        for: root, in: capturedContext
+        result.failures.filter { acceptsRoot($0.root) }.map { failure in
+            DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
+                kind: failure.kind, requestedScopePath: failure.requestedScopePath)
+        }, for: root, in: capturedContext
     ).filter { failure in
         scannedScopes.contains { $0.intersects(failure.relativeScope) }
     }
-    return .init(files: result.files, failures: failures)
+    var qualifiedFailures = failures
+    var files: [DiscoveredSourceFile] = []
+    for file in result.files {
+        // Some legacy implementations return a larger discovery. Only the
+        // original requested scopes may contribute rows or coverage.
+        guard scopes.contains(where: { $0.scanPath.contains(file.canonicalPath) }) else { continue }
+        guard file.agent == agent, acceptsRoot(file.root, file: file.canonicalPath) else {
+            for scope in scopes where scope.scanPath.contains(file.canonicalPath) {
+                qualifiedFailures.append(.init(failure: .init(agent: agent, root: root.url,
+                    path: file.url.path, message: "The adapter returned an incompatible source identity"), scope: scope))
+            }
+            continue
+        }
+        files.append(.init(agent: agent, root: root.url, canonicalPath: file.canonicalPath, format: file.format))
+    }
+    return .init(files: files, failures: deduplicatedNormalizedDiscoveryFailures(qualifiedFailures))
 }
 
 func sourceFormat(for url: URL, agent: AgentKind) -> SourceFormat? {
@@ -201,6 +237,8 @@ public enum SessionSourceError: LocalizedError, Sendable {
 }
 
 public extension SessionSource {
+    var supportsFileScopedDiscovery: Bool { false }
+
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?,
                  initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
         records(in: file, from: offset, through: boundary, initialSessionID: initialContext.sessionID)
@@ -329,6 +367,22 @@ public extension SessionSource {
                     continue
                 }
                 let startsAtRoot = startScope.relativeScope.isRoot
+                // Starting below an excluded ancestor must agree with a full
+                // enumeration. The explicitly configured root itself is allowed.
+                if !startsAtRoot {
+                    var ancestor = start.url.standardizedFileURL
+                    var excluded = false
+                    while ancestor.path != root.scanURL.standardizedFileURL.path {
+                        let properties = try? ancestor.resourceValues(forKeys: [.isHiddenKey, .isPackageKey])
+                        if ancestor.lastPathComponent.hasPrefix(".") || properties?.isHidden == true || properties?.isPackage == true {
+                            excluded = true; break
+                        }
+                        let parent = ancestor.deletingLastPathComponent()
+                        if parent.path == ancestor.path { break }
+                        ancestor = parent
+                    }
+                    if excluded { continue }
+                }
                 let itemType: FileAttributeType?
                 do {
                     itemType = startsAtRoot

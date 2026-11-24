@@ -1,6 +1,7 @@
 import Foundation
 
 public struct ClaudeCodeSource: SessionSource {
+    public var supportsFileScopedDiscovery: Bool { true }
     public let agent = AgentKind.claudeCode
     public let roots: [SourceRoot]
 

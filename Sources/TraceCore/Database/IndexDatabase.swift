@@ -128,6 +128,30 @@ private struct StoredRecoveryRow: Sendable {
     let isDefault: Bool
 }
 
+/// Immutable query inputs. Each row is normalized once for each needed policy;
+/// walking its ancestors is independent of the number of requested scopes.
+private struct ReconciliationScopeMatcher: Sendable {
+    let sensitive: Set<String>, insensitive: Set<String>
+    init(_ scopes: [TraceFileIO.CanonicalPath]) {
+        sensitive = Set(scopes.filter(\.isCaseSensitive).map { $0.path.precomposedStringWithCanonicalMapping })
+        insensitive = Set(scopes.filter { !$0.isCaseSensitive }.map {
+            TraceFileIO.comparisonKey($0.path, caseSensitive: false).precomposedStringWithCanonicalMapping
+        })
+    }
+    private func contains(_ key: String, in scopes: Set<String>) -> Bool {
+        var candidate = key
+        while true {
+            if scopes.contains(candidate) { return true }
+            guard candidate != "/", let slash = candidate.lastIndex(of: "/") else { return false }
+            candidate = slash == candidate.startIndex ? "/" : String(candidate[..<slash])
+        }
+    }
+    func contains(_ path: String) -> Bool {
+        if !sensitive.isEmpty, contains(path.precomposedStringWithCanonicalMapping, in: sensitive) { return true }
+        return !insensitive.isEmpty && contains(TraceFileIO.comparisonKey(path, caseSensitive: false).precomposedStringWithCanonicalMapping, in: insensitive)
+    }
+}
+
 public actor IndexDatabase {
     private var transcriptReadRevision: UInt64 = 0
     private var codexNameWriteTransactionCount = 0
@@ -192,14 +216,7 @@ public actor IndexDatabase {
             try db.execute(sql: "PRAGMA temp_store = MEMORY")
             try db.execute(sql: "PRAGMA mmap_size = 268435456")
             try db.execute(sql: "CREATE TEMP VIEW supported_agent(agent) AS \(supportedAgents)")
-            db.add(function: DatabaseFunction("trace_scope_contains", argumentCount: 3, pure: true) { values in
-                guard let path = String.fromDatabaseValue(values[0]),
-                      let scope = String.fromDatabaseValue(values[1]),
-                      let caseSensitive = Bool.fromDatabaseValue(values[2]) else { return false }
-                let key = TraceFileIO.comparisonKey(path, caseSensitive: caseSensitive)
-                let prefix = TraceFileIO.comparisonKey(scope, caseSensitive: caseSensitive)
-                return key == prefix || key.hasPrefix(prefix == "/" ? prefix : prefix + "/")
-            })
+
         }
         pool = try DatabasePool(path: url.path, configuration: configuration)
         try Self.migrate(pool)
@@ -1709,52 +1726,50 @@ public actor IndexDatabase {
         })
     }
 
-    // Binary ranges remain the fast query. A separate, root-filtered Unicode
-    // fallback must not exclude canonical equivalents before Swift sees them.
+    // Binary ranges find literal sensitive paths. One query-local matcher
+    // handles canonical equivalence and insensitive scopes without O(rows*scopes)
+    // callbacks or resolving a stored path against today's filesystem.
     func paths(agent: AgentKind, rootID: Int64, capturedScopes: [TraceFileIO.CanonicalPath]?) throws -> [IndexedSourcePath] {
         if let capturedScopes, capturedScopes.isEmpty { return [] }
+        let scopes = capturedScopes.map { Array(Set($0)).sorted { $0.path < $1.path } }
+        let matcher = scopes.map(ReconciliationScopeMatcher.init)
         return try pool.read { db in
-            let uniqueScopes = capturedScopes.map { Array(Set($0)).sorted {
-                ($0.path, $0.isCaseSensitive ? 1 : 0) < ($1.path, $1.isCaseSensitive ? 1 : 0)
-            } }
-            let batches: [[TraceFileIO.CanonicalPath]?] = uniqueScopes.map { values in
-                stride(from: 0, to: values.count, by: 128).map { start in
-                    Optional(Array(values[start..<min(start + 128, values.count)]))
-                }
-            } ?? [nil]
             var rows: [Row] = [], seen: Set<Int64> = []
             let base = "SELECT id, root_id, path FROM source_file WHERE agent=? AND root_id=?"
-            func collect(_ predicates: [String], _ arguments: StatementArguments) throws {
-                let sql = base + (predicates.isEmpty ? "" : " AND (" + predicates.joined(separator: " OR ") + ")")
-                for row in try Row.fetchAll(db, sql: sql, arguments: arguments) {
+            func collect(_ suffix: String, _ arguments: StatementArguments) throws {
+                for row in try Row.fetchAll(db, sql: base + suffix, arguments: arguments) {
                     if seen.insert(row["id"]).inserted { rows.append(row) }
                 }
             }
-            for batch in batches {
-                var arguments: StatementArguments = [agent.rawValue, rootID]
-                var fallbackArguments = arguments
-                var predicates: [String] = [], fallback: [String] = []
-                for scope in batch ?? [] {
-                    if scope.isCaseSensitive {
+            if let scopes, let matcher {
+                let binary = scopes.filter(\.isCaseSensitive)
+                for offset in stride(from: 0, to: binary.count, by: 128) {
+                    var predicates: [String] = [], arguments: StatementArguments = [agent.rawValue, rootID]
+                    for scope in binary[offset..<min(offset + 128, binary.count)] {
                         let prefix = scope.path == "/" ? scope.path : scope.path + "/"
                         predicates.append("(path=? OR (path>=? AND path<?))")
                         arguments += [scope.path, prefix, String(prefix.dropLast()) + "0"]
-                        if scope.path.utf8.allSatisfy({ $0 < 128 }) {
-                            fallback.append("(path GLOB ? AND trace_scope_contains(path, ?, 1))")
-                            fallbackArguments += ["*[^\u{1}-\u{7f}]*", scope.path]
-                        } else {
-                            // An ASCII candidate can also be canonically equivalent
-                            // to a non-ASCII scope (for example K and Kelvin sign).
-                            fallback.append("trace_scope_contains(path, ?, 1)")
-                            fallbackArguments += [scope.path]
-                        }
-                    } else {
-                        predicates.append("trace_scope_contains(path, ?, 0)")
-                        arguments += [scope.path]
                     }
+                    try collect(" AND (" + predicates.joined(separator: " OR ") + ")", arguments)
                 }
-                try collect(predicates, arguments)
-                if !fallback.isEmpty { try collect(fallback, fallbackArguments) }
+                let function = DatabaseFunction("trace_reconciliation_matches", argumentCount: 1, pure: true) { values in
+                    guard let path = String.fromDatabaseValue(values[0]) else { return false }
+                    #if DEBUG
+                    self.reconciliationPredicates.withLock { $0 += 1 }
+                    #endif
+                    return matcher.contains(path)
+                }
+                db.add(function: function)
+                defer { db.remove(function: function) }
+                let onlyASCII = scopes.allSatisfy { $0.isCaseSensitive && $0.path.utf8.allSatisfy { $0 < 128 } }
+                if onlyASCII {
+                    try collect(" AND path GLOB ? AND trace_reconciliation_matches(path)",
+                        [agent.rawValue, rootID, "*[^\u{1}-\u{7f}]*"])
+                } else {
+                    try collect(" AND trace_reconciliation_matches(path)", [agent.rawValue, rootID])
+                }
+            } else {
+                try collect("", [agent.rawValue, rootID])
             }
             #if DEBUG
             let rowCount = rows.count
@@ -1766,7 +1781,9 @@ public actor IndexDatabase {
 
     #if DEBUG
     private nonisolated let reconciliationRows = OSAllocatedUnfairLock(initialState: 0)
+    private nonisolated let reconciliationPredicates = OSAllocatedUnfairLock(initialState: 0)
     nonisolated var reconciliationRowsForTesting: Int { reconciliationRows.withLock { $0 } }
+    nonisolated var reconciliationPredicatesForTesting: Int { reconciliationPredicates.withLock { $0 } }
     #endif
 
     private var rollupFailures: Set<IndexFailureDiagnostic> = []

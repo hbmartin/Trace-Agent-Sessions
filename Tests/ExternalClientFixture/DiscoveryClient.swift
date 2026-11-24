@@ -155,3 +155,16 @@ func compileCommittedScopeClient(_ database: IndexDatabase) async throws {
     let _: IndexScope = database.committedIndexScope
     let _: IndexScope = try await database.storedIndexScope()
 }
+
+// Old adapters inherit the conservative default; file-aware adapters may opt in.
+struct FileScopedDiscoveryClient: SessionSource {
+    var agent: AgentKind { .claudeCode }
+    var roots: [SourceRoot] { [] }
+    var supportsFileScopedDiscovery: Bool { true }
+    func discover() throws -> [DiscoveredSourceFile] { [] }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> { AsyncThrowingStream { $0.finish() } }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage { throw SessionSourceError.unsupportedLocator }
+}
+func compileDiscoveryCapabilities(_ legacy: ExternalDiscoverySource, _ current: FileScopedDiscoveryClient) -> (Bool, Bool) {
+    (legacy.supportsFileScopedDiscovery, current.supportsFileScopedDiscovery)
+}

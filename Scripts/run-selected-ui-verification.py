@@ -251,9 +251,18 @@ def prepared_manifest(derived: Path, sdk: str) -> Path:
     return expected
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def manifest_hashes(derived: Path) -> dict[str, str]:
-    return {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted((derived / "Build/Products").glob("*.xctestrun"))}
+    products = derived / "Build/Products"
+    return {p.relative_to(products).as_posix(): file_sha256(p)
+            for p in sorted(products.glob("*.xctestrun"))}
 
 
 PREPARATION_RECEIPT = "prepared-ui-build.json"
@@ -279,7 +288,7 @@ def product_hashes(derived: Path) -> dict:
             path.resolve(strict=True).relative_to(products.resolve())
             result[name] = {"symlink": os.readlink(path)}
         elif path.is_file():
-            result[name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            result[name] = {"sha256": file_sha256(path),
                             "mode": path.stat().st_mode & 0o777}
     if not result:
         raise ValueError("Prepared Debug product inventory is empty")
@@ -292,7 +301,7 @@ def build_context(runner, sdk: str) -> dict:
 
 
 def record_preparation(derived: Path, inputs: dict, context: dict) -> dict:
-    receipt = {"format": 1, "revision": inputs["revision"], "nativeInputs": native_inputs(inputs),
+    receipt = {"format": 2, "revision": inputs["revision"], "nativeInputs": native_inputs(inputs),
                "context": context, "artifacts": product_hashes(derived)}
     path = derived / PREPARATION_RECEIPT
     temporary = path.with_suffix(".json.tmp")
@@ -306,8 +315,8 @@ def verify_preparation(derived: Path, inputs: dict, context: dict) -> dict:
     if not path.is_file():
         raise ValueError("Prepared build provenance is missing; run --prepare-only into a new DerivedData directory")
     receipt = json.loads(path.read_text())
-    if not isinstance(receipt, dict) or receipt.get("format") != 1:
-        raise ValueError("Unsupported prepared build provenance")
+    if not isinstance(receipt, dict) or receipt.get("format") != 2:
+        raise ValueError("Unsupported prepared build provenance; reprepare with --prepare-only into a new DerivedData directory")
     if receipt.get("context") != context or receipt.get("nativeInputs") != native_inputs(inputs):
         raise ValueError("Prepared build does not match current native inputs/toolchain/Debug configuration")
     if receipt.get("artifacts") != product_hashes(derived):

@@ -29,7 +29,8 @@ private func record(_ session: String, _ index: Int) -> Data {
     Data("{\"type\":\"user\",\"uuid\":\"\(session)-\(index)\",\"sessionId\":\"\(session)\",\"message\":{\"content\":\"message \(index)\"}}\n".utf8)
 }
 @main struct IncrementalReconciliationWorkload {
-    static func main() async {
+    static func main() async { exit(await run()) }
+    static func run() async -> Int32 {
         do {
             let mode = CommandLine.arguments.count == 4 ? CommandLine.arguments[3] : "ascii"
             guard (3...4).contains(CommandLine.arguments.count), let count = Int(CommandLine.arguments[1]),
@@ -100,10 +101,10 @@ private func record(_ session: String, _ index: Int) -> Data {
                 "retainedGrowthBytes": Int64(retained) - Int64(before), "correct": correct]
             withExtendedLifetime(database) {}
             print(String(decoding: try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), as: UTF8.self))
-            if !correct { exit(2) }
+            return correct ? 0 : 2
         } catch {
             FileHandle.standardError.write(Data(("Incremental reconciliation failed: \(error)\n").utf8))
-            exit(1)
+            return 1
         }
     }
 }

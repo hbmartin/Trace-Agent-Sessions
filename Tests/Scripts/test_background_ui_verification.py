@@ -288,6 +288,32 @@ except m.RunInterrupted as e:
             with self.assertRaisesRegex(ValueError, "Debug configuration"):
                 module.prepared_manifest(derived, "fixture")
 
+    def test_prepared_provenance_is_relocatable_and_rejects_legacy_format(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as temp:
+            original, relocated = Path(temp)/"original", Path(temp)/"relocated"
+            self.products(original)
+            inputs = {"revision": "fixture"}
+            module.record_preparation(original, inputs, self.context())
+            shutil.copytree(original, relocated)
+            self.assertEqual(module.product_hashes(original), module.product_hashes(relocated))
+            self.assertEqual(module.verify_preparation(relocated, inputs, self.context())["format"], 2)
+            provenance = relocated/module.PREPARATION_RECEIPT
+            value = json.loads(provenance.read_text()); value["format"] = 1
+            provenance.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError, "reprepare"):
+                module.verify_preparation(relocated, inputs, self.context())
+
+    def test_product_hashing_streams_large_files(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as temp:
+            derived = Path(temp)/"derived"; self.products(derived)
+            payload = derived/"Build/Products/Debug/large"
+            data = b"payload" * 400000; payload.write_bytes(data)
+            with patch.object(Path, "read_bytes", side_effect=AssertionError("whole file read")):
+                observed = module.product_hashes(derived)
+            self.assertEqual(observed["products"]["Debug/large"]["sha256"], hashlib.sha256(data).hexdigest())
+
     def test_final_inventory_exception_still_saves_and_restores_process_state(self):
         with tempfile.TemporaryDirectory() as temp:
             derived=Path(temp)/"derived";self.products(derived)
@@ -431,7 +457,9 @@ except m.RunInterrupted as e:
 from pathlib import Path
 if os.fork()==0:
  signal.signal(signal.SIGTERM,signal.SIG_IGN)
- Path(sys.argv[1]).write_text(str(os.getpid()))
+ temporary = Path(sys.argv[1] + '.tmp')
+ temporary.write_text(str(os.getpid()))
+ temporary.replace(sys.argv[1])
  while True: time.sleep(.1)
 while not Path(sys.argv[2]).exists(): time.sleep(.005)
 os._exit(0)
@@ -458,6 +486,9 @@ os._exit(0)
                 if descendant is not None:
                     try: os.kill(descendant,signal.SIGKILL)
                     except ProcessLookupError: pass
+                elif child.returncode is None:
+                    # Readiness failure must also retire the original owned group.
+                    module.cleanup_child(child)
                 if child.poll() is None: child.kill()
                 child.wait(timeout=2)
 

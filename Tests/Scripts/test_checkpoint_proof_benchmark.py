@@ -259,8 +259,8 @@ private func cpuSeconds() -> Double { 0 }
 
     def test_admission_correctness_checks_inputs_before_retirement(self):
         source=(ROOT/'Scripts/benchmark-navigation-admission.swift').read_text()
-        admission=source[source.index('let work = ledger.reserve'):source.index('retained = ledger')]
-        self.assertLess(admission.index('let duration ='),admission.index('let expectedWork ='))
+        admission=source[source.index('let phaseCPU = cpu()'):source.index('retained = ledger')]
+        self.assertLess(admission.index('elapsed = seconds('),admission.index('let expectedWork ='))
         self.assertLess(admission.index('admissionCorrect ='),admission.index('item.retire()'))
         self.assertIn('correct = admissionCorrect && counts["pendingReceipts"] == 0',admission)
 

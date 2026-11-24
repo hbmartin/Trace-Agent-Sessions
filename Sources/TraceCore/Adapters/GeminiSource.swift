@@ -1,6 +1,7 @@
 import Foundation
 
 public struct GeminiSource: SessionSource {
+    public var supportsFileScopedDiscovery: Bool { true }
     public let agent = AgentKind.gemini
     public let roots: [SourceRoot]
 

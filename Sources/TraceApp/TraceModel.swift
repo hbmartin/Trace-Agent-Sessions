@@ -3270,6 +3270,11 @@ final class TraceModel: ObservableObject {
             kind: .metadata, rootsByAgent: watcherRootsByAgent, unavailableStreams: [])
         let observe = mailbox.observationForTesting(); mailbox.close(); return observe
     }
+    private weak var currentMetadataIngressForTesting: SourceIngressMailbox?
+    func enqueueCurrentMetadataForTesting(_ changes: SourceChanges) -> Bool {
+        guard let mailbox = currentMetadataIngressForTesting else { return false }
+        mailbox.enqueue(changes); return true
+    }
     var sourceIngressAfterTransferGateForTesting: Task<Void, Never>?
     private(set) var sourceIngressAfterTransferWaitingForTesting = false
     var sourceIngressTransfersForTesting: [SourceIngressMailbox.Transfer]?
@@ -7227,8 +7232,11 @@ final class TraceModel: ObservableObject {
         }
         watchers = started
         let metadataIngress = makeSourceIngress(database: database, generation: generation,
-            kind: .metadata, rootsByAgent: [:], unavailableStreams: [])
+            kind: .metadata, rootsByAgent: rootsByAgent, unavailableStreams: [])
         sourceIngressMailboxes.append(metadataIngress)
+        #if DEBUG
+        currentMetadataIngressForTesting = metadataIngress
+        #endif
         let metadataWatcher = CodexMetadataWatcher(metadataDirectories: metadataRoots, mapping: sidecarMapping) { changes, diagnostics in
             metadataIngress.enqueue(changes, diagnostics: diagnostics)
         }

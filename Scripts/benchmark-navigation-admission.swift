@@ -26,10 +26,12 @@ private struct DeclaredSource: SessionSource {
     var agent: AgentKind { base.agent }; var roots: [SourceRoot] { base.roots }
     func discover() throws -> [DiscoveredSourceFile] { files }
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
-        records(in: file, from: offset, through: boundary, initialContext: .init(fallbackTimestampMilliseconds: 0))
+        reads.withLock { $0 += 1 }
+        return base.records(in: file, from: offset, through: boundary)
     }
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
-        records(in: file, from: offset, through: boundary)
+        reads.withLock { $0 += 1 }
+        return base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
     }
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
         reads.withLock { $0 += 1 }; return base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
@@ -43,7 +45,8 @@ private final class PreparedPayload: Sendable {
     init(_ values: [SourceIngressMailbox.Prepared]) { self.values = values }
 }
 @main struct NavigationAdmissionWorkload {
-    @MainActor static func main() async {
+    @MainActor static func main() async { exit(await run()) }
+    @MainActor static func run() async -> Int32 {
         do {
             guard CommandLine.arguments.count == 4, let count = Int(CommandLine.arguments[1]), count > 0,
                   ["outside", "mixed", "adapter", "long-outside"].contains(CommandLine.arguments[3]) else {
@@ -67,6 +70,7 @@ private final class PreparedPayload: Sendable {
             }
             var preparationElapsed = 0.0, preparationCPU = 0.0
             var absenceElapsed = 0.0, absenceCPU = 0.0, absenceQueries = 0
+            var retirementElapsed = 0.0, retirementCPU = 0.0
             if mode == "adapter" {
                 let root = directory.appendingPathComponent("sources"); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 func data(_ index: Int, _ content: String) -> Data {
@@ -92,8 +96,11 @@ private final class PreparedPayload: Sendable {
                 })
                 elapsed = seconds(start.duration(to: .now)); processCPU = cpu() - startCPU
                 readCount = reads.withLock { $0 }
-                let sessions = try await database.sessions()
-                let messages = try await database.messages(sessionID: sessions[0].id)
+                let sessions = try await database.sessions(limit: count)
+                guard let first = sessions.first else {
+                    throw NSError(domain: "NavigationAdmission.emptyCorpus", code: 1)
+                }
+                let messages = try await database.messages(sessionID: first.id)
                 correct = readCount == count && terminal.withLock { $0?.failedFiles } == 0 && messages.first?.prefix.contains("after") == true
             } else {
                 let roots = [TraceFileIO.canonicalPath("/tmp/navigation-domain/sessions")]
@@ -118,18 +125,24 @@ private final class PreparedPayload: Sendable {
                 raw = nil; setup = footprint()
                 let ledger = IndexNavigationWorkLedger()
                 var admissionCorrect = true
-                elapsed = 0; processCPU = 0
-                for (index, value) in payload!.values.enumerated() {
-                    let callCPU = cpu(), call = ContinuousClock.now
-                    let work = ledger.reserve(value.navigationInputs)
-                    let duration = seconds(call.duration(to: .now))
-                    processCPU += cpu() - callCPU; elapsed += duration
-                    latencies.append(duration)
+                var admitted: [[IndexNavigationWork]] = []
+                admitted.reserveCapacity(count); latencies.reserveCapacity(count)
+                let phaseCPU = cpu(), phaseStart = ContinuousClock.now
+                for value in payload!.values {
+                    let call = ContinuousClock.now
+                    admitted.append(ledger.reserve(value.navigationInputs))
+                    latencies.append(seconds(call.duration(to: .now)))
+                }
+                elapsed = seconds(phaseStart.duration(to: .now)); processCPU = cpu() - phaseCPU
+                // Correctness and explicit owner retirement are separate phases.
+                for (index, work) in admitted.enumerated() {
                     let expectedWork = mode == "mixed" && index.isMultiple(of: 2)
                     admissionCorrect = admissionCorrect && (!work.isEmpty == expectedWork)
-                    // Validation and deliberate owner retirement are outside timing.
-                    for item in work { item.retire() }
                 }
+                let retirementStartCPU = cpu(), retirementStart = ContinuousClock.now
+                for work in admitted { for item in work { item.retire() } }
+                retirementElapsed = seconds(retirementStart.duration(to: .now)); retirementCPU = cpu() - retirementStartCPU
+                admitted = []
                 counts = ledger.benchmarkCounts
                 correct = admissionCorrect && counts["pendingReceipts"] == 0
                 retained = ledger
@@ -160,7 +173,8 @@ private final class PreparedPayload: Sendable {
             let output: [String: Any] = ["label": CommandLine.arguments[2], "mode": mode, "count": count,
                 "elapsedSeconds": elapsed, "processCPUSeconds": processCPU,
                 "preparationElapsedSeconds": preparationElapsed, "preparationProcessCPUSeconds": preparationCPU,
-                "cpuDefinition": "process-wide CPU around each named execution phase; no setup or idle interval",
+                "cpuDefinition": "process-wide CPU around contiguous named phases; reservation includes per-call latency sampling; no validation, retirement, setup or idle",
+                "metricVersion": 2, "retirementElapsedSeconds": retirementElapsed, "retirementProcessCPUSeconds": retirementCPU,
                 "absenceQueryElapsedSeconds": absenceElapsed, "absenceQueryProcessCPUSeconds": absenceCPU, "absenceQueries": absenceQueries,
                 "reservationMedianSeconds": median, "reservationP95Seconds": p95, "fixturesReleased": preparedLifetime == nil, "prePayloadFootprintBytes": beforePayload,
                 "postSetupFootprintBytes": setup, "peakFootprintBytes": peak.withLock { $0 },
@@ -168,9 +182,9 @@ private final class PreparedPayload: Sendable {
                 "navigationState": counts, "readCount": readCount, "correct": correct]
             withExtendedLifetime(retained) {}
             print(String(decoding: try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), as: UTF8.self))
-            if !correct { exit(2) }
+            return correct ? 0 : 2
         } catch {
-            FileHandle.standardError.write(Data(("Navigation admission workload failed: \(error)\n").utf8)); exit(1)
+            FileHandle.standardError.write(Data(("Navigation admission workload failed: \(error)\n").utf8)); return 1
         }
     }
 }
