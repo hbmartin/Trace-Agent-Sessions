@@ -66,6 +66,7 @@ private final class PreparedPayload: Sendable {
                 }
             }
             var preparationElapsed = 0.0, preparationCPU = 0.0
+            var absenceElapsed = 0.0, absenceCPU = 0.0, absenceQueries = 0
             if mode == "adapter" {
                 let root = directory.appendingPathComponent("sources"); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 func data(_ index: Int, _ content: String) -> Data {
@@ -127,6 +128,16 @@ private final class PreparedPayload: Sendable {
                 counts = ledger.benchmarkCounts; correct = counts["pendingReceipts"] == 0
                 retained = ledger
                 payload = nil
+                let queryDatabase = try IndexDatabase(url: directory.appendingPathComponent("query.sqlite"))
+                let coverage = IndexNavigationCoverage.benchmarkFixture(generation: queryDatabase.contentGeneration,
+                    names: ["selected.jsonl"], covered: true)
+                guard let reference = coverage.benchmarkReferences("selected.jsonl").first else { throw CancellationError() }
+                let queryCPU = cpu(), queryStart = ContinuousClock.now
+                var allowed = 0
+                for _ in 0..<100 { if ledger.permitsAbsence(reference, coverage: coverage) { allowed += 1 } }
+                absenceElapsed = seconds(queryStart.duration(to: .now)); absenceCPU = cpu() - queryCPU
+                absenceQueries = allowed
+                guard allowed == 100 else { throw NSError(domain: "NavigationAdmission.absenceCorrectness", code: 1) }
 
             }
             guard preparedLifetime == nil else { throw NSError(domain: "NavigationAdmission.fixtureLifetime", code: 1) }
@@ -144,6 +155,7 @@ private final class PreparedPayload: Sendable {
                 "elapsedSeconds": elapsed, "processCPUSeconds": processCPU,
                 "preparationElapsedSeconds": preparationElapsed, "preparationProcessCPUSeconds": preparationCPU,
                 "cpuDefinition": "process-wide CPU around each named execution phase; no setup or idle interval",
+                "absenceQueryElapsedSeconds": absenceElapsed, "absenceQueryProcessCPUSeconds": absenceCPU, "absenceQueries": absenceQueries,
                 "reservationMedianSeconds": median, "reservationP95Seconds": p95, "fixturesReleased": preparedLifetime == nil, "prePayloadFootprintBytes": beforePayload,
                 "postSetupFootprintBytes": setup, "peakFootprintBytes": peak.withLock { $0 },
                 "retainedFootprintBytes": idle, "retainedGrowthBytes": Int64(idle) - Int64(beforePayload),
