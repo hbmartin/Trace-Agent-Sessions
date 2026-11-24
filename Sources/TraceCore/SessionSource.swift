@@ -139,7 +139,7 @@ func verifiedDiscoveryResult(
         // original requested scopes may contribute rows or coverage.
         guard scopes.contains(where: { contains($0.scanPath, file.canonicalPath) }) else { continue }
         guard file.agent == agent, acceptsRoot(file.root, file: file.canonicalPath) else {
-            for scope in scopes where scope.scanPath.contains(file.canonicalPath) {
+            for scope in scopes where contains(scope.scanPath, file.canonicalPath) {
                 qualifiedFailures.append(.init(failure: .init(agent: agent, root: root.url,
                     path: file.url.path, message: "The adapter returned an incompatible source identity"), scope: scope))
             }

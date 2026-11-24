@@ -102,6 +102,20 @@ final class IndexingRegressionTests: XCTestCase {
         }
     }
 
+    func testIncompatibleDiscoveryUsesCapturedScopePolicyForFailures() {
+        let path = TraceFileIO.CanonicalPath(path: "/ROOT", comparisonKey: "/root", isCaseSensitive: false)
+        let context = SourceRootPathContext(scanPath: path, configuredComponents: ["/", "ROOT"])
+        let scope = SourceRootScope(scanPath: path, relativeScope: .init(components: [], caseSensitive: false))
+        let file = DiscoveredSourceFile(agent: .claudeCode, root: URL(fileURLWithPath: "/other"),
+            canonicalPath: .init(path: "/ROOT/UPPER.jsonl", comparisonKey: "/ROOT/UPPER.jsonl", isCaseSensitive: true),
+            format: .claudeJSONL)
+        let result = verifiedDiscoveryResult(.init(files: [file], failures: []), agent: .claudeCode,
+            root: .init(agent: .claudeCode, url: URL(fileURLWithPath: "/ROOT")),
+            capturedContext: context, currentContext: context, scopes: [scope])
+        XCTAssertTrue(result.files.isEmpty)
+        XCTAssertEqual(result.failures.count, 1, "A different child-volume policy cannot turn rejection into successful coverage")
+    }
+
     func testDirectDiscoveryHonorsHiddenAndPackageAncestors() throws {
         let root = try directory()
         for name in [".hidden", "Fixture.app"] {
