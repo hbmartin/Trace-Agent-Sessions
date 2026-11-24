@@ -141,11 +141,6 @@ public actor IndexCoordinator {
         let failures: [NormalizedDiscoveryFailure]
     }
 
-    private struct MissingSourceFile: Hashable {
-        let agent: AgentKind
-        let path: String
-    }
-
     private let database: IndexDatabase
     private let failures = IndexFailureEpisodes()
     #if DEBUG
@@ -691,9 +686,7 @@ public actor IndexCoordinator {
             for directory in invalidatedMetadataDirectories {
                 codexNameCache.removeValue(forKey: directory)
             }
-            var missingSources: Set<MissingSourceFile> = []
             var discoveryAttempts: [RootDiscoveryAttempt] = []
-            var unclaimedInputs: [String: Set<RootRelativeScope>] = [:]
             var acceptedRootsByFile: [SourceFileKey: Set<String>] = [:]
 
             func absorbDiscoveryResult(
@@ -760,13 +753,14 @@ public actor IndexCoordinator {
                     }
                 }
             } else {
-                if !reconciliationPaths.isEmpty {
+                let discoveryPaths = reconciliationPaths.union(paths ?? [])
+                if !discoveryPaths.isEmpty {
                     for source in sources {
                         for root in source.roots {
                             try Task.checkCancellation()
                             guard let context = mappingContexts[root.id] else { continue }
                             let scopes = Self.minimalRootScopes(
-                                reconciliationPaths.compactMap {
+                                discoveryPaths.compactMap {
                                     root.reconciliationScope(forRawPath: $0, in: context)
                                 }
                             )
@@ -796,33 +790,8 @@ public actor IndexCoordinator {
                         }
                     }
                 }
-                for path in (paths ?? []).subtracting(directoryInputs).sorted() {
-                    try Task.checkCancellation()
-                    let url = URL(fileURLWithPath: pathsAreCanonical ? path : TraceFileIO.canonicalPath(path).path)
-                    let accepted = classifications(url: url, mappingContexts: mappingContexts, includeAllRoots: true)
-                    let matches = preferredClassifications(accepted)
-                    for (_, file, root) in accepted {
-                        acceptedRootsByFile[.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey), default: []].insert(root.id)
-                    }
-                    let regularFile = (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
-                    // Negative classification is source-owned evidence too. A
-                    // provider/root which definitively does not claim this input
-                    // must not retain debt until an unrelated full discovery.
-                    for root in rootsByID.values {
-                        guard let context = mappingContexts[root.id],
-                              let relative = root.relativeScope(forStoredPath: url.path, in: context),
-                              regularFile, !accepted.contains(where: { $0.2.id == root.id }) else { continue }
-                        unclaimedInputs[root.id, default: []].insert(relative)
-                    }
-                    if !FileManager.default.fileExists(atPath: url.path) {
-                        missingSources.formUnion(matches.map {
-                            MissingSourceFile(agent: $0.1.agent, path: url.path)
-                        })
-                    } else {
-                        allFiles += matches.map(\.1)
-                    }
-                }
             }
+
             var discoveryErrorReplacements: [DiscoveryErrorReplacement] = []
             var attemptsByRootID: [Int64: RootDiscoveryAttempt] = [:]
             var absentOptionalRoots: Set<String> = []
@@ -1004,25 +973,7 @@ public actor IndexCoordinator {
                 await progress(status)
             }
             try Task.checkCancellation()
-            if !missingSources.isEmpty {
-                status.phase = .reconciling
-                await progress(status)
-                for missing in missingSources.sorted(by: {
-                    ($0.agent.rawValue, $0.path) < ($1.agent.rawValue, $1.path)
-                }) {
-                    try Task.checkCancellation()
-                    if let state = try await database.sourceState(
-                        agent: missing.agent, path: missing.path
-                    ) {
-                        try await database.deleteSource(id: state.id)
-                        await mutations.markChanged()
-                    }
-                }
-                updateFailureCounts(&status, try? await database.unresolvedSourceFailureCounts())
-                status.mutationRevision = await mutations.version()
-                await progress(status)
-            }
-            if fullScan || !reconciliationPaths.isEmpty {
+            if !discoveryAttempts.isEmpty {
                 status.phase = .reconciling
                 await progress(status)
                 for source in sources {
@@ -1134,7 +1085,6 @@ public actor IndexCoordinator {
             let regions = rootsByID.values.compactMap { root -> IndexNavigationCoverage.Region? in
                 guard let context = mappingContexts[root.id] else { return nil }
                 var facts: [RootRelativeScope: IndexNavigationCoverage.Fact] = [:]
-                for relative in unclaimedInputs[root.id] ?? [] { facts[relative] = .init(order: 0, covered: true) }
                 for attempt in discoveryAttempts where attempt.root.id == root.id {
                     for scope in attempt.scannedScopes { facts[scope] = .init(order: 0, covered: true) }
                     if !absentOptionalRoots.contains(root.id) {
@@ -1148,11 +1098,6 @@ public actor IndexCoordinator {
                           let relative = root.relativeScope(forStoredPath: file.url.path, in: context) else { continue }
                     let failed = failedSourceFiles.contains(key) || incompleteFiles.contains(key)
                     facts[relative] = .init(order: 0, covered: !failed)
-                }
-                for missing in missingSources where missing.agent == root.agent {
-                    if let relative = root.relativeScope(forStoredPath: missing.path, in: context) {
-                        facts[relative] = .init(order: 0, covered: true)
-                    }
                 }
                 // Empty regions retain configured-source membership. Another
                 // provider scanning this directory cannot pay their obligations.

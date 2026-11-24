@@ -1,0 +1,9 @@
+{
+  "candidate": "11c5d0a6860f14d71b22c6f3b8c8eba9339b8fac",
+  "catalogCount": 1041,
+  "selectedCount": 33,
+  "missing": [],
+  "catalogSHA256": "357044ad60ff62e66e68528be26272387a1e8024949eaf708426448a8dc4a23e",
+  "selectionSHA256": "b6a04a88d8fdbdca5316d1d0d2bb15fb24139cad1c7f8df615fc26ee15c3a809",
+  "uiExecution": false
+}

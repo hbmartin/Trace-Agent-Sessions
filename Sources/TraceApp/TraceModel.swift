@@ -61,25 +61,37 @@ final class SourceIngressMailbox: Sendable {
         private var canonicalPaths: Set<TraceFileIO.CanonicalPath>
         private var canonicalReconciliation: Set<TraceFileIO.CanonicalPath>
         private var canonicalRoots: [String: Set<TraceFileIO.CanonicalPath>]
+        private var navigationPaths: Set<TraceFileIO.CanonicalPath>
+        private var navigationReconciliation: Set<TraceFileIO.CanonicalPath>
         init(changes: SourceChanges, recoveryEligible: Bool,
              canonicalPaths: Set<TraceFileIO.CanonicalPath>? = nil,
              canonicalReconciliation: Set<TraceFileIO.CanonicalPath>? = nil,
-             canonicalRoots: [String: Set<TraceFileIO.CanonicalPath>]? = nil) {
+             canonicalRoots: [String: Set<TraceFileIO.CanonicalPath>]? = nil,
+             navigationRoots: [TraceFileIO.CanonicalPath]? = nil) {
             self.changes = changes; self.recoveryEligible = recoveryEligible
             let needsInputs = changes.hasIndexWork || (!changes.watermarks.isEmpty && changes.checkpointReservations.isEmpty)
             self.canonicalPaths = needsInputs ? (canonicalPaths ?? Set(changes.paths.map(TraceFileIO.canonicalPath))) : []
             self.canonicalReconciliation = needsInputs ? (canonicalReconciliation ?? Set(changes.reconciliationPaths.map(TraceFileIO.canonicalPath))) : []
             self.canonicalRoots = needsInputs ? (canonicalRoots ?? changes.streamRoots.mapValues { Set($0.map(TraceFileIO.canonicalPath)) }) : [:]
+            let paths = self.canonicalPaths, reconciliation = self.canonicalReconciliation
+            navigationPaths = navigationRoots.map { roots in paths.filter { path in roots.contains { $0.contains(path) } } } ?? paths
+            navigationReconciliation = navigationRoots.map { roots in
+                Set(reconciliation.flatMap { path in roots.compactMap { root in
+                    root.intersects(path) ? (path.contains(root) ? root : path) : nil
+                } })
+            } ?? reconciliation
         }
         mutating func merge(_ other: Self) {
             changes.merge(other.changes)
             recoveryEligible = recoveryEligible || other.recoveryEligible
+            navigationPaths.formUnion(other.navigationPaths)
+            navigationReconciliation.formUnion(other.navigationReconciliation)
             canonicalPaths.formUnion(other.canonicalPaths)
             canonicalReconciliation.formUnion(other.canonicalReconciliation)
             for (stream, roots) in other.canonicalRoots { canonicalRoots[stream, default: []].formUnion(roots) }
         }
         var navigationInputs: IndexNavigationInputs {
-            .init(canonicalPaths: canonicalPaths, canonicalReconciliationPaths: canonicalReconciliation)
+            .init(canonicalPaths: navigationPaths, canonicalReconciliationPaths: navigationReconciliation)
         }
         var checkpointInputs: IndexCheckpointInputs? {
             guard !changes.watermarks.isEmpty, changes.checkpointReservations.isEmpty else { return nil }
@@ -174,12 +186,12 @@ final class SourceIngressMailbox: Sendable {
         return .init(changes: relevant, recoveryEligible: eligible || !reconciliation.isEmpty,
             canonicalPaths: paths, canonicalReconciliation: reconciliation, canonicalRoots: canonicalRoots)
     }
-    static func normalizeMetadata(_ changes: SourceChanges) -> Prepared {
+    static func normalizeMetadata(_ changes: SourceChanges, navigationRoots: [TraceFileIO.CanonicalPath] = []) -> Prepared {
         // CodexMetadataWatcher has already mapped lexical/structural topology to
         // configured indexing paths before this app-only handoff.
         var relevant = changes
         discardConsumedTopology(&relevant)
-        return .init(changes: relevant, recoveryEligible: relevant.hasIndexWork)
+        return .init(changes: relevant, recoveryEligible: relevant.hasIndexWork, navigationRoots: navigationRoots)
     }
     private static func discardConsumedTopology(_ changes: inout SourceChanges) {
         changes.lexicalPaths = []; changes.structuralPaths = []
@@ -1567,8 +1579,9 @@ final class TraceModel: ObservableObject {
         let filtered = SourceIngressMailbox.checkpointable(changes, excluding: unavailableCheckpointStreams)
         guard filtered.navigationWork.isEmpty || (!filtered.watermarks.isEmpty && filtered.checkpointReservations.isEmpty) else { return filtered }
         guard let owner = database, !terminating else { return nil }
+        let navigationRoots: [TraceFileIO.CanonicalPath]? = watcherRootsByAgent.isEmpty ? nil : Array(watcherRootsByAgent.values.joined())
         let (canonical, navigationInputs) = await Task.detached {
-            let prepared = SourceIngressMailbox.Prepared(changes: filtered, recoveryEligible: false)
+            let prepared = SourceIngressMailbox.Prepared(changes: filtered, recoveryEligible: false, navigationRoots: navigationRoots)
             return (prepared, prepared.navigationInputs)
         }.value
         var prepared = canonical
@@ -3254,7 +3267,7 @@ final class TraceModel: ObservableObject {
     var rebuildRecoveryPathsForTesting: Set<String> { rebuildRequest?.recoveryInputs.changes.paths ?? [] }
     func closedSourceIngressObservationForTesting(database: IndexDatabase) -> @Sendable () async -> (queued: Int, pending: Bool, paths: Int, delivering: Bool) {
         let mailbox = makeSourceIngress(database: database, generation: watcherGeneration,
-            kind: .metadata, rootsByAgent: [:], unavailableStreams: [])
+            kind: .metadata, rootsByAgent: watcherRootsByAgent, unavailableStreams: [])
         let observe = mailbox.observationForTesting(); mailbox.close(); return observe
     }
     var sourceIngressAfterTransferGateForTesting: Task<Void, Never>?
@@ -7285,7 +7298,7 @@ final class TraceModel: ObservableObject {
         switch kind { case .transcript: transcript = true; case .metadata: transcript = false }
         return SourceIngressMailbox(prepare: { changes in
             transcript ? SourceIngressMailbox.normalizeTranscript(changes, rootsByAgent: rootsByAgent, unavailableStreams: unavailableStreams)
-                : SourceIngressMailbox.normalizeMetadata(changes)
+                : SourceIngressMailbox.normalizeMetadata(changes, navigationRoots: Array(rootsByAgent.values.joined()))
         }, receivePrepared: { [weak self, weak database] delivery in
             guard let self, let database else { return .retired }
             let outcome = await self.receiveSourceIngress(delivery, database: database, generation: generation, kind: kind, testingInjection: testingInjection)

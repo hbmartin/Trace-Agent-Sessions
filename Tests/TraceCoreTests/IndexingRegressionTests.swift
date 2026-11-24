@@ -8,6 +8,53 @@ import XCTest
 
 final class IndexingRegressionTests: XCTestCase {
 
+    func testIncrementalAdapterDeclarationOwnsReadAndFailure() async throws {
+        let root = try directory(), file = root.appendingPathComponent("declared.trace")
+        try Data(line(1).utf8).write(to: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let source = DeclaredFormatSource(base: ClaudeCodeSource(roots: [root]), file: file, fails: false)
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        try Data(line(2).utf8).write(to: file, options: .atomic)
+        let terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
+        let failing = IndexCoordinator(database: database, sources: [DeclaredFormatSource(base: source.base, file: file, fails: true)])
+        let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path,
+            path: file.path, externalSessionID: "one", anchorSourceKey: nil, anchorExternalID: nil)
+        for fail in [true, false] {
+            await (fail ? failing : coordinator).refresh(paths: [file.path], scope: .proseOnly, progress: { update in
+                if update.phase == .complete { terminal.withLock { $0 = update } }
+            })
+            let result = try XCTUnwrap(terminal.withLock { $0 }), coverage = try XCTUnwrap(result.navigationCoverage)
+            XCTAssertEqual(result.totalFiles, 1)
+            XCTAssertEqual(result.failedFiles, fail ? 1 : 0)
+            XCTAssertEqual(coverage.covers(reference), !fail)
+        }
+        let sessions = try await database.sessions()
+        let session = try XCTUnwrap(sessions.first)
+        let messages = try await database.messages(sessionID: session.id)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertTrue(try XCTUnwrap(messages.first).prefix.contains("searchable message 2"), "Incremental adapter recovery must replace the actual indexed rows")
+    }
+
+    func testDeletedNonSessionScopePaysWithoutFullScan() async throws {
+        let root = try directory(), file = root.appendingPathComponent("tool-output.tmp")
+        try Data("temporary".utf8).write(to: file); try FileManager.default.removeItem(at: file)
+        let database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: [root])])
+        let ledger = IndexNavigationWorkLedger()
+        let work = ledger.reserve(canonicalPaths: [TraceFileIO.canonicalPath(file.path)], canonicalReconciliationPaths: [])
+        let execution = IndexNavigationWork.begin(work), terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
+        await coordinator.refresh(paths: [file.path], scope: .proseOnly, progress: { update in
+            if update.phase == .complete { terminal.withLock { $0 = update } }
+        })
+        let result = try XCTUnwrap(terminal.withLock { $0 }), coverage = try XCTUnwrap(result.navigationCoverage)
+        XCTAssertFalse(coverage.performedFullScan)
+        IndexNavigationWork.observe(coverage, executions: execution); IndexNavigationWork.finish(execution)
+        #if DEBUG
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+        #endif
+    }
+
     func testCoverageUsesAdapterDiscoveryForNonstandardFilename() async throws {
         let root = try directory(), file = root.appendingPathComponent("declared.trace")
         try Data(line(1).utf8).write(to: file)

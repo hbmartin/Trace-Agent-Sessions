@@ -1,0 +1,18 @@
+{
+  "uniqueCases": 12,
+  "executions": 60,
+  "counts": {
+    "AppReviewFollowupTests/testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead": 5,
+    "AppReviewFollowupTests/testDeferredResetAllowsRecreatedSourceRestorationAndRetry": 5,
+    "AppReviewFollowupTests/testMetadataOutsideTranscriptRootsDoesNotAccumulateNavigationWork": 5,
+    "AppReviewFollowupTests/testObsoleteNativeSearchRetiresBeforePassivePriorityArbitration": 5,
+    "AppReviewFollowupTests/testRecreatedSourceRefreshCannotReplaceCapturedUnsentRecoveryNavigation": 5,
+    "IndexingRegressionTests/testAcceptingAliasesShareFailureAndRecovery": 5,
+    "IndexingRegressionTests/testDeletedNonSessionScopePaysWithoutFullScan": 5,
+    "IndexingRegressionTests/testDirectoryInputDiscoversDescendantsInsteadOfPayingUnscannedWork": 5,
+    "IndexingRegressionTests/testIncrementalAdapterDeclarationOwnsReadAndFailure": 5,
+    "IndexingRegressionTests/testNavigationObservationDoesNotBlockOrConsumeNewAdmission": 5,
+    "IndexingRegressionTests/testNavigationRemovedSourceDebtRetiresAndOlderRosterCannotReturn": 5,
+    "IndexingRegressionTests/testOlderRosterPreservesNewerAndUnmatchedGenericAdmissions": 5
+  }
+}

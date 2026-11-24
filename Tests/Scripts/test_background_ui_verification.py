@@ -19,6 +19,22 @@ spec.loader.exec_module(module)
 
 
 class BackgroundUIVerificationTests(unittest.TestCase):
+    def products(self, derived):
+        products = derived / "Build/Products"
+        for name in ("Trace.app", "TraceUITests-Runner.app"):
+            path = products / "Debug" / name / "Contents/MacOS/executable"
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b"fixture executable")
+        (products/"Debug/TraceUITests-Runner.app/Contents/PlugIns/TraceUITests.xctest").mkdir(parents=True, exist_ok=True)
+        manifest = products / "Trace_macosxfixture-arm64.xctestrun"
+        manifest.write_bytes(plistlib.dumps({"TraceUITests": {"IsUITestBundle": True,
+            "TestHostPath": "__TESTROOT__/Debug/TraceUITests-Runner.app", "UITargetAppPath": "__TESTROOT__/Debug/Trace.app", "TestBundlePath": "__TESTHOST__/Contents/PlugIns/TraceUITests.xctest"},
+            "TraceCoreTests": {}, "TraceAppTests": {}}))
+        return manifest
+
+    def context(self):
+        return {"configuration": "Debug", "architecture": "arm64", "sdk": "fixture", "toolchain": "fixture",
+                "developerDirectory": os.environ.get("DEVELOPER_DIR", "default")}
+
     def test_malformed_summaries_and_discovery_fail_with_schema_errors(self):
         for summary in [[], None, "text", {"passedTests": "one"}, {"passedTests": True},
                         {"passedTests": 1, "failedTests": -1}]:
@@ -35,6 +51,8 @@ class BackgroundUIVerificationTests(unittest.TestCase):
             if commands is not None: commands.append((label, args))
             if label in ("toolchain", "macOS"):
                 (runner.output / (label + ".log")).write_text("fixture")
+            elif label == "build":
+                self.products(Path(runner.receipt["derivedData"]))
             elif label == "discovery":
                 Path(args[-1]).write_text(json.dumps({"values": [{"kind": "target", "name": "TraceUITests", "children": [
                     {"kind": "class", "name": "TraceUITests", "children": [
@@ -48,6 +66,7 @@ class BackgroundUIVerificationTests(unittest.TestCase):
                 Path(args[args.index("-resultBundlePath") + 1]).mkdir()
             return 0
         values = inputs or [{"revision": "fixture"}] * 2
+        if derived is None: values = [values[0], values[0], values[-1]]
         with patch.object(sys, "argv", ["runner", "--selection", selection, "--output", str(output),
                                        "--test-timeout", str(timeout)] + (["--derived-data", str(derived)] if derived is not None else [])), \
              patch.dict(os.environ, {"CI": "false", "GITHUB_ACTIONS": "false"}), \
@@ -226,9 +245,9 @@ except m.RunInterrupted as e:
             try:
                 os.chdir(temp)
                 derived = Path("prepared"); products = derived / "Build/Products"; products.mkdir(parents=True)
-                manifest = products / "Trace_macosxfixture-arm64.xctestrun"
-                payload = plistlib.dumps({"TraceUITests": {"IsUITestBundle": True}, "TraceCoreTests": {}, "TraceAppTests": {}})
-                manifest.write_bytes(payload)
+                manifest = self.products(derived)
+                payload = manifest.read_bytes()
+                module.record_preparation(derived, {"revision": "fixture"}, self.context())
                 commands = []
                 self.assertEqual(self.invoke(Path("attempt"), derived=derived, commands=commands), 0)
                 receipt = json.loads(Path("attempt/verification.json").read_text())
@@ -246,6 +265,99 @@ except m.RunInterrupted as e:
             self.assertEqual(self.invoke(Path(temp)/"attempt", derived=Path(temp)/"missing", commands=commands), 1)
             self.assertNotIn("build", [label for label, _ in commands])
             self.assertFalse(any(label.startswith("ui-") for label, _ in commands))
+
+    def test_prepared_provenance_rejects_stale_binary_context_and_native_inputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            derived = Path(temp)/"derived"; manifest = self.products(derived)
+            inputs = {"revision": "A", "files": {"Sources/main.swift": {"sha256": "A"}, "docs/README.md": {"sha256": "A"}}}
+            with self.assertRaisesRegex(ValueError, "provenance is missing"):
+                module.verify_preparation(derived, inputs, self.context())
+            module.record_preparation(derived, inputs, self.context())
+            equivalent = {"revision": "B", "files": {**inputs["files"], "docs/README.md": {"sha256": "B"}}}
+            self.assertEqual(module.verify_preparation(derived, equivalent, self.context())["revision"], "A")
+            with self.assertRaisesRegex(ValueError, "native inputs"):
+                module.verify_preparation(derived, {"revision": "B", "files": {"Sources/main.swift": {"sha256": "B"}}}, self.context())
+            with self.assertRaisesRegex(ValueError, "configuration"):
+                module.verify_preparation(derived, inputs, {**self.context(), "configuration": "Release"})
+            executable = derived/"Build/Products/Debug/Trace.app/Contents/MacOS/executable"
+            executable.write_bytes(b"rebuilt behind unchanged manifest")
+            with self.assertRaisesRegex(ValueError, "hashes changed"):
+                module.verify_preparation(derived, inputs, self.context())
+            value = plistlib.loads(manifest.read_bytes());value["TraceUITests"]["TestHostPath"] = "__TESTROOT__/Release/TraceUITests-Runner.app"
+            manifest.write_bytes(plistlib.dumps(value))
+            with self.assertRaisesRegex(ValueError, "Debug configuration"):
+                module.prepared_manifest(derived, "fixture")
+
+    def test_final_inventory_exception_still_saves_and_restores_process_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            derived=Path(temp)/"derived";self.products(derived)
+            module.record_preparation(derived,{"revision":"fixture"},self.context())
+            original=module.product_hashes;calls=0
+            def broken(path):
+                nonlocal calls
+                calls += 1
+                if calls == 6: raise PermissionError("final inventory denied")
+                return original(path)
+            cwd=Path.cwd();handlers={s:signal.getsignal(s) for s in (signal.SIGINT,signal.SIGTERM)}
+            with patch.object(module,"product_hashes",side_effect=broken):
+                self.assertEqual(self.invoke(Path(temp)/"attempt",derived=derived),1)
+            receipt=json.loads((Path(temp)/"attempt/verification.json").read_text())
+            self.assertEqual(receipt["status"],"failed");self.assertIn("denied",str(receipt["finalizationErrors"]))
+            self.assertEqual(Path.cwd(),cwd)
+            self.assertTrue(all(signal.getsignal(s)==h for s,h in handlers.items()))
+
+    def test_final_receipt_write_failure_or_signal_preserves_failure_and_restores(self):
+        import io
+        from contextlib import redirect_stderr
+        for event in ("write", "signal"):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as temp:
+                save = module.Runner.save; injected = False
+                def interrupted_save(runner):
+                    nonlocal injected
+                    if runner.receipt["status"] == "passed" and not injected:
+                        injected = True
+                        if event == "write": raise PermissionError("receipt replace denied")
+                        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                    return save(runner)
+                cwd=Path.cwd();handlers={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM)}
+                with patch.object(module.Runner,"save",interrupted_save),redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.invoke(Path(temp)/"attempt"),1 if event == "write" else 143)
+                receipt=json.loads((Path(temp)/"attempt/verification.json").read_text())
+                self.assertEqual(receipt["status"],"failed" if event == "write" else "interrupted")
+                self.assertEqual(Path.cwd(),cwd)
+                self.assertTrue(all(signal.getsignal(sig)==handler for sig,handler in handlers.items()))
+
+    def test_permission_error_in_cleanup_is_batch_fatal(self):
+        from unittest.mock import Mock
+        child=Mock(pid=123,returncode=None)
+        with patch.object(module.os,"killpg",side_effect=PermissionError("denied")):
+            with self.assertRaisesRegex(module.CleanupFailed,"123"): module.cleanup_child(child)
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertEqual(self.invoke(Path(temp)/"attempt",[module.CleanupFailed("denied")]),1)
+            receipt=json.loads((Path(temp)/"attempt/verification.json").read_text())
+            self.assertEqual(len(receipt["tests"]),1)
+
+    def test_interruption_wins_when_cleanup_also_fails(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            runner=module.Runner(Path(temp)/"command",{})
+            child=Mock(pid=123,returncode=None);child.wait.side_effect=subprocess.TimeoutExpired("held",1)
+            def cleanup(child):
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+                raise module.CleanupFailed("unconfirmed group")
+            with patch.object(module.subprocess,"Popen",return_value=child),patch.object(module,"cleanup_child",side_effect=cleanup):
+                with self.assertRaises(module.RunInterrupted) as interrupted: runner.command("held",["fixture"],1)
+            self.assertEqual(interrupted.exception.signum,signal.SIGTERM)
+            self.assertEqual(runner.receipt["phases"][0]["processGroupID"],123)
+            self.assertIn("unconfirmed",runner.receipt["phases"][0]["cleanupError"])
+            self.assertEqual(self.invoke(Path(temp)/"batch",[interrupted.exception]),143)
+
+    def test_stderr_failure_path_is_recorded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner=module.Runner(Path(temp)/"attempt",{})
+            self.assertEqual(runner.command("error",[sys.executable,"-c","import sys; print('detail',file=sys.stderr);sys.exit(7)"],5),7)
+            phase=runner.receipt["phases"][0]
+            self.assertIn("detail",(runner.output/phase["stderrLog"]).read_text())
 
     def test_export_stderr_warning_does_not_corrupt_json(self):
         with tempfile.TemporaryDirectory() as temp:

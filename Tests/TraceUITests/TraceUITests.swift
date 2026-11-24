@@ -5106,6 +5106,57 @@ final class TraceUITests: XCTestCase {
         attach(app, name: "search-target-survives-automatic-reset")
     }
 
+    func testRetiredSearchCannotReturnDuringHeightChanges() throws {
+        try assertRetiredSearchGeometry(correction: false)
+    }
+
+    func testRetiredSearchCannotReturnDuringAnchorCorrection() throws {
+        try assertRetiredSearchGeometry(correction: true)
+    }
+
+    private func assertRetiredSearchGeometry(correction: Bool) throws {
+        let (app, directory) = try makeApp(extra: ["--ui-show-main"])
+        let name = "Retired geometry reader", project = "RetiredGeometryProject"
+        try addLongSession(name, project: project, directory: directory, count: 50)
+        let started = directory.appendingPathComponent("search-started"), release = directory.appendingPathComponent("search-release")
+        let receipts = directory.appendingPathComponent("retired-geometry")
+        app.launchEnvironment["TRACE_TEST_SEED_ONBOARDING_COMPLETE"] = "1"
+        app.launchEnvironment["TRACE_TEST_SIDEBAR_RECOVERY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_SEARCH_COVERAGE_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_RETIRED_GEOMETRY_CONTROL"] = "1"
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_STARTED_PATH"] = started.path
+        app.launchEnvironment["TRACE_TEST_TRANSCRIPT_SEARCH_RESTORE_RELEASE_PATH"] = release.path
+        app.launchEnvironment["TRACE_TEST_RETIRED_GEOMETRY_RECEIPTS_PATH"] = receipts.path
+        app.launch()
+        XCTAssertTrue(app.staticTexts[project].firstMatch.waitForExistence(timeout: 20)); app.staticTexts[project].firstMatch.click()
+        let query = app.textFields["mainSearch"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10)); query.click(); query.typeText(name + " message 35")
+        let result = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", name + " message 35")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); result.click()
+        XCTAssertTrue(waitForFile(started, timeout: 10))
+        let scroll = app.scrollViews["transcriptScroll"]
+        XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).waitForExistence(timeout: 10))
+        app.buttons[correction ? "testRetireSearchDuringCorrection" : "testRetireSearchDuringHeights"].click()
+        XCTAssertTrue(waitForFile(receipts, timeout: 5))
+        let line = try XCTUnwrap(fileLines(in: receipts).last)
+        let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        let database = directory.appendingPathComponent("index.sqlite")
+        XCTAssertEqual((receipt["generation"] as? [String: String])?["value"], try sqliteText(database, sql: "SELECT value FROM trace_meta WHERE key='content_generation';"))
+        XCTAssertEqual((receipt["session"] as? NSNumber)?.int64Value, try sqliteInteger(database, sql: "SELECT id FROM session WHERE external_id='Retired geometry reader';"))
+        XCTAssertNotNil(receipt["invocation"] as? String)
+        XCTAssertEqual(receipt["pendingSearch"] as? Bool, false)
+        XCTAssertEqual(receipt["acceptedIndex"] as? Int, 0)
+        let before = try XCTUnwrap(receipt["beforeOrigin"] as? Double), after = try XCTUnwrap(receipt["afterOrigin"] as? Double)
+        XCTAssertEqual(after, before, accuracy: 1)
+        try Data().write(to: release)
+        for _ in 0..<5 {
+            XCTAssertTrue(transcriptMessage(name, index: 0, in: scroll).isHittable)
+            XCTAssertFalse(transcriptMessage(name, index: 35, in: scroll).isHittable)
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
     func testVisibilityRefreshCannotReapplyRetiredSearchTarget() throws {
         let (app, directory) = try makeApp(extra: ["--ui-show-main"])
         installNativeAnchorProbe(app: app, directory: directory)

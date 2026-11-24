@@ -7,6 +7,7 @@ private extension Notification.Name {
     static let traceTestTranscriptScroll = Notification.Name("traceTestTranscriptScroll")
     static let traceTestTranscriptJumpBottom = Notification.Name("traceTestTranscriptJumpBottom")
     static let traceTestTranscriptProbe = Notification.Name("traceTestTranscriptProbe")
+    static let traceTestRetiredGeometry = Notification.Name("traceTestRetiredGeometry")
 }
 
 struct MainView: View {
@@ -298,6 +299,16 @@ private struct SessionSidebar: View {
                                             .accessibilityIdentifier("testReaderRetryDuringIndexing")
                                     }
                                 }.font(.caption)
+                                if TraceTestHooks.environment["TRACE_TEST_RETIRED_GEOMETRY_CONTROL"] == "1" {
+                                    HStack {
+                                        Button("Retire/height") {
+                                            NotificationCenter.default.post(name: .traceTestRetiredGeometry, object: false)
+                                        }.accessibilityIdentifier("testRetireSearchDuringHeights")
+                                        Button("Retire/anchor") {
+                                            NotificationCenter.default.post(name: .traceTestRetiredGeometry, object: true)
+                                        }.accessibilityIdentifier("testRetireSearchDuringCorrection")
+                                    }.font(.caption)
+                                }
                             }
                             HStack {
                                 Button("Fail") { model.cancelLaunchRestorationForUserIntent(); model.failSidebarSummaryForUITesting() }
@@ -1139,6 +1150,10 @@ struct TranscriptRenderer: NSViewRepresentable {
                 ) { [weak self] _ in
                     MainActor.assumeIsolated { self?.jumpToBottomForUITest() }
                 },
+                NotificationCenter.default.addObserver(forName: .traceTestRetiredGeometry, object: nil, queue: .main) { [weak self] event in
+                    let correction = event.object as? Bool ?? false
+                    MainActor.assumeIsolated { self?.exerciseRetiredGeometryForUITest(correction: correction) }
+                },
                 NotificationCenter.default.addObserver(
                     forName: .traceTestTranscriptProbe,
                     object: nil, queue: .main
@@ -1391,14 +1406,33 @@ struct TranscriptRenderer: NSViewRepresentable {
         #if DEBUG
         /// Narrow invariant fixture; exercise the actual priority/refresh path.
         func captureSearchForTesting(model: TraceModel, sessionID: Int64, bookmark: TranscriptBookmark) {
+            // Explicit search replaces both pending and deferred navigation.
+            cancelPendingRestore(reportCancellation: false)
             self.model = model; self.sessionID = sessionID
             var captured = RestoreRequest(bookmark: bookmark, reason: .search(messageID: bookmark.messageID), refreshesRowHeights: false)
             captured.sessionID = sessionID; captured.inputGeneration = userInputGeneration
             captured.bookmarkOwner = model.transcriptRestoreOwner(sessionID: sessionID)
             pendingRestore = captured
         }
+        /// Arrange only the native asynchronous state; run the real geometry entry points.
+        func exerciseRetiredGeometryForTesting(bookmark: TranscriptBookmark, correction: Bool) {
+            establishedBookmark = bookmark
+            followsBottom = false; positionEstablished = true
+            pendingAnchorCorrection = true
+            if correction {
+                pendingRestore?.revealedTargetRow = true
+                correctEstablishedAnchor()
+            } else {
+                pendingHeightMessageIDs.insert(bookmark.messageID)
+                flushHeightChanges()
+            }
+        }
+        var acceptedGeometryBookmarkForTesting: TranscriptBookmark? { capturePosition().bookmark }
+
         var hasPendingSearchForTesting: Bool {
-            if case .search = pendingRestore?.reason { return true }
+            for reason in [pendingRestore?.reason, deferredContentRestore?.reason] {
+                if case .search = reason { return true }
+            }
             return false
         }
 
@@ -2270,6 +2304,7 @@ struct TranscriptRenderer: NSViewRepresentable {
         }
 
         private func flushHeightChanges() {
+            retireObsoleteSearchRestore()
             heightWorkItem = nil
             guard let table else { return }
             let changed = pendingHeightMessageIDs
@@ -2554,7 +2589,33 @@ struct TranscriptRenderer: NSViewRepresentable {
             }
         }
 
+        private func exerciseRetiredGeometryForUITest(correction: Bool) {
+            #if DEBUG
+            guard TraceTestHooks.isUITesting,
+                  TraceTestHooks.environment["TRACE_TEST_NAVIGATION_INTENT_CONTROL"] == "1",
+                  let model, let request = pendingRestore, case .search(let target) = request.reason,
+                  model.requestedMessageID == target, let bookmark = currentBookmark(),
+                  let generation = renderedContentGeneration, let scrollView,
+                  let generationData = try? JSONEncoder().encode(generation),
+                  let generationObject = try? JSONSerialization.jsonObject(with: generationData) else { return }
+            let before = scrollView.contentView.bounds.origin.y
+            model.consumeRequestedMessageID(target)
+            // Arrange the pending native branch without another renderer update
+            // or navigation request, then exercise the real synchronous entry point.
+            exerciseRetiredGeometryForTesting(bookmark: bookmark, correction: correction)
+            let accepted = acceptedGeometryBookmarkForTesting
+            let receipt: [String: Any] = ["invocation": UUID().uuidString, "generation": generationObject,
+                "session": sessionID, "index": bookmark.index, "acceptedIndex": accepted?.index ?? -1,
+                "beforeOrigin": before, "afterOrigin": scrollView.contentView.bounds.origin.y,
+                "correction": correction, "pendingSearch": hasPendingSearchForTesting]
+            if let data = try? JSONSerialization.data(withJSONObject: receipt), let line = String(data: data, encoding: .utf8) {
+                TraceTestHooks.appendLine(line, pathKey: "TRACE_TEST_RETIRED_GEOMETRY_RECEIPTS_PATH")
+            }
+            #endif
+        }
+
         private func correctEstablishedAnchor() {
+            retireObsoleteSearchRestore()
             guard pendingAnchorCorrection else { return }
             if var request = pendingRestore, request.revealedTargetRow,
                request.sessionID == sessionID, request.inputGeneration == userInputGeneration,

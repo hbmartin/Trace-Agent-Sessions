@@ -12,14 +12,26 @@ the UI target and verify the selected identifiers through compiled XCTest
 discovery before requesting desktop time. Reuse that DerivedData directory for
 the selected run so compilation is already complete.
 
-For the previously skipped selection:
+Prepare a dedicated Debug build and record its provenance before desktop time:
 
 ```sh
 python3 Scripts/run-selected-ui-verification.py \
-  --selection docs/validation/2026-11-22-navigation-source-ownership/selected-ui-tests.json \
-  --derived-data build/DerivedData \
-  --output /absolute/path/to/a/new/local-ui-attempt
+  --selection /absolute/path/within/repo/selected-ui-tests.json \
+  --derived-data /absolute/path/to/new/PreparedUI \
+  --output /absolute/path/to/new/preparation-attempt --prepare-only
 ```
+
+Then reuse those products without building or changing their manifests:
+
+```sh
+python3 Scripts/run-selected-ui-verification.py \
+  --selection /absolute/path/within/repo/selected-ui-tests.json \
+  --derived-data /absolute/path/to/PreparedUI \
+  --output /absolute/path/to/new/local-ui-attempt
+```
+
+Preparation requires a nonexistent DerivedData directory and runs no UI cases.
+Existing products without a preparation receipt cannot be adopted retroactively.
 
 Obtain one fresh desktop-idle confirmation for the complete batch. Keep the Mac
 unlocked and input-free, wait for competing native checks, and run cases
@@ -73,14 +85,23 @@ Receipts include actual tracked input hashes, relevant untracked inputs and
 submodule state, including permitted vendor modifications. Inputs are rechecked
 at the end; changes reject acceptance even if the selected tests passed.
 
-Explicit `--derived-data` is reuse-only: prepare the full Debug test build first.
-The runner pins the active SDK/arm64 test manifest and verifies shared manifest
-hashes at completion. Missing compatible products fail without rebuilding. Without
-that option each attempt builds privately. Paths remain invocation-relative.
+Explicit `--derived-data` is reuse-only unless `--prepare-only` is supplied.
+Preparation binds native/build inputs, recursive vendor inputs, Debug/SDK/arm64,
+Xcode toolchain, manifests, binaries, frameworks, resources and symlinks to the
+build invocation. Reuse rejects stale or missing provenance, Release products,
+missing dependencies, or changed products before launch. Documentation-only
+revision differences require exact native-input equivalence and both revisions
+remain visible. Product inventories are checked around discovery, every case,
+and finalization. Without explicit DerivedData, a private build records the same
+provenance. Paths remain invocation-relative.
 
 Summary exports retain stdout and stderr separately. Interruptions received during
-timeout cleanup are propagated after bounded TERM/KILL process-group cleanup. If
-cleanup cannot be confirmed, the batch aborts and records the remaining group; do
+timeout cleanup are propagated after bounded TERM/KILL process-group cleanup. Interruption remains the primary result even if cleanup also fails. Any error
+that prevents confirming cleanup aborts the batch and records the remaining group; do
 not resume desktop work until remaining validation processes are checked. Vendor
 provenance recursively hashes initialized submodule inputs and identifies missing
 checkouts explicitly.
+
+Finalization failures fail verification and retain terminal diagnostics while always
+restoring signal handlers and the invocation directory. Every phase identifies
+both stdout and stderr logs; summary parsing uses stdout only.
