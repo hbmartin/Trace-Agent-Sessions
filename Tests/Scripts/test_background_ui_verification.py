@@ -306,6 +306,27 @@ except m.RunInterrupted as e:
             self.assertEqual(Path.cwd(),cwd)
             self.assertTrue(all(signal.getsignal(s)==h for s,h in handlers.items()))
 
+    def test_final_receipt_write_failure_or_signal_preserves_failure_and_restores(self):
+        import io
+        from contextlib import redirect_stderr
+        for event in ("write", "signal"):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as temp:
+                save = module.Runner.save; injected = False
+                def interrupted_save(runner):
+                    nonlocal injected
+                    if runner.receipt["status"] == "passed" and not injected:
+                        injected = True
+                        if event == "write": raise PermissionError("receipt replace denied")
+                        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                    return save(runner)
+                cwd=Path.cwd();handlers={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM)}
+                with patch.object(module.Runner,"save",interrupted_save),redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.invoke(Path(temp)/"attempt"),1 if event == "write" else 143)
+                receipt=json.loads((Path(temp)/"attempt/verification.json").read_text())
+                self.assertEqual(receipt["status"],"failed" if event == "write" else "interrupted")
+                self.assertEqual(Path.cwd(),cwd)
+                self.assertTrue(all(signal.getsignal(sig)==handler for sig,handler in handlers.items()))
+
     def test_permission_error_in_cleanup_is_batch_fatal(self):
         from unittest.mock import Mock
         child=Mock(pid=123,returncode=None)

@@ -501,8 +501,20 @@ def main() -> int:
             try:
                 runner.save()
             except Exception as error:
+                runner.receipt["receiptWriteError"] = error_description(error)
+                if runner.receipt["status"] != "interrupted": runner.receipt["status"] = "failed"
                 print("Could not finalize verification receipt: " + error_description(error), file=sys.stderr)
                 exit_code = exit_code or 1
+                try: runner.save()
+                except Exception as final_error:
+                    print("Terminal receipt remains unwritable: " + error_description(final_error), file=sys.stderr)
+            if pending_signals and exit_code != 128 + pending_signals[0]:
+                error = RunInterrupted(pending_signals[0])
+                runner.receipt.update(status="interrupted", error=error_description(error))
+                exit_code = 128 + error.signum
+                try: runner.save()
+                except Exception as error:
+                    print("Could not record final interruption: " + error_description(error), file=sys.stderr)
         finally:
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
