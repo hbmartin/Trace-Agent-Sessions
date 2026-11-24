@@ -1,0 +1,73 @@
+{
+  "baseline": {
+    "revision": "2257866e0d81907a76dc55cfd585830317553b54",
+    "sourceExport": "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/baseline-source",
+    "instrumentation": {
+      "instrumentation": "reconciliation-decoded-row-v1",
+      "counterDefinition": "materialized IndexedSourcePath objects; not SQLite rows visited or physical I/O",
+      "sourceSHA256": "b992d2b0e2d450c17a5ec9134d5bc2ed6c69790922d27485bac3d9c2b472b347",
+      "instrumentedSHA256": "6f1bb4e6464a9d57d30c784cb136d57b84a0dcbe465619ad83368520d9aee63f"
+    },
+    "normalizedCoreSourceHashes": {
+      "Sources/TraceCore/Adapters/ClaudeCodeSource.swift": "ce47f61760ccdd7696c55a7e779339fe65069d08e753f4b6ea165d37d33830b2",
+      "Sources/TraceCore/Adapters/CodexSource.swift": "a6204ddcf71008d3a58810e06871b8d1b20201d2cea90e5f7fee9ebccc4f3b09",
+      "Sources/TraceCore/Adapters/GeminiSource.swift": "8ce5e77676180f845f69ac8d795753feebbe548fc1fc06798b0308123115c2bc",
+      "Sources/TraceCore/Database/IndexDatabase.swift": "b992d2b0e2d450c17a5ec9134d5bc2ed6c69790922d27485bac3d9c2b472b347",
+      "Sources/TraceCore/Diagnostics/DiagnosticsStore.swift": "6de38c29fa4f84c30153f9fcc3f4216b3fa007675c7aadee8e884ad2c74c197e",
+      "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+      "Sources/TraceCore/Indexing/CodexMetadataWatcher.swift": "4294a21fd5f0c1290d8e435b849627c23fedb7ca6ac7d45754e69004ebd4b9c4",
+      "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "b9ab6791ae8f3a54a372c994d36d3e8f674f667357df49a2b1ffb6f4e9795e6e",
+      "Sources/TraceCore/Indexing/IndexCoordinator.swift": "08c0b6c400bb4fa6039ab07ea63f245a597ec051bdd9de0bd3940b686f59ffd7",
+      "Sources/TraceCore/Indexing/IndexScheduler.swift": "ffc08410f75e6f06a8647813c3f04ab65cc0a811667e29b4923ff77750d32cbc",
+      "Sources/TraceCore/Indexing/SessionMetadata.swift": "cdb4aa23feee374b8ff4cdfb9b379f9c214b309ee366f7f722086e1c53f8b3e8",
+      "Sources/TraceCore/Models.swift": "598ae3b2a69cf799878d63d50b3df8f1015335ff90ca6de2ae1dfb5d0038da70",
+      "Sources/TraceCore/Pricing/PricingCatalog.swift": "f065d4cafe8f6ef815b688ff69a09099edd40963ccd1326df28773a5c9d949a4",
+      "Sources/TraceCore/Search/FTSQueryParser.swift": "f0ef5959ed837936017299484859a9d0dd1a3fd3b3a64c3d9d86f9c89065556c",
+      "Sources/TraceCore/SessionSource.swift": "53900d879bdf67c1c315d9a8c3d7fae1de39480c9179e43634df6ab5ff5d1e65",
+      "Sources/TraceCore/Support/FileIO.swift": "1f40e27732314b8cc0de52115245aeb7e7404c16d470d0358bdc16452aa99fab",
+      "Sources/TraceCore/Support/JSONHelpers.swift": "60abd12a48aa98b6e8c00d9c4214402197f5f98c20992f7fa8c69d030233ee94",
+      "Sources/TraceCore/Support/ProjectCanonicalizer.swift": "7625dc884e070138f2073c0cf584fe46959bb2e5c76f9fd22ef0da23b2e5a29d",
+      "Sources/TraceCore/Support/SidebarRevealProgress.swift": "e01f1aa175bd71e4c76c5aa33a8b3cf3c8a2fde3b4612fb14c55b1ea4c60bfbc",
+      "Sources/TraceCore/Support/TraceTestHooks.swift": "ecca22acd89ca106d9c0b68b48ac0797c71e23f07675253339721ec25868ebed",
+      "Sources/TraceCore/Support/TranscriptMarkdown.swift": "382e24bb317f3c1c46f9bd2b6732a40df9b55ecaa6ce442c2da5ed8cfe1081d9",
+      "Sources/TraceCore/Support/TranscriptViewportPolicy.swift": "b05e2716f068c852bb9afd7a5cc9f672615aedea687fdce8ea84a13a695e690b"
+    },
+    "dependencyUnchanged": true
+  },
+  "candidate": {
+    "revision": "7643f1214ed789880d4ff6d9b7c2d0f91c626216",
+    "sourceExport": "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/candidate-source",
+    "instrumentation": {
+      "instrumentation": "reconciliation-decoded-row-v1",
+      "counterDefinition": "materialized IndexedSourcePath objects; not SQLite rows visited or physical I/O",
+      "sourceSHA256": "844372cb9035ea78743cace85d8e2be8aa6db15bb55856772434bef7e2b41dce",
+      "instrumentedSHA256": "c309183a4d803f5ef82eeb86ffcef4583c2622a0d4aa6c07472ec4cfb8d3f3ad"
+    },
+    "normalizedCoreSourceHashes": {
+      "Sources/TraceCore/Adapters/ClaudeCodeSource.swift": "06725f8d84f8f7ec7e4ae6b6a16bae56abaa7723082f691efc6967bca2096772",
+      "Sources/TraceCore/Adapters/CodexSource.swift": "50fb2e7317037b7640444a9b83314ac054868bd888789b5aa6de161c2055daac",
+      "Sources/TraceCore/Adapters/GeminiSource.swift": "3c1808271207b2aa3e6aa4c8618b51ab391e16026a5b4799f1a3b10dd9a52cb6",
+      "Sources/TraceCore/Database/IndexDatabase.swift": "844372cb9035ea78743cace85d8e2be8aa6db15bb55856772434bef7e2b41dce",
+      "Sources/TraceCore/Diagnostics/DiagnosticsStore.swift": "6de38c29fa4f84c30153f9fcc3f4216b3fa007675c7aadee8e884ad2c74c197e",
+      "Sources/TraceCore/Diagnostics/TracePerformance.swift": "fba35820a0c01c1cc9a7db6578ffba5bc8a838220691100ebcfd14d9667b4dc8",
+      "Sources/TraceCore/Indexing/CodexMetadataWatcher.swift": "4294a21fd5f0c1290d8e435b849627c23fedb7ca6ac7d45754e69004ebd4b9c4",
+      "Sources/TraceCore/Indexing/FSEventsWatcher.swift": "b9ab6791ae8f3a54a372c994d36d3e8f674f667357df49a2b1ffb6f4e9795e6e",
+      "Sources/TraceCore/Indexing/IndexCoordinator.swift": "d52c57e36e655f8f332ab1fe7c5599fd00e45cf1ee2dc1e2bc6e7d198e0617f6",
+      "Sources/TraceCore/Indexing/IndexScheduler.swift": "ffc08410f75e6f06a8647813c3f04ab65cc0a811667e29b4923ff77750d32cbc",
+      "Sources/TraceCore/Indexing/SessionMetadata.swift": "cdb4aa23feee374b8ff4cdfb9b379f9c214b309ee366f7f722086e1c53f8b3e8",
+      "Sources/TraceCore/Models.swift": "598ae3b2a69cf799878d63d50b3df8f1015335ff90ca6de2ae1dfb5d0038da70",
+      "Sources/TraceCore/Pricing/PricingCatalog.swift": "f065d4cafe8f6ef815b688ff69a09099edd40963ccd1326df28773a5c9d949a4",
+      "Sources/TraceCore/Search/FTSQueryParser.swift": "f0ef5959ed837936017299484859a9d0dd1a3fd3b3a64c3d9d86f9c89065556c",
+      "Sources/TraceCore/SessionSource.swift": "33ba96eda9c2f04a04413de8450e44fb4bd3c8c51c6ab219cc69984ea8d04210",
+      "Sources/TraceCore/Support/FileIO.swift": "1f40e27732314b8cc0de52115245aeb7e7404c16d470d0358bdc16452aa99fab",
+      "Sources/TraceCore/Support/JSONHelpers.swift": "60abd12a48aa98b6e8c00d9c4214402197f5f98c20992f7fa8c69d030233ee94",
+      "Sources/TraceCore/Support/ProjectCanonicalizer.swift": "7625dc884e070138f2073c0cf584fe46959bb2e5c76f9fd22ef0da23b2e5a29d",
+      "Sources/TraceCore/Support/SidebarRevealProgress.swift": "e01f1aa175bd71e4c76c5aa33a8b3cf3c8a2fde3b4612fb14c55b1ea4c60bfbc",
+      "Sources/TraceCore/Support/TraceTestHooks.swift": "ecca22acd89ca106d9c0b68b48ac0797c71e23f07675253339721ec25868ebed",
+      "Sources/TraceCore/Support/TranscriptMarkdown.swift": "382e24bb317f3c1c46f9bd2b6732a40df9b55ecaa6ce442c2da5ed8cfe1081d9",
+      "Sources/TraceCore/Support/TranscriptViewportPolicy.swift": "b05e2716f068c852bb9afd7a5cc9f672615aedea687fdce8ea84a13a695e690b"
+    },
+    "dependencyUnchanged": true
+  },
+  "verification": "All normalized Core export bytes match pinned Git revisions; identical committed instrumentation and configured dependency snapshot."
+}

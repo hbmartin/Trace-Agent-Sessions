@@ -1,0 +1,458 @@
+{
+  "base": "e18e6d5a924bc9b9b251b180c64b94e85b60f2f2",
+  "baseline": "2257866e0d81907a76dc55cfd585830317553b54",
+  "frozenCandidate": "7643f1214ed789880d4ff6d9b7c2d0f91c626216",
+  "native": {
+    "passed": 740,
+    "failed": 0,
+    "skipped": 0,
+    "summary": "final-affected-native-summary.json"
+  },
+  "scripts": {
+    "passed": 135,
+    "failed": 0,
+    "inputEquivalence": "Scripts and Tests/Scripts unchanged between optimized-script-tests candidate and frozen candidate; final changes affect Core/test code only."
+  },
+  "ownership": {
+    "nativeExecutions": 35,
+    "scriptExecutions": 25,
+    "repetitions": 5
+  },
+  "checks": {
+    "final-debug-build": {
+      "command": [
+        "xcodebuild",
+        "build-for-testing",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryDebug"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:12:00.805760+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 84.4352000001818
+    },
+    "final-production-release-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryRelease"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:12:04.510884+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 173.4038269580342
+    },
+    "final-external-client-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryExternal"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:12:08.505063+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 41.18932387512177
+    },
+    "final-affected-native": {
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryDebug",
+        "-parallel-testing-enabled",
+        "NO",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests",
+        "-only-testing:TraceCoreTests/SidecarDependencyTests",
+        "-only-testing:TraceCoreTests/FSEventsWatcherTests",
+        "-only-testing:TraceCoreTests/TranscriptViewportPolicyTests",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests",
+        "-test-timeouts-enabled",
+        "YES",
+        "-default-test-execution-time-allowance",
+        "90",
+        "-maximum-test-execution-time-allowance",
+        "120",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/final-affected-native.xcresult"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:13:25.319993+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 291.687822249718
+    },
+    "final-native-races": {
+      "command": [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryDebug",
+        "-parallel-testing-enabled",
+        "NO",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testLegacyDirectoryAdapterPreservesFileRefreshAndDeletion",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testDiscoveryCanonicalAliasBindsRootAndIncompatibleRootRemainsUncovered",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testOverlappingConfiguredRootDiscoverySharesReadFailures",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testReconciliationPreservesLiveRowsAcrossCapturedCasePolicy",
+        "-only-testing:TraceCoreTests/IndexingRegressionTests/testLifecycleResetReturnsDebtOnceAndLaterEnrollmentHasNoTimerRetry",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testLiveMetadataIngressEnrollsConfiguredSourceBeforeFallbackPreparation",
+        "-only-testing:TraceAppTests/AppReviewFollowupTests/testSelectionReentryWhileClearingTargetFailurePreservesSuccessor",
+        "-test-iterations",
+        "5",
+        "-test-timeouts-enabled",
+        "YES",
+        "-default-test-execution-time-allowance",
+        "45",
+        "-maximum-test-execution-time-allowance",
+        "60",
+        "-resultBundlePath",
+        "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/final-native-races.xcresult"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:18:17.062747+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 13.480046791955829
+    },
+    "optimized-script-tests": {
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "Tests/Scripts",
+        "-p",
+        "test_*.py"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:02:05.507798+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 195.4925253749825
+    },
+    "optimized-project-drift": {
+      "command": [
+        "bash",
+        "Scripts/check-project-drift.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:09:33.079064+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.25178912514820695
+    },
+    "optimized-signing-settings": {
+      "command": [
+        "bash",
+        "Scripts/check-signing-settings.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:09:35.306466+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 6.634672500193119
+    },
+    "final-release-network-surface": {
+      "command": [
+        "bash",
+        "Scripts/check-network-surface.sh",
+        "build/AdapterDiscoveryRelease/Build/Products/Release/Trace.app"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:15:23.708496+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.18559962511062622
+    },
+    "final-pinned-whitespace": {
+      "command": [
+        "git",
+        "diff",
+        "e18e6d5a924bc9b9b251b180c64b94e85b60f2f2...HEAD",
+        "--check"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:28:04.774170+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.035313624888658524
+    },
+    "final-candidate-optimized-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/candidate-source/Trace.xcodeproj",
+        "-scheme",
+        "TraceBench",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/candidate-optimized",
+        "-clonedSourcePackagesDirPath",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/ScopedReconciliationDebug/SourcePackages",
+        "OTHER_SWIFT_FLAGS=$(inherited) -DTRACE_CHECKPOINT_BENCHMARK"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:11:45.757028+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 40.85374154197052
+    },
+    "final-compiled-workloads": {
+      "command": [
+        "python3",
+        "/private/tmp/adapter-coverage-work/compile-workloads.py"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:18:31.479705+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 11.46459637535736
+    },
+    "final-source-hashes": {
+      "command": [
+        "python3",
+        "/private/tmp/adapter-coverage-work/verify-hashes.py"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-24T18:18:43.018480+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.2345689171925187
+    },
+    "final-cleanup-race-v2-1": {
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "-B",
+        "-m",
+        "unittest",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_pre_reap_snapshot_does_not_adopt_recycled_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_permission_probe_after_owned_group_exits_is_confirmed_from_state",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_benchmark_preserves_failure_and_retires_fixture"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/Scripts",
+      "startedAt": "2026-11-24T18:13:26.658983+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 10.820684792008251
+    },
+    "final-cleanup-race-v2-2": {
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "-B",
+        "-m",
+        "unittest",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_pre_reap_snapshot_does_not_adopt_recycled_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_permission_probe_after_owned_group_exits_is_confirmed_from_state",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_benchmark_preserves_failure_and_retires_fixture"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/Scripts",
+      "startedAt": "2026-11-24T18:13:37.533700+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 10.689605708234012
+    },
+    "final-cleanup-race-v2-3": {
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "-B",
+        "-m",
+        "unittest",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_pre_reap_snapshot_does_not_adopt_recycled_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_permission_probe_after_owned_group_exits_is_confirmed_from_state",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_benchmark_preserves_failure_and_retires_fixture"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/Scripts",
+      "startedAt": "2026-11-24T18:13:48.272832+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 10.727344333194196
+    },
+    "final-cleanup-race-v2-4": {
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "-B",
+        "-m",
+        "unittest",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_pre_reap_snapshot_does_not_adopt_recycled_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_permission_probe_after_owned_group_exits_is_confirmed_from_state",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_benchmark_preserves_failure_and_retires_fixture"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/Scripts",
+      "startedAt": "2026-11-24T18:13:59.096693+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 10.860163459088653
+    },
+    "final-cleanup-race-v2-5": {
+      "command": [
+        "/opt/homebrew/opt/python@3.15/bin/python3.15",
+        "-B",
+        "-m",
+        "unittest",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_pre_reap_snapshot_does_not_adopt_recycled_leader",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_distinguishes_zombies_live_denial_and_recycled_identity",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_permission_probe_after_owned_group_exits_is_confirmed_from_state",
+        "test_background_ui_verification.BackgroundUIVerificationTests.test_cleanup_benchmark_preserves_failure_and_retires_fixture"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/Scripts",
+      "startedAt": "2026-11-24T18:14:10.130511+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 10.861920291557908
+    }
+  },
+  "targeted": {
+    "complete": false,
+    "recordedPairs": 15,
+    "remaining": "waived by user",
+    "waiver": {
+      "recordedAt": "2026-11-24T18:35:34.248438+00:00",
+      "questionItemId": "[\"request_user_input_async\",\"call_b180679073314560adea8c147d514f34\",0]",
+      "userReply": "Skip remaining measurements; publish with limitations",
+      "remainingTargetedMeasurements": "waived",
+      "completedTargetedWorkloads": "three complete 1000-input paired workloads retained as partial evidence",
+      "local10PercentAcceptance": false,
+      "crossChatMessagesSent": false,
+      "retiredOwnWaitingPID": 79788
+    },
+    "summary": "targeted-summary.json"
+  },
+  "failedAndInterruptedAttempts": [
+    {
+      "record": "cleanup-harness-failure.json",
+      "classification": "pre-freeze fixture defect",
+      "resolution": "Controlled benchmark teardown now retires its original unreaped owned group even if the injected runner fails."
+    },
+    {
+      "record": "affected-native.json",
+      "classification": "initial combined native failure",
+      "resolution": "Introduced mixed-case containment fixed; selection fault setup made invocation-owned. A lifecycle TestClock timeout was not reproduced by the pinned baseline probe and remains inconclusive; final affected and five-repeat runs passed."
+    },
+    {
+      "record": "isolated-regressions.json",
+      "classification": "pre-freeze selection invariant setup race",
+      "resolution": "Seed the current failure prerequisite after suspended setup, immediately before observer installation; genuine database-failure/Retry regressions remain intact."
+    },
+    {
+      "record": "external-client.json",
+      "classification": "fixture conformance defect",
+      "resolution": "Added the required legacy read overload; final external-client build passed."
+    },
+    {
+      "record": "final-cleanup-race-1.json",
+      "classification": "invalid test invocation",
+      "resolution": "Wrong module working directory; five corrected launches use the original recorded Tests/Scripts directory and pass."
+    },
+    {
+      "record": "targeted-pairs/verification.json",
+      "classification": "contended measurement",
+      "resolution": "First baseline warm-up excluded after competing native build appeared."
+    },
+    {
+      "record": "targeted-pairs-v2/verification.json",
+      "classification": "pre-optimization measurement",
+      "resolution": "Agent stopped this batch after a material append regression. Captured-depth discovery checks, reused file identities and bounded scope ancestor walks address the overhead. Final candidate measured separately."
+    },
+    {
+      "record": "targeted-pairs-v3/verification.json",
+      "classification": "partly completed final measurement with contended next warm-up",
+      "resolution": "Three complete valid workloads retained as partial evidence. The fourth workload warm-up pair is excluded. Remaining measurements were explicitly waived before v4 began."
+    },
+    {
+      "record": "resumed-coordinated-targeted-pairs.json",
+      "classification": "user-requested cancellation of a waiting job",
+      "resolution": "The user waived remaining measurements; only Trace waiting launcher was interrupted. No v4 workload ran."
+    }
+  ],
+  "limitations": [
+    "Remaining targeted measurements explicitly waived after partial completion",
+    "UI execution omitted by approved plan",
+    "Complete native suites omitted",
+    "Three full Release comparison pairs omitted",
+    "No local 10% performance-acceptance claim",
+    "Mixed-volume coverage injects captured policies rather than mounting another volume",
+    "Initial lifecycle TestClock timeout remains inconclusive; no matching baseline failure reproduced",
+    "Raw payloads are local-only, not downloadable repository or CI artifacts"
+  ],
+  "schemaMigration": false,
+  "indexFormatChange": false,
+  "publicSignatureBreak": false,
+  "applicationRetryTimerAdded": false
+}

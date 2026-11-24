@@ -1,0 +1,207 @@
+{
+  "baseline": "2257866e0d81907a76dc55cfd585830317553b54",
+  "candidate": "7643f1214ed789880d4ff6d9b7c2d0f91c626216",
+  "complete": false,
+  "remainingMeasurements": "waived by user",
+  "validSamples": 36,
+  "recordedSamples": 30,
+  "recordedPairs": 15,
+  "warmupSamples": 6,
+  "local10PercentAcceptance": false,
+  "definitions": "Medians of five samples per revision; paired changes use matching recorded sample indices. Signed footprint growth retained. Metrics have workload-specific named phases; see cpuDefinition. No threshold is applied.",
+  "sourceManifest": "targeted-pairs-v3/verification.json",
+  "sourceManifestSHA256": "42d82af0fa44a6ea97c491eece635fa504fc09ff2e951d6d3870c00409c39d24",
+  "selection": "The first three chronologically completed workloads, each with one warm-up and five valid recorded pairs. Excludes the following interrupted warm-up pair; remaining 14 workloads waived.",
+  "waiver": {
+    "recordedAt": "2026-11-24T18:35:34.248438+00:00",
+    "questionItemId": "[\"request_user_input_async\",\"call_b180679073314560adea8c147d514f34\",0]",
+    "userReply": "Skip remaining measurements; publish with limitations",
+    "remainingTargetedMeasurements": "waived",
+    "completedTargetedWorkloads": "three complete 1000-input paired workloads retained as partial evidence",
+    "local10PercentAcceptance": false,
+    "crossChatMessagesSent": false,
+    "retiredOwnWaitingPID": 79788
+  },
+  "workloads": [
+    {
+      "tool": "incremental",
+      "mode": "ascii",
+      "inputs": 1000,
+      "recordedPairs": 5,
+      "warmupsPerRevision": 1,
+      "revisions": {
+        "baseline": {
+          "decodedReconciliationRows": 100,
+          "elapsedSeconds": 0.44821912900000005,
+          "iterations": 100,
+          "peakFootprintBytes": 13894328,
+          "postSetupFootprintBytes": 13550240,
+          "prePayloadFootprintBytes": 2261544,
+          "processCPUSeconds": 0.44807799999999975,
+          "queryScopeCount": 0,
+          "refreshP95Seconds": 0.004759,
+          "retainedFootprintBytes": 13943480,
+          "retainedGrowthBytes": 11681936,
+          "unrelatedSources": 1000,
+          "cpuDefinition": "process-wide CPU during coordinator refresh or one scoped-query await; includes executor entry, excludes setup, validation, retirement and idle"
+        },
+        "candidate": {
+          "decodedReconciliationRows": 100,
+          "elapsedSeconds": 0.4453142890000001,
+          "iterations": 100,
+          "peakFootprintBytes": 13779592,
+          "postSetupFootprintBytes": 13468296,
+          "prePayloadFootprintBytes": 2245136,
+          "processCPUSeconds": 0.44437900000000097,
+          "queryScopeCount": 0,
+          "refreshP95Seconds": 0.004802583,
+          "retainedFootprintBytes": 13828744,
+          "retainedGrowthBytes": 11599992,
+          "unrelatedSources": 1000,
+          "cpuDefinition": "process-wide CPU during coordinator refresh or one scoped-query await; includes executor entry, excludes setup, validation, retirement and idle"
+        }
+      },
+      "pairedChanges": {
+        "elapsedSeconds": {
+          "medianSignedDelta": -0.002904839999999964,
+          "medianPercent": -0.6480847897948514
+        },
+        "processCPUSeconds": {
+          "medianSignedDelta": -0.0036989999999987866,
+          "medianPercent": -0.8255259128988232
+        },
+        "retainedFootprintBytes": {
+          "medianSignedDelta": -114736,
+          "medianPercent": -0.8228648802164166
+        },
+        "retainedGrowthBytes": {
+          "medianSignedDelta": -81944
+        },
+        "peakFootprintBytes": {
+          "medianSignedDelta": -114736,
+          "medianPercent": -0.8257758129792243
+        }
+      }
+    },
+    {
+      "tool": "incremental",
+      "mode": "query-insensitive",
+      "inputs": 1000,
+      "recordedPairs": 5,
+      "warmupsPerRevision": 1,
+      "revisions": {
+        "baseline": {
+          "decodedReconciliationRows": 500,
+          "elapsedSeconds": 0.813830333,
+          "iterations": 1,
+          "peakFootprintBytes": 13943480,
+          "postSetupFootprintBytes": 13615800,
+          "prePayloadFootprintBytes": 2277928,
+          "processCPUSeconds": 0.801539,
+          "queryScopeCount": 500,
+          "refreshP95Seconds": 0.813830333,
+          "retainedFootprintBytes": 13959864,
+          "retainedGrowthBytes": 11681936,
+          "unrelatedSources": 1000,
+          "cpuDefinition": "process-wide CPU during coordinator refresh or one scoped-query await; includes executor entry, excludes setup, validation, retirement and idle"
+        },
+        "candidate": {
+          "decodedReconciliationRows": 500,
+          "elapsedSeconds": 0.003219917,
+          "iterations": 1,
+          "peakFootprintBytes": 13615800,
+          "postSetupFootprintBytes": 13615800,
+          "prePayloadFootprintBytes": 2245136,
+          "processCPUSeconds": 0.0032729999999998594,
+          "queryScopeCount": 500,
+          "refreshP95Seconds": 0.003219917,
+          "retainedFootprintBytes": 13730488,
+          "retainedGrowthBytes": 11485328,
+          "unrelatedSources": 1000,
+          "cpuDefinition": "process-wide CPU during coordinator refresh or one scoped-query await; includes executor entry, excludes setup, validation, retirement and idle"
+        }
+      },
+      "pairedChanges": {
+        "elapsedSeconds": {
+          "medianSignedDelta": -0.81066675,
+          "medianPercent": -99.61127241493469
+        },
+        "processCPUSeconds": {
+          "medianSignedDelta": -0.7983290000000001,
+          "medianPercent": -99.59952042258706
+        },
+        "retainedFootprintBytes": {
+          "medianSignedDelta": -262192,
+          "medianPercent": -1.8672271272653105
+        },
+        "retainedGrowthBytes": {
+          "medianSignedDelta": -229376
+        },
+        "peakFootprintBytes": {
+          "medianSignedDelta": -311344,
+          "medianPercent": -2.217268119207645
+        }
+      }
+    },
+    {
+      "tool": "incremental",
+      "mode": "unicode",
+      "inputs": 1000,
+      "recordedPairs": 5,
+      "warmupsPerRevision": 1,
+      "revisions": {
+        "baseline": {
+          "decodedReconciliationRows": 100,
+          "elapsedSeconds": 0.708071159,
+          "iterations": 100,
+          "peakFootprintBytes": 13845152,
+          "postSetupFootprintBytes": 13533856,
+          "prePayloadFootprintBytes": 2294336,
+          "processCPUSeconds": 0.7067890000000001,
+          "queryScopeCount": 0,
+          "refreshP95Seconds": 0.007802375,
+          "retainedFootprintBytes": 13861536,
+          "retainedGrowthBytes": 11567200,
+          "unrelatedSources": 1000,
+          "cpuDefinition": "process-wide CPU during coordinator refresh or one scoped-query await; includes executor entry, excludes setup, validation, retirement and idle"
+        },
+        "candidate": {
+          "decodedReconciliationRows": 100,
+          "elapsedSeconds": 0.460766791,
+          "iterations": 100,
+          "peakFootprintBytes": 13746848,
+          "postSetupFootprintBytes": 13419168,
+          "prePayloadFootprintBytes": 2245160,
+          "processCPUSeconds": 0.4587740000000011,
+          "queryScopeCount": 0,
+          "refreshP95Seconds": 0.004966333,
+          "retainedFootprintBytes": 13779616,
+          "retainedGrowthBytes": 11518072,
+          "unrelatedSources": 1000,
+          "cpuDefinition": "process-wide CPU during coordinator refresh or one scoped-query await; includes executor entry, excludes setup, validation, retirement and idle"
+        }
+      },
+      "pairedChanges": {
+        "elapsedSeconds": {
+          "medianSignedDelta": -0.2473590779999999,
+          "medianPercent": -34.30182188926201
+        },
+        "processCPUSeconds": {
+          "medianSignedDelta": -0.2462380000000004,
+          "medianPercent": -34.26267989653212
+        },
+        "retainedFootprintBytes": {
+          "medianSignedDelta": 131096,
+          "medianPercent": 0.9491192831013097
+        },
+        "retainedGrowthBytes": {
+          "medianSignedDelta": 131072
+        },
+        "peakFootprintBytes": {
+          "medianSignedDelta": 49176,
+          "medianPercent": 0.35602832936008727
+        }
+      }
+    }
+  ]
+}

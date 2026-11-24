@@ -1,0 +1,13 @@
+{
+  "executions": 35,
+  "uniqueTests": 7,
+  "perCase": {
+    "TraceAppTests/AppReviewFollowupTests/testLiveMetadataIngressEnrollsConfiguredSourceBeforeFallbackPreparation": 5,
+    "TraceAppTests/AppReviewFollowupTests/testSelectionReentryWhileClearingTargetFailurePreservesSuccessor": 5,
+    "TraceCoreTests/IndexingRegressionTests/testDiscoveryCanonicalAliasBindsRootAndIncompatibleRootRemainsUncovered": 5,
+    "TraceCoreTests/IndexingRegressionTests/testLegacyDirectoryAdapterPreservesFileRefreshAndDeletion": 5,
+    "TraceCoreTests/IndexingRegressionTests/testLifecycleResetReturnsDebtOnceAndLaterEnrollmentHasNoTimerRetry": 5,
+    "TraceCoreTests/IndexingRegressionTests/testOverlappingConfiguredRootDiscoverySharesReadFailures": 5,
+    "TraceCoreTests/IndexingRegressionTests/testReconciliationPreservesLiveRowsAcrossCapturedCasePolicy": 5
+  }
+}

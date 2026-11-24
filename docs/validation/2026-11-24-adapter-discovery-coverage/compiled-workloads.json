@@ -1,0 +1,20 @@
+{
+  "baseline-incremental": {
+    "binarySHA256": "a639e677a67418b2eb1fe5c63570390f269b160c140af6c86f2032abc73439d6",
+    "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Scripts/benchmark-incremental-reconciliation.swift": "17664dd09cf27b13144ca194a7fb055d733e31f4495434b91f663f54384f0cef"
+  },
+  "baseline-admission": {
+    "binarySHA256": "a18b0048786185a9b1b21a9290a36e8cd9774b35f3b5a3b3b7234aa266d8c145",
+    "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/baseline-mailbox.swift": "1b91b186f193e65624d85665901e4637bf07590b9e5cc41cd93daf438dc49cd9",
+    "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Scripts/benchmark-navigation-admission.swift": "48d68ebe036a853fe1c05a799a7bdb4fabbcc1caac36fc54338f0c3b1c34cdd8"
+  },
+  "candidate-incremental": {
+    "binarySHA256": "de0d402d519aa444120c3a74c211f4a7924c5a6292a12f61003c8a0be0c7a83a",
+    "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Scripts/benchmark-incremental-reconciliation.swift": "17664dd09cf27b13144ca194a7fb055d733e31f4495434b91f663f54384f0cef"
+  },
+  "candidate-admission": {
+    "binarySHA256": "2076b77bfb906b0e68d3d3380397a29bdf00f5c50f44db3515dc018081b7a8ac",
+    "/Volumes/Pro2T/TraceValidation/adapter-discovery-coverage-followup/candidate-mailbox.swift": "1b91b186f193e65624d85665901e4637bf07590b9e5cc41cd93daf438dc49cd9",
+    "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Scripts/benchmark-navigation-admission.swift": "48d68ebe036a853fe1c05a799a7bdb4fabbcc1caac36fc54338f0c3b1c34cdd8"
+  }
+}

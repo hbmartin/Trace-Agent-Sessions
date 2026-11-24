@@ -1,0 +1,33 @@
+{
+  "xcode": {
+    "command": [
+      "xcodebuild",
+      "-version"
+    ],
+    "output": "Xcode 27.2\nBuild version 27B52"
+  },
+  "swift": {
+    "command": [
+      "xcrun",
+      "swiftc",
+      "--version"
+    ],
+    "output": "Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9 clang-2100.4.1.1)\nTarget: arm64-apple-macosx27.0.0"
+  },
+  "macOS": {
+    "command": [
+      "sw_vers"
+    ],
+    "output": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+  },
+  "hardware": {
+    "command": [
+      "sysctl",
+      "-n",
+      "hw.model",
+      "hw.memsize",
+      "hw.logicalcpu"
+    ],
+    "output": "Mac14,12\n34359738368\n10"
+  }
+}
