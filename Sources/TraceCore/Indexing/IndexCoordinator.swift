@@ -127,6 +127,24 @@ private actor IndexRunGate {
     }
 }
 
+// Exact identity always survives; only a file captured on a case-insensitive
+// volume authorizes folded membership. A root may contain another mounted volume.
+struct ReconciliationLivePaths {
+    private let exact: Set<String>
+    private let insensitive: Set<String>
+
+    init(_ paths: [TraceFileIO.CanonicalPath]) {
+        exact = Set(paths.map(\.path))
+        insensitive = Set(paths.filter { !$0.isCaseSensitive }.map(\.comparisonKey))
+    }
+
+    func contains(storedPath: String) -> Bool {
+        let path = URL(fileURLWithPath: storedPath).standardized.path
+        return exact.contains(path) || insensitive.contains(
+            TraceFileIO.comparisonKey(path, caseSensitive: false))
+    }
+}
+
 public actor IndexCoordinator {
     private struct SourceFileKey: Hashable {
         let agent: AgentKind
@@ -138,6 +156,7 @@ public actor IndexCoordinator {
         let root: SourceRoot
         let mappingContext: SourceRootPathContext
         let scannedScopes: Set<RootRelativeScope>
+        let capturedScopes: [TraceFileIO.CanonicalPath]
         let failures: [NormalizedDiscoveryFailure]
     }
 
@@ -698,7 +717,8 @@ public actor IndexCoordinator {
                 let scannedScopes = Set(scopes.map(\.relativeScope))
                 discoveryAttempts.append(.init(
                     source: source, root: root, mappingContext: mappingContext,
-                    scannedScopes: scannedScopes, failures: result.failures
+                    scannedScopes: scannedScopes, capturedScopes: scopes.map(\.scanPath),
+                    failures: result.failures
                 ))
             }
 
@@ -719,6 +739,7 @@ public actor IndexCoordinator {
                 discoveryAttempts.append(.init(
                     source: source, root: root, mappingContext: mappingContext,
                     scannedScopes: Set(scopes.map(\.relativeScope)),
+                    capturedScopes: scopes.map(\.scanPath),
                     failures: deduplicatedNormalizedDiscoveryFailures(failures)
                 ))
             }
@@ -977,24 +998,17 @@ public actor IndexCoordinator {
                 status.phase = .reconciling
                 await progress(status)
                 let liveByAgent = Dictionary(grouping: allFiles, by: \.agent).mapValues { files in
-                    Set(files.map { $0.canonicalPath.comparisonKey })
+                    ReconciliationLivePaths(files.map(\.canonicalPath))
                 }
                 for (rootID, attempt) in attemptsByRootID.sorted(by: { $0.key < $1.key }) {
                     let failedScopes = attempt.failures.map(\.relativeScope)
                     let coversWholeRoot = attempt.scannedScopes.contains(where: \.isRoot)
                     if failedScopes.contains(where: \.isRoot) { continue }
                     let context = attempt.mappingContext
-                    let scopes: [String]? = coversWholeRoot ? nil : attempt.scannedScopes.map { relative in
-                        relative.components.reduce(URL(fileURLWithPath: context.scanPath.path)) {
-                            $0.appendingPathComponent($1)
-                        }.path
-                    }
                     for stored in try await database.paths(agent: attempt.source.agent, rootID: rootID,
-                        scopes: scopes, caseSensitive: context.scanPath.isCaseSensitive) {
+                        capturedScopes: coversWholeRoot ? nil : attempt.capturedScopes) {
                         try Task.checkCancellation()
-                        let key = TraceFileIO.comparisonKey(URL(fileURLWithPath: stored.path).standardized.path,
-                            caseSensitive: context.scanPath.isCaseSensitive)
-                        if liveByAgent[attempt.source.agent]?.contains(key) == true { continue }
+                        if liveByAgent[attempt.source.agent]?.contains(storedPath: stored.path) == true { continue }
                         let relative = attempt.root.relativeScope(forStoredPath: stored.path, in: context)
                         if !coversWholeRoot {
                             guard let relative, attempt.scannedScopes.contains(where: { $0.contains(relative) }) else { continue }

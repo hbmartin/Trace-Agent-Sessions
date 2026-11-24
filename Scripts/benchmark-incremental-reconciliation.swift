@@ -31,7 +31,9 @@ private func record(_ session: String, _ index: Int) -> Data {
 @main struct IncrementalReconciliationWorkload {
     static func main() async {
         do {
-            guard CommandLine.arguments.count == 3, let count = Int(CommandLine.arguments[1]), count > 0 else {
+            let mode = CommandLine.arguments.count == 4 ? CommandLine.arguments[3] : "ascii"
+            guard (3...4).contains(CommandLine.arguments.count), let count = Int(CommandLine.arguments[1]),
+                  count > 0, count < Int.max, ["ascii", "unicode"].contains(mode) else {
                 throw NSError(domain: "IncrementalReconciliation.arguments", code: 1)
             }
             let before = footprint()
@@ -43,16 +45,16 @@ private func record(_ session: String, _ index: Int) -> Data {
             for index in 0..<count {
                 try record("unrelated-\(index)", 0).write(to: roots[index % 2].appendingPathComponent("unrelated-\(index).jsonl"))
             }
-            let selected = roots[0].appendingPathComponent("selected.jsonl")
+            let selected = roots[0].appendingPathComponent(mode == "unicode" ? "caf\u{00e9}.jsonl" : "selected.jsonl")
             try record("selected", 0).write(to: selected)
             let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
             let coordinator = IndexCoordinator(database: database, sources: [ClaudeCodeSource(roots: roots)])
             await coordinator.indexAll(scope: .proseOnly)
-            var initial = try await database.sessions()
+            let expectedSessions = try await database.statistics().sessionCount
+            var initial = try await database.sessions(limit: count + 1)
             guard let selectedID = initial.first(where: { $0.sourcePath == TraceFileIO.canonicalPath(selected.path).path })?.id else {
                 throw NSError(domain: "IncrementalReconciliation.setup", code: 1)
             }
-            let expectedSessions = initial.count
             initial = []
             let setup = footprint(), rowsBefore = database.reconciliationBenchmarkDecodedRows
             let peak = OSAllocatedUnfairLock(initialState: setup)
@@ -89,7 +91,7 @@ private func record(_ session: String, _ index: Int) -> Data {
             sampler.cancel(); _ = try? await sampler.value
             try await Task.sleep(for: .seconds(2))
             let retained = footprint()
-            let output: [String: Any] = ["label": CommandLine.arguments[2], "unrelatedSources": count,
+            let output: [String: Any] = ["label": CommandLine.arguments[2], "mode": mode, "unrelatedSources": count,
                 "iterations": iterations, "elapsedSeconds": elapsed, "processCPUSeconds": processCPU,
                 "cpuDefinition": "process-wide CPU only during each coordinator refresh; setup, append, validation and idle excluded",
                 "refreshP95Seconds": p95, "decodedReconciliationRows": decoded,
