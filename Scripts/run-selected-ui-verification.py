@@ -126,12 +126,21 @@ class CleanupFailed(Exception):
     """Cleanup could not be confirmed; do not start another desktop command."""
 
 
-def process_group_exists(pid: int) -> bool:
-    try:
-        os.killpg(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
+def process_group_members(group: int) -> list[dict]:
+    # ps is diagnostic-only, bounded, and never runs via the desktop command
+    # runner. lstart distinguishes PID reuse across successive snapshots.
+    value = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,pgid=,uid=,stat=,lstart="],
+        capture_output=True, text=True, timeout=2, check=True, env={**os.environ, "LC_ALL": "C"})
+    result = []
+    for line in value.stdout.splitlines():
+        fields = line.split(None, 5)
+        if len(fields) != 6:
+            raise CleanupFailed("Malformed process-state snapshot")
+        pid, parent, pgid, uid = map(int, fields[:4])
+        if pgid == group:
+            result.append({"pid": pid, "parent": parent, "uid": uid,
+                "state": fields[4], "start": fields[5]})
+    return result
 
 
 def cleanup_child(child: subprocess.Popen) -> None:
@@ -142,15 +151,54 @@ def cleanup_child(child: subprocess.Popen) -> None:
 
 
 def _cleanup_child(child: subprocess.Popen) -> None:
+    known = set()
+
+    def inspect() -> bool:
+        child.poll()  # Reap only our direct child before taking the snapshot.
+        members = process_group_members(child.pid)
+        live = [member for member in members if not member["state"].startswith("Z")]
+        if child.returncode is not None and not live:
+            return True
+        if child.returncode is not None and any(member["pid"] == child.pid for member in live):
+            raise CleanupFailed("Process-group leader identity was recycled")
+        if child.returncode is None:
+            # A group whose live leader is our unreaped setsid child is owned.
+            if not any(member["pid"] == child.pid for member in members):
+                return False  # Leader may be between exit and reaping; inspect again.
+            for member in members:
+                if member["uid"] != os.getuid():
+                    raise CleanupFailed("Process group contains a different user")
+                known.add((member["pid"], member["start"]))
+        else:
+            # New descendants may appear while TERM is being handled. Admit only
+            # ancestry rooted in an already observed, still-identical member.
+            pending = list(live)
+            while pending:
+                old_count = len(pending)
+                live_known = {m["pid"] for m in live if (m["pid"], m["start"]) in known}
+                for member in pending[:]:
+                    identity = (member["pid"], member["start"])
+                    if member["uid"] == os.getuid() and (identity in known or member["parent"] in live_known):
+                        known.add(identity)
+                        pending.remove(member)
+                if len(pending) == old_count:
+                    raise CleanupFailed("Live process-group membership could not be verified")
+        return False
+
     for signum, allowance in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        if inspect():
+            return
         try:
             os.killpg(child.pid, signum)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            if inspect():
+                return
+            raise CleanupFailed("Permission denied for a verified live process group")
         deadline = time.monotonic() + allowance
         while time.monotonic() < deadline:
-            child.poll()  # Reap the leader without blocking, including after SIGKILL.
-            if child.returncode is not None and not process_group_exists(child.pid):
+            if inspect():
                 return
             time.sleep(.02)
     raise CleanupFailed("Command or process group remains after bounded SIGKILL cleanup")
@@ -363,6 +411,55 @@ def run_case(runner: Runner, base: list[str], selector: str, index: int, timeout
         runner.save()
 
 
+def finalize_verification(runner, repo, derived_data, initial_inputs, original_artifacts, pending_signals, exit_code):
+    failures = []
+    if initial_inputs is not None:
+        try:
+            final_inputs = capture_inputs(repo)
+            runner.receipt["inputsUnchanged"] = initial_inputs == final_inputs
+            if initial_inputs != final_inputs:
+                runner.receipt["finalInputs"] = final_inputs
+                failures.append("Tested inputs changed during verification")
+        except Exception as error:
+            failures.append(error_description(error))
+    if original_artifacts is not None:
+        try:
+            unchanged = original_artifacts == product_hashes(derived_data)
+            runner.receipt["preparedArtifactsUnchanged"] = unchanged
+            runner.receipt["preparedManifestsUnchanged"] = original_artifacts["manifests"] == manifest_hashes(derived_data)
+            if not unchanged:
+                failures.append("Prepared binaries/resources/manifests changed during verification")
+        except Exception as error:
+            failures.append(error_description(error))
+    if failures:
+        runner.receipt["finalizationErrors"] = failures
+        if runner.receipt["status"] != "interrupted":
+            runner.receipt["status"] = "failed"
+        exit_code = exit_code or 1
+    if pending_signals:
+        error = RunInterrupted(pending_signals[0])
+        runner.receipt.update(status="interrupted", error=error_description(error))
+        exit_code = 128 + error.signum
+    try:
+        runner.save()
+    except Exception as error:
+        runner.receipt["receiptWriteError"] = error_description(error)
+        if runner.receipt["status"] != "interrupted": runner.receipt["status"] = "failed"
+        print("Could not finalize verification receipt: " + error_description(error), file=sys.stderr)
+        exit_code = exit_code or 1
+        try: runner.save()
+        except Exception as final_error:
+            print("Terminal receipt remains unwritable: " + error_description(final_error), file=sys.stderr)
+    if pending_signals and exit_code != 128 + pending_signals[0]:
+        error = RunInterrupted(pending_signals[0])
+        runner.receipt.update(status="interrupted", error=error_description(error))
+        exit_code = 128 + error.signum
+        try: runner.save()
+        except Exception as error:
+            print("Could not record final interruption: " + error_description(error), file=sys.stderr)
+    return exit_code
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selection", type=Path, required=True, help="Repository-relative selection, or an absolute path within it")
@@ -419,7 +516,6 @@ def main() -> int:
         if args.prepare_only and (not args.derived_data or derived_data.exists()):
             raise ValueError("--prepare-only requires a new, nonexistent --derived-data directory")
         if args.derived_data and not args.prepare_only:
-            sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-version"], text=True).strip()
             manifest = prepared_manifest(derived_data, sdk)
             preparation = verify_preparation(derived_data, initial_inputs, context)
             original_artifacts = preparation["artifacts"]
@@ -470,51 +566,8 @@ def main() -> int:
         try:
             for sig in handlers:
                 signal.signal(sig, lambda signum, frame: pending_signals.append(signum))
-            failures = []
-            if initial_inputs is not None:
-                try:
-                    final_inputs = capture_inputs(repo)
-                    runner.receipt["inputsUnchanged"] = initial_inputs == final_inputs
-                    if initial_inputs != final_inputs:
-                        runner.receipt["finalInputs"] = final_inputs
-                        failures.append("Tested inputs changed during verification")
-                except Exception as error:
-                    failures.append(error_description(error))
-            if original_artifacts is not None:
-                try:
-                    unchanged = original_artifacts == product_hashes(derived_data)
-                    runner.receipt["preparedArtifactsUnchanged"] = unchanged
-                    runner.receipt["preparedManifestsUnchanged"] = original_artifacts["manifests"] == manifest_hashes(derived_data)
-                    if not unchanged:
-                        failures.append("Prepared binaries/resources/manifests changed during verification")
-                except Exception as error:
-                    failures.append(error_description(error))
-            if failures:
-                runner.receipt["finalizationErrors"] = failures
-                if runner.receipt["status"] != "interrupted":
-                    runner.receipt["status"] = "failed"
-                exit_code = exit_code or 1
-            if pending_signals:
-                error = RunInterrupted(pending_signals[0])
-                runner.receipt.update(status="interrupted", error=error_description(error))
-                exit_code = 128 + error.signum
-            try:
-                runner.save()
-            except Exception as error:
-                runner.receipt["receiptWriteError"] = error_description(error)
-                if runner.receipt["status"] != "interrupted": runner.receipt["status"] = "failed"
-                print("Could not finalize verification receipt: " + error_description(error), file=sys.stderr)
-                exit_code = exit_code or 1
-                try: runner.save()
-                except Exception as final_error:
-                    print("Terminal receipt remains unwritable: " + error_description(final_error), file=sys.stderr)
-            if pending_signals and exit_code != 128 + pending_signals[0]:
-                error = RunInterrupted(pending_signals[0])
-                runner.receipt.update(status="interrupted", error=error_description(error))
-                exit_code = 128 + error.signum
-                try: runner.save()
-                except Exception as error:
-                    print("Could not record final interruption: " + error_description(error), file=sys.stderr)
+            exit_code = finalize_verification(runner, repo, derived_data, initial_inputs,
+                original_artifacts, pending_signals, exit_code)
         finally:
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)

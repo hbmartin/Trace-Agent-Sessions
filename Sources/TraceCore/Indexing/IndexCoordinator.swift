@@ -976,42 +976,31 @@ public actor IndexCoordinator {
             if !discoveryAttempts.isEmpty {
                 status.phase = .reconciling
                 await progress(status)
-                for source in sources {
-                    let live = Set(allFiles.filter { $0.agent == source.agent }.map {
-                        SourceFileKey(
-                            agent: $0.agent,
-                            comparisonPath: $0.canonicalPath.comparisonKey
-                        )
-                    })
-                    for stored in try await database.paths(agent: source.agent)
-                    where !live.contains(SourceFileKey(
-                        agent: source.agent,
-                        comparisonPath: TraceFileIO.canonicalPath(stored.path).comparisonKey
-                    )) {
+                let liveByAgent = Dictionary(grouping: allFiles, by: \.agent).mapValues { files in
+                    Set(files.map { $0.canonicalPath.comparisonKey })
+                }
+                for (rootID, attempt) in attemptsByRootID.sorted(by: { $0.key < $1.key }) {
+                    let failedScopes = attempt.failures.map(\.relativeScope)
+                    let coversWholeRoot = attempt.scannedScopes.contains(where: \.isRoot)
+                    if failedScopes.contains(where: \.isRoot) { continue }
+                    let context = attempt.mappingContext
+                    let scopes: [String]? = coversWholeRoot ? nil : attempt.scannedScopes.map { relative in
+                        relative.components.reduce(URL(fileURLWithPath: context.scanPath.path)) {
+                            $0.appendingPathComponent($1)
+                        }.path
+                    }
+                    for stored in try await database.paths(agent: attempt.source.agent, rootID: rootID,
+                        scopes: scopes, caseSensitive: context.scanPath.isCaseSensitive) {
                         try Task.checkCancellation()
-                        guard let attempt = attemptsByRootID[stored.rootID] else { continue }
-                        let failedScopes = attempt.failures.map(\.relativeScope)
-                        let coversWholeRoot = attempt.scannedScopes.contains {
-                            $0.isRoot
+                        let key = TraceFileIO.comparisonKey(URL(fileURLWithPath: stored.path).standardized.path,
+                            caseSensitive: context.scanPath.isCaseSensitive)
+                        if liveByAgent[attempt.source.agent]?.contains(key) == true { continue }
+                        let relative = attempt.root.relativeScope(forStoredPath: stored.path, in: context)
+                        if !coversWholeRoot {
+                            guard let relative, attempt.scannedScopes.contains(where: { $0.contains(relative) }) else { continue }
                         }
-                        let relative = attempt.root.relativeScope(
-                            forStoredPath: stored.path,
-                            in: attempt.mappingContext
-                        )
-                        if coversWholeRoot {
-                            if failedScopes.contains(where: \.isRoot) {
-                                continue
-                            }
-                            if !failedScopes.isEmpty {
-                                guard let relative,
-                                      !failedScopes.contains(where: { $0.contains(relative) })
-                                else { continue }
-                            }
-                        } else {
-                            guard let relative,
-                                  attempt.scannedScopes.contains(where: { $0.contains(relative) }),
-                                  !failedScopes.contains(where: { $0.contains(relative) })
-                            else { continue }
+                        if !failedScopes.isEmpty {
+                            guard let relative, !failedScopes.contains(where: { $0.contains(relative) }) else { continue }
                         }
                         try await database.deleteSource(id: stored.id)
                         await mutations.markChanged()
