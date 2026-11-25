@@ -568,7 +568,10 @@ os._exit(0)
         class Child:
             pid=123
             returncode=None
-            def poll(self):raise AssertionError('Reaped the ownership anchor too early')
+            def poll(self):
+                events.append('poll')
+                if state['forked']:self.returncode=0
+                return self.returncode
             def wait(self,timeout):
                 self_test.assertTrue(state['killed']);events.append('wait');self.returncode=0
         self_test=self;child=Child()
@@ -585,6 +588,7 @@ os._exit(0)
         self.assertLess(events.index('term'),events.index('kill'))
         self.assertLess(events.index('kill'),events.index('wait'))
         self.assertEqual(child.returncode,0)
+        self.assertNotIn('poll',events)
 
     def test_unreaped_leader_replacement_is_rejected_without_second_signal(self):
         from unittest.mock import Mock
