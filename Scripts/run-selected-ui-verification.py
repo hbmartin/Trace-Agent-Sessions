@@ -152,36 +152,43 @@ def cleanup_child(child: subprocess.Popen) -> None:
 
 def _cleanup_child(child: subprocess.Popen) -> None:
     known = set()
-    if child.returncode is None:
-        # Do not reap the only proof that this PGID is still our setsid child's.
-        # Its zombie row remains trustworthy until poll(), even after descendants
-        # have been reparented. Never adopt an already-reaped group's strangers.
-        original = process_group_members(child.pid)
-        leader = next((member for member in original if member["pid"] == child.pid), None)
-        if leader is not None:
-            if any(member["uid"] != os.getuid() for member in original):
-                raise CleanupFailed("Process group contains a different user")
-            known.update((member["pid"], member["start"]) for member in original)
+    anchor = None
 
     def inspect() -> bool:
-        child.poll()  # Reap only our direct child, then revalidate current members.
+        nonlocal anchor
+        # poll()/wait() can release the PID which pins ownership of this PGID.
+        # Keep the direct child unreaped until every live member has retired,
+        # including descendants created by a TERM handler between snapshots.
         members = process_group_members(child.pid)
         live = [member for member in members if not member["state"].startswith("Z")]
-        if child.returncode is not None and not live:
-            return True
-        if child.returncode is not None and any(member["pid"] == child.pid for member in live):
-            raise CleanupFailed("Process-group leader identity was recycled")
+        leader = next((member for member in members if member["pid"] == child.pid), None)
         if child.returncode is None:
-            # A group whose live leader is our unreaped setsid child is owned.
-            if not any(member["pid"] == child.pid for member in members):
-                return False  # Leader may be between exit and reaping; inspect again.
-            for member in members:
-                if member["uid"] != os.getuid():
+            if leader is not None:
+                identity = (leader["pid"], leader["start"])
+                if anchor is not None and identity != anchor:
+                    raise CleanupFailed("Process-group leader identity was recycled")
+                if leader["parent"] != os.getpid():
+                    raise CleanupFailed("Unreaped leader is not our direct child")
+                if any(member["uid"] != os.getuid() for member in members):
                     raise CleanupFailed("Process group contains a different user")
-                known.add((member["pid"], member["start"]))
+                anchor = identity
+                known.update((member["pid"], member["start"]) for member in members)
+            elif live:
+                raise CleanupFailed("Unreaped process-group ownership could not be verified")
+            if not live:
+                child.wait(timeout=2)
+                remaining = process_group_members(child.pid)
+                if any(not member["state"].startswith("Z") for member in remaining):
+                    raise CleanupFailed("Live membership appeared after final child join")
+                return True
         else:
-            # New descendants may appear while TERM is being handled. Admit only
-            # ancestry rooted in an already observed, still-identical member.
+            if not live:
+                return True
+            if leader is not None and not leader["state"].startswith("Z"):
+                raise CleanupFailed("Process-group leader identity was recycled")
+            # Never adopt an already-reaped group's strangers. An external
+            # waiter may have retired our leader; only previously proved
+            # identities and their still-observed ancestry remain admissible.
             pending = list(live)
             while pending:
                 old_count = len(pending)
@@ -344,44 +351,62 @@ class Runner:
         interrupted = False
         # Structured exports keep stdout pure; diagnostics always have their own log.
         with (self.output / phase["log"]).open("w") as log, (self.output / (label + ".stderr.log")).open("w") as diagnostics:
+            launch_signals = []
+            launch_handlers = {sig: signal.signal(sig, lambda signum, frame: launch_signals.append(signum))
+                               for sig in (signal.SIGINT, signal.SIGTERM)}
             try:
-                child = subprocess.Popen(args, stdout=log, stderr=diagnostics, start_new_session=True)
-            except OSError as error:
-                phase.update(status="launch-failed", error=str(error), elapsedSeconds=time.monotonic() - start)
-                self.save()
-                raise
-            try:
-                phase["processGroupID"] = child.pid
-                code = child.wait(timeout=timeout)
-            except (subprocess.TimeoutExpired, KeyboardInterrupt, RunInterrupted) as error:
-                interrupted = not isinstance(error, subprocess.TimeoutExpired)
-                pending_signals = []
-                handlers = {sig: signal.signal(sig, lambda signum, frame: pending_signals.append(signum))
-                            for sig in (signal.SIGINT, signal.SIGTERM)}
-                cleanup_error = None
                 try:
-                    cleanup_child(child)
-                except CleanupFailed as failure:
-                    cleanup_error = failure
-                finally:
-                    for sig, handler in handlers.items():
-                        signal.signal(sig, handler)
-                if pending_signals:
-                    error = RunInterrupted(pending_signals[0])
-                    interrupted = True
-                if cleanup_error:
-                    phase.update(status="cleanup-failed", error=error_description(error), cleanupError=str(cleanup_error),
-                                 elapsedSeconds=time.monotonic() - start)
+                    child = subprocess.Popen(args, stdout=log, stderr=diagnostics, start_new_session=True)
+                except OSError as error:
+                    phase.update(status="launch-failed", error=str(error), elapsedSeconds=time.monotonic() - start)
+                    if launch_signals:
+                        interruption = RunInterrupted(launch_signals[0])
+                        phase.update(status="interrupted", launchError=str(error), error=error_description(interruption),
+                                     exitCode=128 + interruption.signum)
+                        self.save()
+                        raise interruption from error
                     self.save()
-                    if interrupted:
-                        interruption = error if isinstance(error, RunInterrupted) else RunInterrupted(signal.SIGINT)
-                        interruption.cleanup_error = str(cleanup_error)
-                        raise interruption
-                    raise cleanup_error
-                phase["status"] = "interrupted" if interrupted else "timeout"
-                phase["error"] = error_description(error)
-                code = (128 + error.signum if isinstance(error, RunInterrupted) else 130) if interrupted else 124
-                interruption = error if isinstance(error, RunInterrupted) else RunInterrupted(signal.SIGINT)
+                    raise
+                try:
+                    phase["processGroupID"] = child.pid
+                    # A signal during Popen must not lose ownership of its child.
+                    # Restore normal interruption only after the handle is installed
+                    # inside the protected cleanup boundary.
+                    for sig, handler in launch_handlers.items(): signal.signal(sig, handler)
+                    launch_handlers.clear()
+                    if launch_signals: raise RunInterrupted(launch_signals[0])
+                    code = child.wait(timeout=timeout)
+                except (subprocess.TimeoutExpired, KeyboardInterrupt, RunInterrupted) as error:
+                    interrupted = not isinstance(error, subprocess.TimeoutExpired)
+                    pending_signals = []
+                    handlers = {sig: signal.signal(sig, lambda signum, frame: pending_signals.append(signum))
+                                for sig in (signal.SIGINT, signal.SIGTERM)}
+                    cleanup_error = None
+                    try:
+                        cleanup_child(child)
+                    except CleanupFailed as failure:
+                        cleanup_error = failure
+                    finally:
+                        for sig, handler in handlers.items():
+                            signal.signal(sig, handler)
+                    if pending_signals:
+                        error = RunInterrupted(pending_signals[0])
+                        interrupted = True
+                    if cleanup_error:
+                        phase.update(status="cleanup-failed", error=error_description(error), cleanupError=str(cleanup_error),
+                                     elapsedSeconds=time.monotonic() - start)
+                        self.save()
+                        if interrupted:
+                            interruption = error if isinstance(error, RunInterrupted) else RunInterrupted(signal.SIGINT)
+                            interruption.cleanup_error = str(cleanup_error)
+                            raise interruption
+                        raise cleanup_error
+                    phase["status"] = "interrupted" if interrupted else "timeout"
+                    phase["error"] = error_description(error)
+                    code = (128 + error.signum if isinstance(error, RunInterrupted) else 130) if interrupted else 124
+                    interruption = error if isinstance(error, RunInterrupted) else RunInterrupted(signal.SIGINT)
+            finally:
+                for sig, handler in launch_handlers.items(): signal.signal(sig, handler)
         phase.update(exitCode=code, elapsedSeconds=time.monotonic() - start)
         if phase["status"] == "running":
             phase["status"] = "passed" if code == 0 else "failed"

@@ -159,6 +159,50 @@ private struct ReconciliationScopeMatcher: Sendable {
 }
 
 public actor IndexDatabase {
+    private struct SourcePathKey: Hashable, Sendable { let agent: String; let rootID: Int64 }
+    private struct SourcePathCacheContext: Equatable, Sendable {
+        let connection: ObjectIdentifier
+        let dataVersion: Int
+    }
+    private struct SourcePathMembership: Sendable {
+        let key: SourcePathKey
+        let nonASCII: Bool
+    }
+    // Counts, not path copies: retained state is bounded by configured roots.
+    private var nonASCIIPathCounts: [SourcePathKey: Int] = [:]
+    private var sourcePathCacheContext: SourcePathCacheContext?
+
+    private nonisolated static func sourcePathMembership(id: Int64, in db: Database) throws -> SourcePathMembership? {
+        guard let row = try Row.fetchOne(db, sql: "SELECT agent, root_id, path FROM source_file WHERE id=?", arguments: [id]) else { return nil }
+        let path: String = row["path"]
+        return .init(key: .init(agent: row["agent"], rootID: row["root_id"]), nonASCII: !path.utf8.allSatisfy { $0 < 128 })
+    }
+
+    /// All membership mutations are synchronous actor operations. Publish deltas
+    /// only after commit, retaining the old external-writer qualification until
+    /// the next read snapshot validates it again.
+    private func changingSourcePaths<T>(ids: [Int64] = [],
+        _ body: (Database) throws -> (T, [Int64])) throws -> T {
+        let tracking = !nonASCIIPathCounts.isEmpty
+        let (result, before, after) = try pool.write { db in
+            let before = tracking ? try Set(ids).compactMap { try Self.sourcePathMembership(id: $0, in: db) } : []
+            let (result, inserted) = try body(db)
+            let after = tracking ? try Set(ids + inserted).compactMap { try Self.sourcePathMembership(id: $0, in: db) } : []
+            return (result, before, after)
+        }
+        var deltas: [SourcePathKey: Int] = [:]
+        for item in before where item.nonASCII { deltas[item.key, default: 0] -= 1 }
+        for item in after where item.nonASCII { deltas[item.key, default: 0] += 1 }
+        for (key, delta) in deltas {
+            guard let count = nonASCIIPathCounts[key] else { continue }
+            // An external writer may have changed membership. Never turn an
+            // inconsistent count into permission to skip a fallback.
+            if count + delta < 0 { nonASCIIPathCounts.removeValue(forKey: key) }
+            else { nonASCIIPathCounts[key] = count + delta }
+        }
+        return result
+    }
+
     private var transcriptReadRevision: UInt64 = 0
     private var codexNameWriteTransactionCount = 0
     private var failNextCodexTitleLookupForTesting = false
@@ -788,6 +832,13 @@ public actor IndexDatabase {
         let committed = OSAllocatedUnfairLock(initialState: false)
         defer { if committed.withLock({ $0 }) { committedResetCountForTesting += 1 } }
         #endif
+        let pathResetCommitted = OSAllocatedUnfairLock(initialState: false)
+        defer {
+            if pathResetCommitted.withLock({ $0 }) {
+                nonASCIIPathCounts.removeAll()
+                sourcePathCacheContext = nil
+            }
+        }
         let generation = contentGeneration.advanced()
         try pool.writeWithoutTransaction { db in
             try db.inTransaction {
@@ -809,6 +860,7 @@ public actor IndexDatabase {
             #if DEBUG
             committed.withLock { $0 = true }
             #endif
+            pathResetCommitted.withLock { $0 = true }
             generationState.withLock { $0.generation = generation; if let scope { $0.scope = scope } }
             onCommitted()
             #if DEBUG
@@ -827,7 +879,7 @@ public actor IndexDatabase {
         let configured = Set(roots.map {
             StoredRootIdentity(agent: $0.agent.rawValue, path: $0.url.path)
         })
-        return try pool.writeWithoutTransaction { db in
+        let (changed, removedRoots) = try pool.writeWithoutTransaction { db in
             let stored = try Row.fetchAll(db, sql: "SELECT id, agent, path FROM source_root")
             let storedIdentities = Set(stored.map { (row: Row) -> StoredRootIdentity in
                 StoredRootIdentity(agent: row["agent"], path: row["path"])
@@ -839,7 +891,7 @@ public actor IndexDatabase {
                 return configured.contains(identity) ? nil : row["id"]
             }
             let hasUnregisteredRoots = !configured.subtracting(storedIdentities).isEmpty
-            guard !removed.isEmpty || hasUnregisteredRoots else { return false }
+            guard !removed.isEmpty || hasUnregisteredRoots else { return (false, [Int64]()) }
             try db.inTransaction {
                 for rootID in removed {
                     try db.execute(sql: """
@@ -861,8 +913,11 @@ public actor IndexDatabase {
                 }
                 return .commit
             }
-            return true
+            return (true, removed)
         }
+        let removed = Set(removedRoots)
+        nonASCIIPathCounts = nonASCIIPathCounts.filter { !removed.contains($0.key.rootID) }
+        return changed
     }
 
     public func statistics() throws -> IndexStatistics {
@@ -1006,7 +1061,7 @@ public actor IndexDatabase {
         file: DiscoveredSourceFile,
         fingerprint: SourceFingerprint
     ) throws -> Int64 {
-        try pool.write { db in
+        try changingSourcePaths { db in
             try db.execute(
                 sql: """
                     INSERT INTO source_file(root_id, agent, format, path, dev, inode, size, mtime_ns, scanned_bytes, head_hash, head_length)
@@ -1019,7 +1074,7 @@ public actor IndexDatabase {
                     fingerprint.headHash, fingerprint.headLength,
                 ]
             )
-            return db.lastInsertedRowID
+            return (db.lastInsertedRowID, [db.lastInsertedRowID])
         }
     }
 
@@ -1071,33 +1126,32 @@ public actor IndexDatabase {
     }
 
     func moveSource(id: Int64, rootID: Int64, path: String) throws {
-        try pool.write { db in
+        try changingSourcePaths(ids: [id]) { db in
             try recordRelocation(sourceID: id, in: db)
             try db.execute(
                 sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
                 arguments: [rootID, path, id]
             )
+            return ((), [])
         }
     }
 
     func replacePlaceholderWithMovedSource(placeholderID: Int64, movedID: Int64,
                                            rootID: Int64, path: String) throws {
-        try pool.writeWithoutTransaction { db in
-            try db.inTransaction {
-                try db.execute(sql: "DELETE FROM source_file WHERE id=? AND is_placeholder=1",
-                               arguments: [placeholderID])
-                guard db.changesCount == 1 else { throw SessionSourceError.malformedRecord("source placeholder changed") }
-                try recordRelocation(sourceID: movedID, in: db)
-                try db.execute(sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
-                               arguments: [rootID, path, movedID])
-                return .commit
-            }
+        try changingSourcePaths(ids: [placeholderID, movedID]) { db in
+            try db.execute(sql: "DELETE FROM source_file WHERE id=? AND is_placeholder=1",
+                           arguments: [placeholderID])
+            guard db.changesCount == 1 else { throw SessionSourceError.malformedRecord("source placeholder changed") }
+            try recordRelocation(sourceID: movedID, in: db)
+            try db.execute(sql: "UPDATE source_file SET root_id=?, path=? WHERE id=?",
+                           arguments: [rootID, path, movedID])
+            return ((), [])
         }
     }
 
     func promotePlaceholder(id: Int64, rootID: Int64, file: DiscoveredSourceFile,
                             fingerprint: SourceFingerprint) throws {
-        try pool.write { db in
+        try changingSourcePaths(ids: [id]) { db in
             try db.execute(sql: """
                 UPDATE source_file SET root_id=?, agent=?, format=?, is_placeholder=0,
                     dev=?, inode=?, size=?, mtime_ns=?, scanned_bytes=0, head_hash=?, head_length=?, fallback_ts=NULL, last_valid_ts=NULL
@@ -1109,23 +1163,22 @@ public actor IndexDatabase {
                     fingerprint.headHash, fingerprint.headLength, id,
                 ])
             guard db.changesCount == 1 else { throw SessionSourceError.malformedRecord("source placeholder changed") }
+            return ((), [])
         }
     }
 
     func deleteSource(id: Int64) throws {
-        try pool.writeWithoutTransaction { db in
-            try db.inTransaction {
-                try db.execute(
-                    sql: "DELETE FROM message_fts WHERE rowid IN (SELECT id FROM message WHERE source_file_id=?)",
-                    arguments: [id]
-                )
-                try db.execute(sql: "DELETE FROM usage_daily")
-                try db.execute(sql: "DELETE FROM source_file WHERE id=?", arguments: [id])
-                try Self.markRollupsDirty(db)
-                try deleteOrphanedProjects(db: db)
-                try db.execute(sql: "DELETE FROM source_move_alias WHERE source_file_id=?", arguments: [id])
-                return .commit
-            }
+        try changingSourcePaths(ids: [id]) { db in
+            try db.execute(
+                sql: "DELETE FROM message_fts WHERE rowid IN (SELECT id FROM message WHERE source_file_id=?)",
+                arguments: [id]
+            )
+            try db.execute(sql: "DELETE FROM usage_daily")
+            try db.execute(sql: "DELETE FROM source_file WHERE id=?", arguments: [id])
+            try Self.markRollupsDirty(db)
+            try deleteOrphanedProjects(db: db)
+            try db.execute(sql: "DELETE FROM source_move_alias WHERE source_file_id=?", arguments: [id])
+            return ((), [])
         }
     }
 
@@ -1553,7 +1606,8 @@ public actor IndexDatabase {
     }
 
     func recordSourceError(file: DiscoveredSourceFile, rootID: Int64, error: String) throws {
-        try pool.write { db in
+        let existing = try sourceState(agent: file.agent, path: file.url.path)
+        try changingSourcePaths(ids: existing.map { [$0.id] } ?? []) { db in
             try db.execute(sql: """
                 INSERT OR IGNORE INTO source_file(
                     root_id, agent, format, path, dev, inode, size, mtime_ns,
@@ -1582,6 +1636,7 @@ public actor IndexDatabase {
                     """,
                 arguments: [id, error]
             )
+            return ((), [id])
         }
     }
 
@@ -1739,7 +1794,8 @@ public actor IndexDatabase {
         if let capturedScopes, capturedScopes.isEmpty { return [] }
         let scopes = capturedScopes.map { Array(Set($0)).sorted { $0.path < $1.path } }
         let matcher = scopes.map(ReconciliationScopeMatcher.init)
-        return try pool.read { db in
+        let onlyASCII = scopes?.allSatisfy { $0.isCaseSensitive && $0.path.utf8.allSatisfy { $0 < 128 } } == true
+        let readRows: @Sendable (Database, Bool) throws -> [IndexedSourcePath] = { db, skipFallback in
             var rows: [Row] = [], seen: Set<Int64> = []
             let base = "SELECT id, root_id, path FROM source_file WHERE agent=? AND root_id=?"
             func collect(_ suffix: String, _ arguments: StatementArguments) throws {
@@ -1758,34 +1814,87 @@ public actor IndexDatabase {
                     }
                     try collect(" AND (" + predicates.joined(separator: " OR ") + ")", arguments)
                 }
-                let function = DatabaseFunction("trace_reconciliation_matches", argumentCount: 1, pure: true) { values in
-                    guard let path = String.fromDatabaseValue(values[0]) else { return false }
+                if !skipFallback {
                     #if DEBUG
-                    self.reconciliationPredicates.withLock { $0 += 1 }
+                    self.reconciliationFallbacks.withLock { $0 += 1 }
                     #endif
-                    return matcher.contains(path)
-                }
-                db.add(function: function)
-                defer { db.remove(function: function) }
-                let onlyASCII = scopes.allSatisfy { $0.isCaseSensitive && $0.path.utf8.allSatisfy { $0 < 128 } }
-                if onlyASCII {
-                    try collect(" AND path GLOB ? AND trace_reconciliation_matches(path)",
-                        [agent.rawValue, rootID, "*[^\u{1}-\u{7f}]*"])
-                } else {
-                    try collect(" AND trace_reconciliation_matches(path)", [agent.rawValue, rootID])
+                    let function = DatabaseFunction("trace_reconciliation_matches", argumentCount: 1, pure: true) { values in
+                        guard let path = String.fromDatabaseValue(values[0]) else { return false }
+                        #if DEBUG
+                        self.reconciliationPredicates.withLock { $0 += 1 }
+                        #endif
+                        return matcher.contains(path)
+                    }
+                    db.add(function: function)
+                    defer { db.remove(function: function) }
+                    if onlyASCII {
+                        try collect(" AND path GLOB ? AND trace_reconciliation_matches(path)",
+                            [agent.rawValue, rootID, "*[^\u{1}-\u{7f}]*"])
+                    } else {
+                        try collect(" AND trace_reconciliation_matches(path)", [agent.rawValue, rootID])
+                    }
                 }
             } else {
                 try collect("", [agent.rawValue, rootID])
             }
             #if DEBUG
             let rowCount = rows.count
-            reconciliationRows.withLock { $0 += rowCount }
+            self.reconciliationRows.withLock { $0 += rowCount }
             #endif
             return rows.map { IndexedSourcePath(id: $0["id"], rootID: $0["root_id"], path: $0["path"]) }
         }
+        // Ordinary insensitive and Unicode requests keep their existing reader
+        // path. Only ASCII-sensitive requests need the qualified count cache.
+        guard onlyASCII else { return try pool.read { try readRows($0, false) } }
+        let key = SourcePathKey(agent: agent.rawValue, rootID: rootID)
+        let priorContext = sourcePathCacheContext, priorCount = nonASCIIPathCounts[key]
+        #if DEBUG
+        let snapshotHook = reconciliationSnapshotHookForTesting
+        #endif
+        let (result, context, count) = try pool.writeWithoutTransaction { db in
+            var output: ([IndexedSourcePath], SourcePathCacheContext, Int?)?
+            try db.inTransaction(.deferred) {
+                // Establish the snapshot before data_version. Other connections
+                // may commit meanwhile; this version stays fixed until COMMIT.
+                let rootExists = try Int64.fetchOne(db, sql: "SELECT id FROM source_root WHERE id=? AND agent=?", arguments: [rootID, agent.rawValue]) != nil
+                let context = SourcePathCacheContext(connection: ObjectIdentifier(db),
+                    dataVersion: try Int.fetchOne(db, sql: "PRAGMA data_version") ?? 0)
+                guard rootExists else { output = ([], context, nil); return .commit }
+                let count: Int
+                if context == priorContext, let priorCount { count = priorCount }
+                else {
+                    count = try Int.fetchOne(db, sql: "SELECT count(*) FROM source_file WHERE agent=? AND root_id=? AND path GLOB ?",
+                        arguments: [agent.rawValue, rootID, "*[^\u{1}-\u{7f}]*"]) ?? 0
+                    #if DEBUG
+                    self.reconciliationClassifications.withLock { $0 += 1 }
+                    #endif
+                }
+                #if DEBUG
+                snapshotHook?()
+                #endif
+                output = (try readRows(db, count == 0), context, count)
+                return .commit
+            }
+            return output!
+        }
+        if sourcePathCacheContext != context { nonASCIIPathCounts.removeAll() }
+        sourcePathCacheContext = context
+        if let count { nonASCIIPathCounts[key] = count }
+        else { nonASCIIPathCounts.removeValue(forKey: key) }
+        return result
     }
 
     #if DEBUG
+    private var reconciliationSnapshotHookForTesting: (@Sendable () -> Void)?
+    func setReconciliationSnapshotHookForTesting(_ hook: (@Sendable () -> Void)?) { reconciliationSnapshotHookForTesting = hook }
+    var reconciliationCachedRootsForTesting: Int { nonASCIIPathCounts.count }
+    func reconciliationCachedCountForTesting(agent: AgentKind, rootID: Int64) -> Int? {
+        nonASCIIPathCounts[.init(agent: agent.rawValue, rootID: rootID)]
+    }
+    private nonisolated let reconciliationClassifications = OSAllocatedUnfairLock(initialState: 0)
+    private nonisolated let reconciliationFallbacks = OSAllocatedUnfairLock(initialState: 0)
+    nonisolated var reconciliationClassificationsForTesting: Int { reconciliationClassifications.withLock { $0 } }
+    nonisolated var reconciliationFallbacksForTesting: Int { reconciliationFallbacks.withLock { $0 } }
     private nonisolated let reconciliationRows = OSAllocatedUnfairLock(initialState: 0)
     private nonisolated let reconciliationPredicates = OSAllocatedUnfairLock(initialState: 0)
     nonisolated var reconciliationRowsForTesting: Int { reconciliationRows.withLock { $0 } }

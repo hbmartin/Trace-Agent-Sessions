@@ -20,7 +20,7 @@ The decoded-row counter is measurement instrumentation, not a normal TraceCore A
 Apply the committed preparer to an isolated source export for **both** revisions:
 
 ```sh
-python3 Scripts/prepare-reconciliation-benchmark.py --source-root /absolute/export
+python3 Scripts/prepare-reconciliation-benchmark.py --source-root /absolute/export --layout count-cache
 xcodebuild build -project /absolute/export/Trace.xcodeproj -scheme Trace \
   -configuration Release -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath /absolute/products \
@@ -56,3 +56,19 @@ performance samples. All workload exits unwind fixture cleanup before exiting.
 Prepared UI provenance now uses format 2 with product-relative manifest names and
 streaming hashes. An old receipt must be prepared again; reuse never rebuilds it.
 The existing complete Debug inventory and before/after-case checks remain in place.
+
+Use `--layout pr106` for the pinned #106 export and `--layout count-cache` for
+the follow-up; missing or incompatible layouts fail before writing. Both layouts
+use the same metric definitions. `query-sensitive-ascii` and
+`query-sensitive-mixed` separate the first cold query from 100 warm queries.
+Actual captured filesystem policies and forced SQL policies are reported
+separately; forced queries do not establish physical mixed-volume coverage.
+
+The follow-up's ASCII-sensitive fast path caches a count per provider/root, not
+source-path copies. It classifies inside the same writer read snapshot as its
+query and qualifies that count by connection identity and SQLite data_version.
+Committed membership changes adjust known counts; content appends do not.
+Other-writer commits invalidate qualification, and reset/root retirement removes
+entries. Unicode-bearing roots retain fallback matching; this does not make
+normalization-sensitive filesystems equivalent to APFS. No filesystem policy or
+normalization semantics change is implied by the optimization.
