@@ -1,0 +1,12 @@
+{
+  "executions": 30,
+  "uniqueTests": 6,
+  "perCase": {
+    "TraceCoreTests/IndexingRegressionTests/testPathCacheExternalCommitDuringSnapshotCannotHideUnicode": 5,
+    "TraceCoreTests/IndexingRegressionTests/testPathCacheFailedMembershipTransactionPreservesCounts": 5,
+    "TraceCoreTests/IndexingRegressionTests/testPathCachePlaceholderPromotionReplacementAndRootRetirement": 5,
+    "TraceCoreTests/IndexingRegressionTests/testPathCacheRollbackAndCommittedCheckpointFailure": 5,
+    "TraceCoreTests/IndexingRegressionTests/testPathCacheTracksCommittedMembershipAndCanonicalFallback": 5,
+    "TraceCoreTests/IndexingRegressionTests/testSensitiveASCIIPathCacheSkipsWarmFallbackThroughContentAppends": 5
+  }
+}

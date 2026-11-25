@@ -25,7 +25,7 @@ def main() -> int:
         'cpuDefinition': 'Python process CPU during cleanup only; excludes ps subprocess CPU',
         'elapsedDefinition': 'cleanup call after fixture readiness; setup, teardown, and validation excluded'}
     child = None
-    descendant = None
+    shutdown_read = shutdown_write = None
     interrupted_signal = None
     def interrupted(signum, frame):
         nonlocal interrupted_signal
@@ -35,7 +35,8 @@ def main() -> int:
     try:
         with tempfile.TemporaryDirectory(prefix='TraceCleanup-') as temp:
             ready, release = Path(temp)/'ready', Path(temp)/'exit'
-            code = '''import os,sys,time
+            shutdown_read, shutdown_write = os.pipe()
+            code = '''import os,sys,time,select
 from pathlib import Path
 mode=sys.argv[3]
 if mode=='early-exit':
@@ -43,25 +44,27 @@ if mode=='early-exit':
   pending=Path(sys.argv[1]+'.tmp')
   pending.write_text(str(os.getpid()))
   pending.replace(sys.argv[1])
-  time.sleep(60)
+  os.read(int(sys.argv[4]),1)
  else:
-  while not Path(sys.argv[2]).exists():time.sleep(.005)
+  while not Path(sys.argv[2]).exists():
+   if select.select([int(sys.argv[4])],[],[],.005)[0]:sys.exit(0)
   os._exit(0)
 else:
  pending=Path(sys.argv[1]+'.tmp')
  pending.write_text('ready')
  pending.replace(sys.argv[1])
  if mode=='zombie':os._exit(0)
- time.sleep(60)
+ os.read(int(sys.argv[4]),1)
 '''
-            child = subprocess.Popen([sys.executable, '-c', code, str(ready), str(release), args.mode],
-                start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            child = subprocess.Popen([sys.executable, '-c', code, str(ready), str(release), args.mode, str(shutdown_read)],
+                pass_fds=(shutdown_read,), start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.close(shutdown_read); shutdown_read = None
             result['processGroupID'] = child.pid
             deadline = time.monotonic()+5
             while not ready.exists() and time.monotonic()<deadline: time.sleep(.005)
             if not ready.exists(): raise TimeoutError('fixture readiness timeout')
             if args.mode=='early-exit':
-                descendant = int(ready.read_text())
+                if int(ready.read_text()) <= 0: raise ValueError('Invalid fixture PID')
                 release.touch()
             if args.mode in ('early-exit', 'zombie'):
                 deadline = time.monotonic()+5
@@ -87,26 +90,22 @@ else:
         pending_signals, cleanup_errors = [], []
         try:
             for sig in handlers: signal.signal(sig, lambda signum, frame: pending_signals.append(signum))
-            if descendant is not None:
-                try: os.kill(descendant, signal.SIGKILL)
-                except ProcessLookupError: pass
-                except Exception as error: cleanup_errors.append(f'{type(error).__name__}: {error}')
+            # The pipe belongs to this invocation, not a reusable numeric PID.
+            # EOF also retires a descendant if a deliberately broken runner
+            # failed before signaling anything. This is outside execution timing.
+            for descriptor in (shutdown_write, shutdown_read):
+                if descriptor is not None:
+                    try: os.close(descriptor)
+                    except Exception as error: cleanup_errors.append(f'{type(error).__name__}: {error}')
             if child is not None:
                 try:
-                    if descendant is None and child.returncode is None:
-                        runner.cleanup_child(child)
-                    if child.poll() is None: child.kill()
                     child.wait(timeout=2)
+                    deadline = time.monotonic() + 2
+                    while hasattr(runner, 'process_group_members') and any(not member['state'].startswith('Z') for member in runner.process_group_members(child.pid)):
+                        if time.monotonic() >= deadline: raise TimeoutError('Controlled fixture did not retire after shutdown')
+                        time.sleep(.01)
                 except Exception as error:
                     cleanup_errors.append(f'{type(error).__name__}: {error}')
-                    # This is our fixed fixture, not an arbitrary desktop group.
-                    # Its original unreaped setsid child still owns this PGID.
-                    # A broken injected runner must not defeat fixture teardown.
-                    try:
-                        if child.returncode is None: os.killpg(child.pid, signal.SIGKILL)
-                        child.wait(timeout=2)
-                    except ProcessLookupError: pass
-                    except Exception as teardown: cleanup_errors.append(f'{type(teardown).__name__}: {teardown}')
         finally:
             for sig, handler in handlers.items(): signal.signal(sig, handler)
         if pending_signals and interrupted_signal is None: interrupted_signal = pending_signals[0]

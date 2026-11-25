@@ -1,0 +1,34 @@
+{
+  "report": "#2",
+  "actualFilesystemReproduced": false,
+  "newMountsCreated": false,
+  "results": [
+    {
+      "fixtureBase": "/var/folders/zk/m1t80b0n64z5sphqvc6kkmzc0000gn/T",
+      "mount": "/System/Volumes/Data",
+      "filesystemType": "apfs",
+      "filesystemPersonality": null,
+      "normalizationTwinsCreated": false,
+      "sameInodeForVariants": true,
+      "directoryNamesUTF8Hex": [
+        "636166c3a9"
+      ]
+    },
+    {
+      "fixtureBase": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup",
+      "mount": "/Volumes/Pro2T",
+      "filesystemType": "apfs",
+      "filesystemPersonality": null,
+      "normalizationTwinsCreated": false,
+      "sameInodeForVariants": true,
+      "directoryNamesUTF8Hex": [
+        "636166c3a9"
+      ]
+    }
+  ],
+  "conclusion": "Both existing writable APFS filesystems reject normalization twins. The reported destructive twin-directory pipeline cannot be reproduced here; existing normalization behavior is retained. Synthetic SQL equivalence alone is not a production-path reproduction.",
+  "deferred": [
+    "#6",
+    "#7"
+  ]
+}

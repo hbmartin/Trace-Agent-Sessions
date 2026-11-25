@@ -7,6 +7,186 @@ import XCTest
 @testable import TraceCore
 
 final class IndexingRegressionTests: XCTestCase {
+    private func cacheSource(_ database: IndexDatabase, root: URL, rootID: Int64,
+                             name: String, agent: AgentKind = .claudeCode) async throws -> Int64 {
+        try await database.createSource(rootID: rootID,
+            file: .init(agent: agent, root: root, url: root.appendingPathComponent(name),
+                        format: agent == .codex ? .codexJSONL : .claudeJSONL),
+            fingerprint: .init(device: 0, inode: 0, size: 0, modificationNanoseconds: 0, headHash: Data(), headLength: 0))
+    }
+
+    func testSensitiveASCIIPathCacheSkipsWarmFallbackThroughContentAppends() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let rootID = try await database.register(root: .init(agent: .claudeCode, url: root))
+        let id = try await cacheSource(database, root: root, rootID: rootID, name: "K.jsonl")
+        for index in 0..<100 { _ = try await cacheSource(database, root: root, rootID: rootID, name: "unrelated-\(index).jsonl") }
+        for index in 0..<10 {
+            let rows = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+            XCTAssertEqual(rows.map(\.id), [id])
+            try await database.finishSource(id: id, fingerprint: .init(device: 0, inode: 0, size: Int64(index),
+                modificationNanoseconds: Int64(index), headHash: Data(), headLength: 0), scannedBytes: Int64(index))
+        }
+        #if DEBUG
+        XCTAssertEqual(database.reconciliationClassificationsForTesting, 1)
+        XCTAssertEqual(database.reconciliationFallbacksForTesting, 0)
+        let count = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: rootID)
+        XCTAssertEqual(count, 0)
+        #endif
+    }
+
+    func testPathCacheTracksCommittedMembershipAndCanonicalFallback() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let rootID = try await database.register(root: .init(agent: .claudeCode, url: root))
+        let codexRootID = try await database.register(root: .init(agent: .codex, url: root))
+        let id = try await cacheSource(database, root: root, rootID: rootID, name: "K.jsonl")
+        let codexID = try await cacheSource(database, root: root, rootID: codexRootID, name: "K.jsonl", agent: .codex)
+        for (agent, key) in [(AgentKind.claudeCode, rootID), (.codex, codexRootID)] {
+            _ = try await database.paths(agent: agent, rootID: key, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        }
+        // String SQL bindings preserve this canonical variant without NSURL
+        // rewriting it. It must invalidate the ASCII-only permission immediately.
+        try await database.moveSource(id: id, rootID: rootID, path: root.path + "/\u{212a}.jsonl")
+        let matched = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        XCTAssertEqual(matched.map(\.id), [id])
+        let codex = try await database.paths(agent: .codex, rootID: codexRootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        XCTAssertEqual(codex.map(\.id), [codexID])
+        #if DEBUG
+        XCTAssertEqual(database.reconciliationClassificationsForTesting, 2)
+        XCTAssertEqual(database.reconciliationFallbacksForTesting, 1)
+        #endif
+        try await database.moveSource(id: id, rootID: rootID, path: root.path + "/K.jsonl")
+        let ascii = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        XCTAssertEqual(ascii.map(\.id), [id])
+        #if DEBUG
+        XCTAssertEqual(database.reconciliationFallbacksForTesting, 1)
+        #endif
+    }
+
+    func testPathCachePlaceholderPromotionReplacementAndRootRetirement() async throws {
+        let outer = try directory(), inner = outer.appendingPathComponent("inner")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let database = try IndexDatabase(url: outer.appendingPathComponent("index.sqlite"))
+        let roots = [SourceRoot(agent: .claudeCode, url: outer), .init(agent: .claudeCode, url: inner)]
+        let first = try await database.register(root: roots[0]), second = try await database.register(root: roots[1])
+        for key in [first, second] { _ = try await database.paths(agent: .claudeCode, rootID: key, scopes: [outer.path + "/K.jsonl"], caseSensitive: true) }
+        let file = DiscoveredSourceFile(agent: .claudeCode, root: outer, url: inner.appendingPathComponent("caf\u{00e9}.jsonl"), format: .claudeJSONL)
+        try await database.recordSourceError(file: file, rootID: first, error: "fixture failure")
+        let state = try await database.sourceState(agent: .claudeCode, path: file.url.path)
+        let placeholder = try XCTUnwrap(state)
+        try await database.promotePlaceholder(id: placeholder.id, rootID: second,
+            file: .init(agent: .claudeCode, root: inner, url: file.url, format: .claudeJSONL),
+            fingerprint: .init(device: 0, inode: 0, size: 0, modificationNanoseconds: 0, headHash: Data(), headLength: 0))
+        #if DEBUG
+        let firstCount = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: first)
+        let secondCount = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: second)
+        XCTAssertEqual(firstCount, 0); XCTAssertEqual(secondCount, 1)
+        #endif
+        try await database.deleteSource(id: placeholder.id)
+        try await database.recordSourceError(file: file, rootID: second, error: "replacement placeholder")
+        let replacementState = try await database.sourceState(agent: .claudeCode, path: file.url.path)
+        let replacement = try XCTUnwrap(replacementState)
+        let moved = try await cacheSource(database, root: outer, rootID: first, name: "K.jsonl")
+        try await database.replacePlaceholderWithMovedSource(placeholderID: replacement.id, movedID: moved, rootID: second, path: file.url.path)
+        let rows = try await database.paths(agent: .claudeCode, rootID: second, scopes: [file.url.path], caseSensitive: true)
+        XCTAssertEqual(rows.map(\.id), [moved])
+        try await database.recordSourceError(file: file, rootID: first, error: "reassigned error")
+        #if DEBUG
+        let reassigned = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: first)
+        let previous = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: second)
+        XCTAssertEqual(reassigned, 1); XCTAssertEqual(previous, 0)
+        #endif
+        _ = try await database.synchronizeConfiguredRoots([roots[1]])
+        #if DEBUG
+        let retained = await database.reconciliationCachedRootsForTesting
+        XCTAssertEqual(retained, 1)
+        #endif
+        let empty = try await database.paths(agent: .claudeCode, rootID: second, scopes: [outer.path + "/K.jsonl"], caseSensitive: true)
+        XCTAssertTrue(empty.isEmpty)
+        let stale = try await database.paths(agent: .claudeCode, rootID: first, scopes: [outer.path + "/K.jsonl"], caseSensitive: true)
+        XCTAssertTrue(stale.isEmpty)
+        #if DEBUG
+        let afterStaleRead = await database.reconciliationCachedRootsForTesting
+        XCTAssertEqual(afterStaleRead, 1, "A retired root cannot recreate a cache entry")
+        #endif
+    }
+
+    func testPathCacheRollbackAndCommittedCheckpointFailure() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let rootID = try await database.register(root: .init(agent: .claudeCode, url: root))
+        let id = try await cacheSource(database, root: root, rootID: rootID, name: "caf\u{00e9}.jsonl")
+        _ = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        #if DEBUG
+        await database.setResetFaultForTesting(.rollback)
+        do { try await database.clearIndex(); XCTFail("Expected rollback") } catch { }
+        let retained = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: rootID)
+        XCTAssertEqual(retained, 1)
+        let original = try await database.paths(agent: .claudeCode, rootID: rootID, capturedScopes: nil)
+        XCTAssertEqual(original.map(\.id), [id], "Rollback must preserve the original source row")
+        await database.setResetFaultForTesting(.checkpoint)
+        do { try await database.clearIndex(); XCTFail("Expected post-commit checkpoint failure") } catch { }
+        let cleared = await database.reconciliationCachedRootsForTesting
+        XCTAssertEqual(cleared, 0)
+        #else
+        _ = id
+        try await database.clearIndex()
+        #endif
+        let empty = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        XCTAssertTrue(empty.isEmpty)
+        #if DEBUG
+        let count = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: rootID)
+        XCTAssertEqual(count, 0)
+        #endif
+    }
+
+    func testPathCacheFailedMembershipTransactionPreservesCounts() async throws {
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let rootID = try await database.register(root: .init(agent: .claudeCode, url: root))
+        let unicode = try await cacheSource(database, root: root, rootID: rootID, name: "caf\u{00e9}.jsonl")
+        let ascii = try await cacheSource(database, root: root, rootID: rootID, name: "other.jsonl")
+        _ = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/other.jsonl"], caseSensitive: true)
+        let asciiState = try await database.paths(agent: .claudeCode, rootID: rootID, capturedScopes: nil)
+        let target = try XCTUnwrap(asciiState.first(where: { $0.id == ascii }))
+        do { try await database.moveSource(id: unicode, rootID: rootID, path: target.path); XCTFail("Expected unique-path rollback") }
+        catch let error as DatabaseError { XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT) }
+        let preserved = try await database.paths(agent: .claudeCode, rootID: rootID, capturedScopes: nil)
+        XCTAssertEqual(Set(preserved.map(\.id)), [unicode, ascii])
+        #if DEBUG
+        let count = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: rootID)
+        XCTAssertEqual(count, 1)
+        #endif
+    }
+
+    func testPathCacheExternalCommitDuringSnapshotCannotHideUnicode() async throws {
+        let root = try directory(), url = root.appendingPathComponent("index.sqlite")
+        let database = try IndexDatabase(url: url)
+        let rootID = try await database.register(root: .init(agent: .claudeCode, url: root))
+        let id = try await cacheSource(database, root: root, rootID: rootID, name: "K.jsonl")
+        _ = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        let external = try DatabaseQueue(path: url.path)
+        let newPath = root.path + "/\u{212a}.jsonl"
+        #if DEBUG
+        let failure = OSAllocatedUnfairLock<String?>(initialState: nil)
+        await database.setReconciliationSnapshotHookForTesting {
+            do { try external.write { db in try db.execute(sql: "UPDATE source_file SET path=? WHERE id=?", arguments: [newPath, id]) } }
+            catch { failure.withLock { $0 = String(describing: error) } }
+        }
+        let previous = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        await database.setReconciliationSnapshotHookForTesting(nil)
+        XCTAssertNil(failure.withLock { $0 })
+        XCTAssertTrue(try XCTUnwrap(previous.first).path.utf8.elementsEqual((root.path + "/K.jsonl").utf8))
+        #else
+        try await external.write { db in try db.execute(sql: "UPDATE source_file SET path=? WHERE id=?", arguments: [newPath, id]) }
+        #endif
+        let current = try await database.paths(agent: .claudeCode, rootID: rootID, scopes: [root.path + "/K.jsonl"], caseSensitive: true)
+        XCTAssertEqual(current.map(\.id), [id])
+        XCTAssertTrue(try XCTUnwrap(current.first).path.utf8.elementsEqual(newPath.utf8))
+        #if DEBUG
+        XCTAssertEqual(database.reconciliationClassificationsForTesting, 2)
+        let count = await database.reconciliationCachedCountForTesting(agent: .claudeCode, rootID: rootID)
+        XCTAssertEqual(count, 1)
+        #endif
+    }
+
     func testDiscoveryValidationPreservesAliasFailuresAndRejectsWrongProvider() throws {
         let parent = try directory(), target = parent.appendingPathComponent("target"), alias = parent.appendingPathComponent("alias")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)

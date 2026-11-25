@@ -1,3 +1,5 @@
+import contextlib
+import io
 import importlib.util
 import json
 import plistlib
@@ -156,6 +158,40 @@ class BackgroundUIVerificationTests(unittest.TestCase):
             self.assertNotEqual(before["trackedDiffSHA256"], after["trackedDiffSHA256"])
             self.assertIn("Sources/new.swift", after["untrackedInputs"])
 
+    def test_launch_signal_is_deferred_until_child_cleanup_owns_handle(self):
+        from unittest.mock import Mock
+        child=Mock(pid=123,returncode=None)
+        child.wait.side_effect=lambda timeout: setattr(child,'returncode',0)
+        def start(*args,**kwargs):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+            return child
+        previous=signal.signal(signal.SIGTERM,lambda signum,frame: (_ for _ in ()).throw(module.RunInterrupted(signum)))
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                runner=module.Runner(Path(temp)/'attempt',{})
+                with patch.object(module.subprocess,'Popen',side_effect=start),patch.object(module,'process_group_members',return_value=[]),patch.object(module.os,'killpg') as kill:
+                    with self.assertRaises(module.RunInterrupted) as error:runner.command('launch',['fixture'],5)
+                self.assertEqual(error.exception.signum,signal.SIGTERM)
+                self.assertEqual(runner.receipt['phases'][0]['status'],'interrupted')
+                self.assertEqual(runner.receipt['phases'][0]['exitCode'],143)
+                self.assertEqual(child.wait.call_count,1)
+                child.poll.assert_not_called();kill.assert_not_called()
+        finally:signal.signal(signal.SIGTERM,previous)
+
+    def test_launch_failure_preserves_a_deferred_interruption(self):
+        def start(*args,**kwargs):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+            raise OSError('original launch failure')
+        with tempfile.TemporaryDirectory() as temp:
+            runner=module.Runner(Path(temp)/'attempt',{})
+            with patch.object(module.subprocess,'Popen',side_effect=start):
+                with self.assertRaises(module.RunInterrupted) as error:runner.command('launch',['fixture'],5)
+            self.assertEqual(error.exception.signum,signal.SIGTERM)
+            phase=runner.receipt['phases'][0]
+            self.assertEqual(phase['status'],'interrupted')
+            self.assertEqual(phase['exitCode'],143)
+            self.assertEqual(phase['launchError'],'original launch failure')
+
     def test_real_sigterm_joins_child_and_records_interruption(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "attempt"
@@ -185,7 +221,7 @@ except m.RunInterrupted as e:
                 self.assertEqual(child.returncode, 143, stdout + stderr)
                 receipt = json.loads((output / "verification.json").read_text())
                 self.assertEqual(receipt["status"], "interrupted")
-                self.assertEqual(receipt["phases"][0]["status"], "interrupted")
+                self.assertEqual(receipt["phases"][0]["status"], "interrupted", json.dumps(receipt) + stdout + stderr)
                 self.assertIn("SIGTERM", receipt["error"])
                 with self.assertRaises(ProcessLookupError):
                     os.kill(held_pid, 0)
@@ -354,7 +390,7 @@ except m.RunInterrupted as e:
     def test_permission_error_in_cleanup_is_batch_fatal(self):
         from unittest.mock import Mock
         child=Mock(pid=123,returncode=None)
-        with patch.object(module.os,"killpg",side_effect=PermissionError("denied")), patch.object(module,"process_group_members",return_value=[{"pid":123,"parent":1,"uid":os.getuid(),"state":"S","start":"original"}]):
+        with patch.object(module.os,"killpg",side_effect=PermissionError("denied")), patch.object(module,"process_group_members",return_value=[{"pid":123,"parent":os.getpid(),"uid":os.getuid(),"state":"S","start":"original"}]):
             with self.assertRaisesRegex(module.CleanupFailed,"123"): module.cleanup_child(child)
         with tempfile.TemporaryDirectory() as temp:
             self.assertEqual(self.invoke(Path(temp)/"attempt",[module.CleanupFailed("denied")]),1)
@@ -427,7 +463,7 @@ except m.RunInterrupted as e:
     def test_final_kill_join_is_bounded(self):
         from unittest.mock import Mock
         child = Mock(pid=123, returncode=None)
-        with patch.object(module.os, "killpg"), patch.object(module, "process_group_members", return_value=[{"pid":123,"parent":1,"uid":os.getuid(),"state":"S","start":"original"}]), \
+        with patch.object(module.os, "killpg"), patch.object(module, "process_group_members", return_value=[{"pid":123,"parent":os.getpid(),"uid":os.getuid(),"state":"S","start":"original"}]), \
              patch.object(module.time, "monotonic", side_effect=[0, 20, 21, 40]):
             with self.assertRaises(module.CleanupFailed): module.cleanup_child(child)
         child.wait.assert_not_called()
@@ -453,24 +489,26 @@ except m.RunInterrupted as e:
     def test_cleanup_admits_owned_descendants_before_reaping_exited_leader(self):
         with tempfile.TemporaryDirectory() as temp:
             pidfile, release = Path(temp)/"pid", Path(temp)/"exit"
-            code = """import os,sys,time,signal
+            read_fd, shutdown = os.pipe()
+            code = """import os,sys,time,signal,select
 from pathlib import Path
 if os.fork()==0:
  signal.signal(signal.SIGTERM,signal.SIG_IGN)
  temporary = Path(sys.argv[1] + '.tmp')
  temporary.write_text(str(os.getpid()))
  temporary.replace(sys.argv[1])
- while True: time.sleep(.1)
-while not Path(sys.argv[2]).exists(): time.sleep(.005)
+ os.read(int(sys.argv[3]),1)
+while not Path(sys.argv[2]).exists():
+ if select.select([int(sys.argv[3])],[],[],.005)[0]:sys.exit(0)
 os._exit(0)
 """
-            child = subprocess.Popen([sys.executable,"-c",code,str(pidfile),str(release)],
-                start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            descendant = None
+            child = subprocess.Popen([sys.executable,"-c",code,str(pidfile),str(release),str(read_fd)],
+                pass_fds=(read_fd,), start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.close(read_fd)
             try:
                 deadline = time.monotonic()+5
                 while not pidfile.exists() and time.monotonic()<deadline: time.sleep(.005)
-                descendant = int(pidfile.read_text())
+                self.assertGreater(int(pidfile.read_text()),0)
                 release.touch()
                 deadline = time.monotonic()+5
                 while time.monotonic()<deadline:
@@ -483,14 +521,12 @@ os._exit(0)
                 self.assertIsNotNone(child.returncode)
                 self.assertFalse(any(not m["state"].startswith("Z") for m in module.process_group_members(child.pid)))
             finally:
-                if descendant is not None:
-                    try: os.kill(descendant,signal.SIGKILL)
-                    except ProcessLookupError: pass
-                elif child.returncode is None:
-                    # Readiness failure must also retire the original owned group.
-                    module.cleanup_child(child)
-                if child.poll() is None: child.kill()
+                os.close(shutdown)
                 child.wait(timeout=2)
+                deadline = time.monotonic()+2
+                while any(not m['state'].startswith('Z') for m in module.process_group_members(child.pid)):
+                    if time.monotonic()>=deadline:self.fail('Controlled descendant did not retire after EOF')
+                    time.sleep(.01)
 
     def test_cleanup_benchmark_preserves_failure_and_retires_fixture(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -510,26 +546,74 @@ os._exit(0)
         original={"pid":123,"parent":os.getpid(),"uid":os.getuid(),"state":"Z","start":"original"}
         recycled={**original,"state":"S","start":"replacement"}
         child=Mock(pid=123,returncode=None)
-        def poll(): child.returncode=0
-        child.poll.side_effect=poll
+        child.wait.side_effect=lambda timeout: setattr(child,'returncode',0)
         with patch.object(module,"process_group_members",side_effect=[[original],[recycled]]), patch.object(module.os,"killpg") as kill:
-            with self.assertRaisesRegex(module.CleanupFailed,"recycled"): module.cleanup_child(child)
+            with self.assertRaisesRegex(module.CleanupFailed,"after final child join"): module.cleanup_child(child)
             kill.assert_not_called()
+        child.poll.assert_not_called()
 
     def test_permission_probe_after_owned_group_exits_is_confirmed_from_state(self):
         from unittest.mock import Mock
-        member={"pid":123,"parent":1,"uid":os.getuid(),"state":"S","start":"original"}
-        zombie={"pid":124,"parent":1,"uid":os.getuid(),"state":"Z","start":"descendant"}
+        member={"pid":123,"parent":os.getpid(),"uid":os.getuid(),"state":"S","start":"original"}
+        zombie={**member,"state":"Z"}
         child=Mock(pid=123,returncode=None)
-        calls=0
-        def poll():
-            nonlocal calls
-            calls+=1
-            if calls>1:child.returncode=0
-        child.poll.side_effect=poll
-        with patch.object(module,"process_group_members",side_effect=[[member],[member],[zombie]]), patch.object(module.os,"killpg",side_effect=PermissionError("zombie-only group")):
+        child.wait.side_effect=lambda timeout: setattr(child,'returncode',0)
+        with patch.object(module,"process_group_members",side_effect=[[member],[zombie],[]]), patch.object(module.os,"killpg",side_effect=PermissionError("zombie-only group")):
             module.cleanup_child(child)
         self.assertEqual(child.returncode,0)
+        child.poll.assert_not_called()
+
+    def test_late_term_fork_keeps_ownership_until_group_retirement(self):
+        state={'forked':False,'killed':False};events=[]
+        class Child:
+            pid=123
+            returncode=None
+            def poll(self):
+                events.append('poll')
+                if state['forked']:self.returncode=0
+                return self.returncode
+            def wait(self,timeout):
+                self_test.assertTrue(state['killed']);events.append('wait');self.returncode=0
+        self_test=self;child=Child()
+        def members(group):
+            leader={'pid':123,'parent':os.getpid(),'uid':os.getuid(),'state':'Z' if state['forked'] else 'S','start':'leader'}
+            descendant={'pid':124,'parent':1,'uid':os.getuid(),'state':'Z' if state['killed'] else 'S','start':'late-child'}
+            events.append('snapshot')
+            return ([] if child.returncode is not None else [leader])+([descendant] if state['forked'] else [])
+        def signal_group(group,signum):
+            if signum==signal.SIGTERM:state['forked']=True;events.append('term')
+            else:state['killed']=True;events.append('kill')
+        with patch.object(module,'process_group_members',side_effect=members),patch.object(module.os,'killpg',side_effect=signal_group),patch.object(module.time,'monotonic',side_effect=[0,11,12,13]):
+            module.cleanup_child(child)
+        self.assertLess(events.index('term'),events.index('kill'))
+        self.assertLess(events.index('kill'),events.index('wait'))
+        self.assertEqual(child.returncode,0)
+        self.assertNotIn('poll',events)
+
+    def test_unreaped_leader_replacement_is_rejected_without_second_signal(self):
+        from unittest.mock import Mock
+        original={'pid':123,'parent':os.getpid(),'uid':os.getuid(),'state':'S','start':'original'}
+        child=Mock(pid=123,returncode=None)
+        with patch.object(module,'process_group_members',side_effect=[[original],[{**original,'start':'replacement'}]]),patch.object(module.os,'killpg') as kill:
+            with self.assertRaisesRegex(module.CleanupFailed,'recycled'):module.cleanup_child(child)
+        self.assertEqual(kill.call_args_list, [unittest.mock.call(123,signal.SIGTERM)])
+        child.poll.assert_not_called();child.wait.assert_not_called()
+
+    def test_benchmark_success_does_not_signal_saved_descendant_pid(self):
+        from unittest.mock import Mock
+        spec=importlib.util.spec_from_file_location('cleanup_benchmark',ROOT/'Scripts/benchmark-process-cleanup.py')
+        benchmark=importlib.util.module_from_spec(spec);spec.loader.exec_module(benchmark)
+        child=Mock(pid=123,returncode=None)
+        child.wait.side_effect=lambda timeout: setattr(child,'returncode',0)
+        def start(command,**kwargs):Path(command[3]).write_text('124');return child
+        with tempfile.TemporaryDirectory() as temp:
+            runner=Path(temp)/'runner.py'
+            runner.write_text('import os\ncleaned=False\ndef cleanup_child(child):\n global cleaned\n cleaned=True\n child.returncode=0\ndef process_group_members(group):\n return [] if cleaned else [{"pid":group,"parent":os.getpid(),"uid":os.getuid(),"state":"Z","start":"original"}]\n')
+            output=io.StringIO()
+            with patch.object(sys,'argv',['benchmark','--runner',str(runner),'--mode','early-exit']),patch.object(benchmark.subprocess,'Popen',side_effect=start),patch.object(benchmark.os,'kill') as kill,patch.object(benchmark.os,'killpg') as killpg,contextlib.redirect_stdout(output):
+                self.assertEqual(benchmark.main(),0)
+            self.assertTrue(json.loads(output.getvalue())['correct'])
+            kill.assert_not_called();killpg.assert_not_called();child.kill.assert_not_called()
 
     def test_sdk_is_captured_once_for_prepared_reuse(self):
         with tempfile.TemporaryDirectory() as temp:
