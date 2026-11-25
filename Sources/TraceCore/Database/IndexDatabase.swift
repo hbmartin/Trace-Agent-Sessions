@@ -182,12 +182,14 @@ public actor IndexDatabase {
     /// only after commit, retaining the old external-writer qualification until
     /// the next read snapshot validates it again.
     private func changingSourcePaths<T>(ids: [Int64] = [],
+        matching: ((Database) throws -> [Int64])? = nil,
         _ body: (Database) throws -> (T, [Int64])) throws -> T {
         let tracking = !nonASCIIPathCounts.isEmpty
         let (result, before, after) = try pool.write { db in
-            let before = tracking ? try Set(ids).compactMap { try Self.sourcePathMembership(id: $0, in: db) } : []
+            let observedIDs = tracking ? ids + (try matching?(db) ?? []) : []
+            let before = try Set(observedIDs).compactMap { try Self.sourcePathMembership(id: $0, in: db) }
             let (result, inserted) = try body(db)
-            let after = tracking ? try Set(ids + inserted).compactMap { try Self.sourcePathMembership(id: $0, in: db) } : []
+            let after = tracking ? try Set(observedIDs + inserted).compactMap { try Self.sourcePathMembership(id: $0, in: db) } : []
             return (result, before, after)
         }
         var deltas: [SourcePathKey: Int] = [:]
@@ -1606,8 +1608,10 @@ public actor IndexDatabase {
     }
 
     func recordSourceError(file: DiscoveredSourceFile, rootID: Int64, error: String) throws {
-        let existing = try sourceState(agent: file.agent, path: file.url.path)
-        try changingSourcePaths(ids: existing.map { [$0.id] } ?? []) { db in
+        try changingSourcePaths(matching: { db in
+            try Int64.fetchOne(db, sql: "SELECT id FROM source_file WHERE agent=? AND path=?",
+                arguments: [file.agent.rawValue, file.url.path]).map { [$0] } ?? []
+        }) { db in
             try db.execute(sql: """
                 INSERT OR IGNORE INTO source_file(
                     root_id, agent, format, path, dev, inode, size, mtime_ns,
