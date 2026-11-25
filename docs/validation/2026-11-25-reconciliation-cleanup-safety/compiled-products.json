@@ -1,0 +1,22 @@
+[
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/Trace.app/Contents/MacOS/Trace",
+    "bytes": 41120,
+    "sha256": "5cbb06183f140c3f1d4ca04de9cb5ff967b7b945b977d43f6c186e75b5258538"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryRelease/Build/Products/Release/Trace.app/Contents/MacOS/Trace",
+    "bytes": 8275536,
+    "sha256": "7b6d7035f50f650e407698f49b8d347115d291232de53ddd3c870a4b68a20d14"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized/Build/Products/Release/TraceCore.framework/TraceCore",
+    "bytes": 3845480,
+    "sha256": "c8540f30550bbf3d0dbe6f44d5c35f53b4fae415fed5df0cecc2cebe17ef623a"
+  },
+  {
+    "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized/Build/Products/Release/TraceCore.framework/TraceCore",
+    "bytes": 3883304,
+    "sha256": "721320e3f54de2c8c691560cb2c5ce36d4471d814b1e29cb96af3727d3030cb5"
+  }
+]

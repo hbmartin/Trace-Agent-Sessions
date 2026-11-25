@@ -1,0 +1,1037 @@
+{
+  "rawRoot": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup",
+  "availability": "local-only; not downloadable repository or CI artifacts",
+  "fileHashing": "SHA-256 of regular file bytes, streamed in 1 MiB blocks; symlinks excluded. Directory entries are provenance paths, not tree digests.",
+  "files": [
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/WORKSTATE.json",
+      "bytes": 2381,
+      "sha256": "f9db445577836e798820aa6fca6efd51a7db1eeb54033f92d51b046f27e7ae8f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/affected-native.json",
+      "bytes": 1140,
+      "sha256": "33103635d88a59f85b4678e6d49f3117abd2c00a6f4ed66a0c597e5b1e4271c5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/affected-native.log",
+      "bytes": 252310,
+      "sha256": "495bac34f0b04da01742f1d6090b273a77031d60a30d42d3eb53c6abec715e83"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/affected-native.stderr",
+      "bytes": 1760,
+      "sha256": "8d31b5bdf37b8d7cf5541c9243168a6c51dfb4b862f3bb89e999aec9a94e2b54"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/base.json",
+      "bytes": 357,
+      "sha256": "4a5d62e0bbe68c179d0f6d71e9d8dc73d06d9d75314cd018b05478a9de673615"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-benchmark-negative-control.json",
+      "bytes": 270,
+      "sha256": "24fbbff8747a95e2ca9ae22f1f6f898ffa826745e9239afd59089b2c710894cc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-benchmark-negative-control.txt",
+      "bytes": 1302,
+      "sha256": "e067d7c7ecb56ec9fedcc7cf67f946e35b585ca94ac99b11e0e56dee16318df6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-cleanup-runner.py",
+      "bytes": 30736,
+      "sha256": "e246f82bdfb0ca6ab52163b4d4236f217cfa8508a4d199a45f44c54ea355fdc1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-client-compile.json",
+      "bytes": 1034,
+      "sha256": "4b14ba89cc4a35b56ec036b5262de5ab9157b4e43cedf8d6664315aa4a7f5510"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-database-before-self.swift",
+      "bytes": 153738,
+      "sha256": "8bdcd157b87b17632d16213bbd662a15870e2335d397de2d16b2e526333388eb"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-incremental",
+      "bytes": 144504,
+      "sha256": "77952b53ed27b1c5334a4ed095d77fdc0f50cc82d0a72725de639d9f1cf047e1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-negative-control.json",
+      "bytes": 342,
+      "sha256": "bddf81aba7d82ede80ed9b4e34b85ebdf0b49890a2510df1a91a0a3751773f10"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-negative-control.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-negative-control.stderr",
+      "bytes": 103,
+      "sha256": "464e0ee629edf74de09ef21e4232fbcedc26588ff7cc23c470f47fe2da88c255"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized-build-v2.json",
+      "bytes": 861,
+      "sha256": "a12fe5675a11a4600717a8385c9db9132931f8d432272abe36427346905c6b04"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized-build-v2.log",
+      "bytes": 211167,
+      "sha256": "fdcf9c57f5d2d947cd2c328d7c13f9c636f0982015fd2e64cb6cfd0fd9554eb3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized-build-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized-build.json",
+      "bytes": 862,
+      "sha256": "3b41444ba590afe0844ed2ab445e0a8e8ce5b6f8b1c2bb03e63b64b92cf94f5d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized-build.log",
+      "bytes": 838828,
+      "sha256": "6d453bd37cbe5ba8406fb597610063f4f02831eff067e95b9173dc7fbab2f088"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-regression-probe.json",
+      "bytes": 376,
+      "sha256": "5621c349b37c984f84d74f12ac395b19b9a6d7bc36c47b1d899d7a701e861363"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-regression-probe.txt",
+      "bytes": 3043,
+      "sha256": "b593879429bffa0dc311947b66ec63ef9e4f0e4ec1713d386850993bbea0a0f1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-ui-runner.py",
+      "bytes": 30736,
+      "sha256": "e246f82bdfb0ca6ab52163b4d4236f217cfa8508a4d199a45f44c54ea355fdc1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-1.json",
+      "bytes": 1441,
+      "sha256": "048be479a51498952c9e8aeaabc89ce0cfea3a2e29804b5a21b174d221e4198f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-1.log",
+      "bytes": 5383,
+      "sha256": "ff75440cb58895e84f586528ec6eab6630a000b4b859414208d8b969360757b5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-1.stderr",
+      "bytes": 1182,
+      "sha256": "5dab9b5c0d68c095dc772589e262956bea3ba83e1b7fb0f7cbba377067bac735"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-2.json",
+      "bytes": 1555,
+      "sha256": "4c226ce7c154f2996b70409e68618658b919510c131c7bcc4540bfd1cedd7104"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-2.log",
+      "bytes": 5510,
+      "sha256": "275238c293624a58e1cf5ab46185e7504bc5bb5b0aa165617a1fb70204988733"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-2.stderr",
+      "bytes": 1062,
+      "sha256": "f0dfe51b89f544532ac6474f75c3f117d64b73881113e66161f670cced6117ae"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-cleanup-runner.py",
+      "bytes": 32326,
+      "sha256": "425b98a5b3b42ff1873fb1252897c7a951847ef35dc7d558c2a1c3cc6f699798"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-client-compile.json",
+      "bytes": 1038,
+      "sha256": "ab393ec94765a004cb3ff01a939ae2f598faa95be83e05e61a77023c74b8a6b4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-database-before-self.swift",
+      "bytes": 160615,
+      "sha256": "87ede1b3d82308f1c60aaf2f6d5f34868489aa6f771606251f887b46a5af549a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-incremental",
+      "bytes": 144504,
+      "sha256": "500dfe5062a109226e013db508118e280745227a1ebe068a6475ef066f481475"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized-build-v2.json",
+      "bytes": 863,
+      "sha256": "ddfdb92702101a4588328e149807343d6e41f7f8bc82f387311f076ef51f16cf"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized-build-v2.log",
+      "bytes": 274893,
+      "sha256": "4f26ae32c596209162564016fdfac6335ff68a429793ce7f29b33d71654f50af"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized-build-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized-build.json",
+      "bytes": 864,
+      "sha256": "554346ce1ac8c3b756f5fa3e6d216b91c99b56d94c293ecafb173c43fe340216"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized-build.log",
+      "bytes": 777266,
+      "sha256": "cd8f3a4aa33f9cdf7dab8655e592582639ffe483d8142269ebc7f274606e6a0f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized-build.stderr",
+      "bytes": 23478,
+      "sha256": "6aa87864a841d8e5b899330e926453915e8c0268d7d383891640b05a92da966d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cleanup-script-tests-1.json",
+      "bytes": 410,
+      "sha256": "1bbfc3c4a2440a2980b3550b92fcecaed771cd03606ca098fe8823381be07172"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cleanup-script-tests-1.log",
+      "bytes": 221,
+      "sha256": "8c3f0066904f8698fa5c3bb4b71b099d1ad2823ec1a4798ce9f91b9d287bfb86"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cleanup-script-tests-1.stderr",
+      "bytes": 1420,
+      "sha256": "cf0e1b65a65ce52f2b1141529a7849243f064b9c40c041faabaf3e3ea712a1e4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cleanup-script-tests-2.json",
+      "bytes": 410,
+      "sha256": "dbe05a9e4f9de38f77aee1c0f466902e41d34bcdc1ae8da9c16ec9308dd40145"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cleanup-script-tests-2.log",
+      "bytes": 273,
+      "sha256": "0d1ea447d82dabfa083bd7d211bc647daff0e4dbfb0449c92c40de2781fed072"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cleanup-script-tests-2.stderr",
+      "bytes": 650,
+      "sha256": "96a6c4a7fa8bf810bb7aa14c000c37495ce0ecf0fc4f2a88bd0d4ce3d3b9b012"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/command-label-clarification.json",
+      "bytes": 264,
+      "sha256": "b9c3f5a619927cbc107d35d773117ad325f1527954479d7921f7bbcc2973ccb7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/compile-workloads.json",
+      "bytes": 368,
+      "sha256": "30e1d6c87d9d2852737ee0b1adb69d8123c102be90d0d4936b979d983c87afb4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/compile-workloads.log",
+      "bytes": 66,
+      "sha256": "954492de1c929b799865c477974a3b3233a60baeea2d9f0f2b80d68e5cbeae05"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/compile-workloads.py",
+      "bytes": 1841,
+      "sha256": "0055275a30d41a88bec616615126840a0d1676a498f47acc71c2bee635eba3d7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/compile-workloads.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/compiled-products.json",
+      "bytes": 1060,
+      "sha256": "964fc432e5bc8d99ae3f12ff2828eee15043000f4f00552a94af54d333708574"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/compiled-workloads.json",
+      "bytes": 588,
+      "sha256": "5d12e271573260ff38095eb906e4c4eb9a73efe89a8f86597b8ff303a50656e5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-1.json",
+      "bytes": 511,
+      "sha256": "1fdc0e0efd39e5304b7f6153fa3bbe7c3bc7ae5aa2e12f3c5947715c31966d82"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-1.log",
+      "bytes": 529235,
+      "sha256": "8f3fa7030e33e80410cf4467d888b6da3e2e4dabbeef7d4c827c310b85e07d5c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-1.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-2.json",
+      "bytes": 512,
+      "sha256": "ea3db92786310e6a8e132cd6b37847dd4e74c9fe8063f3362ddfa80d84ddc460"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-2.log",
+      "bytes": 208893,
+      "sha256": "886f9fb9028eb15fcfffa5c6274f69d61f9231fab7b72ef9993e1cef06108d21"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-3.json",
+      "bytes": 513,
+      "sha256": "05a57a749c8a06477de06bb7cfb8dcc3a7c9fef73853b916336741b6ea3acea2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-3.log",
+      "bytes": 182237,
+      "sha256": "0791e91b8f51a78c029a959367fa402ec91f8e1b05041422e4cf8c1b86452ff0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-3.stderr",
+      "bytes": 501,
+      "sha256": "5efc4c75d9cb612ffe09176e24b678ffd0fd6d34a11be4fc5ce2f48792089188"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-4.json",
+      "bytes": 511,
+      "sha256": "24e6c1246678a244e75cdc5f4d0d9cd728328d59c0a3d57426f3d87821634032"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-4.log",
+      "bytes": 243343,
+      "sha256": "2be2c1843d6e6fd2ee42a476f2c31371a4d185cec788f4706d0ed4c09b3edfed"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-4.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-5.json",
+      "bytes": 512,
+      "sha256": "5dc1b352757970e6813fa4709e350ce04b316a5090fe71b7b69e7db4db3e3ba1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-5.log",
+      "bytes": 244279,
+      "sha256": "e723188a8ee8951258db66c591498978c31f3cc927c2f5212b47f512bf9e466f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/debug-build-5.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/evidence-generation-attempt1.json",
+      "bytes": 420,
+      "sha256": "2950e0fb95d8333313adcdbdd5d5986a24ae21481b72bec2243a9946d0f62203"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/external-client-v2.json",
+      "bytes": 526,
+      "sha256": "0c47164169c8e1a6f2c72a549b97b40e7319a7a022adafb3ab3c74e48c888ace"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/external-client-v2.log",
+      "bytes": 389962,
+      "sha256": "25fead71d831d0631716dd04eaeda4f90b66ebd87a84e3e34c58ec007796867c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/external-client-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/external-client.json",
+      "bytes": 526,
+      "sha256": "2afc456dedef12bfa2c760247224d9bab734aacacbc215b9fea38f6544cdc7b4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/external-client.log",
+      "bytes": 402606,
+      "sha256": "02e5a8b44c5f5074dd954159843d8249893d87e5190fc05a3f5310ad2a4c97c1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/external-client.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-affected-native-execution-counts.json",
+      "bytes": 80535,
+      "sha256": "1600b60b80f8e0318cf8a47974e752586175e8a21c591f3d46cc0dc54919681f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-affected-native-summary.json",
+      "bytes": 1734,
+      "sha256": "ab5966cca9cceb5fa496c8bc24f04a48726cdbc9ff96efd2360d55663ba8fc11"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-affected-native-summary.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-affected-native.json",
+      "bytes": 1145,
+      "sha256": "4f4a4209470195e895f82f6386916c8ec47bbc59a322b519c31bb35fd251a578"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-affected-native.log",
+      "bytes": 252730,
+      "sha256": "f8e21a3d24a7d0db6d6f9d38de1111079dc3b7c45f47e5851355767beee64fb9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-affected-native.stderr",
+      "bytes": 1760,
+      "sha256": "7e48e42b88226e4fec65445d4a3a61de7eb8db40f402b0b4619e75760f171084"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-debug-build.json",
+      "bytes": 511,
+      "sha256": "0761294aff4c9273017e459305d96897eee6320a68ed024092dfee3be1312fc9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-debug-build.log",
+      "bytes": 529235,
+      "sha256": "2407d5a9ab60a5d761160d23a9c257208301e01e7e08aaf8af36b3c5f19a2fc2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-debug-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-script-tests.json",
+      "bytes": 380,
+      "sha256": "44a5f072106778a85bbd9ed817b1f61442a7e6849c78f358927f70142d957b0e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-script-tests.log",
+      "bytes": 1604,
+      "sha256": "a8e2d412938bf574a11907fecf421bf7d2bf8181ff48feec77232b136fc8a6bd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-script-tests.stderr",
+      "bytes": 2791,
+      "sha256": "f79d9071aca3df97550bc38042ffa6455f7cf60f547bdd307bc113c9c871134a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/frozen-input-equivalence.json",
+      "bytes": 6560,
+      "sha256": "6df3ca97cdaf03fdf76a6233ea8cffe6e02dc92d442499555288258d32a3eac3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/instrumentation-script-tests.json",
+      "bytes": 358,
+      "sha256": "a08a7fb1d51c7ca2bdcf9b299c0540b7a32d903d2339829d4c7cbe18b0da8077"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/instrumentation-script-tests.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/instrumentation-script-tests.stderr",
+      "bytes": 103,
+      "sha256": "1f11b6e880045ee35de832b81b45d06257342e13b5c79bbf0034379d4ca220b9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/launch-signal-regressions.json",
+      "bytes": 873,
+      "sha256": "5fc86485fd867a70717fde2fdc34f6407e675fe9a12faf9d26da44e3739d196f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/launch-signal-regressions.log",
+      "bytes": 52,
+      "sha256": "ceb7c01575f0f74ca3a045b8a922de2c3617e179abebf383d5942ea379fcbea0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/launch-signal-regressions.stderr",
+      "bytes": 887,
+      "sha256": "be2a6c443b7e950d90882b13ea62917ee40558a4af71d470c8a65a515266f284"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/measurement-choice.json",
+      "bytes": 466,
+      "sha256": "ad47dfd6c8b1c04bd38dceb35ae62ebecf97e830ebdf13c55934f981249a60c8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/native-races-execution-counts.json",
+      "bytes": 709,
+      "sha256": "a15b2fad2e5033a001f67e16539bf17957e9081f2de5bb0d5014fe3f7f8cbc61"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/native-races-summary.json",
+      "bytes": 1070,
+      "sha256": "5f4fb39009e028e0557654c3b4b2aa90544be1c51eaab1028186ea1093b38855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/native-races-summary.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/native-races.json",
+      "bytes": 1581,
+      "sha256": "b043670f733084ab5a525b2c1ef689fd1d952224b50bcc26488ae631438eed63"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/native-races.log",
+      "bytes": 12324,
+      "sha256": "51610db17945cc26635bf1cebda0dac6b2ceb2debd32ea166e67a8253d38fcb7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/native-races.stderr",
+      "bytes": 1062,
+      "sha256": "cbbb6751e23eb1ac0a07bbab4b26b4f73822267672dbde997fe31a4ea788ad84"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/network-surface.json",
+      "bytes": 378,
+      "sha256": "ab0c3fbb0bbcf09cc767e4a632ccbbc4cd4b38bb58cd55b3b340ad262df6716e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/network-surface.log",
+      "bytes": 188,
+      "sha256": "dfd039632d2e84ea29fb342c22910fedcd7e21293d880d2dacc7ba506b86c20f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/network-surface.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/normalization-investigation.json",
+      "bytes": 1110,
+      "sha256": "25b644729c4199302fcec02398b8825ac463acd4125408412d1241f3754a4a18"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/normalization-probe-attempt1.json",
+      "bytes": 319,
+      "sha256": "dc1454218fc4f5df5a0e23e4897fb40344a5456438f40172829b532b0b919f8d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/normalization-probe.json",
+      "bytes": 341,
+      "sha256": "1f5a913756045749b52efaea50f79a56d60c3b8a8d1e90783b3e090424869fc4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/normalization-probe.log",
+      "bytes": 1110,
+      "sha256": "25b644729c4199302fcec02398b8825ac463acd4125408412d1241f3754a4a18"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/normalization-probe.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/optimized-correctness-smoke.json",
+      "bytes": 20839,
+      "sha256": "ec4b3cebf9320a130f4a9e7014abd674191621ed7c62f207b3a2f766eff6b4c8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/optimized-input-equivalence-before-self.json",
+      "bytes": 7355,
+      "sha256": "ba24ac6c06c58d74ae919742e021d543cfb4f7e6b956f4908985ba4756bb09c3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/optimized-input-equivalence.json",
+      "bytes": 7434,
+      "sha256": "d9409cbcc7087ca60e55d3075d661b1d4f685caaac4b00590166369115b58d38"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/pinned-whitespace.json",
+      "bytes": 349,
+      "sha256": "17702873275c39a40639aa734f8154a8f128d0e83c77d891b75654ad4aba57e0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/pinned-whitespace.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/pinned-whitespace.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/prepare-optimized-exports.json",
+      "bytes": 337,
+      "sha256": "082dc5d1bbc27f1f4452a38849b429f7f306222709e0764d7ad5840a4e620bc9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/prepare-optimized-exports.log",
+      "bytes": 49,
+      "sha256": "f92dfbdf842bef1d7280cc7cbf7a131ff6ca29a2b378c40bc6e71c7fe98c7340"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/prepare-optimized-exports.stderr",
+      "bytes": 480,
+      "sha256": "dba30c90ac27fda3de14ca4bb7d645c88511768d87d25ad59e2cccb45a6271ed"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/project-drift.json",
+      "bytes": 306,
+      "sha256": "d8d39bfb37cda358ee7519bc445dba61d8ec7082a930e04ddf834de229ad0a96"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/project-drift.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/project-drift.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-1.json",
+      "bytes": 1319,
+      "sha256": "35378d60da834a4484b1c523a807d3ef8f033f8f8c40d628b90e69147c88ef23"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-1.log",
+      "bytes": 52,
+      "sha256": "ceb7c01575f0f74ca3a045b8a922de2c3617e179abebf383d5942ea379fcbea0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-1.stderr",
+      "bytes": 106,
+      "sha256": "245d2715329fb1f5a15ecb0e513c7159082cd16998516a20425f688eee00d49f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-2.json",
+      "bytes": 1319,
+      "sha256": "cf6cccfeef95f88c06772f83b7f273099d374bccd485dcf78de00ff1a106429f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-2.log",
+      "bytes": 52,
+      "sha256": "ceb7c01575f0f74ca3a045b8a922de2c3617e179abebf383d5942ea379fcbea0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-2.stderr",
+      "bytes": 106,
+      "sha256": "ca9ea6dd862c64ed9f3cd5fdaaf6b4ef15fa4c4eccfe9ad562853b1c1a0e2245"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-3.json",
+      "bytes": 1319,
+      "sha256": "0fa91a002921215cb379b4405e307703480f2d1c6703734ad1db5effe2ab27dc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-3.log",
+      "bytes": 52,
+      "sha256": "ceb7c01575f0f74ca3a045b8a922de2c3617e179abebf383d5942ea379fcbea0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-3.stderr",
+      "bytes": 106,
+      "sha256": "878a1fe802e662e83a1c7916c1490e2b265351d044ecedd4b8ec74da42096c70"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-4.json",
+      "bytes": 1319,
+      "sha256": "6fd15c9678317dacff1248ed794b6f51746282fb07f81b906bac501bffbc5c83"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-4.log",
+      "bytes": 52,
+      "sha256": "ceb7c01575f0f74ca3a045b8a922de2c3617e179abebf383d5942ea379fcbea0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-4.stderr",
+      "bytes": 106,
+      "sha256": "45e8ffb88f768fcdea181e0731aaf9112aa52c489fc17f69bbcf076f9a519f71"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-5.json",
+      "bytes": 1319,
+      "sha256": "6fae8212beed104d85373905643eedd0f528a76019b2ac31471c89f4efada592"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-5.log",
+      "bytes": 52,
+      "sha256": "ceb7c01575f0f74ca3a045b8a922de2c3617e179abebf383d5942ea379fcbea0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/python-races-5.stderr",
+      "bytes": 106,
+      "sha256": "a9fc6b531d45e10971cddd72aeb9c1b63b486743baf91080d1dfbfcdde15bcd6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/race-selectors.json",
+      "bytes": 935,
+      "sha256": "c5a54df28a93b514abf641290c5f9be07b59c410aeb93f27bca86c762957ccc7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/real-sigterm-diagnostic.json",
+      "bytes": 445,
+      "sha256": "0715cb110bbf1228b99b0ecc4af11e3eeb48973072b0b260c306f4eaab2bbd44"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/real-sigterm-diagnostic.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/real-sigterm-diagnostic.stderr",
+      "bytes": 98,
+      "sha256": "b6cbec792e1e42b5b6145e501e0330e5580ef5e9339e2250396d328c0ff58b39"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/real-sigterm-repeat.json",
+      "bytes": 996,
+      "sha256": "24a67bd3ef632663ec914f17a08a845f47e90d7cee9dacf4082da727642d6142"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/real-sigterm-repeat.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/real-sigterm-repeat.stderr",
+      "bytes": 103,
+      "sha256": "fe23f9d30259704b683c039a611a3635c9a8464f8fa565162b628b5d0e7504cc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/rebuild-baseline.py",
+      "bytes": 909,
+      "sha256": "ebb20d03d4f43c6ef72393423ef2f56b6ff779eda333a2f893fb0a56425403c3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-app-build.json",
+      "bytes": 533,
+      "sha256": "c67054be45ad876b0f325d061b65084e9193e116950d3337742f69d62caacc73"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-app-build.log",
+      "bytes": 698850,
+      "sha256": "ad5c30e480c1ad9cb8b62f75363a5db2cb81545be3d67dc4034873f48f735051"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-app-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-compile-v2.json",
+      "bytes": 583,
+      "sha256": "273983fb6d9029e4d4cfbce6a06c482ba3462f0e1c227449ff7d2e121a64c085"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-compile-v2.log",
+      "bytes": 1076460,
+      "sha256": "632b4daaf83c308bc4f5c9e878f5bf1dd92deba9373ccc86283b099cfcf8799b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-compile-v2.stderr",
+      "bytes": 28595,
+      "sha256": "0329ba904cff196bd7d4900161f01376becf579f74e9fb01f67beece272b1980"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-compile.json",
+      "bytes": 552,
+      "sha256": "d84e053d3a0f64d50fa4ce45183f158a37238c2feb20921703566e6802e2b55d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-compile.log",
+      "bytes": 773833,
+      "sha256": "a794ec848c97a6c8437e50c3794099b6054c1fc69f4285ae44175306f41a1169"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-compile.stderr",
+      "bytes": 384,
+      "sha256": "a085a5de8df262954100a523d604fd190cdb872a18ac13f4dd9795d55bf6622f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-target.json",
+      "bytes": 866,
+      "sha256": "821f78e4d31ac1cf5570c53d154240615a03de0c8f2b28890b1f1df6fb58915e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-target.log",
+      "bytes": 854356,
+      "sha256": "f571d63f8f0a69ae28f22ac51f732f2bcbba1ee9c23a3b0e1101db4c69f88822"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-target.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/run-final-native.py",
+      "bytes": 1879,
+      "sha256": "7368321df2ae878aa85c452f6a4aae55490fd2a1b1d5b509e11aedc66bfaac38"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/run-final-scripts.py",
+      "bytes": 970,
+      "sha256": "4bbd33ac65d4d0f85a9d27d80736574181a9a1bb91d9f03534aa6ea1fee914b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/run-targeted-pairs.py",
+      "bytes": 5647,
+      "sha256": "6b9e66d86673ae2b513238344f0bdc93d163603ebfbea631f5d94919ded61cf2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/run-with-native-lease.py",
+      "bytes": 1811,
+      "sha256": "9b22c617d9296c3aaffb385a2d4523405896e988cd42258959e4a204eb84ba29"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/script-tests.json",
+      "bytes": 380,
+      "sha256": "e7fa991d9146a04a5be6b881e085c096c92eab1a1b92ebf9ac4234ee299ed865"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/script-tests.log",
+      "bytes": 1604,
+      "sha256": "2a3e54b721db223e1e6911051ec4165dc17f46ad3b52efc9c91a793b058bbc35"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/script-tests.stderr",
+      "bytes": 2791,
+      "sha256": "0cf4ea08c59e8e7b0ad9536a1d40c12a28d09b1a7e8d4c0e3afa44a3c54b5341"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/signing-settings.json",
+      "bytes": 307,
+      "sha256": "2d89be02d5f071a300a9d724dbb50aca4d5aa0fccd0438b62698d7b3658bd6b5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/signing-settings.log",
+      "bytes": 61,
+      "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/signing-settings.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-ascii.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-ascii.stdout",
+      "bytes": 1125,
+      "sha256": "53e336969135b97917b970cc8d9310028435dac05b2f61125fc1a7312b16c764"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-insensitive.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-insensitive.stdout",
+      "bytes": 1169,
+      "sha256": "06dbc5621b315e197c3bf369f90bae2082d32816507f26610c6af80f15919122"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-sensitive-ascii.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-sensitive-ascii.stdout",
+      "bytes": 1172,
+      "sha256": "c1e990aff85c6497ecbf3459bf92903a933c6feb5919b4a3fcd74babdabba146"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-sensitive-mixed.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-sensitive-mixed.stdout",
+      "bytes": 1161,
+      "sha256": "9e72d05755d4070f2caf8803480259e27c77953a7ee5303b15e16142c6c0d3c4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-query-unicode.stdout",
+      "bytes": 1162,
+      "sha256": "d5e8127c9ef74375a92f820d58b6ea3763837bc0df9b06b643f8cb89068015fa"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-baseline-unicode.stdout",
+      "bytes": 1128,
+      "sha256": "69804bc7e9f62fd7e734e66ae6a6a3ee58fc691b71a2012599ab6f76c341142a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-ascii.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-ascii.stdout",
+      "bytes": 1139,
+      "sha256": "e71f2dfbfa1c21f6424ec83a3df3f6f357fce4e4e1156bcf448f0c559d6008e5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-insensitive.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-insensitive.stdout",
+      "bytes": 1159,
+      "sha256": "81546782e8fba90bf639151f17fe049ed1335da100aad843459d6ea045c677dd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-sensitive-ascii.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-sensitive-ascii.stdout",
+      "bytes": 1138,
+      "sha256": "62f6857cf93968a42212b7f3124db5d0489e3655a1dd494a3d02fd1e5006d027"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-sensitive-mixed.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-sensitive-mixed.stdout",
+      "bytes": 1160,
+      "sha256": "8264d4bdaeb38eb317c3c74d4fba9207b9796fd2b6091fea274007c2ad1aa8b1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-query-unicode.stdout",
+      "bytes": 1163,
+      "sha256": "9f262ce39a71f317b155e9e36e702101b68ccd41fe234900621bd9f668f80b6c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/smoke-candidate-unicode.stdout",
+      "bytes": 1140,
+      "sha256": "92099920756aa9a07220e9da5b28ceaf8111b94af5702325c55ee51ee36d7068"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/source-hashes.json",
+      "bytes": 44859,
+      "sha256": "65eb64a4a40451183d53160b0812c048c816bd62e65ea4bc7b73c1be27228bd5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/toolchain.json",
+      "bytes": 662,
+      "sha256": "5033475fe65595fa71540b177df525ed0ecb4b264dc70b822e058f457c8dd52e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/vendor-after.json",
+      "bytes": 611462,
+      "sha256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/vendor-before.json",
+      "bytes": 611462,
+      "sha256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/verify-source-hashes.json",
+      "bytes": 334,
+      "sha256": "35568d86db10da3b012c82f0d3d7e13051f3927a5547195ee66ba3b6e876d120"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/verify-source-hashes.log",
+      "bytes": 81,
+      "sha256": "2a1167ba25785dd00be169aa3c6527e750d4627ac32ee33d71c9703f1fd5bd34"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/verify-source-hashes.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "directories": [
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/__pycache__",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/affected-native.xcresult",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-source",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-1.xcresult",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/cache-regressions-2.xcresult",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-source",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/final-affected-native.xcresult",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/module-cache",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/native-races.xcresult",
+      "recursiveDigestRecorded": false
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-target",
+      "recursiveDigestRecorded": false
+    }
+  ]
+}

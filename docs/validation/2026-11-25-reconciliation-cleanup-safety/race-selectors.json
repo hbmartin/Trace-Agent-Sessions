@@ -1,0 +1,20 @@
+{
+  "native": [
+    "testSensitiveASCIIPathCacheSkipsWarmFallbackThroughContentAppends",
+    "testPathCacheTracksCommittedMembershipAndCanonicalFallback",
+    "testPathCachePlaceholderPromotionReplacementAndRootRetirement",
+    "testPathCacheRollbackAndCommittedCheckpointFailure",
+    "testPathCacheFailedMembershipTransactionPreservesCounts",
+    "testPathCacheExternalCommitDuringSnapshotCannotHideUnicode"
+  ],
+  "python": [
+    "test_launch_signal_is_deferred_until_child_cleanup_owns_handle",
+    "test_real_sigterm_joins_child_and_records_interruption",
+    "test_late_term_fork_keeps_ownership_until_group_retirement",
+    "test_unreaped_leader_replacement_is_rejected_without_second_signal",
+    "test_benchmark_success_does_not_signal_saved_descendant_pid",
+    "test_cleanup_admits_owned_descendants_before_reaping_exited_leader",
+    "test_cleanup_benchmark_preserves_failure_and_retires_fixture"
+  ],
+  "repetitions": 5
+}

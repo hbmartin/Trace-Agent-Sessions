@@ -1,0 +1,12 @@
+{
+  "baseline": {
+    "binarySHA256": "77952b53ed27b1c5334a4ed095d77fdc0f50cc82d0a72725de639d9f1cf047e1",
+    "harnessSHA256": "114e0fd21fc3a93b261ab9a86e3e7f1eca51642cd15855be120909212942fd47",
+    "cleanupRunnerSHA256": "e246f82bdfb0ca6ab52163b4d4236f217cfa8508a4d199a45f44c54ea355fdc1"
+  },
+  "candidate": {
+    "binarySHA256": "500dfe5062a109226e013db508118e280745227a1ebe068a6475ef066f481475",
+    "harnessSHA256": "114e0fd21fc3a93b261ab9a86e3e7f1eca51642cd15855be120909212942fd47",
+    "cleanupRunnerSHA256": "425b98a5b3b42ff1873fb1252897c7a951847ef35dc7d558c2a1c3cc6f699798"
+  }
+}

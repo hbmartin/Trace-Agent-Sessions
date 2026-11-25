@@ -1,0 +1,667 @@
+{
+  "base": "b817fd48a1172178b7c7220db6d380277a49de96",
+  "baseline": "25c5fff3c73b191dd29f806f8102da2be168e7eb",
+  "frozenCandidate": "8506092bf413576da00b570c17873371a76018b4",
+  "native": {
+    "passed": 746,
+    "failed": 0,
+    "skipped": 0,
+    "executionCounts": "native-execution-counts.json",
+    "runtimeWarnings": [
+      {
+        "issueType": "Runtime Warning",
+        "message": "Thread running at User-interactive quality-of-service class waiting on a lower QoS thread running at Utility quality-of-service class. Investigate ways to avoid priority inversions",
+        "sourceURL": "file:///Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Tests/TraceCoreTests/FSEventsWatcherTests.swift"
+      }
+    ]
+  },
+  "scripts": {
+    "passed": 141,
+    "failed": 0
+  },
+  "ownershipRaces": {
+    "nativeExecutions": 30,
+    "scriptExecutions": 35,
+    "repetitions": 5,
+    "selectors": "race-selectors.json",
+    "nativeCounts": "native-race-counts.json"
+  },
+  "checks": {
+    "final-debug-build": {
+      "command": [
+        "xcodebuild",
+        "build-for-testing",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryDebug"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:08:55.204306+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 90.96410908270627
+    },
+    "release-app-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryRelease",
+        "ENABLE_TESTABILITY=NO"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:14:30.468835+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 156.99978904100135
+    },
+    "release-core-target": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-target",
+        "TraceCoreTests",
+        "-configuration",
+        "Release",
+        "-sdk",
+        "macosx",
+        "-arch",
+        "arm64",
+        "ENABLE_TESTABILITY=YES",
+        "SYMROOT=/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-target/Build/Products",
+        "OBJROOT=/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/release-core-target/Build/Intermediates",
+        "-clonedSourcePackagesDirPath",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/ScopedReconciliationDebug/SourcePackages"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:15:05.343273+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 134.0531417503953
+    },
+    "external-client-v2": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryExternal"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:09:57.965091+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 123.27791608311236
+    },
+    "project-drift": {
+      "command": [
+        "bash",
+        "Scripts/check-project-drift.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:20:18.981589+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.25942695839330554
+    },
+    "signing-settings": {
+      "command": [
+        "bash",
+        "Scripts/check-signing-settings.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:20:21.227711+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 7.062848333735019
+    },
+    "network-surface": {
+      "command": [
+        "bash",
+        "Scripts/check-network-surface.sh",
+        "build/AdapterDiscoveryRelease/Build/Products/Release/Trace.app"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:20:24.323690+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.11029945919290185
+    },
+    "pinned-whitespace": {
+      "command": [
+        "git",
+        "diff",
+        "b817fd48a1172178b7c7220db6d380277a49de96...HEAD",
+        "--check"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:20:26.271805+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.03209483390673995
+    },
+    "verify-source-hashes": {
+      "command": [
+        "python3",
+        "/private/tmp/reconciliation-cleanup-work/verify-hashes.py"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:20:28.663674+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.210142542142421
+    },
+    "baseline-optimized-build-v2": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-source/Trace.xcodeproj",
+        "-scheme",
+        "TraceBench",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized",
+        "-clonedSourcePackagesDirPath",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/ScopedReconciliationDebug/SourcePackages",
+        "OTHER_SWIFT_FLAGS=$(inherited) -DTRACE_CHECKPOINT_BENCHMARK"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:09:54.334364+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 66.37692154198885
+    },
+    "candidate-optimized-build-v2": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-source/Trace.xcodeproj",
+        "-scheme",
+        "TraceBench",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized",
+        "-clonedSourcePackagesDirPath",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/ScopedReconciliationDebug/SourcePackages",
+        "OTHER_SWIFT_FLAGS=$(inherited) -DTRACE_CHECKPOINT_BENCHMARK"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-25T17:09:50.255837+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 73.10511262528598
+    },
+    "baseline-client-compile": {
+      "command": [
+        "xcrun",
+        "swiftc",
+        "-O",
+        "-parse-as-library",
+        "-DTRACE_CHECKPOINT_BENCHMARK",
+        "-target",
+        "arm64-apple-macos15.0",
+        "-module-cache-path",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/module-cache",
+        "-F",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized/Build/Products/Release",
+        "-I",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized/Build/Products/Release",
+        "-framework",
+        "TraceCore",
+        "-framework",
+        "GRDB",
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-optimized/Build/Products/Release",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Scripts/benchmark-incremental-reconciliation.swift",
+        "-o",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/baseline-incremental"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate-client-compile": {
+      "command": [
+        "xcrun",
+        "swiftc",
+        "-O",
+        "-parse-as-library",
+        "-DTRACE_CHECKPOINT_BENCHMARK",
+        "-target",
+        "arm64-apple-macos15.0",
+        "-module-cache-path",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/module-cache",
+        "-F",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized/Build/Products/Release",
+        "-I",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized/Build/Products/Release",
+        "-framework",
+        "TraceCore",
+        "-framework",
+        "GRDB",
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-optimized/Build/Products/Release",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/Scripts/benchmark-incremental-reconciliation.swift",
+        "-o",
+        "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup/candidate-incremental"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "extraReleaseAppTestCompilation": {
+    "status": "failed",
+    "records": [
+      "release-core-compile.json",
+      "release-core-compile-v2.json"
+    ],
+    "limitation": "The broad scheme build-for-testing attempt also compiled App ClockTests and failed on DEBUG-only helpers. No matching baseline evidence was obtained. The required normal Release app and isolated Release Core test target both passed."
+  },
+  "negativeControls": {
+    "baseline-regression-probe": {
+      "baseline": "25c5fff3c73b191dd29f806f8102da2be168e7eb",
+      "selectors": [
+        "test_launch_signal_is_deferred_until_child_cleanup_owns_handle",
+        "test_late_term_fork_keeps_ownership_until_group_retirement"
+      ],
+      "testsRun": 2,
+      "failedTests": 1,
+      "erroredTests": 1,
+      "unsuccessfulTests": 2,
+      "expectedNegativeControl": true,
+      "realProcessesOrSignalsUsed": false
+    },
+    "baseline-benchmark-negative-control": {
+      "baseline": "25c5fff3c73b191dd29f806f8102da2be168e7eb",
+      "selector": "test_benchmark_success_does_not_signal_saved_descendant_pid",
+      "testsRun": 1,
+      "failedTests": 1,
+      "erroredTests": 0,
+      "expectedNegativeControl": true,
+      "realProcessesOrSignalsUsed": false
+    },
+    "labelClarification": {
+      "baseline-negative-control.json": "Historical job label ran instrumentation contract tests, not the baseline ownership probe. Expected baseline failures are recorded separately in baseline-regression-probe.json and baseline-benchmark-negative-control.json."
+    }
+  },
+  "measurements": {
+    "status": "incomplete",
+    "acceptedSamples": 0,
+    "requiredByOriginalPlan": true,
+    "compiledAndCorrectnessSmokePassed": true,
+    "performanceClaim": false,
+    "explicitMeasurementWaiverReceived": false,
+    "deliveryRequest": "open ready PR",
+    "deliveryDecision": "Publish the authorized ready PR with the required measurement gate explicitly incomplete; no fresh desktop-idle confirmation has been received.",
+    "recordedAt": "2026-11-25T17:29:35.649202+00:00"
+  },
+  "normalizationInvestigation": "normalization-investigation.json",
+  "ui": "omitted by approved plan",
+  "completeNativeSuites": "omitted by approved plan",
+  "threeFullReleaseComparisonPairs": "omitted by approved plan",
+  "local10PercentPerformanceAcceptance": false,
+  "deferred": {
+    "6": "Mixed-volume ancestor case policy redesign, explicitly deferred.",
+    "7": "Sensitive child-scope parent spelling, explicitly deferred; no production reproduction established."
+  },
+  "rawRoot": "/Volumes/Pro2T/TraceValidation/reconciliation-cleanup-safety-followup",
+  "rawPayloads": "local-only; not attached as downloadable repository or CI artifacts",
+  "attempts": [
+    {
+      "record": "affected-native.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "affected-native.log",
+      "stderr": "affected-native.stderr"
+    },
+    {
+      "record": "baseline-negative-control.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "baseline-negative-control.log",
+      "stderr": "baseline-negative-control.stderr"
+    },
+    {
+      "record": "baseline-optimized-build-v2.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "baseline-optimized-build-v2.log",
+      "stderr": "baseline-optimized-build-v2.stderr"
+    },
+    {
+      "record": "baseline-optimized-build.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "baseline-optimized-build.log",
+      "stderr": "baseline-optimized-build.stderr"
+    },
+    {
+      "record": "cache-regressions-1.json",
+      "status": "failed",
+      "exitCode": 65,
+      "stdout": "cache-regressions-1.log",
+      "stderr": "cache-regressions-1.stderr"
+    },
+    {
+      "record": "cache-regressions-2.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "cache-regressions-2.log",
+      "stderr": "cache-regressions-2.stderr"
+    },
+    {
+      "record": "candidate-optimized-build-v2.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "candidate-optimized-build-v2.log",
+      "stderr": "candidate-optimized-build-v2.stderr"
+    },
+    {
+      "record": "candidate-optimized-build.json",
+      "status": "failed",
+      "exitCode": 65,
+      "stdout": "candidate-optimized-build.log",
+      "stderr": "candidate-optimized-build.stderr"
+    },
+    {
+      "record": "cleanup-script-tests-1.json",
+      "status": "failed",
+      "exitCode": 1,
+      "stdout": "cleanup-script-tests-1.log",
+      "stderr": "cleanup-script-tests-1.stderr"
+    },
+    {
+      "record": "cleanup-script-tests-2.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "cleanup-script-tests-2.log",
+      "stderr": "cleanup-script-tests-2.stderr"
+    },
+    {
+      "record": "compile-workloads.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "compile-workloads.log",
+      "stderr": "compile-workloads.stderr"
+    },
+    {
+      "record": "debug-build-1.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "debug-build-1.log",
+      "stderr": "debug-build-1.stderr"
+    },
+    {
+      "record": "debug-build-2.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "debug-build-2.log",
+      "stderr": "debug-build-2.stderr"
+    },
+    {
+      "record": "debug-build-3.json",
+      "status": "failed",
+      "exitCode": 65,
+      "stdout": "debug-build-3.log",
+      "stderr": "debug-build-3.stderr"
+    },
+    {
+      "record": "debug-build-4.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "debug-build-4.log",
+      "stderr": "debug-build-4.stderr"
+    },
+    {
+      "record": "debug-build-5.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "debug-build-5.log",
+      "stderr": "debug-build-5.stderr"
+    },
+    {
+      "record": "evidence-generation-attempt1.json",
+      "status": "failed",
+      "exitCode": null,
+      "stdout": "evidence-generation-attempt1.log",
+      "stderr": "evidence-generation-attempt1.stderr"
+    },
+    {
+      "record": "external-client-v2.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "external-client-v2.log",
+      "stderr": "external-client-v2.stderr"
+    },
+    {
+      "record": "external-client.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "external-client.log",
+      "stderr": "external-client.stderr"
+    },
+    {
+      "record": "final-affected-native.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "final-affected-native.log",
+      "stderr": "final-affected-native.stderr"
+    },
+    {
+      "record": "final-debug-build.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "final-debug-build.log",
+      "stderr": "final-debug-build.stderr"
+    },
+    {
+      "record": "final-script-tests.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "final-script-tests.log",
+      "stderr": "final-script-tests.stderr"
+    },
+    {
+      "record": "instrumentation-script-tests.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "instrumentation-script-tests.log",
+      "stderr": "instrumentation-script-tests.stderr"
+    },
+    {
+      "record": "launch-signal-regressions.json",
+      "status": "failed",
+      "exitCode": 1,
+      "stdout": "launch-signal-regressions.log",
+      "stderr": "launch-signal-regressions.stderr"
+    },
+    {
+      "record": "native-races.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "native-races.log",
+      "stderr": "native-races.stderr"
+    },
+    {
+      "record": "network-surface.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "network-surface.log",
+      "stderr": "network-surface.stderr"
+    },
+    {
+      "record": "normalization-probe.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "normalization-probe.log",
+      "stderr": "normalization-probe.stderr"
+    },
+    {
+      "record": "pinned-whitespace.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "pinned-whitespace.log",
+      "stderr": "pinned-whitespace.stderr"
+    },
+    {
+      "record": "prepare-optimized-exports.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "prepare-optimized-exports.log",
+      "stderr": "prepare-optimized-exports.stderr"
+    },
+    {
+      "record": "project-drift.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "project-drift.log",
+      "stderr": "project-drift.stderr"
+    },
+    {
+      "record": "python-races-1.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "python-races-1.log",
+      "stderr": "python-races-1.stderr"
+    },
+    {
+      "record": "python-races-2.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "python-races-2.log",
+      "stderr": "python-races-2.stderr"
+    },
+    {
+      "record": "python-races-3.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "python-races-3.log",
+      "stderr": "python-races-3.stderr"
+    },
+    {
+      "record": "python-races-4.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "python-races-4.log",
+      "stderr": "python-races-4.stderr"
+    },
+    {
+      "record": "python-races-5.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "python-races-5.log",
+      "stderr": "python-races-5.stderr"
+    },
+    {
+      "record": "real-sigterm-diagnostic.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "real-sigterm-diagnostic.log",
+      "stderr": "real-sigterm-diagnostic.stderr"
+    },
+    {
+      "record": "real-sigterm-repeat.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "real-sigterm-repeat.log",
+      "stderr": "real-sigterm-repeat.stderr"
+    },
+    {
+      "record": "release-app-build.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "release-app-build.log",
+      "stderr": "release-app-build.stderr"
+    },
+    {
+      "record": "release-core-compile-v2.json",
+      "status": "failed",
+      "exitCode": 65,
+      "stdout": "release-core-compile-v2.log",
+      "stderr": "release-core-compile-v2.stderr"
+    },
+    {
+      "record": "release-core-compile.json",
+      "status": "failed",
+      "exitCode": 65,
+      "stdout": "release-core-compile.log",
+      "stderr": "release-core-compile.stderr"
+    },
+    {
+      "record": "release-core-target.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "release-core-target.log",
+      "stderr": "release-core-target.stderr"
+    },
+    {
+      "record": "script-tests.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "script-tests.log",
+      "stderr": "script-tests.stderr"
+    },
+    {
+      "record": "signing-settings.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "signing-settings.log",
+      "stderr": "signing-settings.stderr"
+    },
+    {
+      "record": "verify-source-hashes.json",
+      "status": "passed",
+      "exitCode": 0,
+      "stdout": "verify-source-hashes.log",
+      "stderr": "verify-source-hashes.stderr"
+    }
+  ]
+}
