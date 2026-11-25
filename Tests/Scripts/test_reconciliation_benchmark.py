@@ -16,7 +16,7 @@ class ReconciliationInstrumentationTests(unittest.TestCase):
         self.assertEqual(MODULE.instrument(result, layout='count-cache'), result)
         self.assertEqual(result.count(MODULE.probe('count-cache')), 1)
         self.assertIn('#if TRACE_CHECKPOINT_BENCHMARK', result)
-        self.assertIn('measureReconciliationRow('+MODULE.EXPRESSION+')', result)
+        self.assertIn(MODULE.WRAPPED, result)
         self.assertIn('public func reconciliationBenchmarkQuery(', result)
         self.assertIn('public func reconciliationBenchmarkRoot(', result)
         with tempfile.TemporaryDirectory() as temp:

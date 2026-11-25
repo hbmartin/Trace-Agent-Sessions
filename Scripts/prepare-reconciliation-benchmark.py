@@ -12,6 +12,7 @@ CACHE_ANCHOR = '    private var nonASCIIPathCounts: [SourcePathKey: Int] = [:]'
 FALLBACK_ANCHOR = 'let function = DatabaseFunction("trace_reconciliation_matches"'
 CLASSIFICATION_ANCHOR = 'count = try Int.fetchOne(db, sql: "SELECT count(*) FROM source_file WHERE agent=? AND root_id=? AND path GLOB ?",'
 EXPRESSION = 'IndexedSourcePath(id: $0["id"], rootID: $0["root_id"], path: $0["path"])'
+WRAPPED = 'self.measureReconciliationRow(' + EXPRESSION + ')'
 FALLBACK_CALL = 'self.recordReconciliationFallback()\n'
 CLASSIFICATION_CALL = 'self.recordReconciliationClassification()\n'
 
@@ -64,7 +65,7 @@ def instrument(source, *, layout):
     if source.count(CACHE_ANCHOR) != (1 if layout == 'count-cache' else 0):
         raise ValueError('Source does not match explicit layout: ' + layout)
     if BEGIN in source:
-        if (source.count(value) != 1 or source.count('measureReconciliationRow(' + EXPRESSION + ')') != 1
+        if (source.count(value) != 1 or source.count(WRAPPED) != 1
                 or source.count(FALLBACK_CALL) != 1
                 or source.count(CLASSIFICATION_CALL) != (1 if layout == 'count-cache' else 0)):
             raise ValueError('Conflicting reconciliation instrumentation')
@@ -76,7 +77,7 @@ def instrument(source, *, layout):
         if source.count(marker) != 1: raise ValueError('Missing unique reconciliation anchor: ' + marker)
     source = insert_call(source, FALLBACK_ANCHOR, FALLBACK_CALL)
     if layout == 'count-cache': source = insert_call(source, CLASSIFICATION_ANCHOR, CLASSIFICATION_CALL)
-    source = source.replace(EXPRESSION, 'measureReconciliationRow(' + EXPRESSION + ')', 1)
+    source = source.replace(EXPRESSION, WRAPPED, 1)
     return source.replace(anchor, value + anchor, 1)
 
 
