@@ -67,6 +67,7 @@ private func measuredUnion(_ spans: [Span]) -> (Double, Double) {
             guard initial.sessionCount == count + 1 else { throw NSError(domain: "ReconciliationContention.setup", code: 1) }
             let rootID = try await database.reconciliationBenchmarkRoot(root)
             let mtime = try database.reconciliationBenchmarkMtime(path: path)
+            guard mtime >= 0 else { throw NSError(domain: "ReconciliationContention.sourceMissing", code: 1) }
             let setup = memory(), peak = OSAllocatedUnfairLock(initialState: memory())
             let sampler = Task.detached {
                 while !Task.isCancelled { peak.withLock { $0 = max($0, memory()) };try await Task.sleep(for: .milliseconds(50)) }

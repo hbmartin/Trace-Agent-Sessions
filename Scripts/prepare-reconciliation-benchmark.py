@@ -75,10 +75,10 @@ def probe(layout):
         }
     }
     public nonisolated func reconciliationBenchmarkMtime(path: String) throws -> Int64 {
-        try pool.read { db in try Int64.fetchOne(db, sql: "SELECT mtime_ns FROM source_file WHERE agent='claudeCode' AND path=?", arguments: [path]) ?? -1 }
+        try pool.read { db in try Int64.fetchOne(db, sql: "SELECT mtime_ns FROM source_file WHERE agent=? AND path=?", arguments: [AgentKind.claudeCode.rawValue, path]) ?? -1 }
     }
     public nonisolated func reconciliationBenchmarkWrite(path: String) throws {
-        try pool.write { db in try db.execute(sql: "UPDATE source_file SET mtime_ns=mtime_ns+1 WHERE agent='claudeCode' AND path=?", arguments: [path]) }
+        try pool.write { db in try db.execute(sql: "UPDATE source_file SET mtime_ns=mtime_ns+1 WHERE agent=? AND path=?", arguments: [AgentKind.claudeCode.rawValue, path]) }
     }
     public func reconciliationBenchmarkRoot(_ root: URL) throws -> Int64 {
         try register(root: SourceRoot(agent: .claudeCode, url: root))
