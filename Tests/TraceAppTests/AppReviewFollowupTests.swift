@@ -12647,6 +12647,7 @@ private struct NavigationReviewFaultSource: SessionSource {
     let base: ClaudeCodeSource
     var agent: AgentKind { base.agent }
     var roots: [SourceRoot] { base.roots }
+    var supportsFileScopedDiscovery: Bool { base.supportsFileScopedDiscovery }
     func discover() throws -> [DiscoveredSourceFile] { try base.discover() }
     func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult { try base.discoverResult(scopedTo: paths) }
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {

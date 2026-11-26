@@ -81,6 +81,28 @@ struct VerifiedDiscoveryResult: Sendable {
     let failures: [NormalizedDiscoveryFailure]
 }
 
+// Immutable scope lookup: one normalization per file and policy, then ancestor
+// membership checks independent of the number of requested scopes.
+struct DiscoveryScopeMatcher {
+    private let sensitive: Set<String>, insensitive: Set<String>
+    init(_ scopes: [SourceRootScope]) {
+        sensitive = Set(scopes.filter { $0.scanPath.isCaseSensitive }.map { $0.scanPath.path.precomposedStringWithCanonicalMapping })
+        insensitive = Set(scopes.filter { !$0.scanPath.isCaseSensitive }.map { $0.scanPath.comparisonKey.precomposedStringWithCanonicalMapping })
+    }
+    private func contains(_ path: String, keys: Set<String>) -> Bool {
+        var key = path
+        while true {
+            if keys.contains(key) { return true }
+            guard key != "/", let slash = key.lastIndex(of: "/") else { return false }
+            key = slash == key.startIndex ? "/" : String(key[..<slash])
+        }
+    }
+    func contains(_ path: TraceFileIO.CanonicalPath) -> Bool {
+        if !sensitive.isEmpty, contains(path.path.precomposedStringWithCanonicalMapping, keys: sensitive) { return true }
+        return !insensitive.isEmpty && contains(TraceFileIO.comparisonKey(path.path, caseSensitive: false).precomposedStringWithCanonicalMapping, keys: insensitive)
+    }
+}
+
 func verifiedDiscoveryResult(
     _ result: DiscoveryResult, agent: AgentKind, root: SourceRoot,
     capturedContext: SourceRootPathContext, currentContext: SourceRootPathContext,
@@ -88,65 +110,75 @@ func verifiedDiscoveryResult(
 ) -> VerifiedDiscoveryResult {
     let scannedScopes = Set(scopes.map(\.relativeScope))
     guard capturedContext == currentContext else {
-        let failures = scopes.map { scope in
-            NormalizedDiscoveryFailure(
-                failure: DiscoveryFailure(
-                    agent: agent, root: root.url, path: scope.scanPath.path,
-                    message: "The configured source path changed while Trace was running"
-                ),
-                scope: scope
-            )
-        }
-        return .init(
-            files: [],
-            failures: deduplicatedNormalizedDiscoveryFailures(failures)
-        )
+        return .init(files: [], failures: scopes.map { scope in
+            .init(failure: .init(agent: agent, root: root.url, path: scope.scanPath.path,
+                message: "The configured source path changed while Trace was running"), scope: scope)
+        })
     }
-    // Containment uses the containing scope's captured policy. A file on a
-    // nested mount can have a different comparison key; its own policy is still
-    // retained for ingestion identity and live-row reconciliation.
-    func contains(_ scope: TraceFileIO.CanonicalPath, _ file: TraceFileIO.CanonicalPath) -> Bool {
-        let key = TraceFileIO.comparisonKey(file.path, caseSensitive: scope.isCaseSensitive)
-        return key == scope.comparisonKey || key.hasPrefix(scope.comparisonKey == "/" ? "/" : scope.comparisonKey + "/")
-    }
+    let matcher = DiscoveryScopeMatcher(scopes)
+    let configuredContexts = Dictionary(uniqueKeysWithValues: configuredRoots.filter { $0.id != root.id }.map { ($0.id, $0.mappingContext) })
     var aliases: [String: TraceFileIO.CanonicalPath] = [:]
     func canonicalRoot(_ candidate: URL) -> TraceFileIO.CanonicalPath {
         if let cached = aliases[candidate.path] { return cached }
-        let canonical = TraceFileIO.canonicalPath(candidate.path)
-        aliases[candidate.path] = canonical
-        return canonical
+        let value = TraceFileIO.canonicalPath(candidate.path); aliases[candidate.path] = value; return value
     }
-    func acceptsRoot(_ candidate: URL, file: TraceFileIO.CanonicalPath? = nil) -> Bool {
-        if candidate.path == root.url.path || canonicalRoot(candidate) == capturedContext.scanPath { return true }
-        // A multi-root adapter can return the same source through both an outer
-        // and an inner configured root. Share the eventual ingestion outcome.
+    func sameRoot(_ candidate: URL) -> Bool {
+        candidate.path == root.url.path || canonicalRoot(candidate) == capturedContext.scanPath
+    }
+    func acceptsRoot(_ candidate: URL, path: String) -> Bool {
+        if sameRoot(candidate) { return true }
         return configuredRoots.contains { configured in
-            configured.url.path == candidate.path && (file.map { contains(configured.scanPath, $0) } ?? true)
+            configured.url.path == candidate.path && configuredContexts[configured.id].flatMap { configured.lexicalDiscoveryScope(path, in: $0) } != nil
         }
     }
-    let failures = normalizedDiscoveryFailures(
-        result.failures.filter { acceptsRoot($0.root) }.map { failure in
-            DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
-                kind: failure.kind, requestedScopePath: failure.requestedScopePath)
-        }, for: root, in: capturedContext
-    ).filter { failure in
+    let failures = result.failures.filter { failure in
+        guard failure.agent == agent else { return false }
+        if sameRoot(failure.root) { return true }
+        // Root availability belongs only to the root which was checked. Sharing
+        // file read outcomes must not manufacture an outer-root availability error.
+        let origin = canonicalRoot(failure.root)
+        guard failure.kind != .missingRoot,
+              TraceFileIO.canonicalPath(failure.path) != origin else { return false }
+        return acceptsRoot(failure.root, path: failure.path)
+    }.map { failure in
+        DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
+            kind: failure.kind, requestedScopePath: failure.requestedScopePath)
+    }
+    var qualifiedFailures = normalizedDiscoveryFailures(failures, for: root, in: capturedContext).filter { failure in
         scannedScopes.contains { $0.intersects(failure.relativeScope) }
     }
-    var qualifiedFailures = failures
     var files: [DiscoveredSourceFile] = []
     for file in result.files {
-        // Some legacy implementations return a larger discovery. Only the
-        // original requested scopes may contribute rows or coverage.
-        guard scopes.contains(where: { contains($0.scanPath, file.canonicalPath) }) else { continue }
-        guard file.agent == agent, acceptsRoot(file.root, file: file.canonicalPath) else {
-            for scope in scopes where contains(scope.scanPath, file.canonicalPath) {
-                qualifiedFailures.append(.init(failure: .init(agent: agent, root: root.url,
-                    path: file.url.path, message: "The adapter returned an incompatible source identity"), scope: scope))
+        let canonicalMember = matcher.contains(file.canonicalPath)
+        let lexical = canonicalMember ? nil : root.lexicalDiscoveryScope(file.discoveryPath, in: capturedContext)
+        let lexicalMember = lexical.map { matcher.contains($0.scanPath) } ?? false
+        guard canonicalMember || lexicalMember else {
+            // A whole-root adapter claiming an external target without lexical
+            // membership has not proved an authoritative empty result. Larger
+            // legacy discoveries remain harmlessly filtered for narrow requests.
+            if sameRoot(file.root), scopes.contains(where: { $0.relativeScope.isRoot }) {
+                qualifiedFailures += scopes.filter { $0.relativeScope.isRoot }.map {
+                    .init(failure: .init(agent: agent, root: root.url, path: file.discoveryPath,
+                        message: "Could not verify the discovered source membership"), scope: $0)
+                }
             }
             continue
         }
-        if file.root.path == root.url.path { files.append(file) }
-        else { files.append(.init(agent: agent, root: root.url, canonicalPath: file.canonicalPath, format: file.format)) }
+        let identityAccepted = file.agent == agent && acceptsRoot(file.root, path: file.discoveryPath)
+        let targetType = canonicalMember ? nil : (try? FileManager.default.attributesOfItem(atPath: file.url.path)[.type]) as? FileAttributeType
+        let linkAccepted = canonicalMember || (targetType == .typeRegular && TraceFileIO.canonicalPath(file.discoveryPath) == file.canonicalPath)
+        guard identityAccepted && linkAccepted else {
+            if let fileScope = lexical ?? root.scope(forScanPath: file.canonicalPath, in: capturedContext) {
+                qualifiedFailures.append(.init(failure: .init(agent: agent, root: root.url, path: file.discoveryPath,
+                    message: identityAccepted ? "The source link changed during discovery" : "The adapter returned an incompatible source identity"), scope: fileScope))
+            } else {
+                qualifiedFailures += scopes.map { .init(failure: .init(agent: agent, root: root.url, path: file.discoveryPath,
+                    message: "The adapter returned an incompatible source identity"), scope: $0) }
+            }
+            continue
+        }
+        files.append(.init(agent: agent, root: root.url, canonicalPath: file.canonicalPath,
+            format: file.format, discoveryPath: file.discoveryPath))
     }
     return .init(files: files, failures: deduplicatedNormalizedDiscoveryFailures(qualifiedFailures))
 }

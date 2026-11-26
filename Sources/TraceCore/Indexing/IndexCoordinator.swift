@@ -146,6 +146,7 @@ struct ReconciliationLivePaths {
 }
 
 public actor IndexCoordinator {
+    private var discoveredLinkPaths: [String: Set<String>] = [:]
     private struct SourceFileKey: Hashable {
         let agent: AgentKind
         let comparisonPath: String
@@ -714,6 +715,13 @@ public actor IndexCoordinator {
                 scopes: [SourceRootScope]
             ) {
                 allFiles += result.files
+                let links = Set(result.files.filter { file in
+                    file.discoveryPath != file.canonicalPath.path && root.lexicalDiscoveryScope(file.discoveryPath, in: mappingContext)
+                        .map { $0.scanPath.path != file.canonicalPath.path } == true
+                }.map { URL(fileURLWithPath: $0.discoveryPath).standardizedFileURL.path })
+                if scopes.contains(where: { $0.relativeScope.isRoot }), result.failures.isEmpty {
+                    discoveredLinkPaths[root.id] = links
+                } else { discoveredLinkPaths[root.id, default: []].formUnion(links) }
                 let scannedScopes = Set(scopes.map(\.relativeScope))
                 discoveryAttempts.append(.init(
                     source: source, root: root, mappingContext: mappingContext,
@@ -782,7 +790,9 @@ public actor IndexCoordinator {
                             guard let context = mappingContexts[root.id] else { continue }
                             let scopes = Self.minimalRootScopes(
                                 discoveryPaths.compactMap {
-                                    root.reconciliationScope(forRawPath: $0, in: context)
+                                    discoveredLinkPaths[root.id]?.contains(URL(fileURLWithPath: $0).standardizedFileURL.path) == true
+                                        ? root.rootScope(in: context)
+                                        : root.reconciliationScope(forRawPath: $0, in: context)
                                 }
                             )
                             guard !scopes.isEmpty else { continue }
@@ -1108,10 +1118,12 @@ public actor IndexCoordinator {
                 // Routing selects one reader; every accepting root shares its outcome.
                 for file in allFiles where file.agent == root.agent {
                     let key = SourceFileKey(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey)
-                    guard acceptedRootsByFile[key]?.contains(root.id) == true,
-                          let relative = root.relativeScope(forStoredPath: file.url.path, in: context) else { continue }
+                    guard acceptedRootsByFile[key]?.contains(root.id) == true else { continue }
                     let failed = failedSourceFiles.contains(key) || incompleteFiles.contains(key)
-                    facts[relative] = .init(order: 0, covered: !failed)
+                    facts[root.navigationScope(forStoredPath: file.url.path, in: context)] = .init(order: 0, covered: !failed)
+                    if let lexical = root.lexicalDiscoveryScope(file.discoveryPath, in: context) {
+                        facts[lexical.relativeScope] = .init(order: 0, covered: !failed)
+                    }
                 }
                 // Empty regions retain configured-source membership. Another
                 // provider scanning this directory cannot pay their obligations.

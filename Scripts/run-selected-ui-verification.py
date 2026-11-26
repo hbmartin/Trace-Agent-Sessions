@@ -331,6 +331,20 @@ def verify_preparation(derived: Path, inputs: dict, context: dict) -> dict:
     return receipt
 
 
+def wait_owned_child(child: subprocess.Popen, timeout: float, pending_signals: list[int]) -> int:
+    """Observe exit without releasing the PID that proves process-group ownership."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if pending_signals:
+            raise RunInterrupted(pending_signals[0])
+        observed = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if observed is not None:
+            return observed.si_status if observed.si_code == os.CLD_EXITED else -observed.si_status
+        if time.monotonic() >= deadline:
+            raise subprocess.TimeoutExpired(child.args, timeout)
+        time.sleep(.02)
+
+
 class Runner:
     def __init__(self, output: Path, metadata: dict):
         output.mkdir(parents=True, exist_ok=False)
@@ -345,75 +359,89 @@ class Runner:
     def command(self, label: str, args: list[str], timeout: int) -> int:
         phase = {"label": label, "command": args, "log": label + ".log", "stderrLog": label + ".stderr.log", "status": "running"}
         self.receipt["phases"].append(phase)
-        self.save()
-        print(f"Starting {label}", flush=True)
+        pending_signals, handlers = [], {}
+        child = None
+        failure = cleanup_error = None
+        code = 1
         start = time.monotonic()
-        interrupted = False
-        # Structured exports keep stdout pure; diagnostics always have their own log.
-        with (self.output / phase["log"]).open("w") as log, (self.output / (label + ".stderr.log")).open("w") as diagnostics:
-            launch_signals = []
-            launch_handlers = {sig: signal.signal(sig, lambda signum, frame: launch_signals.append(signum))
-                               for sig in (signal.SIGINT, signal.SIGTERM)}
+        # One collection lifetime covers launch, transitions, cleanup and save.
+        # Handlers never raise while this command owns a child. In particular a
+        # second signal cannot jump over cleanup or handler installation.
+        def collect(signum, frame):
+            pending_signals.append(signum)
+        try:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                handlers[sig] = signal.signal(sig, collect)
+            self.save()
+            print(f"Starting {label}", flush=True)
             try:
-                try:
+                with (self.output / phase["log"]).open("w") as log, (self.output / phase["stderrLog"]).open("w") as diagnostics:
                     child = subprocess.Popen(args, stdout=log, stderr=diagnostics, start_new_session=True)
-                except OSError as error:
-                    phase.update(status="launch-failed", error=str(error), elapsedSeconds=time.monotonic() - start)
-                    if launch_signals:
-                        interruption = RunInterrupted(launch_signals[0])
-                        phase.update(status="interrupted", launchError=str(error), error=error_description(interruption),
-                                     exitCode=128 + interruption.signum)
-                        self.save()
-                        raise interruption from error
-                    self.save()
-                    raise
-                try:
                     phase["processGroupID"] = child.pid
-                    # A signal during Popen must not lose ownership of its child.
-                    # Restore normal interruption only after the handle is installed
-                    # inside the protected cleanup boundary.
-                    for sig, handler in launch_handlers.items(): signal.signal(sig, handler)
-                    launch_handlers.clear()
-                    if launch_signals: raise RunInterrupted(launch_signals[0])
-                    code = child.wait(timeout=timeout)
-                except (subprocess.TimeoutExpired, KeyboardInterrupt, RunInterrupted) as error:
-                    interrupted = not isinstance(error, subprocess.TimeoutExpired)
-                    pending_signals = []
-                    handlers = {sig: signal.signal(sig, lambda signum, frame: pending_signals.append(signum))
-                                for sig in (signal.SIGINT, signal.SIGTERM)}
-                    cleanup_error = None
-                    try:
-                        cleanup_child(child)
-                    except CleanupFailed as failure:
-                        cleanup_error = failure
-                    finally:
-                        for sig, handler in handlers.items():
-                            signal.signal(sig, handler)
-                    if pending_signals:
-                        error = RunInterrupted(pending_signals[0])
-                        interrupted = True
-                    if cleanup_error:
-                        phase.update(status="cleanup-failed", error=error_description(error), cleanupError=str(cleanup_error),
-                                     elapsedSeconds=time.monotonic() - start)
-                        self.save()
-                        if interrupted:
-                            interruption = error if isinstance(error, RunInterrupted) else RunInterrupted(signal.SIGINT)
-                            interruption.cleanup_error = str(cleanup_error)
-                            raise interruption
-                        raise cleanup_error
-                    phase["status"] = "interrupted" if interrupted else "timeout"
-                    phase["error"] = error_description(error)
-                    code = (128 + error.signum if isinstance(error, RunInterrupted) else 130) if interrupted else 124
-                    interruption = error if isinstance(error, RunInterrupted) else RunInterrupted(signal.SIGINT)
+                    code = wait_owned_child(child, timeout, pending_signals)
+            except BaseException as error:
+                failure = error
             finally:
-                for sig, handler in launch_handlers.items(): signal.signal(sig, handler)
-        phase.update(exitCode=code, elapsedSeconds=time.monotonic() - start)
-        if phase["status"] == "running":
-            phase["status"] = "passed" if code == 0 else "failed"
+                if child is not None:
+                    try:
+                        # Also verify descendants after a normal leader exit.
+                        # The non-reaping waiter leaves the anchor available.
+                        cleanup_child(child)
+                    except BaseException as error:
+                        cleanup_error = error
+            def settle():
+                nonlocal code
+                interruption = (RunInterrupted(pending_signals[0]) if pending_signals else
+                    failure if isinstance(failure, RunInterrupted) else
+                    RunInterrupted(signal.SIGINT) if isinstance(failure, KeyboardInterrupt) else None)
+                if interruption is not None:
+                    code = 128 + interruption.signum
+                    phase.update(status="interrupted", error=error_description(interruption))
+                    if child is None and failure is not None:
+                        phase["launchError"] = str(failure) or error_description(failure)
+                elif isinstance(failure, subprocess.TimeoutExpired):
+                    code = 124
+                    phase.update(status="timeout", error=error_description(failure))
+                elif failure is not None:
+                    phase.update(status="launch-failed" if child is None else "failed", error=error_description(failure))
+                else:
+                    phase["status"] = "passed" if code == 0 else "failed"
+                if cleanup_error is not None:
+                    phase.update(status="cleanup-failed", cleanupError=error_description(cleanup_error))
+                    if interruption is None:
+                        code = 1
+                phase.update(exitCode=code, elapsedSeconds=time.monotonic() - start)
+                return interruption
+            interruption = settle()
+            self.save()
+        finally:
+            # Finish restoring every handler even if an original handler raises
+            # during restoration. The child has already been retired above.
+            restoration_error = None
+            mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+            try:
+                for sig, handler in handlers.items():
+                    try:
+                        signal.signal(sig, handler)
+                    except BaseException as error:
+                        restoration_error = error
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+            if restoration_error is not None:
+                failure = restoration_error
+        # Nothing can append to our list after restoration. Re-adjudicate once:
+        # a signal during the first save or a failed launch must not disappear.
+        interruption = settle()
         self.save()
         print(f"Finished {label}: {phase['status']} ({phase['elapsedSeconds']:.1f}s)", flush=True)
-        if interrupted:
-            raise interruption
+        if interruption is not None:
+            if cleanup_error is not None:
+                interruption.cleanup_error = error_description(cleanup_error)
+            raise interruption from failure
+        if cleanup_error is not None:
+            raise CleanupFailed(error_description(cleanup_error)) from failure
+        if failure is not None and not isinstance(failure, subprocess.TimeoutExpired):
+            raise failure
         return code
 
 
