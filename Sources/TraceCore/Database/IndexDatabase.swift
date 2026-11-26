@@ -1939,6 +1939,11 @@ public actor IndexDatabase {
     }
 
     #if DEBUG
+    nonisolated func withReconciliationMatcherForTesting(path: String, _ body: @Sendable (Database) throws -> Bool) throws -> Bool {
+        let functions = reconciliationFunctions
+        let scope = TraceFileIO.CanonicalPath(path: path, comparisonKey: path, isCaseSensitive: true)
+        return try pool.read { db in try functions.withMatcher(.init([scope]), in: db) { try body(db) } }
+    }
     func reconciliationFunctionReuseForTesting() throws -> (before: Int, after: Int, restored: Bool, reprepares: Int) {
         let functions = reconciliationFunctions
         return try pool.read { db in

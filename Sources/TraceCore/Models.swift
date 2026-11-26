@@ -271,7 +271,7 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     // old target facts; no relocation dictionary or persistent schema is needed.
     func navigationScope(forStoredPath path: String, in context: SourceRootPathContext) -> RootRelativeScope {
         relativeScope(forStoredPath: path, in: context) ?? .init(
-            components: ["\0external"] + path.split(separator: "/").map(String.init), caseSensitive: true)
+            components: ["\0external"] + path.precomposedStringWithCanonicalMapping.split(separator: "/").map(String.init), caseSensitive: true)
     }
 
     /// Maps an indexed path back into this root without re-resolving symlinks.

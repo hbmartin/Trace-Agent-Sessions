@@ -49,8 +49,8 @@ private func measuredUnion(_ spans: [Span]) -> (Double, Double) {
     static func main() async { exit(await run()) }
     static func run() async -> Int32 {
         do {
-            guard CommandLine.arguments.count == 3, let count = Int(CommandLine.arguments[1]), count > 0 else {
-                throw NSError(domain: "ReconciliationContention.arguments", code: 1)
+            guard CommandLine.arguments.count == 3, let count = Int(CommandLine.arguments[1]), count > 0, count < Int.max else {
+                throw NSError(domain: "ReconciliationContention.arguments", code: 1, userInfo: [NSLocalizedDescriptionKey: "Expected a positive file count and a revision label."])
             }
             let before = memory(), directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceContention-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

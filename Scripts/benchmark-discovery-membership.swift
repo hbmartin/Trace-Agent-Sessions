@@ -31,9 +31,9 @@ private func seconds(_ value: Duration) -> Double { Double(value.components.seco
     static func main() async { exit(await run()) }
     static func run() async -> Int32 {
         do {
-            guard CommandLine.arguments.count == 4, let count = Int(CommandLine.arguments[1]), count > 0,
+            guard CommandLine.arguments.count == 4, let count = Int(CommandLine.arguments[1]), count > 0, count < Int.max,
                   let scopes = Int(CommandLine.arguments[3]), scopes > 0 else {
-                throw NSError(domain: "DiscoveryMembership.arguments", code: 1)
+                throw NSError(domain: "DiscoveryMembership.arguments", code: 1, userInfo: [NSLocalizedDescriptionKey: "Expected positive file and scope counts and a revision label."])
             }
             let baseline = footprint()
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceDiscovery-" + UUID().uuidString)

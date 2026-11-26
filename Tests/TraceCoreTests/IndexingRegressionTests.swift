@@ -164,6 +164,44 @@ final class IndexingRegressionTests: XCTestCase {
         }
         XCTAssertFalse(matcher.contains(.init(path: "/ROOT/P-2000/file", comparisonKey: "unused", isCaseSensitive: true)))
         XCTAssertFalse(matcher.contains(.init(path: "/ROOT/P-1-sibling/file", comparisonKey: "unused", isCaseSensitive: true)))
+        let unicode = DiscoveryScopeMatcher([.init(scanPath: .init(path: "/ROOT/cafe\u{301}", comparisonKey: "/root/cafe\u{301}", isCaseSensitive: false),
+            relativeScope: .init(components: ["cafe\u{301}"], caseSensitive: false))])
+        XCTAssertTrue(unicode.contains(.init(path: "/root/caf\u{00e9}/file", comparisonKey: "unused", isCaseSensitive: true)))
+    }
+
+    func testConcurrentReconciliationReadersKeepConnectionLocalMatchers() async throws {
+        #if DEBUG
+        let root = try directory(), database = try IndexDatabase(url: root.appendingPathComponent("index.sqlite"))
+        let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let read: @Sendable (String) async throws -> Bool = { path in
+            try await withCheckedThrowingContinuation { continuation in
+                // Blocking gates run on dedicated queues, never on the Swift
+                // cooperative pool. Both connection contexts must be installed.
+                DispatchQueue(label: "Trace.matcher." + path).async {
+                    continuation.resume(with: Result {
+                        try database.withReconciliationMatcherForTesting(path: path) { db in
+                            entered.signal()
+                            guard release.wait(timeout: .now() + 5) == .success else { throw CancellationError() }
+                            let own = try Bool.fetchOne(db, sql: "SELECT trace_reconciliation_matches(?)", arguments: [path])
+                            let other = try Bool.fetchOne(db, sql: "SELECT trace_reconciliation_matches(?)", arguments: [path == "/first" ? "/second" : "/first"])
+                            return own == true && other == false
+                        }
+                    })
+                }
+            }
+        }
+        async let first = read("/first"), second = read("/second")
+        let ready = await withCheckedContinuation { continuation in
+            DispatchQueue(label: "Trace.matcher.release").async {
+                let first = entered.wait(timeout: .now() + 5) == .success
+                let second = entered.wait(timeout: .now() + 5) == .success
+                release.signal();release.signal()
+                continuation.resume(returning: first && second)
+            }
+        }
+        let results = try await (first, second)
+        XCTAssertTrue(ready);XCTAssertTrue(results.0);XCTAssertTrue(results.1)
+        #endif
     }
 
     func testReconciliationFunctionContextRestoresWithoutStatementInvalidation() async throws {
