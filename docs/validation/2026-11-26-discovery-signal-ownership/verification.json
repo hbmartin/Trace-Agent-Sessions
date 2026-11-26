@@ -2,7 +2,7 @@
   "base": "753b578a2eb6aa4ef9aafdb95c9c6d6dd1125dc4",
   "baseline": "a8732af55a5595974d20260cc81d854eb3c50895",
   "frozenCandidate": "a511d9d6a5d0abac89b611ecb799779fce52c894",
-  "status": "targeted-measurements-pending",
+  "status": "publication-requested-with-targeted-measurements-incomplete",
   "native": {
     "passed": 759,
     "failed": 0,
@@ -247,7 +247,7 @@
   "vendorSnapshotPreserved": true,
   "targetedMeasurements": {
     "required": true,
-    "status": "awaiting-fresh-desktop-idle-confirmation",
+    "status": "not-run-before-requested-publication",
     "acceptedSamples": 0,
     "warmups": 0,
     "correctnessSmokesAreMeasurements": false,
@@ -267,12 +267,12 @@
     "threeFullReleaseComparisonPairs": "omitted by the selected plan"
   },
   "local10PercentPerformanceAcceptanceClaim": false,
-  "readyPullRequestCreated": false,
   "rawArtifacts": "raw-artifacts.json",
   "coordination": {
     "receiptLocalPath": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/native-exclusive-lease.json",
     "coreAndRaceExecution": "All passed while lease was held",
     "receiptOverallStatus": "failed because the extra Release launcher failed before execution; direct Release retry passes",
     "releaseRetry": "release-core-focus-v2.json"
-  }
+  },
+  "publicationDecision": "publication.json"
 }

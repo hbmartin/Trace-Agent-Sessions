@@ -4,11 +4,13 @@ Follow-up to merged #107. Frozen implementation/test candidate: `a511d9d6a5d0aba
 Pinned baseline: `a8732af55a5595974d20260cc81d854eb3c50895`; main base:
 `753b578a2eb6aa4ef9aafdb95c9c6d6dd1125dc4`.
 
-**Required targeted measurements are pending fresh desktop-idle confirmation.**
-No accepted timing samples or performance waiver are recorded. No ready PR has
-been opened. UI tests, complete native suites, and three full Release comparison
-pairs are omitted by the selected plan. No local 10% performance-acceptance claim
-or unmeasured CPU/footprint improvement is made.
+**Ready publication is requested with targeted measurements incomplete.**
+After being told the ready PR was waiting on this gate, the user requested
+“open ready PR.” This authorizes publication now; it does not establish performance
+acceptance. No accepted timing samples are recorded. UI tests, complete native
+suites, and three full Release comparison pairs are omitted by the selected plan.
+No local 10% performance-acceptance claim or unmeasured CPU/footprint improvement
+is made. See [the publication decision](publication.json).
 
 ## Resulting behavior
 
@@ -108,5 +110,6 @@ checks, run the approved paired optimized scope/discovery, cold/warm reconciliat
 query/write-contention, and owned-process-cleanup workloads: one warm-up and five
 recorded samples per workload/revision. Keep actual filesystem policy separate
 from forced-query policy, preserve signed footprint and invalid attempts, and
-reject incorrect samples. No cleanup scan may mask missing work. Publish the ready,
-unmerged follow-up only after that gate completes or the user explicitly waives it.
+reject incorrect samples. No cleanup scan may mask missing work. The user has
+requested the ready, unmerged follow-up now with this gate explicitly incomplete;
+publication is not evidence that performance acceptance passed.
