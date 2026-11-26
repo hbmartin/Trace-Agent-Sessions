@@ -59,7 +59,11 @@ final class IndexingRegressionTests: XCTestCase {
         XCTAssertTrue(values.withLock { $0.isEmpty })
         failures.replace(with: [])
         await clock.advance(by: .seconds(5))
-        try await waitForCondition { values.withLock { $0 == [100] } }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while values.withLock({ $0.isEmpty }), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(values.withLock { $0 }, [100], "Ordinary retry must publish the held checkpoint")
         await scheduler.waitUntilIdle(); await scheduler.stop()
         try await clock.checkSuspension()
     }
