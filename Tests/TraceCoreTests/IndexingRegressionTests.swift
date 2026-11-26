@@ -49,6 +49,9 @@ final class IndexingRegressionTests: XCTestCase {
             checkpointLedger: ledger, didCompleteCheckpoints: { updates in
                 if let update = updates["s"] { values.withLock { $0.append(update.value) } }
             })
+        // This regression owns a settled scheduler installation; initialization
+        // overlap is exercised separately by the activation/ownership tests.
+        await scheduler.waitUntilIdle()
         let reservation = ledger.reserve(watermarks: ["s": 100], streamRoots: ["s": [root.path]], hasIndexWork: true,
             reconciliationPaths: [root.path])
         await scheduler.request(reconciliationPaths: [root.path], onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [reservation])
