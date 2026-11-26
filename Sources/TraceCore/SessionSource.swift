@@ -141,7 +141,8 @@ func verifiedDiscoveryResult(
               TraceFileIO.canonicalPath(failure.path) != origin else { return false }
         return acceptsRoot(failure.root, path: failure.path)
     }.map { failure in
-        if let lexical = root.lexicalDiscoveryScope(failure.path, in: capturedContext) {
+        if root.scope(forRawPath: failure.path, in: capturedContext) == nil,
+           let lexical = root.lexicalDiscoveryScope(failure.path, in: capturedContext) {
             return DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
                 kind: failure.kind, requestedScope: lexical)
         }
