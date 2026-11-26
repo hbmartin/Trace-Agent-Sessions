@@ -169,3 +169,11 @@ struct FileScopedDiscoveryClient: SessionSource {
 func compileDiscoveryCapabilities(_ legacy: ExternalDiscoverySource, _ current: FileScopedDiscoveryClient) -> (Bool, Bool) {
     (legacy.supportsFileScopedDiscovery, current.supportsFileScopedDiscovery)
 }
+
+// Observed locations remain separate from canonical ingestion identities.
+func compileFileLocationPreparation(_ path: String, root: TraceFileIO.CanonicalPath) {
+    var resolver = TraceFileIO.FileLocationResolver()
+    let location = resolver.location(path)
+    _ = location.isWithin(root)
+    _ = location.matchesCanonicalPath(TraceFileIO.canonicalPath(path))
+}

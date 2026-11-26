@@ -7,6 +7,60 @@ import XCTest
 @testable import TraceCore
 
 final class IndexingRegressionTests: XCTestCase {
+    func testDanglingExternalLinkRetainsRowsAndWithholdsAbsenceUntilRecovery() async throws {
+        let parent = try directory(), root = parent.appendingPathComponent("root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let target = parent.appendingPathComponent("outside.jsonl"), link = root.appendingPathComponent("link.jsonl")
+        try Data(line(1).utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let source = ClaudeCodeSource(roots: [root]), terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
+        let progress: @Sendable (IndexProgress) async -> Void = { value in if value.phase == .complete { terminal.withLock { $0 = value } } }
+        let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path,
+            path: TraceFileIO.canonicalPath(target.path).path, externalSessionID: "one", anchorSourceKey: nil, anchorExternalID: nil)
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly, progress: progress)
+        try FileManager.default.removeItem(at: target)
+        for current in [coordinator, IndexCoordinator(database: database, sources: [source])] {
+            await current.indexAll(scope: .proseOnly, progress: progress)
+            let sessions = try await database.sessions()
+            XCTAssertEqual(sessions.count, 1, "A temporarily missing target is not authoritative deletion")
+            XCTAssertFalse(try XCTUnwrap(terminal.withLock { $0?.navigationCoverage }).covers(reference))
+            XCTAssertEqual(terminal.withLock { $0?.failedFiles }, 1)
+        }
+        try Data(line(2).utf8).write(to: target)
+        await coordinator.refresh(paths: [link.path], scope: .proseOnly, progress: progress)
+        XCTAssertTrue(try XCTUnwrap(terminal.withLock { $0?.navigationCoverage }).covers(reference))
+        XCTAssertEqual(terminal.withLock { $0?.failedFiles }, 0)
+    }
+
+    func testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry() async throws {
+        let parent = try directory(), root = parent.appendingPathComponent("root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let target = parent.appendingPathComponent("outside.jsonl"), link = root.appendingPathComponent("link.jsonl")
+        try Data(line(1).utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let failures = MutableFailureSelection([target.lastPathComponent]), clock = TestClock<Duration>()
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite")), ledger = IndexCheckpointLedger()
+        ledger.seed(stream: "s", checkpoint: nil)
+        let coordinator = IndexCoordinator(database: database, sources: [MutableSelectiveReadFailureSource(base: .init(roots: [root]), failures: failures)], clock: clock)
+        let values = OSAllocatedUnfairLock<[UInt64]>(initialState: [])
+        let scheduler = IndexScheduler(coordinator: coordinator, scope: .proseOnly, progress: { _ in }, clock: clock,
+            checkpointLedger: ledger, didCompleteCheckpoints: { updates in
+                if let update = updates["s"] { values.withLock { $0.append(update.value) } }
+            })
+        let reservation = ledger.reserve(watermarks: ["s": 100], streamRoots: ["s": [root.path]], hasIndexWork: true,
+            reconciliationPaths: [root.path])
+        await scheduler.request(reconciliationPaths: [root.path], onRebuildReset: {}, onRebuildDeferred: {}, onOrdinaryWorkCompleted: {}, checkpointReservations: [reservation])
+        await scheduler.waitUntilIdle()
+        XCTAssertTrue(values.withLock { $0.isEmpty })
+        failures.replace(with: [])
+        await clock.advance(by: .seconds(5))
+        try await waitForCondition { values.withLock { $0 == [100] } }
+        await scheduler.waitUntilIdle(); await scheduler.stop()
+        try await clock.checkSuspension()
+    }
+
     func testNestedMissingDefaultRootDoesNotBorrowAvailabilityFailure() async throws {
         let outer = try directory(), inner = outer.appendingPathComponent("projects")
         let database = try IndexDatabase(url: outer.appendingPathComponent("index.sqlite"))
@@ -50,7 +104,8 @@ final class IndexingRegressionTests: XCTestCase {
         let terminal = OSAllocatedUnfairLock<IndexProgress?>(initialState: nil)
         let progress: @Sendable (IndexProgress) async -> Void = { value in if value.phase == .complete { terminal.withLock { $0 = value } } }
         await coordinator.indexAll(scope: .proseOnly, progress: progress)
-        let initial = try await database.sessions(), first = try XCTUnwrap(initial.first)
+        let initial = try await database.sessions()
+        _ = try XCTUnwrap(initial.first)
         XCTAssertEqual(initial.count, 1)
         let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path,
             path: TraceFileIO.canonicalPath(target.path).path, externalSessionID: "one", anchorSourceKey: nil, anchorExternalID: nil)

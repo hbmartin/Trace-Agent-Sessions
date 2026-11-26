@@ -160,10 +160,12 @@ final class SourceIngressMailbox: Sendable {
                                     rootsByAgent: [AgentKind: [TraceFileIO.CanonicalPath]],
                                     unavailableStreams: Set<String>) -> Prepared {
         let roots = rootsByAgent.values.flatMap { $0 }
-        var relevant = changes, eligible = false
+        var relevant = changes, eligible = false, recoveryReconciliation = false
+        var canonicalByRaw: [String: TraceFileIO.CanonicalPath] = [:]
         var paths: Set<TraceFileIO.CanonicalPath> = [], reconciliation: Set<TraceFileIO.CanonicalPath> = []
         for path in changes.paths {
             let canonical = TraceFileIO.canonicalPath(path)
+            canonicalByRaw[path] = canonical
             guard roots.contains(where: { $0.contains(canonical) }) else { continue }
             if rootsByAgent.contains(where: { agent, roots in
                 TraceFileIO.isSessionTranscript(URL(fileURLWithPath: canonical.path), agent: agent)
@@ -171,10 +173,27 @@ final class SourceIngressMailbox: Sendable {
             }) { eligible = true }
             paths.insert(canonical)
         }
+        // FSEvents preserves the observed location before canonicalizing its
+        // target. Rediscover the owning root for an external file link; never
+        // admit an external directory tree as a configured transcript source.
+        var locations = TraceFileIO.FileLocationResolver()
+        for raw in changes.lexicalPaths.union(changes.paths) {
+            let canonical = canonicalByRaw[raw] ?? TraceFileIO.canonicalPath(raw)
+            guard !roots.contains(where: { $0.contains(canonical) }) || changes.lexicalPaths.contains(raw) || changes.structuralPaths.contains(raw) else { continue }
+            let location = locations.location(raw)
+            guard !location.matchesCanonicalPath(canonical) else { continue }
+            for (agent, configured) in rootsByAgent {
+                for root in configured where location.isWithin(root) {
+                    reconciliation.insert(root)
+                    if TraceFileIO.isSessionTranscript(URL(fileURLWithPath: raw), agent: agent) { eligible = true }
+                }
+            }
+        }
         for path in changes.reconciliationPaths {
             let canonical = TraceFileIO.canonicalPath(path)
             for root in roots where root.intersects(canonical) {
                 reconciliation.insert(canonical.contains(root) ? root : canonical)
+                recoveryReconciliation = true
             }
         }
         relevant.paths = Set(paths.map(\.path)); relevant.reconciliationPaths = Set(reconciliation.map(\.path))
@@ -183,7 +202,7 @@ final class SourceIngressMailbox: Sendable {
         let known = Dictionary(roots.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         let canonicalRoots = relevant.watermarks.isEmpty || !relevant.checkpointReservations.isEmpty ? [:]
             : relevant.streamRoots.mapValues { Set($0.map { known[$0] ?? TraceFileIO.canonicalPath($0) }) }
-        return .init(changes: relevant, recoveryEligible: eligible || !reconciliation.isEmpty,
+        return .init(changes: relevant, recoveryEligible: eligible || recoveryReconciliation,
             canonicalPaths: paths, canonicalReconciliation: reconciliation, canonicalRoots: canonicalRoots)
     }
     static func normalizeMetadata(_ changes: SourceChanges, navigationRoots: [TraceFileIO.CanonicalPath] = []) -> Prepared {

@@ -12,6 +12,38 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testTranscriptPreparationPreservesExternalFileLinkOwnerAndControls() async throws {
+        let f = try await fixture(count: 1), outside = f.root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".jsonl")
+        try Data("{}\n".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let link = f.root.appendingPathComponent("linked.jsonl")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let root = TraceFileIO.canonicalPath(f.root.path)
+        var changes = SourceChanges()
+        changes.include(path: link.path, flags: UInt32(kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsFile),
+            eventID: 100, streamIdentifier: "s", streamRoots: [root.path])
+        let prepared = SourceIngressMailbox.normalizeTranscript(changes, rootsByAgent: [.claudeCode: [root]], unavailableStreams: [])
+        XCTAssertEqual(prepared.changes.reconciliationPaths, [root.path])
+        XCTAssertTrue(prepared.recoveryEligible)
+        XCTAssertEqual(prepared.changes.watermarks, ["s": 100])
+        XCTAssertTrue(prepared.changes.lexicalPaths.isEmpty)
+        let work = IndexNavigationWorkLedger(), boundary = SourceIngressMailbox.Boundary(prepared)
+        XCTAssertFalse(boundary.navigation(in: work).isEmpty)
+        let checkpoint = IndexCheckpointLedger(); checkpoint.seed(stream: "s", checkpoint: nil)
+        XCTAssertEqual(boundary.reservations(in: checkpoint).count, 1)
+        let unknown = f.root.appendingPathComponent("not-a-session.txt")
+        try FileManager.default.createSymbolicLink(at: unknown, withDestinationURL: outside)
+        var other = SourceChanges()
+        other.include(path: unknown.path, flags: UInt32(kFSEventStreamEventFlagItemModified), eventID: 101, streamIdentifier: "s")
+        let ordinary = SourceIngressMailbox.normalizeTranscript(other, rootsByAgent: [.claudeCode: [root]], unavailableStreams: [])
+        XCTAssertTrue(ordinary.changes.hasIndexWork)
+        XCTAssertFalse(ordinary.recoveryEligible, "Unsupported filenames must not enroll another reset")
+        var regular = SourceChanges(); regular.paths = [f.root.appendingPathComponent("sessions.jsonl").path]
+        let append = SourceIngressMailbox.normalizeTranscript(regular, rootsByAgent: [.claudeCode: [root]], unavailableStreams: [])
+        XCTAssertTrue(append.changes.reconciliationPaths.isEmpty)
+        XCTAssertEqual(append.changes.paths.count, 1)
+    }
+
     func testLiveMetadataIngressEnrollsConfiguredSourceBeforeFallbackPreparation() async throws {
         let f = try await fixture(count: 1)
         f.model.settings.onboardingComplete = true

@@ -110,10 +110,10 @@ func verifiedDiscoveryResult(
 ) -> VerifiedDiscoveryResult {
     let scannedScopes = Set(scopes.map(\.relativeScope))
     guard capturedContext == currentContext else {
-        return .init(files: [], failures: scopes.map { scope in
+        return .init(files: [], failures: deduplicatedNormalizedDiscoveryFailures(scopes.map { scope in
             .init(failure: .init(agent: agent, root: root.url, path: scope.scanPath.path,
                 message: "The configured source path changed while Trace was running"), scope: scope)
-        })
+        }))
     }
     let matcher = DiscoveryScopeMatcher(scopes)
     let configuredContexts = Dictionary(uniqueKeysWithValues: configuredRoots.filter { $0.id != root.id }.map { ($0.id, $0.mappingContext) })
@@ -390,6 +390,19 @@ public extension SessionSource {
                 continue
             }
 
+            func appendFile(_ url: URL, format: SourceFormat) {
+                if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                    let target = url.resolvingSymlinksInPath()
+                    let type = (try? manager.attributesOfItem(atPath: target.path)[.type]) as? FileAttributeType
+                    guard type == .typeRegular else {
+                        let scope = root.lexicalDiscoveryScope(url.path, in: context) ?? rootScope
+                        failures.append(.init(agent: agent, root: root.url, path: url.path,
+                            message: "The source link target is not currently available", requestedScope: scope))
+                        return
+                    }
+                }
+                files.append(.init(agent: agent, root: root.url, url: url, format: format))
+            }
             var seenStarts: Set<String> = []
             for start in starts {
                 let startPath = TraceFileIO.canonicalPath(start.url.path)
@@ -445,15 +458,13 @@ public extension SessionSource {
                 if itemType != .typeDirectory {
                     if allowedExtensions.contains(start.url.pathExtension.lowercased()),
                        let format = classify(start.url) {
-                        files.append(.init(
-                            agent: agent, root: root.url, url: start.url, format: format
-                        ))
+                        appendFile(start.url, format: format)
                     }
                     continue
                 }
                 guard let enumerator = manager.enumerator(
                     at: start.url,
-                    includingPropertiesForKeys: [.isRegularFileKey],
+                    includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants],
                     errorHandler: { url, error in
                         failures.append(.init(
@@ -476,7 +487,7 @@ public extension SessionSource {
                     guard allowedExtensions.contains(url.pathExtension.lowercased()),
                           let format = classify(url)
                     else { continue }
-                    files.append(.init(agent: agent, root: root.url, url: url, format: format))
+                    appendFile(url, format: format)
                 }
             }
         }

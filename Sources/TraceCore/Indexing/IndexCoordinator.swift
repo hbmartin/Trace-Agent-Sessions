@@ -146,7 +146,7 @@ struct ReconciliationLivePaths {
 }
 
 public actor IndexCoordinator {
-    private var discoveredLinkPaths: [String: Set<String>] = [:]
+    private var discoveredLinkPaths: [String: [String: String]] = [:]
     private struct SourceFileKey: Hashable {
         let agent: AgentKind
         let comparisonPath: String
@@ -715,13 +715,16 @@ public actor IndexCoordinator {
                 scopes: [SourceRootScope]
             ) {
                 allFiles += result.files
-                let links = Set(result.files.filter { file in
-                    file.discoveryPath != file.canonicalPath.path && root.lexicalDiscoveryScope(file.discoveryPath, in: mappingContext)
-                        .map { $0.scanPath.path != file.canonicalPath.path } == true
-                }.map { URL(fileURLWithPath: $0.discoveryPath).standardizedFileURL.path })
+                var links: [String: String] = [:]
+                for file in result.files {
+                    if let lexical = root.lexicalDiscoveryScope(file.discoveryPath, in: mappingContext),
+                       lexical.scanPath.path != file.canonicalPath.path {
+                        links[lexical.scanPath.path] = file.canonicalPath.path
+                    }
+                }
                 if scopes.contains(where: { $0.relativeScope.isRoot }), result.failures.isEmpty {
                     discoveredLinkPaths[root.id] = links
-                } else { discoveredLinkPaths[root.id, default: []].formUnion(links) }
+                } else { discoveredLinkPaths[root.id, default: [:]].merge(links) { _, new in new } }
                 let scannedScopes = Set(scopes.map(\.relativeScope))
                 discoveryAttempts.append(.init(
                     source: source, root: root, mappingContext: mappingContext,
@@ -790,7 +793,7 @@ public actor IndexCoordinator {
                             guard let context = mappingContexts[root.id] else { continue }
                             let scopes = Self.minimalRootScopes(
                                 discoveryPaths.compactMap {
-                                    discoveredLinkPaths[root.id]?.contains(URL(fileURLWithPath: $0).standardizedFileURL.path) == true
+                                    root.lexicalDiscoveryScope($0, in: context).map { discoveredLinkPaths[root.id]?[$0.scanPath.path] != nil } == true
                                         ? root.rootScope(in: context)
                                         : root.reconciliationScope(forRawPath: $0, in: context)
                                 }
@@ -885,6 +888,11 @@ public actor IndexCoordinator {
                     agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey
                 )
                 acceptedRootsByFile[key, default: []].insert("\(file.agent.rawValue):\(file.root.path)")
+                for root in rootsByID.values where root.agent == file.agent {
+                    if let context = mappingContexts[root.id], context.scanPath.contains(file.canonicalPath) {
+                        acceptedRootsByFile[key, default: []].insert(root.id)
+                    }
+                }
                 guard let existing = uniqueFiles[key] else {
                     uniqueFiles[key] = file
                     continue
@@ -952,6 +960,16 @@ public actor IndexCoordinator {
                     if firstFileError == nil { firstFileError = message }
                     status.error = firstFileError ?? firstDiscoveryError
                     status.failedPaths.insert(file.url.path)
+                    // A stream-root reconciliation must not checkpoint past a
+                    // failed external target whose canonical path lies outside
+                    // its root. This affects checkpoint qualification only; the
+                    // persisted error and navigation fact stay file-specific.
+                    for root in rootsByID.values where root.agent == file.agent {
+                        if acceptedRootsByFile[.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey)]?.contains(root.id) == true,
+                           let context = mappingContexts[root.id], !context.scanPath.contains(file.canonicalPath) {
+                            status.failedReconciliationPaths.insert(context.scanPath.path)
+                        }
+                    }
                     failedSourceFiles.insert(.init(agent: file.agent, comparisonPath: file.canonicalPath.comparisonKey))
                     try await database.recordSourceError(
                         file: file, rootID: rootID, error: message
@@ -1112,7 +1130,22 @@ public actor IndexCoordinator {
                 for attempt in discoveryAttempts where attempt.root.id == root.id {
                     for scope in attempt.scannedScopes { facts[scope] = .init(order: 0, covered: true) }
                     if !absentOptionalRoots.contains(root.id) {
-                        for failure in attempt.failures { facts[failure.relativeScope] = .init(order: 0, covered: false) }
+                        for failure in attempt.failures {
+                            facts[failure.relativeScope] = .init(order: 0, covered: false)
+                            let oldTargets = (discoveredLinkPaths[root.id] ?? [:]).filter { location, _ in
+                                root.lexicalDiscoveryScope(location, in: context).map { failure.relativeScope.contains($0.relativeScope) } == true
+                            }.values
+                            for target in oldTargets {
+                                facts[root.navigationScope(forStoredPath: target, in: context)] = .init(order: 0, covered: false)
+                            }
+                            // On a fresh installation there may be no old link
+                            // map. Withhold external absence, while explicit
+                            // successful file observations below can qualify it.
+                            if oldTargets.isEmpty,
+                               (try? FileManager.default.attributesOfItem(atPath: failure.failure.path)[.type]) as? FileAttributeType == .typeSymbolicLink {
+                                facts[.init(components: ["\0external"], caseSensitive: true)] = .init(order: 0, covered: false)
+                            }
+                        }
                     }
                 }
                 // Routing selects one reader; every accepting root shares its outcome.
