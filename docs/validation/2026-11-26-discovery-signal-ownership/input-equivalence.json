@@ -1,0 +1,12 @@
+{
+  "finalCandidate": "a511d9d6a5d0abac89b611ecb799779fce52c894",
+  "optimizedExportCandidate": "c8a8c5d99b066cca3f885ea1d8fd987c4d3b52f6",
+  "baseline": "a8732af55a5595974d20260cc81d854eb3c50895",
+  "allNormalizedCoreHashesMatchFinalCandidate": true,
+  "allMeasurementHarnessesMatchFinalCandidate": true,
+  "normalization": "Only the committed layout-specific IndexDatabase instrumentation is reversed before comparison.",
+  "finalOnlyChanges": "Release-compatible wait in one Core test; generated scheme Automatic architecture metadata.",
+  "baselineManifestLocalPath": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-export-v3.json",
+  "candidateManifestLocalPath": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/candidate-export-v2.json",
+  "rawPayloads": "Local-only; not uploaded as downloadable repository or CI artifacts."
+}

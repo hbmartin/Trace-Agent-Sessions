@@ -1,0 +1,2052 @@
+{
+  "availability": "Local-only raw payloads. They are not attached as downloadable repository or CI artifacts.",
+  "root": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup",
+  "files": [
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/WORKSTATE.json",
+      "bytes": 3528,
+      "sha256": "0f5366f03ce4d8f72471ef9411fd558c952233dd2ee50c21273decffc80db8ec"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-2-console.log",
+      "bytes": 9124,
+      "sha256": "e575dd37c8d86658aade39762dfa599983b35466bedfef593ff5b1bf662f6a7b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-2-counts.json",
+      "bytes": 47209,
+      "sha256": "cbdc768fa4270a21dc93d79e5069fdd7f0167864fec4bd976dd2518e110db595"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-2.json",
+      "bytes": 724,
+      "sha256": "8c3a0c36265ca798f205bdc00ba114c94e537ee2788a0336a6ba0e32440603eb"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-2.stderr",
+      "bytes": 118289,
+      "sha256": "1615485914ebbc8dfca5e4b9f2e9cf49fb092afc1beebaf43bc33462500d456a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-3-console.log",
+      "bytes": 67,
+      "sha256": "bc4017ba5c9b6cf29ed99d71f12ea1159c55436f7d9a41dead858812e97e4d7f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-3-counts.json",
+      "bytes": 47207,
+      "sha256": "e2d4c56f1377ce308da54ed89ed949427b6a54dbb562feeb9f29522ad9db4535"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-3.json",
+      "bytes": 725,
+      "sha256": "99908c6bfb64e3f9c7294a8b15490e5b004a66d2e2e6e7c007991e3a20d52f23"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-app-direct-3.stderr",
+      "bytes": 117747,
+      "sha256": "57515448bb887bd8f95e8202bafedd3350ff82790c8f45f4e4a7428616118320"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-2-console.log",
+      "bytes": 9128,
+      "sha256": "378b57c6e8bd2ffedee6bd093149caae5fc977f1a086371a9e20304e40015942"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-2-counts.json",
+      "bytes": 32824,
+      "sha256": "9eeae7f73dc14f13cc1cab00de9d6266c70fe0108b2b81594187514fba9df285"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-2.json",
+      "bytes": 847,
+      "sha256": "b5a8734f873644951db23b08d550fcff2e411b56b7da044154f9761b1832bfb6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-2.stderr",
+      "bytes": 84065,
+      "sha256": "65a31fe6e80ebaf17e59f6dc448980aab094211dc026ca383c5cbea62e0104ce"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-3-console.log",
+      "bytes": 69,
+      "sha256": "961baa589d818033384140ae628fdcebfa52e6ca39b9be08eeecf126e986ced1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-3-counts.json",
+      "bytes": 32822,
+      "sha256": "224d76034cf7e71b6c83972ed60329efcd91b64853c776a3a7ca73212e5e10e1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-3.json",
+      "bytes": 847,
+      "sha256": "fb81dc8ec7e2e6953ece48ad008aabfdda422eabab4d2355ec385f7490cab78b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-3.stderr",
+      "bytes": 83240,
+      "sha256": "47f10a8673874d1396bea65b7762b498dcbb40614b05d61455b43fdd862c6d17"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-4-console.log",
+      "bytes": 9128,
+      "sha256": "ff8f84a996437bfc3a31f6ffc1b21e4f11c337d3eaf1d7d92f389238af0bb313"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-4-counts.json",
+      "bytes": 32824,
+      "sha256": "52dd085f6a03c2bd4280c3fbcfaf8735349777856a137558d2887d05da035db9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-4.json",
+      "bytes": 847,
+      "sha256": "8ce94302c16b74f4d33eb51fc22ba6e37ff25834fc4f7de17f6480e4678cd238"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-4.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-4.stderr",
+      "bytes": 83737,
+      "sha256": "f9a699b40119044c0dc5e00de879703987f30f3d6b9465aa17a2546dd6d8f351"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-5-console.log",
+      "bytes": 9128,
+      "sha256": "793c6e204babb3c53786d3f7ba4671065d40970d48ca28b8dee2478b953bb31c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-5-counts.json",
+      "bytes": 32824,
+      "sha256": "f3c35b6186f38ea50452689956e6a6cd687c3901fe07cd5ae5f71a5abf738d0b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-5.json",
+      "bytes": 847,
+      "sha256": "cc523374d0d40ac5b766a6540607550e3df6887e65b1a2010a998e027d2c1f18"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-5.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-5.stderr",
+      "bytes": 83466,
+      "sha256": "5c70cb8e910e8432a0293533486e75e8193c7556e2b59c896f6f9d3e22822a1a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-6-console.log",
+      "bytes": 68,
+      "sha256": "a776bf400a701e858180304d5ee2f172221308523eb2732a8f417b8233840a96"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-6-counts.json",
+      "bytes": 32822,
+      "sha256": "224d76034cf7e71b6c83972ed60329efcd91b64853c776a3a7ca73212e5e10e1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-6.json",
+      "bytes": 846,
+      "sha256": "89e41b1a790217e5eddd27e91f0c050614521b7fe3b57479de898a6e0ac05b8c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-6.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-6.stderr",
+      "bytes": 83234,
+      "sha256": "1cc6fa07c822cb9d523954bfbfab362a8259492b0b8e72baf9ffa9bbd0578660"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-console.log",
+      "bytes": 9120,
+      "sha256": "7bbf76692c0afd83bf2262e757be853ec20f8284bc0bbcd6b5ae62f14a11a3ad"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct-counts.json",
+      "bytes": 32602,
+      "sha256": "d0e5c7181a3efb98fd84b35cc122349a795d0449899e2d280a5d6fb468a74f00"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct.json",
+      "bytes": 846,
+      "sha256": "d26aa9be02f75c94ef6e4db1b83aa1e96377bcd8a380a771f9b5e6e34ed31ce3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-core-direct.stderr",
+      "bytes": 82980,
+      "sha256": "28c943bb53cf00feddbff2d956a5acfe89df8303d12d7e224ea6628dd249e9ba"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-scripts-2.json",
+      "bytes": 343,
+      "sha256": "48fd94642b26869a516ae5bc10083dbb62aa83bf690e21bf5626c7f0a7e7c9d8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-scripts-2.log",
+      "bytes": 1966,
+      "sha256": "c81a2e65d205433ff30cadf1380574841c3dcf56ff423e89f1445f1b2f2bb0a3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/affected-scripts-2.stderr",
+      "bytes": 2799,
+      "sha256": "7619550546f0b685c90037604de1058d115626031c813957790ff9e8a91d17a2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/argument-rejection.json",
+      "bytes": 8449,
+      "sha256": "1a17c11a58fa73ea8f104ed8c0fae16583971a761dfeb5b1d08489001cc5de82"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/base.json",
+      "bytes": 208,
+      "sha256": "f0f9ef7518b07cca803ee665a3d40dcd96d5298108adecabdb71cdecdd92d51e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-cleanup-runner.py",
+      "bytes": 32326,
+      "sha256": "425b98a5b3b42ff1873fb1252897c7a951847ef35dc7d558c2a1c3cc6f699798"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-database-before-query-fix.swift",
+      "bytes": 163233,
+      "sha256": "d30afc76b54875348e9a564ed5885c50394a2d19e4b1ccd49d377516e3d6badb"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-database-before-sync.swift",
+      "bytes": 158444,
+      "sha256": "f6e020d892ce005b021fe56e5858478e3a9962fd943f5c6ba27d3acf6665feae"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-export-v2.json",
+      "bytes": 3941,
+      "sha256": "75260e8a447d661fffccbf7331dbb188ec23b0407cabb03f1585160ce6ca9ac3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-export-v3.json",
+      "bytes": 3990,
+      "sha256": "5067161e23fe5586ec30ea6d76f6ee7cfc29b50fb5caa64a902c360a673b7c74"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/candidate-export-v2.json",
+      "bytes": 4016,
+      "sha256": "e1623d0ab8729768f04f19376e4294036d26d2ffd1ebd95ac10b36327c8c9b59"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/candidate-export.json",
+      "bytes": 3896,
+      "sha256": "4ba6b27af479930d6d4166b17271f649221e7e2448cce40ad6d55808f137b141"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/candidate-session-source-before-dedup-fix.swift",
+      "bytes": 23759,
+      "sha256": "a27db92ac3d3504055c25af58067c49d928c30a5313d00d0638fa4cc8552f177"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-and-link-focus-console.log",
+      "bytes": 71,
+      "sha256": "61b0e76f555fd3287ebaf88bd3501b80e1507daacf5b44bc808d94e140b666da"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-and-link-focus-counts.json",
+      "bytes": 611,
+      "sha256": "dd681be1c1f6cd0f6efbc01d3839f54e6aed766b742d6e3df61b77d67d8f6d22"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-and-link-focus.json",
+      "bytes": 1086,
+      "sha256": "177901e26be9633736dbee9fbdd0589df84cfeb34c5550eb8ac8e2045ced179e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-and-link-focus.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-and-link-focus.stderr",
+      "bytes": 2944,
+      "sha256": "3e320f991bc2b3926530f5326413a52ff6119d2489d27b17897d99683df6a095"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-failure-debug-build.json",
+      "bytes": 510,
+      "sha256": "5a05f84eae16416c7d4cfde3b27ed824e806ef3eece568efa738131e6b188fad"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-failure-debug-build.log",
+      "bytes": 528256,
+      "sha256": "4aa693e3ac2196748fbf5e9eab8b32f17ed1990ce367f9d64b04c4c921955c73"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/canonical-failure-debug-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/checkpoint-test-diagnostic.json",
+      "bytes": 738,
+      "sha256": "8b061e107a7e597e35a6388c8f6bdb6c904e39f1914eb947d1c1824cca65c011"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/checkpoint-test-diagnostic.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/checkpoint-test-diagnostic.stderr",
+      "bytes": 2395,
+      "sha256": "b50035dd5dd9cdafdd5031f7d32e467ed86d56ecd01b8ebfb27f72be52356b52"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-discovery-membership.json",
+      "bytes": 1374,
+      "sha256": "8f2d488bf1997a60e1729a9983ce0576f3164410ebbdd266e6f6bd6ef42adade"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-discovery-membership.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-discovery-membership.stderr",
+      "bytes": 976,
+      "sha256": "33598663acb60bf3c06c3118586dfef8f0d08cd8b1d47df16baf6af821d0e355"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-incremental-reconciliation.json",
+      "bytes": 1385,
+      "sha256": "2cd2a57b63958abbb6dbcd30000b4f4de54bc6c754164732072d62c1cd09ddfc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-incremental-reconciliation.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-incremental-reconciliation.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-reconciliation-contention.json",
+      "bytes": 1384,
+      "sha256": "b529bca2103bbea6d7fc55379bff740f0be97048fb92afeb1b81b0254c9583ab"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-reconciliation-contention.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-baseline-reconciliation-contention.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-discovery-membership-v2.json",
+      "bytes": 1380,
+      "sha256": "72f46b74e1c61cd0ad3a3b88b332553002db89622948a8139cc54634d6e73107"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-discovery-membership-v2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-discovery-membership-v2.stderr",
+      "bytes": 976,
+      "sha256": "33598663acb60bf3c06c3118586dfef8f0d08cd8b1d47df16baf6af821d0e355"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-discovery-membership.json",
+      "bytes": 1380,
+      "sha256": "6a6bcf502f58f97d9f136e4abd7be7f175d17972e8b8d7abaf313761b6cd413d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-discovery-membership.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-discovery-membership.stderr",
+      "bytes": 976,
+      "sha256": "33598663acb60bf3c06c3118586dfef8f0d08cd8b1d47df16baf6af821d0e355"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-incremental-reconciliation-v2.json",
+      "bytes": 1392,
+      "sha256": "0612905fe62a27d0b5cc20597fc37b94185b34601e38ebd322d419196c1c0612"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-incremental-reconciliation-v2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-incremental-reconciliation-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-incremental-reconciliation.json",
+      "bytes": 1391,
+      "sha256": "808a9f977c601f9734415953b672af8f4835f77dfaf1fb7f32947c91fac7ad95"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-incremental-reconciliation.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-incremental-reconciliation.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-reconciliation-contention-v2.json",
+      "bytes": 1390,
+      "sha256": "b4f934d3be7bfbf35bd03abe794cab054c4046c331e93f3530da6e23cd3bee7a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-reconciliation-contention-v2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-reconciliation-contention-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-reconciliation-contention.json",
+      "bytes": 1390,
+      "sha256": "a94596f411db5768f88c0230e4c350008ce7cdfb142fab9d45665d6f63034b02"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-reconciliation-contention.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/compile-candidate-reconciliation-contention.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/coordination-workflow-session.py",
+      "bytes": 196082,
+      "sha256": "2050dcb9b1b1b946d0e09c82e43f3bae90ef9b9f67ce6a838f276bfa4feafd84"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/core-test-build-6.json",
+      "bytes": 970,
+      "sha256": "68345269d93f1a7d9da4891ba6813ee6e4e2e30754f112dadb94b068d4b0dda0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/core-test-build-6.log",
+      "bytes": 714936,
+      "sha256": "cb7f32a29fdbddd61b09da8caf14b34ff2b12f7726174b407780bf70a6053ab0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/core-test-build-6.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-1.json",
+      "bytes": 512,
+      "sha256": "8a802bcd62f7a756dd8210a69a99c8906b8ea8daa466a20e3215b3764f2b509f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-1.log",
+      "bytes": 376286,
+      "sha256": "c9cb318e3de24ec2d81aa0a4f0215c5ed4bbbd5e0b026515ed66dfac77b5d9cd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-1.stderr",
+      "bytes": 583,
+      "sha256": "bde577c2035f81350c73d0bce03de933d59d8670f18589e2536a3f43868454e7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-10.json",
+      "bytes": 511,
+      "sha256": "951da1212c1feb326a5b80da5293f66951507d6247fa37e451d2ab0ef73fc8d9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-10.log",
+      "bytes": 238501,
+      "sha256": "f9b8592240dda12ec68914f2dad65804dbcdad3f86458a18b95d6499c11470a0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-10.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-2.json",
+      "bytes": 513,
+      "sha256": "9363430eb18c5cfd3fefd3492232dbfcef789121604e4565875fb8818a89872f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-2.log",
+      "bytes": 196090,
+      "sha256": "e1257669d809cae41838221e0e486d9b384937431905082058f489ae648cddf2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-2.stderr",
+      "bytes": 623,
+      "sha256": "1396fd407fd11270456ecd36bfda495c9e3d8c25793af203346f8d81aa6685b6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-3.json",
+      "bytes": 511,
+      "sha256": "b854c762181d7dfd76e4ecaaccec1ed68ab0da09d34fcdf6ee090ce66e82efe6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-3.log",
+      "bytes": 343546,
+      "sha256": "ec906a2f68cb04db679839cbaeb65c1437fddb59d4144ec149a6e825055e9442"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-3.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-4.json",
+      "bytes": 512,
+      "sha256": "7dd009b671a007d3c98760b48326faa6da6dcfab169e26b9195f5eb4fb877afc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-4.log",
+      "bytes": 244265,
+      "sha256": "6757532d39cf889c22d4712fdf45db9a054a54a233a94fde757ee086003c84b0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-4.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-5.json",
+      "bytes": 759,
+      "sha256": "6953fb99cc0ddd0d9ca66b9ecea4e028c7bd6ccfedad24b0d071f4e2a6b20996"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-5.log",
+      "bytes": 217661,
+      "sha256": "aeaa6154e3c822afdc6d5d250c511342f4f8b2dd6e6c780ebfc688dce3b9f4ff"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-5.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-7.json",
+      "bytes": 512,
+      "sha256": "6612431180197114365238cce93b48ac312e34a0c20353652667dd2c8000845b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-7.log",
+      "bytes": 727656,
+      "sha256": "f388cacfcab92d492230c4ac0b908103d068a22c59b6f4c6b8a7e057ac02c842"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-7.stderr",
+      "bytes": 653,
+      "sha256": "9948f3c351d440953d2aa07c2e434c75a36c8ea39521fb1b3acfbf33ef7812b8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-8.json",
+      "bytes": 513,
+      "sha256": "40f77eb372401050d6267831dea335f403b2fe2ca333e62ac850e2f4a1f69e04"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-8.log",
+      "bytes": 244303,
+      "sha256": "f69a75ababb84bd8685659ff011ddbb2bba9e9658da170cc52f5ac458e426e0d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-8.stderr",
+      "bytes": 653,
+      "sha256": "9948f3c351d440953d2aa07c2e434c75a36c8ea39521fb1b3acfbf33ef7812b8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-9.json",
+      "bytes": 511,
+      "sha256": "badcb2f94c1bb2b499a1ab94ea821ceb1ee561ed0059906bc50d1615d3cdafad"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-9.log",
+      "bytes": 347556,
+      "sha256": "d2d03e033075c09c30d5f660a4bd889f0c9f12bd81a6f0cd76d46b879ed643fe"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/debug-build-9.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression-2.json",
+      "bytes": 457,
+      "sha256": "c81ca34c7f98d443ce20a8eba28e6569f0e21ab4f79076c7f883155daade2835"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression-2.stderr",
+      "bytes": 3090,
+      "sha256": "9a6a79dff1a527f5acec63c1fe96fb628ec295b9b4ddad8f2a1ec024a9eddb61"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression-3.json",
+      "bytes": 456,
+      "sha256": "1676dc2f47380feabf713e2f923763cb163ea4d22d6a40f5302154bfb95b3038"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression-3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression-3.stderr",
+      "bytes": 98,
+      "sha256": "1b8542aa9fe3db3088648647ff343ab105e01de6fadbfb83997ac702112b08ff"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression.json",
+      "bytes": 456,
+      "sha256": "ca8f515594c40f6c15cd53ab7da7e0036b3586a9ac1a7f5989b1b181fd380d32"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/descriptor-signal-regression.stderr",
+      "bytes": 1467,
+      "sha256": "3fc4f602ddd587c12395377687af3476b64c0803e8b61e6b88aaced04b751c55"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/deterministic-script-tests-2.json",
+      "bytes": 1337,
+      "sha256": "ac3347a4dffe33e4f0601f1593a039cf371e7d998f50c9b6bc29f7f8cd80d86d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/deterministic-script-tests-2.log",
+      "bytes": 308,
+      "sha256": "28c9943b4cab14dac458b7e04443902df9b21bf5e8508ca05d991249dfcf85a8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/deterministic-script-tests-2.stderr",
+      "bytes": 112,
+      "sha256": "70dda53ed6532662b4a5d5937db093045a2f33eb20893e23b1621d64667776ac"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/deterministic-script-tests.json",
+      "bytes": 1337,
+      "sha256": "a8570480a174bcc7967c6de77abf66e42d2efece4104e622c903826673dbd066"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/deterministic-script-tests.log",
+      "bytes": 308,
+      "sha256": "28c9943b4cab14dac458b7e04443902df9b21bf5e8508ca05d991249dfcf85a8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/deterministic-script-tests.stderr",
+      "bytes": 112,
+      "sha256": "1d768dab89bd48b0b924fa0076d08be523c192c2f02de14532becdd91f6f5617"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/diagnostic-core-build.json",
+      "bytes": 838,
+      "sha256": "34e11c52b5cc88ee5403d16947d67762f32a41a169e7dc1446b19c3e19537825"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/diagnostic-core-build.log",
+      "bytes": 600303,
+      "sha256": "0308423e378b0213cae9dc9c1c260d6fe1651571661b19442bd69d98205379c4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/diagnostic-core-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-app-focus-1-console.log",
+      "bytes": 59,
+      "sha256": "22bd9aeb7e637eff6c6351c5d945e0f9e762d2c367401b3000c9d6c6a28778c9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-app-focus-1-counts.json",
+      "bytes": 297,
+      "sha256": "055fb794a8b658d7797073f731d79ea2f277f1231bc7e6a0cf20cd6845c47a1b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-app-focus-1.json",
+      "bytes": 792,
+      "sha256": "f605311a72a096cc160293d07a57e22d40054fca0888b646bffdecd0ab20c2e8"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-app-focus-1.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-app-focus-1.stderr",
+      "bytes": 2158,
+      "sha256": "778a731c8ac741e06784b8cbbc5621226d76c3a5d77cbd9681a02e6118d7aab7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-1-console.log",
+      "bytes": 61,
+      "sha256": "80fa57072323d32356bfaeb873aebd10c61ecc36487d98576a292ccab6fc0730"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-1.json",
+      "bytes": 788,
+      "sha256": "cc12d39977cc1b22a057199c16362766722c84d88a32d934ff5a53fccca7163c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-1.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-1.stderr",
+      "bytes": 2156,
+      "sha256": "ad4efb2e27d2b7ec65b7ef6a7ee5253dee7f887ab737abb7ca414e41b124cc67"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-2-console.log",
+      "bytes": 61,
+      "sha256": "b59df15b28f5cd82a18273057e967b8e96bafc95c3614c206c7b7612588be4c0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-2-counts.json",
+      "bytes": 1272,
+      "sha256": "d8dd21ceccb3462a7a8b81e2a0499142930ba6824df5c75223d1f0ae451b1d8e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-2.json",
+      "bytes": 1703,
+      "sha256": "6cf786911cd672193757c9f06eb7f12f134433bfc714c3a0189a1fea83149efe"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-2.stderr",
+      "bytes": 4559,
+      "sha256": "696aa7caf3b081fae080fab19a3e597f1ba2758ae7bdf487f8c44d9ff92b4386"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-3-console.log",
+      "bytes": 5453,
+      "sha256": "f042e20e6edc587259079a5be50eb05bab2cc5d099e259cb84bfc3e2e1bd4831"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-3-counts.json",
+      "bytes": 1496,
+      "sha256": "362dda60f0c9b9fa02f302c34b4c118f9602cc1c4242d3256a20019385f19701"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-3.json",
+      "bytes": 1911,
+      "sha256": "22c5cf7f3bfb0b745a7be384b840939d424c3c33f0391b65f9163cab2e8352ab"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-3.stderr",
+      "bytes": 5339,
+      "sha256": "1d38bef713d1b63abc59a4aa1553dc9f730c96df2136b566ac29bc96b5989d03"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-4-console.log",
+      "bytes": 3043,
+      "sha256": "81b95dbd0386e7045a74d931b63f0d3622eaa5cc6f2baf96be242f8d770fad71"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-4-counts.json",
+      "bytes": 733,
+      "sha256": "20f8985fbb5ca2b573df10e1e4db4313b5d496c3ca14c1687fbdc987a2e1a6c5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-4.json",
+      "bytes": 3578,
+      "sha256": "b95bce55efe01205ea26cb1bd413542a37f994fef607214bcaeb19669cf6aa5e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-4.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-4.stderr",
+      "bytes": 2927,
+      "sha256": "523efcd99a670ac40852de537fd3204b8b3c19a480d1ac89956813bd1d86846b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-5-console.log",
+      "bytes": 61,
+      "sha256": "2da1bdefd118f2bcd679e2c4bb4ef3a55a4b14fc953da4223b4dff323d9b4ec4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-5-counts.json",
+      "bytes": 1494,
+      "sha256": "678ff2e9fa8374859dd9dee15e0580c3137f5e5493ff8d64b626350fd362f16e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-5.json",
+      "bytes": 1910,
+      "sha256": "9555f59e3cdd53a99ddf0f849b22e5a3acd8a8bc1a623f3d2d20003c7e056e10"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-5.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/direct-core-focus-5.stderr",
+      "bytes": 5101,
+      "sha256": "5eceb4150e6ef29098e11622ec4aa4410285708dcd3060b4f5a2bc4985715304"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/discovery-core-focus-1.json",
+      "bytes": 3444,
+      "sha256": "11e546ec56c9c2bb860417327b61d280a224cdc42929739849cc913e94e2e007"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/discovery-core-focus-1.log",
+      "bytes": 2223,
+      "sha256": "dff2620f18a5635969924d3a0fa3c5d5b66a56adc7b5fd7dfd3830018fec11d9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/discovery-core-focus-1.stderr",
+      "bytes": 1383,
+      "sha256": "bf9718bd28fff054158c1570bfa5c86f5844d8b616aab9ed6a8b6a22c85a9b31"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/external-client.json",
+      "bytes": 526,
+      "sha256": "80763119a3daabc4aface80b1f092976579a66989c01031c04437cdaa9e90f33"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/external-client.log",
+      "bytes": 406711,
+      "sha256": "e6c6e5e0edac1900f61c5b2e167d00f500c49f535fbb455ebc4aeaac21cf033b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/external-client.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-core-debug-build.json",
+      "bytes": 837,
+      "sha256": "26253aa82fe35c72be1c230d0ba696a040aa10aabd72d49f6338f24788613a69"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-core-debug-build.log",
+      "bytes": 600326,
+      "sha256": "2eaa96b0ce677e615d340f8d4c75c3a1bfa15bdfd1db8336d1919aab19cc6b6e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-core-debug-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-debug-build.json",
+      "bytes": 511,
+      "sha256": "768aa3cf2b049187e32c4b696df0d1044ea80c10da56e7f01673cf1d352bbbae"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-debug-build.log",
+      "bytes": 826950,
+      "sha256": "1a0bbd781f84c844e4545002f0ad76e53f0eec0fdf3d99f680702059b801b06c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-debug-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-network-surface.json",
+      "bytes": 378,
+      "sha256": "ecc0cfb37cfdad5f2e8fffaed9d02bc76db486f69d28081ebc6b1975c489ea3f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-network-surface.log",
+      "bytes": 188,
+      "sha256": "dfd039632d2e84ea29fb342c22910fedcd7e21293d880d2dacc7ba506b86c20f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-network-surface.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-preparation-tests.json",
+      "bytes": 356,
+      "sha256": "10da8ace621651a440d65b7fd38582424af7cb80d3bc9485e0fe523d093341db"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-preparation-tests.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-preparation-tests.stderr",
+      "bytes": 105,
+      "sha256": "1afeed7494eaebc3e90d1ca1fa501a629c43fe8d20be60a24c4ee34a8f632d1b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-release-app-build.json",
+      "bytes": 533,
+      "sha256": "78046249e091351a0efe268281bade4ad99060221017e066f260a0b34df242c1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-release-app-build.log",
+      "bytes": 572819,
+      "sha256": "90bf2347b522076b7c493008af179b436e1d43c9860d3fd45c2652d297a3355e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/final-release-app-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/focused-script-tests-1.json",
+      "bytes": 409,
+      "sha256": "28d06fcbb44b1ef9f6ce549b1f256c718f41d8d732acc4cbe57e533f27ead866"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/focused-script-tests-1.log",
+      "bytes": 659,
+      "sha256": "1ee465bf838b35769a7d199ccd5e4ca3efbfacc5dda8b54d338a9c1311e170c3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/focused-script-tests-1.stderr",
+      "bytes": 7209,
+      "sha256": "2b8875ee5b959432d82997abf53bf1618bf22c82dc55f431603f9fd9a85bb176"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/frozen-candidate.json",
+      "bytes": 281,
+      "sha256": "3290fa186f2bf06f3ff32d82a63ed28c56384dbe634ac4ed1407d5a44dd8e67c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/frozen-input-equivalence.json",
+      "bytes": 8761,
+      "sha256": "15bfde520ab51e54c7efaa6ced93ce961f84d31c806a0929b50c3fede97eb056"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/held-checkpoint-test.sample.txt",
+      "bytes": 178097,
+      "sha256": "c60904f0cdf7beda1e827a1010f7902ceda6d9f1512f8f1d70a44f26fc7f8349"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/isolated-checkpoint-restart-console.log",
+      "bytes": 77,
+      "sha256": "9bf9f4f68d8f6d3a3b4539c578de5da34525ad0c298abf66d928aff62791aadd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/isolated-checkpoint-restart-counts.json",
+      "bytes": 302,
+      "sha256": "6ff0cbd5b3466e7b4e4cc8385f5237b7a2c1be064dae9362ef760207ebb9570e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/isolated-checkpoint-restart.json",
+      "bytes": 797,
+      "sha256": "346eb8f7908a1134bcb1b7935089b949655f29cea65a385515ff8cfefa91499b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/isolated-checkpoint-restart.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/isolated-checkpoint-restart.stderr",
+      "bytes": 2168,
+      "sha256": "054b26b34fea702ce506db335b254a656cf8d885cf465a3b82127947317adfd3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/native-exclusive-lease.json",
+      "bytes": 923,
+      "sha256": "2ebeef709fdefcf5865b3dac4839a21b8b94617bc4d62f6f1c63c681d19d16ec"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-baseline-build.json",
+      "bytes": 909,
+      "sha256": "f1f1396803a758c7e29cc2c04196c5c6398a0b70d551acad88790e7c732d1c5b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-baseline-build.log",
+      "bytes": 503645,
+      "sha256": "0fd2a29e67e6010727030a2e1692af7c54cfc0ea99ef59e31519622e6f99edee"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-baseline-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-candidate-build-v2.json",
+      "bytes": 910,
+      "sha256": "ace1c5060bbac5ae1aa1d6e5f4c53d9c68701670223dc0d0d77f703d3199e269"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-candidate-build-v2.log",
+      "bytes": 107422,
+      "sha256": "229e5b30a96f0a1656742e7955e66b4a41e374a44e9d72ed767518e1b4751c97"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-candidate-build-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-candidate-build.json",
+      "bytes": 912,
+      "sha256": "aa32cee8634dfe9649f622f26bfbbbad3d90f04478f98c9affc4fbdd60f4629e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-candidate-build.log",
+      "bytes": 506461,
+      "sha256": "06e24d4724b75f59745b43ae6dbdb73412dbfbb0d57646efdc2a5b9a1bd177f7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/optimized-candidate-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-1-console.log",
+      "bytes": 54,
+      "sha256": "531514a89cecf45050e12ee938ca6b965c21b3633b455a0454a0b83ef707b54a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-1-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-1.json",
+      "bytes": 1274,
+      "sha256": "5cc7bd93bf5a8bce72492045db96757fef598580fb2eac5c147bd3fb5b6ca16f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-1.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-1.stderr",
+      "bytes": 3446,
+      "sha256": "b7980fa883e709bcf0c4ed97c1fab29e0b70e981c03353fffc07a76a14221992"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-2-console.log",
+      "bytes": 55,
+      "sha256": "92e121d21e2b7fa2bd01b456a1fa4057fe27d2b426bdea01c457706f4f7f6c74"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-2-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-2.json",
+      "bytes": 1275,
+      "sha256": "31a267f7edd6209fa2b014adb2713367fa6bd9806004e5f4a032855158189c7e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-2.stderr",
+      "bytes": 3446,
+      "sha256": "ded5a6813a17d7eb8f79d78d3eb7e0c6f24a4d40056e93d98d15d8ebdb9929a9"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-3-console.log",
+      "bytes": 55,
+      "sha256": "967cc854e3209d9ede90b5c10deb4ca34e6dfd90e141b1a2ca4d621737f90010"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-3-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-3.json",
+      "bytes": 1274,
+      "sha256": "3ec54bfcaeb94ca8301b2cd106b00cae18e3a589c7a0c56c8711a6c5e1a01ab1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-3.stderr",
+      "bytes": 3446,
+      "sha256": "49b6f0005539c96584a71d6cfabc7208fefec76e0ef3b3c254955013651ca2cd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-4-console.log",
+      "bytes": 55,
+      "sha256": "a6f457b7c87d0e58cb1b625d8d2a135ec4c3cedf55fa4f3f4a634f4728cc8dcd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-4-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-4.json",
+      "bytes": 1274,
+      "sha256": "b6743512f837f8a1014398dd3694854a94df0b53a86472580677f0e2a0320fcb"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-4.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-4.stderr",
+      "bytes": 3446,
+      "sha256": "431e26edd72012c33dd0b1dff0eb701db97d599e20a5440cec717fa7b353e1f2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-5-console.log",
+      "bytes": 55,
+      "sha256": "6978f5629099501dd4559533e8c5698de7a40164b77e3ab29a7bebcb44cccb1f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-5-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-5.json",
+      "bytes": 1274,
+      "sha256": "6c8dec833ffa251667ac5c039f4fd9e59b823fc21667a081a6a0fcea920e5952"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-5.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-5.stderr",
+      "bytes": 3446,
+      "sha256": "b5b6673741a3c5e15344e11ea19649c57374dad22ab49ee55166022afedb2f46"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-1-console.log",
+      "bytes": 67,
+      "sha256": "da6dc5f243d6b4540d3e345cddb0101f1d84564acd323f8b4e4885b59879dc8a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-1-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-1.json",
+      "bytes": 1274,
+      "sha256": "b379ad43e94929d0d71e3e5f65153f4ca27f5cd5f97fc8db493464ae5f82cdaf"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-1.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-1.stderr",
+      "bytes": 3446,
+      "sha256": "bcf94cad3fb856c6290abf2f885d2ffca7d9ec66cfb6f724cdb244d808252ff4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-2-console.log",
+      "bytes": 67,
+      "sha256": "15b0d8dcf0d7808a6b27147b9e0822cf1d090ea5774313c9b6f3676b676c5910"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-2-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-2.json",
+      "bytes": 1275,
+      "sha256": "faf0c131cb274f69835baa4a8c9c803339c7a669e7cfa9c13beb141cc53a06dc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-2.stderr",
+      "bytes": 3446,
+      "sha256": "a6c832c2890098a2eeec5ea248e716548b29352cd8f84b422a2d7afb59ce66be"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-3-console.log",
+      "bytes": 66,
+      "sha256": "2b36ea901f8f9cae06d9552c8a395228377cf2e17daf573f4efa7807cb97cb96"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-3-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-3.json",
+      "bytes": 1275,
+      "sha256": "39f8ed47ca9a2aeaff7d37a820b16e2bbc160bde1d2735cd593d46973a5f488e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-3.stderr",
+      "bytes": 3446,
+      "sha256": "64ba015c086e71b699174b3e9a154dbff0daa20ca59bac4582574bb7527113c4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-4-console.log",
+      "bytes": 66,
+      "sha256": "9303727b32cf8cc29398f2dcb889889328df9158879a0ad33356def9944ecafc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-4-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-4.json",
+      "bytes": 1274,
+      "sha256": "e396daaeb37387ddc9c780aee88f9f16474ef99d14919cab626ea3a322e60dfb"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-4.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-4.stderr",
+      "bytes": 3446,
+      "sha256": "109b4f840a3bcc51fac7e8267d1489a959ffbd7b2cc8dabd218d6f6eb8c3647c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-5-console.log",
+      "bytes": 66,
+      "sha256": "23d487600c3a983c9a158497dc0acc84cb9f393f2bd365d145815c660c9f2192"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-5-counts.json",
+      "bytes": 813,
+      "sha256": "b364029688ce9fe86241d3f59b4205c36b856ca9e727b20a26af59129cfe54b2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-5.json",
+      "bytes": 1274,
+      "sha256": "59b11a56a8af7f935119c55d506e82a7dfd92a38def2f23b0b399e0b2cc61f6c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-5.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-core-final-5.stderr",
+      "bytes": 3446,
+      "sha256": "ed49439612b243e81e535906a2b2ff2cbc6def7beda5635570dc19fcd4cfd75e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-1-console.log",
+      "bytes": 61,
+      "sha256": "423ba7a919ba4531766ad045b63568ae277934e07418e56a0bc6744e3b5776f4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-1.json",
+      "bytes": 1376,
+      "sha256": "da046f238ddbfd86d44c4b01621f70faab4896a13ad59318ae3f6aa21350fcd4"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-1.log",
+      "bytes": 251,
+      "sha256": "5f63cc2ce786822ded88f309687f27f8fc302b66fa593c74e93a5e773a54858e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-1.stderr",
+      "bytes": 107,
+      "sha256": "86686e6c37881d0c4825d765f950d371e720998a673de4464e2b828edbf521be"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-2-console.log",
+      "bytes": 62,
+      "sha256": "2cb075a23e96c70a7ac668ea2f5e21e536ca8ff868cfacfad309233cceb7a72a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-2.json",
+      "bytes": 1376,
+      "sha256": "2e49fac02aa4c3b0a69d2b5fbf185285a525c14b3573bab237bd8955be1ff987"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-2.log",
+      "bytes": 251,
+      "sha256": "5f63cc2ce786822ded88f309687f27f8fc302b66fa593c74e93a5e773a54858e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-2.stderr",
+      "bytes": 107,
+      "sha256": "0f9734ce56d10cd499cfbc683c083ec77ca96e6c95a4aa03065e9306848d2ed3"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-3-console.log",
+      "bytes": 62,
+      "sha256": "5f357dcd2adcb2ffbf2d1f5a5ee97932a2074615e9b4aeb51baa8ae3ba7d58ef"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-3.json",
+      "bytes": 1376,
+      "sha256": "c19d3b3526ab5c5a031b21c859fcc440d6293439aaa6fc91087f3ca9a218d47c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-3.log",
+      "bytes": 251,
+      "sha256": "5f63cc2ce786822ded88f309687f27f8fc302b66fa593c74e93a5e773a54858e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-3.stderr",
+      "bytes": 107,
+      "sha256": "62ece9fc178d3da1f62d408843220458bf6b6ebc3bd1b653878c36b42547f87a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-4-console.log",
+      "bytes": 62,
+      "sha256": "fa82386f78438b5cb1aae4ed01f130a382f6c82323fa1f1eda8a5b5b415618e2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-4.json",
+      "bytes": 1376,
+      "sha256": "1f1c1374b647d143b3bb73d34a724362a4762f3884358b44682fd84a67e28175"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-4.log",
+      "bytes": 251,
+      "sha256": "5f63cc2ce786822ded88f309687f27f8fc302b66fa593c74e93a5e773a54858e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-4.stderr",
+      "bytes": 107,
+      "sha256": "71cfc7325ad2033050f0b34b997831928f7be1a92fa2452f94ff6972f91e8a57"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-5-console.log",
+      "bytes": 62,
+      "sha256": "c8dd58907f4bfb3c28f61926bd283d640d0bff4c305f5629757b0338b679a8ff"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-5.json",
+      "bytes": 1376,
+      "sha256": "814eba6aabae70fbce2b5ba2ae0a5e8480bb5941f2cb5dab6446ab483a33e73e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-5.log",
+      "bytes": 251,
+      "sha256": "5f63cc2ce786822ded88f309687f27f8fc302b66fa593c74e93a5e773a54858e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/ownership-scripts-5.stderr",
+      "bytes": 107,
+      "sha256": "37e4db2e26675dad663dfd180440b68ce5d6976e97051e1bfbf3e3a9cbd9e1c7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/pinned-whitespace.json",
+      "bytes": 349,
+      "sha256": "4a6d29cff4bc2ccb844b7aea372cec11688f4dce1ecbcc18c9b5fb2a464406a6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/pinned-whitespace.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/pinned-whitespace.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/preparation-tests-2.json",
+      "bytes": 357,
+      "sha256": "6d56164ee9a02cdfe34b2438dba82e93a296a2b1cf2293b6e6dc54fa21fb8196"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/preparation-tests-2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/preparation-tests-2.stderr",
+      "bytes": 104,
+      "sha256": "7fef6d6d64671aee4fcdf0e8ff22d837d1191e16cfe6ffdaa1b788dad47e0b10"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/prepare-baseline-export-v2.json",
+      "bytes": 318,
+      "sha256": "9847770977a259b387a04fd46482d84428f4617b906c8835ee21cb38f42ad5bb"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/prepare-baseline-export-v2.log",
+      "bytes": 176,
+      "sha256": "0e34119e96f788a00ae271388e9b7e778c703742c9bfdae4e2548a8a78cbdb62"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/prepare-baseline-export-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/prepare-baseline-export.json",
+      "bytes": 416,
+      "sha256": "a74900d6801a8d42828c67f108ba461ffa3101a82093a9079fae563e4f16f2ae"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/prepare-baseline-export.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/prepare-baseline-export.stderr",
+      "bytes": 233,
+      "sha256": "34c703514480ee2cdfbbccc8105d0e35272779bc4175178e84bce3201119dd85"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/project-drift-v2.json",
+      "bytes": 306,
+      "sha256": "d84d81616893132a87ec582f7e5eb4dccee2c45141b0019d98d6605ac47ec1d1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/project-drift-v2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/project-drift-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/project-drift.json",
+      "bytes": 306,
+      "sha256": "1ba8d16841c09b1a9d3c9b8e572c8585ea61b1cc98cd3a953d63c6f48ec3dc5c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/project-drift.log",
+      "bytes": 2002,
+      "sha256": "a772db50ec067565201e9cfb23a29f4b3adbae5c35b7eec37fac02565b18bef7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/project-drift.stderr",
+      "bytes": 61,
+      "sha256": "e60e282fa95822015f7c114e2a7fb4ce38134ff9ae11f8ecf0936f6ea72a995f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/race-selectors.json",
+      "bytes": 1480,
+      "sha256": "a1bb0fa495aab662a196a3241d32627b39a128b5ca9ea7506bb495bddf79c3b7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-app-build.json",
+      "bytes": 532,
+      "sha256": "234510519df68ee529371fd719040533a6f21b8a417be6e7f6212cbc6dd8f3e1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-app-build.log",
+      "bytes": 416554,
+      "sha256": "eae50981d09c6195587446fdbfd5189bb952dc28812e50415567658fe1270dbf"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-app-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus-console.log",
+      "bytes": 1216,
+      "sha256": "1e49ac92e9bd6e17afacde56e1c7533c259deab632544506148852ef21da006f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus-counts.json",
+      "bytes": 185,
+      "sha256": "d4c70104e12f28a35782826a4c7d314a5fa638138c518196cb46e1d865714d4f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus-v2-console.log",
+      "bytes": 65,
+      "sha256": "184623b8c70dc1c5c2a89bccc8d19f7e063217bb9002dcb98ec649fc41efd572"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus-v2-counts.json",
+      "bytes": 1269,
+      "sha256": "0724383cc1a5162632bbc20e5cc260bc53277d9e55e12662e0aee7ba2a38fd47"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus-v2.json",
+      "bytes": 1768,
+      "sha256": "07205bbc203f53ae6f053ef4d5afefaa00bda44a8e96f6db70ee0074a952104a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus-v2.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus-v2.stderr",
+      "bytes": 3927,
+      "sha256": "e7bf0e3654fadf2e668ccf4d78ea0bfd69b16f997baf100f702987a4422b376a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus.json",
+      "bytes": 1732,
+      "sha256": "3d7792837ae8946975babf71c2e67a65380a6edc25d2cca9d2c22e00950ea304"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus.log",
+      "bytes": 1106,
+      "sha256": "6fece20a4e3569c91e3f4766eb54894a8c22f5003f2ce030c99392fb79d17c68"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-focus.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target-v2.json",
+      "bytes": 879,
+      "sha256": "cd294f0aee0b207dd89b39d923f10c4a5a05f12865d78c464c08fe9508df395a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target-v2.log",
+      "bytes": 139155,
+      "sha256": "903befe285acab15b040a69c77a34e9d1b5bacec2cc1c646e6cc234ed3e68199"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target.json",
+      "bytes": 880,
+      "sha256": "488459f7941346cd41fcd290951ace99cedadd43551129d5f724c60bb32910cd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target.log",
+      "bytes": 831170,
+      "sha256": "53fcafaee3ee473b4954a04b677b68056dc257f4a569fd97879d71740792cd09"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target.stderr",
+      "bytes": 30595,
+      "sha256": "822241f0c56f242ee4edb6a070645bcf05af00381c888e96bd4b2d722cfa3aef"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/run-job.py",
+      "bytes": 1335,
+      "sha256": "2c22b8254c8b4fd0b6feb4ed4374029ba84eae59c7178a08eb9629adc3371ab5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/signing-settings.json",
+      "bytes": 307,
+      "sha256": "74a3e1c941fb127e48329a7e1070c861b9f140e0a080f2fd378b41f968bdec27"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/signing-settings.log",
+      "bytes": 61,
+      "sha256": "992ca313463e20c569af3dddcc2693d5a068e8e4e4ab605eee35656ca4b5bdce"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/signing-settings.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-discovery-membership.json",
+      "bytes": 640,
+      "sha256": "6efefe39af064e64db7aba971cd59dc26c3db3cf27ea10640269efcf07874d11"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-discovery-membership.log",
+      "bytes": 683,
+      "sha256": "b0a8cb55bbca5e09ac70ff08a7206e2baab4fce94702e0c854bc95b9dcb91e36"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-discovery-membership.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-incremental-reconciliation.json",
+      "bytes": 651,
+      "sha256": "ba47675b493cc7adf95143c917931a8e76f6471bf75cbeaa1d4248bdd7150516"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-incremental-reconciliation.log",
+      "bytes": 1164,
+      "sha256": "370797c10351d675cba881eca5ab38c785ddefeae478e2d0577fd8625b6fe7fd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-incremental-reconciliation.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-insensitive.json",
+      "bytes": 663,
+      "sha256": "55e88f50f551b95958ed96d261523404244e3ccde7448f692dc719e1f7213d92"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-insensitive.log",
+      "bytes": 1196,
+      "sha256": "14285d2f425220b30d6e251744114c7dbcea98de3e55adb30fdfdb3b0cabd802"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-insensitive.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-sensitive-ascii.json",
+      "bytes": 666,
+      "sha256": "092f73d5aae70a63303f0cc444d3d9d381864b88e651035026ac6c2d8c7b3b9b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-sensitive-ascii.log",
+      "bytes": 1195,
+      "sha256": "b719a40c88b024e19e9ed48ebf59d7f66b8bcc54dece7a4e5910e5a6493b29c0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-sensitive-ascii.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-sensitive-mixed.json",
+      "bytes": 666,
+      "sha256": "4ef4baa9cc9a9c163393d54fd36782bc426aa08465f696a27dd07ecda30cd494"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-sensitive-mixed.log",
+      "bytes": 1186,
+      "sha256": "55564a2b4674b384011a5930c22dcf59830d7a0179991844b1c4bef60db220e2"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-sensitive-mixed.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-unicode.json",
+      "bytes": 659,
+      "sha256": "01fd65862ab30a8cbed0446131d7dd61df6b47909f78fcc6e444ea0aae35685e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-unicode.log",
+      "bytes": 1189,
+      "sha256": "454fb21233ba3c288fd9ef662be3093a7b53fc77688282649c0dcadfc73dc06d"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-query-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-reconciliation-contention.json",
+      "bytes": 637,
+      "sha256": "30bb687257e39df86373837252c1a951f4d9966d6c0be87ef26d182b24b23195"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-reconciliation-contention.log",
+      "bytes": 784,
+      "sha256": "d8e3b975eb7dbc4068d4b3495969833f948f211877679389a8ae7655d35f8dff"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-reconciliation-contention.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-unicode.json",
+      "bytes": 653,
+      "sha256": "1c5a9499a318161b6cd1fb451f65275e3a97f921271b2ce6e2461d524ffafe8e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-unicode.log",
+      "bytes": 1167,
+      "sha256": "3cf3b91b2e56e43e916272ca379ebb011c2311910ab6f5f5f80ea06cdf9072c5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-baseline-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-discovery-membership-v2.json",
+      "bytes": 644,
+      "sha256": "83f9b7219c4242a33a49db6b1f4ade744cc81cba7cbb60f35d957157dbb680ea"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-discovery-membership-v2.log",
+      "bytes": 685,
+      "sha256": "1d4860541f218277f5a9b4e24473f7d18ba56ec171d0d7bdfd9c04ce27c85f28"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-discovery-membership-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-discovery-membership.json",
+      "bytes": 645,
+      "sha256": "f97a54744f96b79f9bbe367646952afc4fdeea902461367bbe688bddd60645fd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-discovery-membership.log",
+      "bytes": 671,
+      "sha256": "18ff558c874b12024121b194aed88a76dbdcbf54723d02a3e2fc2b187199cf02"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-discovery-membership.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-incremental-reconciliation-v2.json",
+      "bytes": 655,
+      "sha256": "afbbd7678b5cc59342dbe36da323cece57707dd4318a62fcc8a72e4aaf9b26ff"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-incremental-reconciliation-v2.log",
+      "bytes": 1164,
+      "sha256": "f8977749a63140dfd7408f676299227ede6295944455bbff921cce8df306ada5"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-incremental-reconciliation-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-incremental-reconciliation.json",
+      "bytes": 655,
+      "sha256": "9d23ef81893314513a0cff4193c7f9ca57e449f22ce6302be40ce5fd997fd8f6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-incremental-reconciliation.log",
+      "bytes": 1164,
+      "sha256": "391697fe208af8bc8f57f8119a99914c6ead89e62bc62dd012d9adeb8daf34f6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-incremental-reconciliation.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-insensitive.json",
+      "bytes": 666,
+      "sha256": "f57a1eb4fb9935d94e8ff95390891e6b9a07857959bb5d5fa5f0103d6fb10b25"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-insensitive.log",
+      "bytes": 1195,
+      "sha256": "68852c40085e6a39200a2abdc66ea10ab78e3b1b0ff5645a66e23dd3687355bb"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-insensitive.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-sensitive-ascii.json",
+      "bytes": 670,
+      "sha256": "a1619d63e8f52e9cd4f3fdb1c6876b095cb589c875990f6793da52573cc9ba7e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-sensitive-ascii.log",
+      "bytes": 1185,
+      "sha256": "02c622512e1de31b6b3b06dc275a2bbeb5f0f4848cf76e876e75971c600f8c18"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-sensitive-ascii.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-sensitive-mixed.json",
+      "bytes": 671,
+      "sha256": "3266fa20e772c7d2744b9e4f441ea5f57aac407762bb4e59164df5c038bd698e"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-sensitive-mixed.log",
+      "bytes": 1184,
+      "sha256": "2ec846fbc11302a4f6302add6c45e1cda8dc930ce5dc31115f7e3183b529bfb0"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-sensitive-mixed.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-unicode.json",
+      "bytes": 662,
+      "sha256": "cc454d01f7864a2a58cac98463badf6b7ff2249720171245fa51ae83da90d41b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-unicode.log",
+      "bytes": 1165,
+      "sha256": "2e1d7904f4783f053ff7305f5997ba8d71c0d745d16ac640849e628ce66167f6"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-query-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-reconciliation-contention-v2.json",
+      "bytes": 641,
+      "sha256": "451cce8481439ad3f9c0efa146393a3f5409ce84ee6607b80246c19ae4440932"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-reconciliation-contention-v2.log",
+      "bytes": 772,
+      "sha256": "b1549909d8f1581d3282df3e590f15af159df5140f223c09a30632bffff680dc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-reconciliation-contention-v2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-reconciliation-contention.json",
+      "bytes": 640,
+      "sha256": "cc33350ecf9f3d79dad303efe2fc92ca71d52d3da732cd75e8d91d5768fe69fd"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-reconciliation-contention.log",
+      "bytes": 770,
+      "sha256": "dc27a9a08f5f74da176caadf5031e08ade9374392abb0e13be397af8f32e68d7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-reconciliation-contention.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-unicode.json",
+      "bytes": 657,
+      "sha256": "3ddbbdd537b6eadcf5e186f5cac005dfbf58250acf61dfbbc59a799005c97d2c"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-unicode.log",
+      "bytes": 1166,
+      "sha256": "3ab05db4ee85ba838f8080556a4c224119525721a5c494fea8b731ce16918b5a"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-candidate-unicode.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-early-exit.json",
+      "bytes": 552,
+      "sha256": "7ea6ea842b6748d44af268273261ddeebc56a841c0219ce9e3fad7bee6d02e54"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-early-exit.log",
+      "bytes": 331,
+      "sha256": "147812f37471d1e3920694dfd990cad917fef0434af25e520e49ae8ffbd6bf43"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-early-exit.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-live.json",
+      "bytes": 545,
+      "sha256": "cb0c9de65bd4a95573cab9f35740ed7bc3ef3b51ff83819ae9249ab106d6f3ba"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-live.log",
+      "bytes": 337,
+      "sha256": "d9b5280ffdf29fec6eb427cb8bdc4a1248d3d8076b9ecf2a29fdea3631b13148"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-live.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-zombie.json",
+      "bytes": 548,
+      "sha256": "ec433ccdaf05878ed5b28f7cfb550a121b0443fd6395182dd0acb4c0b670a915"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-zombie.log",
+      "bytes": 340,
+      "sha256": "b4fff3d885b8195e6928ff78de503924ec1cefaaf8fb2a3a7b116f5de28c1f36"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-baseline-zombie.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-early-exit.json",
+      "bytes": 549,
+      "sha256": "3cd19b44efd65ad88590f9e4bc4b87bbfbea44872ce5de695676eef68500ac70"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-early-exit.log",
+      "bytes": 341,
+      "sha256": "89c0b4cbc43bf5c8c1ce720e2d1b77b4c341d715dbe7e75d691b2b1e03b9be05"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-early-exit.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-live.json",
+      "bytes": 542,
+      "sha256": "7be7d1c78682f1fce6a53dcb539942bee6f45060fe421ab8041d1409ce8980b1"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-live.log",
+      "bytes": 325,
+      "sha256": "51c001073e6ab8947d5009f42d2993e4b0cd8ab3fc8a2207ecf3a62badd5429b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-live.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-zombie.json",
+      "bytes": 545,
+      "sha256": "e51cd35f454913cc56bebf3998ad4415fc3c369bfc6cd67ae473823baf2b3593"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-zombie.log",
+      "bytes": 341,
+      "sha256": "d06c974d344563fe0a0f96da251cd93bcfccc71fd47ebf88e21834133e55cbe7"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/smoke-cleanup-candidate-zombie.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/vendor-after.json",
+      "bytes": 611462,
+      "sha256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/vendor-before.json",
+      "bytes": 611462,
+      "sha256": "9969c22598748d8b4af508b91a10570c781e97c888b6433d551ba85fc3fb7008"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/verify-built-signatures.json",
+      "bytes": 572,
+      "sha256": "fa77c0fdd634ee92b69ef4d040be6a131f733bff731bc890dbdd7a8a165ca27b"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/verify-built-signatures.log",
+      "bytes": 44,
+      "sha256": "5a01bd57bb75d816c798f8912f169c5b66a84217ef38a595f552cd5bc740a4fc"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/verify-built-signatures.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/verify-source-hashes.json",
+      "bytes": 320,
+      "sha256": "2d8d7a4d4abac2935ce02bd4c2556757cae1efea7b0af001992099076395b96f"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/verify-source-hashes.log",
+      "bytes": 104,
+      "sha256": "71dc6b5842dc45b975d4a2524ce9fb34614fef0d676034c3de6039d53693b911"
+    },
+    {
+      "path": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/verify-source-hashes.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "additionalDirectories": [
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-source",
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/candidate-source",
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-products",
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/candidate-products",
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target",
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/baseline-tools",
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/candidate-tools",
+    "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/diagnostic-Xcc-output"
+  ],
+  "snapshotNote": "Files are inventoried after the final native/build validation and before required accepted targeted measurements; no timing sample is claimed."
+}
