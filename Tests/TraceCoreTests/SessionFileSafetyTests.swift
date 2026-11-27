@@ -5,7 +5,7 @@ import XCTest
 
 final class SessionFileSafetyTests: XCTestCase {
     private func directory() throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceSafeSession-\(UUID())")
+        let root = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceSafeSession-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
@@ -50,7 +50,7 @@ final class SessionFileSafetyTests: XCTestCase {
             // the parent's runner and wait forever instead of running standalone.
             let inherited = ProcessInfo.processInfo.environment
             var environment = inherited.filter { ["PATH", "HOME", "TMPDIR", "DEVELOPER_DIR"].contains($0.key) }
-            environment["LLVM_PROFILE_FILE"] = FileManager.default.temporaryDirectory
+            environment["LLVM_PROFILE_FILE"] = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory)
                 .appendingPathComponent("trace-session-child-\(UUID()).profraw").path
             environment["TRACE_SESSION_FILE_CHILD"] = "1"
             child.environment = environment

@@ -34,7 +34,7 @@ private func threadCPU() -> Double {
                 throw NSError(domain: "LinkDiscovery.arguments", code: 1)
             }
             let mode = args[3], lexical = mode.hasPrefix("lexical-")
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceLexical-" + UUID().uuidString, isDirectory: true)
+            let directory = (ProcessInfo.processInfo.environment["TRACE_BENCHMARK_TMPDIR"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceLexical-" + UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let before = footprint(), scopes = min(count, 1000)

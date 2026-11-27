@@ -131,3 +131,10 @@ revisions. It separates captured scoped-discovery validation from lexical mappin
 reports process CPU and execution-thread CPU distinctly, and releases captured
 inputs before the retained-footprint sample. These targeted comparisons do not
 constitute the three-pair local performance acceptance.
+
+Verification may opt into an existing, task-owned absolute fixture directory with
+TRACE_TEST_FIXTURE_ROOT (Core/App fixtures) and TRACE_BENCHMARK_TMPDIR (native
+workloads). Both retain system-temporary-directory defaults when unset. Python
+fixture checks use their standard TMPDIR. Use the same explicit native workload
+root for baseline and candidate; record its volume and permission policy. No
+application setting, normal indexing path, or public Swift signature changes.

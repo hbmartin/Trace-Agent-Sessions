@@ -1763,7 +1763,7 @@ final class AppReviewFollowupTests: XCTestCase {
 
     func testCheckpointFailureDoesNotBlockHealthySiblingOrSeedMissingRowAsFailure() async throws {
         let f = try await fixture(count: 2, grouping: .byRoot)
-        let other = FileManager.default.temporaryDirectory.appendingPathComponent("TraceHealthyCheckpoint-\(UUID())")
+        let other = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceHealthyCheckpoint-\(UUID())")
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: other) }
         let source = ClaudeCodeSource(roots: [f.root, other])
@@ -5139,7 +5139,7 @@ final class AppReviewFollowupTests: XCTestCase {
     }
 
     private func fixture(count: Int = 430, grouping: WatcherGroupingPolicy = .byVolume, failUnrelated: Bool = false) async throws -> Fixture {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("TraceAppReview-\(UUID())")
+        let root = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceAppReview-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("sessions.jsonl")
         var data = Data()
@@ -8071,7 +8071,7 @@ final class AppReviewFollowupTests: XCTestCase {
     private func twoRootHealthFixture() async throws -> (Fixture, URL) {
         let f = try await fixture(count: 2)
         await f.model.prepareToTerminate()
-        let removed = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRemovedHealth-\(UUID())")
+        let removed = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceRemovedHealth-\(UUID())")
         try FileManager.default.createDirectory(at: removed, withIntermediateDirectories: true)
         try line(99).write(to: removed.appendingPathComponent("removed.jsonl"))
         addTeardownBlock { try? FileManager.default.removeItem(at: removed) }

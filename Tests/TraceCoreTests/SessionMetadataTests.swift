@@ -127,7 +127,7 @@ final class SessionMetadataTests: XCTestCase {
     #endif
 
     private func directory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TraceMetadata-\(UUID())")
+        let url = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceMetadata-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url

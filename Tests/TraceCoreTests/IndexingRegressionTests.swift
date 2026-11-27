@@ -1318,7 +1318,7 @@ final class IndexingRegressionTests: XCTestCase {
 
     func testNavigationCoveragePaysCanonicalFilesystemRootRequirements() throws {
         for rootPath in ["/", "/tmp"] {
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let directory = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
@@ -1350,7 +1350,7 @@ final class IndexingRegressionTests: XCTestCase {
     func testNavigationObservationsQualifyProviderAndConfiguredRoot() throws {
         for reverse in [false, true] {
             for fullScan in [false, true] {
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                let directory = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent(UUID().uuidString)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 defer { try? FileManager.default.removeItem(at: directory) }
                 let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
@@ -1396,7 +1396,7 @@ final class IndexingRegressionTests: XCTestCase {
     }
 
     func testNavigationObservationsKeepConfiguredAliasesIndependent() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let target = directory.appendingPathComponent("target"), alias = directory.appendingPathComponent("alias")
@@ -1422,7 +1422,7 @@ final class IndexingRegressionTests: XCTestCase {
     }
 
     func testNavigationEmptyFullScanRetiresGlobalEnrollmentAndDisplacedRoster() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = try IndexDatabase(url: directory.appendingPathComponent("index.sqlite"))
@@ -4120,7 +4120,7 @@ final class IndexingRegressionTests: XCTestCase {
     private func directory() throws -> URL {
         // Codex metadata lives beside its sessions root. Own that parent too,
         // rather than discovering metadata in the shared system temp directory.
-        let namespace = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRegressionNamespace-\(UUID())")
+        let namespace = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceRegressionNamespace-\(UUID())")
         let url = namespace.appendingPathComponent("TraceRegression-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: namespace) }
@@ -6610,7 +6610,7 @@ final class IndexingRegressionTests: XCTestCase {
     }
 
     func testDiscoveryDistinguishesMissingAndUnreadableRoots() throws {
-        let missing = FileManager.default.temporaryDirectory
+        let missing = (ProcessInfo.processInfo.environment["TRACE_TEST_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory)
             .appendingPathComponent("TraceMissing-\(UUID().uuidString)")
         XCTAssertTrue(try ClaudeCodeSource(roots: [missing]).discover().isEmpty)
 
