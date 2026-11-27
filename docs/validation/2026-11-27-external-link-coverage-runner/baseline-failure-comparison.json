@@ -1,0 +1,223 @@
+{
+  "candidateConfiguration": "Debug",
+  "baselineConfiguration": "Release",
+  "candidate": "fe3427e19fbcdf117de74d1d9e82dc5a88bb7219",
+  "baselineSourceCandidate": "a511d9d6a5d0abac89b611ecb799779fce52c894",
+  "candidateFailures": [
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testAppendIsReportedAtFileGranularity"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testStopDrainsInFlightCallbacksBeforeRelease"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveWalCreationAndLaterWritesAreDelivered"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRelevantChangesSurviveWatcherReplacement"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+    ]
+  ],
+  "baselineFailures": [
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testAppendIsReportedAtFileGranularity"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testStopDrainsInFlightCallbacksBeforeRelease"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveWalCreationAndLaterWritesAreDelivered"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRelevantChangesSurviveWatcherReplacement"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+    ]
+  ],
+  "matched": [
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testAppendIsReportedAtFileGranularity"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testStopDrainsInFlightCallbacksBeforeRelease"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveWalCreationAndLaterWritesAreDelivered"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRelevantChangesSurviveWatcherReplacement"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+    ]
+  ],
+  "unmatched": [
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+    ]
+  ],
+  "baselineFailuresIncludingBoundedRecheck": [
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testAppendIsReportedAtFileGranularity"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testStopDrainsInFlightCallbacksBeforeRelease"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveWalCreationAndLaterWritesAreDelivered"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRelevantChangesSurviveWatcherReplacement"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+    ]
+  ],
+  "recheckAttempts": [
+    {
+      "label": "baseline-live-empty-1",
+      "passed": true,
+      "failedCases": []
+    },
+    {
+      "label": "baseline-live-empty-2",
+      "passed": true,
+      "failedCases": []
+    },
+    {
+      "label": "baseline-live-empty-3",
+      "passed": true,
+      "failedCases": []
+    },
+    {
+      "label": "baseline-live-empty-4",
+      "passed": false,
+      "failedCases": [
+        [
+          "TraceCoreTests.SidecarDependencyTests",
+          "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+        ]
+      ]
+    }
+  ],
+  "recheckPolicy": "At most five attempts to resolve the one unmatched baseline case; stopped after the fourth reproduced the failure. All passing attempts retained; no failure-rate claim.",
+  "matchedAfterRecheck": [
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testAppendIsReportedAtFileGranularity"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+    ],
+    [
+      "TraceCoreTests.FSEventsWatcherTests",
+      "testStopDrainsInFlightCallbacksBeforeRelease"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testLiveWalCreationAndLaterWritesAreDelivered"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testRelevantChangesSurviveWatcherReplacement"
+    ],
+    [
+      "TraceCoreTests.SidecarDependencyTests",
+      "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+    ]
+  ],
+  "unmatchedAfterRecheck": []
+}

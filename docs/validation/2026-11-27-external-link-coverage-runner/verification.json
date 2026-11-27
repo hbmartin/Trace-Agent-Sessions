@@ -1,0 +1,364 @@
+{
+  "candidate": "fe3427e19fbcdf117de74d1d9e82dc5a88bb7219",
+  "base": "89d4e6a741fe797f86950c87ed2eb87df1148941",
+  "followUpTo": 108,
+  "status": "implemented-with-explicit-native-verification-limitations",
+  "validationPolicy": {
+    "selectedByUser": "Tests only",
+    "ui": "omitted",
+    "targetedMeasurements": "omitted",
+    "fullNativeSuites": "omitted",
+    "threeFullReleasePairs": "omitted",
+    "local10PercentAcceptanceClaim": false,
+    "acceptedPerformanceSamples": 0,
+    "doesNotCompletePR108UnrunMeasurements": true
+  },
+  "requiredAttempts": [
+    "scripts-frozen",
+    "runner-final-group",
+    "runner-python313",
+    "interpreter-cli-matrix",
+    "debug-app-tests-build",
+    "core-fixture-build",
+    "affected-app-focused",
+    "release-core-build",
+    "release-core-focused",
+    "release-app-build",
+    "debug-app-frozen-build",
+    "external-client-build",
+    "project-drift",
+    "signing-settings",
+    "debug-frozen-signature",
+    "release-signature",
+    "debug-frozen-network",
+    "release-network",
+    "network-surface",
+    "pinned-whitespace-final",
+    "source-metadata-safety",
+    "ownership-core-1",
+    "ownership-core-2",
+    "ownership-core-3",
+    "ownership-core-4",
+    "ownership-core-5",
+    "ownership-scripts-1",
+    "ownership-scripts-2",
+    "ownership-scripts-3",
+    "ownership-scripts-4",
+    "ownership-scripts-5"
+  ],
+  "counts": {
+    "affectedDebug": 392,
+    "releaseBehavior": 6,
+    "scriptCases": 156,
+    "coreRaceExecutions": 40,
+    "scriptRaceExecutions": 40,
+    "raceRepetitions": 5,
+    "affectedDebugPassed": 383,
+    "affectedDebugFailedCases": 9,
+    "affectedCoreAssertionFailures": 13
+  },
+  "sourceHashes": {
+    "candidate": "fe3427e19fbcdf117de74d1d9e82dc5a88bb7219",
+    "verifiedEntries": 139,
+    "gitAndWorktreeMatch": true
+  },
+  "preservedVendorInputs": true,
+  "nativeFailedCases": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked",
+    "TraceCoreTests.FSEventsWatcherTests/testStopDrainsInFlightCallbacksBeforeRelease",
+    "TraceCoreTests.SidecarDependencyTests/testHomeDeletionRecreationAndPopulatedLinkReopenMonitors",
+    "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+    "TraceCoreTests.SidecarDependencyTests/testLiveWalCreationAndLaterWritesAreDelivered",
+    "TraceCoreTests.SidecarDependencyTests/testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation",
+    "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+    "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+  ],
+  "baselineComparison": {
+    "candidateConfiguration": "Debug",
+    "baselineConfiguration": "Release",
+    "candidate": "fe3427e19fbcdf117de74d1d9e82dc5a88bb7219",
+    "baselineSourceCandidate": "a511d9d6a5d0abac89b611ecb799779fce52c894",
+    "candidateFailures": [
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testAppendIsReportedAtFileGranularity"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testStopDrainsInFlightCallbacksBeforeRelease"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveWalCreationAndLaterWritesAreDelivered"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRelevantChangesSurviveWatcherReplacement"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ]
+    ],
+    "baselineFailures": [
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testAppendIsReportedAtFileGranularity"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testStopDrainsInFlightCallbacksBeforeRelease"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveWalCreationAndLaterWritesAreDelivered"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRelevantChangesSurviveWatcherReplacement"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ]
+    ],
+    "matched": [
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testAppendIsReportedAtFileGranularity"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testStopDrainsInFlightCallbacksBeforeRelease"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveWalCreationAndLaterWritesAreDelivered"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRelevantChangesSurviveWatcherReplacement"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ]
+    ],
+    "unmatched": [
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+      ]
+    ],
+    "baselineFailuresIncludingBoundedRecheck": [
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testAppendIsReportedAtFileGranularity"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testStopDrainsInFlightCallbacksBeforeRelease"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveWalCreationAndLaterWritesAreDelivered"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRelevantChangesSurviveWatcherReplacement"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+      ]
+    ],
+    "recheckAttempts": [
+      {
+        "label": "baseline-live-empty-1",
+        "passed": true,
+        "failedCases": []
+      },
+      {
+        "label": "baseline-live-empty-2",
+        "passed": true,
+        "failedCases": []
+      },
+      {
+        "label": "baseline-live-empty-3",
+        "passed": true,
+        "failedCases": []
+      },
+      {
+        "label": "baseline-live-empty-4",
+        "passed": false,
+        "failedCases": [
+          [
+            "TraceCoreTests.SidecarDependencyTests",
+            "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+          ]
+        ]
+      }
+    ],
+    "recheckPolicy": "At most five attempts to resolve the one unmatched baseline case; stopped after the fourth reproduced the failure. All passing attempts retained; no failure-rate claim.",
+    "matchedAfterRecheck": [
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testAppendIsReportedAtFileGranularity"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+      ],
+      [
+        "TraceCoreTests.FSEventsWatcherTests",
+        "testStopDrainsInFlightCallbacksBeforeRelease"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testHomeDeletionRecreationAndPopulatedLinkReopenMonitors"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testLiveWalCreationAndLaterWritesAreDelivered"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testRelevantChangesSurviveWatcherReplacement"
+      ],
+      [
+        "TraceCoreTests.SidecarDependencyTests",
+        "testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ]
+    ],
+    "unmatchedAfterRecheck": []
+  },
+  "broadAppAttempt": {
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceAppTests.AppReviewFollowupTests",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceAppTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:17:39.201264+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "error": "TimeoutExpired(['env', 'DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks', '/Applications/Xcode.app/Contents/Developer/usr/bin/xctest', '-XCTest', 'TraceAppTests.AppReviewFollowupTests', '/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceAppTests.xctest'], 600.0)",
+    "exitCode": -9,
+    "wallSeconds": 600.0602344996296
+  },
+  "failedAttemptsRetained": [
+    "scripts-first",
+    "affected-core-final",
+    "isolated-core-stall-check",
+    "isolated-owned-tmpdir",
+    "baseline-existing-controls",
+    "affected-core-owned",
+    "baseline-watcher-sidecar",
+    "affected-app-final",
+    "baseline-live-empty-4"
+  ],
+  "failureNotes": [
+    "scripts-first was a development run: a late-save signal fault-injection setup was corrected, and the run exceeded its 240-second watchdog without a final case summary. Corrected script checks pass.",
+    "Initial Core and isolated attempts exceeded their bounds while fixture metadata discovery enumerated the shared system temporary directory. A preserved #108 Release control also exceeded its bound. A Core test-only parent namespace isolates metadata inside each fixture; no production source or assertion was changed for this issue. A TMPDIR override attempt did not relocate Foundation temporary fixtures.",
+    "The complete 319-case Core selection has nine failed live watcher/sidecar cases (13 assertion failures). Each case also failed on the preserved #108 Release build; one was intermittent and required four bounded rechecks, all retained. This is a Debug-candidate versus Release-baseline comparison, not a matched-configuration regression acceptance. Cause remains undetermined; native verification is not green.",
+    "The broad App selection exceeded its 600-second watchdog without completing. Completed cases passed; the incomplete selection is not accepted or classified as unrelated. Six directly relevant App cases subsequently passed as a complete focused selection."
+  ],
+  "qualification": [
+    "Final native runtime/test inputs match the canonical frozen source map. App source/test files are unchanged from the base; Core was rebuilt after freeze. The standalone Debug/Release app builds and external fixture were validated separately.",
+    "scripts-final passed 155 cases before the last signal-mask regression. scripts-frozen passed 156 cases at 14367d9; only the Core test fixture helper changed afterward. All production Swift files, Scripts and Tests/Scripts inputs are byte-identical to the final candidate. The complete native Core selection and focused App checks ran with the final fixture.",
+    "The 64-case runner group passed on Python 3.13 and Python 3.15. Actual stock Python 3.9 and Homebrew 3.12 CLI invocations rejected execution with failed receipts and no launched command.",
+    "Shared native resource leases were used for coordination, not a claim of machine isolation or quiet-desktop performance acceptance.",
+    "UI and performance execution were explicitly omitted by user selection. No prior evidence or commands were rewritten."
+  ],
+  "rawPayloads": {
+    "localOnly": true,
+    "root": "/Volumes/Pro2T/TraceValidation/external-link-coverage-runner-followup",
+    "downloadableRepositoryOrCIArtifacts": false
+  },
+  "broadAppCounts": {
+    "started": 38,
+    "completed": 37,
+    "passed": 37,
+    "failedCases": 0,
+    "unfinished": [
+      "TraceAppTests.AppReviewFollowupTests/testBareReplacementAbsenceSettlesToPausedWithOneRead"
+    ],
+    "acceptedAsPassingSelection": false
+  },
+  "scriptInputQualification": {
+    "executedCandidate": "14367d9a5e69c1aca6970c5a3ba377c8c98c2209",
+    "currentCandidate": "fe3427e19fbcdf117de74d1d9e82dc5a88bb7219",
+    "onlySubsequentChange": [
+      "Tests/TraceCoreTests/IndexingRegressionTests.swift"
+    ],
+    "productionAndScriptInputsIdentical": true
+  }
+}

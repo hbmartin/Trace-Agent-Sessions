@@ -1,0 +1,35 @@
+{
+  "native": {
+    "newCoreRegressions": [
+      "testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings",
+      "testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification",
+      "testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies",
+      "testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification",
+      "testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion"
+    ],
+    "repeatedCoreCases": [
+      "testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings",
+      "testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification",
+      "testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies",
+      "testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification",
+      "testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion",
+      "testConcurrentReconciliationReadersKeepConnectionLocalMatchers",
+      "testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry",
+      "testPathCacheRollbackAndCommittedCheckpointFailure"
+    ],
+    "repetitions": 5
+  },
+  "scripts": {
+    "repetitions": 5,
+    "cases": [
+      "test_receipt_write_failure_cannot_mask_pending_interruption",
+      "test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic",
+      "test_pending_first_signal_wins_when_original_handler_interrupts_unmask",
+      "test_second_signal_cannot_escape_cleanup_or_replace_first",
+      "test_signal_during_handler_restoration_is_adjudicated",
+      "test_normal_command_retires_descendants_before_reaping_leader",
+      "test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed",
+      "test_non_os_launch_failure_retains_signal_and_original_error"
+    ]
+  }
+}
