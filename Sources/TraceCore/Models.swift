@@ -495,7 +495,17 @@ public struct DiscoveredSourceFile: Hashable, Sendable {
     public let format: SourceFormat
     let canonicalPath: TraceFileIO.CanonicalPath
     let discoveryPath: String
-    var discoveryFailure: DiscoveryFailure? = nil
+    // Healthy discovery values pay one optional reference, not an inline copy
+    // of a failure's strings, scopes and target qualification.
+    private final class FailureStorage: Sendable {
+        let value: DiscoveryFailure
+        init(_ value: DiscoveryFailure) { self.value = value }
+    }
+    private var failureStorage: FailureStorage? = nil
+    var discoveryFailure: DiscoveryFailure? {
+        get { failureStorage?.value }
+        set { failureStorage = newValue.map(FailureStorage.init) }
+    }
 
     public init(agent: AgentKind, root: URL, url: URL, format: SourceFormat) {
         self.init(agent: agent, root: root, canonicalPath: TraceFileIO.canonicalPath(url.path), format: format, discoveryPath: url.standardizedFileURL.path)
