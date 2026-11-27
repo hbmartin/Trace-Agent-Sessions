@@ -38,7 +38,7 @@ private func record(_ session: String, _ index: Int) -> Data {
                 throw NSError(domain: "IncrementalReconciliation.arguments", code: 1)
             }
             let before = footprint()
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TraceIncremental-" + UUID().uuidString)
+            let directory = (ProcessInfo.processInfo.environment["TRACE_BENCHMARK_TMPDIR"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory).appendingPathComponent("TraceIncremental-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let roots = [directory.appendingPathComponent("sessions"), directory.appendingPathComponent("other")]

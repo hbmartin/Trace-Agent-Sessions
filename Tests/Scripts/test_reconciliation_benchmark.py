@@ -10,6 +10,37 @@ MODULE = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(MODULE)
 
 
 class ReconciliationInstrumentationTests(unittest.TestCase):
+    def test_mask_acquisition_interruption_restores_mask_and_retires_fixture(self):
+        import json, subprocess, sys
+        program = """import runpy,signal,sys
+original=signal.pthread_sigmask
+initial=original(signal.SIG_BLOCK,set())
+injected=False
+def masking(how,mask):
+ global injected
+ previous=original(how,mask)
+ if not injected and how==signal.SIG_BLOCK and mask:
+  injected=True
+  signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+ return previous
+signal.pthread_sigmask=masking
+sys.argv=[sys.argv[1],'--runner',sys.argv[2],'--mode','live']
+try:runpy.run_path(sys.argv[0],run_name='__main__')
+except SystemExit as error:
+ print('MASK_RESTORED',original(signal.SIG_BLOCK,set())==initial,flush=True)
+ sys.exit(error.code)
+finally:original(signal.SIG_SETMASK,initial)
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            runner=Path(temp)/"runner.py"
+            runner.write_text('def cleanup_child(child):\n child.terminate();child.wait(timeout=2)\ndef process_group_members(group):return []\n')
+            value=subprocess.run([sys.executable,'-c',program,str(ROOT/'Scripts/benchmark-process-cleanup.py'),str(runner)],capture_output=True,text=True,timeout=12)
+        self.assertEqual(value.returncode,143,value.stdout+value.stderr)
+        self.assertIn('MASK_RESTORED True',value.stdout)
+        result=json.loads(value.stdout.splitlines()[0])
+        self.assertEqual(result['interruptedSignal'],15)
+        self.assertNotIn('fixtureCleanupErrors',result)
+
     def test_exported_instrumentation_is_idempotent_and_flag_gated(self):
         source = (ROOT/'Sources/TraceCore/Database/IndexDatabase.swift').read_text()
         result = MODULE.instrument(source, layout='connection-matcher')

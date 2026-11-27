@@ -509,7 +509,19 @@ def run_case(runner: Runner, base: list[str], selector: str, index: int, timeout
     except Exception as error:
         test.update(status="failed", error=error_description(error))
     finally:
-        runner.save()
+        active_error = sys.exception()
+        try:
+            runner.save()
+        except (RunInterrupted, KeyboardInterrupt) as save_signal:
+            if not isinstance(active_error, (RunInterrupted, KeyboardInterrupt)):
+                raise
+            active_error.add_note("A later interruption arrived during case receipt persistence")
+        except Exception as save_error:
+            if not isinstance(active_error, (RunInterrupted, KeyboardInterrupt, CleanupFailed)):
+                raise
+            test["receiptWriteError"] = error_description(save_error)
+            print("Could not persist case receipt: " + error_description(save_error), file=sys.stderr)
+            active_error.add_note("Case receipt save failed: " + error_description(save_error))
 
 
 def finalize_verification(runner, repo, derived_data, initial_inputs, original_artifacts, pending_signals, exit_code):

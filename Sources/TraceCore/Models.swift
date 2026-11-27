@@ -259,7 +259,8 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
             depth = cached.count
         }
         let suffix = Array(components.dropFirst(depth))
-        let path = suffix.reduce(URL(fileURLWithPath: context.scanPath.path)) { $0.appendingPathComponent($1) }.path
+        let base = context.scanPath.path == "/" ? "" : context.scanPath.path
+        let path = suffix.isEmpty ? context.scanPath.path : base + "/" + suffix.joined(separator: "/")
         return .init(scanPath: .init(path: path,
             comparisonKey: TraceFileIO.comparisonKey(path, caseSensitive: context.scanPath.isCaseSensitive),
             isCaseSensitive: context.scanPath.isCaseSensitive),
@@ -370,7 +371,28 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
         return kept
     }
 
-    private static func resolveScanURL(_ configuredURL: URL) -> (url: URL, encounteredSymlink: Bool) {
+    // Discovery needs a target even when its leaf is absent. A cycle or hop-limit
+    // outcome cannot qualify another target's absence.
+    static func discoveryLinkTarget(_ url: URL) -> TraceFileIO.CanonicalPath? {
+        let manager = FileManager.default
+        guard let destination = try? manager.destinationOfSymbolicLink(atPath: url.path) else { return nil }
+        let start = destination.hasPrefix("/") ? URL(fileURLWithPath: destination, isDirectory: false)
+            : url.deletingLastPathComponent().appendingPathComponent(destination, isDirectory: false)
+        let resolved = resolveScanURL(start)
+        guard resolved.complete else { return nil }
+        let target = TraceFileIO.canonicalPath(resolved.url.path)
+        do {
+            if try manager.attributesOfItem(atPath: target.path)[.type] as? FileAttributeType == .typeSymbolicLink { return nil }
+        } catch {
+            let error = error as NSError
+            let missing = (error.domain == NSCocoaErrorDomain && error.code == CocoaError.Code.fileReadNoSuchFile.rawValue)
+                || (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
+            guard missing else { return nil }
+        }
+        return target
+    }
+
+    private static func resolveScanURL(_ configuredURL: URL) -> (url: URL, encounteredSymlink: Bool, complete: Bool) {
         let manager = FileManager.default
         var pending = Array(configuredURL.standardized.pathComponents.dropFirst())
         var candidate = URL(fileURLWithPath: "/", isDirectory: true)
@@ -384,7 +406,7 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
                   let destination = try? manager.destinationOfSymbolicLink(atPath: candidate.path) {
                 let resolutionState = candidate.path + "\u{0}" + pending.joined(separator: "/")
                 guard visited.insert(resolutionState).inserted else {
-                    return (candidate.standardized, encounteredSymlink)
+                    return (candidate.standardized, encounteredSymlink, false)
                 }
                 // macOS exposes stable top-level aliases such as /var ->
                 // /private/var. They canonicalize path identity but do not make
@@ -397,8 +419,11 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
                 pending = Array(resolved.standardized.pathComponents.dropFirst()) + pending
                 candidate = URL(fileURLWithPath: "/", isDirectory: true)
             }
+            if hops == 32, (try? manager.destinationOfSymbolicLink(atPath: candidate.path)) != nil {
+                return (candidate.standardized, encounteredSymlink, false)
+            }
         }
-        return (candidate.standardized, encounteredSymlink)
+        return (candidate.standardized, encounteredSymlink, true)
     }
 }
 
@@ -484,6 +509,17 @@ public struct DiscoveredSourceFile: Hashable, Sendable {
     public let format: SourceFormat
     let canonicalPath: TraceFileIO.CanonicalPath
     let discoveryPath: String
+    // Healthy discovery values pay one optional reference, not an inline copy
+    // of a failure's strings, scopes and target qualification.
+    private final class FailureStorage: Sendable {
+        let value: DiscoveryFailure
+        init(_ value: DiscoveryFailure) { self.value = value }
+    }
+    private var failureStorage: FailureStorage? = nil
+    var discoveryFailure: DiscoveryFailure? {
+        get { failureStorage?.value }
+        set { failureStorage = newValue.map(FailureStorage.init) }
+    }
 
     public init(agent: AgentKind, root: URL, url: URL, format: SourceFormat) {
         self.init(agent: agent, root: root, canonicalPath: TraceFileIO.canonicalPath(url.path), format: format, discoveryPath: url.standardizedFileURL.path)

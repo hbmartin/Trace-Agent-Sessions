@@ -23,6 +23,32 @@ public protocol SessionSource: Sendable {
     func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage
 }
 
+enum DiscoveryFailureEvidence: Hashable, Sendable {
+    case unknown
+    case fileLink(target: TraceFileIO.CanonicalPath?, missing: Bool)
+}
+
+private func fileLinkEvidence(at path: String) -> DiscoveryFailureEvidence {
+    let target = SourceRoot.discoveryLinkTarget(URL(fileURLWithPath: path, isDirectory: false))
+    var missing = false
+    if let target {
+        do { _ = try FileManager.default.attributesOfItem(atPath: target.path) }
+        catch {
+            let error = error as NSError
+            missing = (error.domain == NSCocoaErrorDomain && error.code == CocoaError.Code.fileReadNoSuchFile.rawValue)
+                || (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
+        }
+    }
+    return .fileLink(target: target, missing: missing)
+}
+
+private func revalidatedLinkFailure(_ failure: DiscoveryFailure) -> DiscoveryFailure {
+    guard case .fileLink = failure.evidence else { return failure }
+    var result = failure
+    if failure.evidence != fileLinkEvidence(at: failure.path) { result.evidence = .unknown }
+    return result
+}
+
 public struct DiscoveryFailure: Hashable, Sendable {
     public enum Kind: String, Sendable {
         case missingRoot
@@ -36,6 +62,7 @@ public struct DiscoveryFailure: Hashable, Sendable {
     public let kind: Kind
     public let requestedScopePath: String?
     let requestedScope: SourceRootScope?
+    var evidence: DiscoveryFailureEvidence = .unknown
 
     public init(
         agent: AgentKind, root: URL, path: String, message: String,
@@ -117,7 +144,7 @@ func verifiedDiscoveryResult(
         }))
     }
     let matcher = DiscoveryScopeMatcher(scopes)
-    let configuredContexts = Dictionary(uniqueKeysWithValues: configuredRoots.filter { $0.id != root.id }.map { ($0.id, $0.mappingContext) })
+    let configuredContexts = Dictionary(configuredRoots.filter { $0.id != root.id }.map { ($0.id, $0.mappingContext) }, uniquingKeysWith: { first, _ in first })
     var aliases: [String: TraceFileIO.CanonicalPath] = [:]
     func canonicalRoot(_ candidate: URL) -> TraceFileIO.CanonicalPath {
         if let cached = aliases[candidate.path] { return cached }
@@ -142,19 +169,31 @@ func verifiedDiscoveryResult(
               TraceFileIO.canonicalPath(failure.path) != origin else { return false }
         return acceptsRoot(failure.root, path: failure.path)
     }.map { failure in
+        var rebased: DiscoveryFailure
         if root.scope(forRawPath: failure.path, in: capturedContext) == nil,
            let lexical = root.lexicalDiscoveryScope(failure.path, in: capturedContext) {
-            return DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
+            rebased = DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
                 kind: failure.kind, requestedScope: lexical)
+        } else {
+            rebased = DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
+                kind: failure.kind, requestedScopePath: failure.requestedScopePath)
         }
-        return DiscoveryFailure(agent: agent, root: root.url, path: failure.path, message: failure.message,
-            kind: failure.kind, requestedScopePath: failure.requestedScopePath)
+        rebased.evidence = failure.evidence
+        return revalidatedLinkFailure(rebased)
     }
     var qualifiedFailures = normalizedDiscoveryFailures(failures, for: root, in: capturedContext).filter { failure in
         scannedScopes.contains { $0.intersects(failure.relativeScope) }
     }
     var files: [DiscoveredSourceFile] = []
     for file in result.files {
+        if let failure = file.discoveryFailure,
+           file.agent == agent, acceptsRoot(file.root, path: file.discoveryPath),
+           let lexical = root.lexicalDiscoveryScope(file.discoveryPath, in: capturedContext) {
+            if scannedScopes.contains(where: { $0.intersects(lexical.relativeScope) }) {
+                qualifiedFailures.append(.init(failure: revalidatedLinkFailure(failure), scope: lexical))
+            }
+            continue
+        }
         let canonicalMember = matcher.contains(file.canonicalPath)
         let lexical = canonicalMember ? nil : root.lexicalDiscoveryScope(file.discoveryPath, in: capturedContext)
         let lexicalMember = lexical.map { matcher.contains($0.scanPath) } ?? false
@@ -257,6 +296,8 @@ public struct DiscoveryResult: Sendable {
     public var files: [DiscoveredSourceFile]
     public var failures: [DiscoveryFailure]
 
+    // Legacy array discovery defers these candidates to individual reads.
+    var rejectedFileLinks: [DiscoveredSourceFile] = []
     public init(files: [DiscoveredSourceFile] = [], failures: [DiscoveryFailure] = []) {
         self.files = files
         self.failures = failures
@@ -331,12 +372,13 @@ public extension SessionSource {
             extensions: allowedExtensions, scopedTo: paths, classify: classify
         )
         if let failure = result.failures.first(where: { failure in
+            if case .fileLink = failure.evidence { return false }
             if failure.kind != .missingRoot { return true }
             return !roots.contains { $0.url.path == failure.root.path && $0.isDefault }
         }) {
             throw SessionSourceError.unreadableDirectory(failure.path, failure.message)
         }
-        return result.files
+        return result.files + result.rejectedFileLinks
     }
 
     func discoverFilesResult(
@@ -346,6 +388,7 @@ public extension SessionSource {
     ) throws -> DiscoveryResult {
         let manager = FileManager.default
         var files: [DiscoveredSourceFile] = []
+        var rejectedFileLinks: [DiscoveredSourceFile] = []
         var failures: [DiscoveryFailure] = []
 
         func itemTypeIfPresent(for url: URL) throws -> FileAttributeType? {
@@ -414,12 +457,25 @@ public extension SessionSource {
 
             func appendFile(_ url: URL, format: SourceFormat) {
                 if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
-                    let target = url.resolvingSymlinksInPath()
-                    let type = (try? manager.attributesOfItem(atPath: target.path)[.type]) as? FileAttributeType
-                    guard type == .typeRegular else {
+                    // Healthy links retain the existing Foundation fast path.
+                    // Only unavailable leaves need bounded target qualification.
+                    let resolved = url.resolvingSymlinksInPath()
+                    let type = (try? manager.attributesOfItem(atPath: resolved.path)[.type]) as? FileAttributeType
+                    if type != .typeRegular {
+                        let target = SourceRoot.discoveryLinkTarget(url)
+                        var missing = false
+                        if let target {
+                            do { missing = try itemTypeIfPresent(for: URL(fileURLWithPath: target.path, isDirectory: false)) == nil }
+                            catch { /* A previously qualified identity stays unpaid. */ }
+                        }
                         let scope = root.lexicalDiscoveryScope(url.path, in: context) ?? rootScope
-                        failures.append(.init(agent: agent, root: root.url, path: url.path,
-                            message: "The source link target is not currently available", requestedScope: scope))
+                        var failure = DiscoveryFailure(agent: agent, root: root.url, path: url.path,
+                            message: "The source link target is not currently available", requestedScope: scope)
+                        failure.evidence = .fileLink(target: target, missing: missing)
+                        failures.append(failure)
+                        var candidate = DiscoveredSourceFile(agent: agent, root: root.url, url: url, format: format)
+                        candidate.discoveryFailure = failure
+                        rejectedFileLinks.append(candidate)
                         return
                     }
                 }
@@ -514,6 +570,8 @@ public extension SessionSource {
             }
         }
 
-        return .init(files: files, failures: failures)
+        var result = DiscoveryResult(files: files, failures: failures)
+        result.rejectedFileLinks = rejectedFileLinks
+        return result
     }
 }
