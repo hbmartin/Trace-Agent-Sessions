@@ -3953,9 +3953,12 @@ final class IndexingRegressionTests: XCTestCase {
     #endif
 
     private func directory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRegression-\(UUID())")
+        // Codex metadata lives beside its sessions root. Own that parent too,
+        // rather than discovering metadata in the shared system temp directory.
+        let namespace = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRegressionNamespace-\(UUID())")
+        let url = namespace.appendingPathComponent("TraceRegression-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: namespace) }
         return url
     }
 
