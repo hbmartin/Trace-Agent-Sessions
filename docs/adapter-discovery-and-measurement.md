@@ -90,3 +90,23 @@ uninstrumented source; `inputSHA256` identifies the actual bytes supplied to tha
 invocation. Changed outputs are atomically replaced. Reservation benchmark metric
 version 2 accumulates admissions before retirement; version 1 measurements must
 not be compared without rerunning synchronized harnesses.
+
+## Local UI runner interpreter and interruptions
+
+Invoke `Scripts/run-selected-ui-verification.py` with Python 3.13 or later on
+macOS (for example, `python3.13 Scripts/run-selected-ui-verification.py ...`).
+The runner requires `os.waitid` with `WNOWAIT` so its direct child remains unreaped
+until process-group cleanup is confirmed. Older or incompatible interpreters
+exit with code 2 before launching commands, with a failed receipt when writable.
+Importing the module does not enforce this execution requirement.
+
+A collected interruption takes precedence over receipt-write errors. Owned-child
+cleanup and handler restoration still complete; write and cleanup errors remain
+in diagnostics. If terminal persistence is impossible, stderr reports it and the
+runner retains the signal-derived exit code. No receipt can be guaranteed on an
+unwritable filesystem.
+
+Directory events containing a known external link reconcile its owning root.
+Unobserved links behind failed directories cannot establish absence; successful
+observations still qualify their own external targets. The protocol's default
+scoped discovery retains lexical link membership for identity verification.

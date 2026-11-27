@@ -359,22 +359,60 @@ class Runner:
     def command(self, label: str, args: list[str], timeout: int) -> int:
         phase = {"label": label, "command": args, "log": label + ".log", "stderrLog": label + ".stderr.log", "status": "running"}
         self.receipt["phases"].append(phase)
-        pending_signals, handlers = [], {}
+        pending_signals, handlers, receipt_errors = [], {}, []
         child = None
         failure = cleanup_error = None
         code = 1
         start = time.monotonic()
-        # One collection lifetime covers launch, transitions, cleanup and save.
-        # Handlers never raise while this command owns a child. In particular a
-        # second signal cannot jump over cleanup or handler installation.
+
         def collect(signum, frame):
             pending_signals.append(signum)
+
+        def settle():
+            nonlocal code
+            interruption = (RunInterrupted(pending_signals[0]) if pending_signals else
+                failure if isinstance(failure, RunInterrupted) else
+                RunInterrupted(signal.SIGINT) if isinstance(failure, KeyboardInterrupt) else None)
+            if interruption is not None:
+                code = 128 + interruption.signum
+                phase.update(status="interrupted", error=error_description(interruption))
+                if child is None and failure is not None:
+                    phase["launchError"] = error_description(failure) if not str(failure) else str(failure)
+            elif isinstance(failure, subprocess.TimeoutExpired):
+                code = 124
+                phase.update(status="timeout", error=error_description(failure))
+            elif failure is not None:
+                phase.update(status="launch-failed" if child is None else "failed", error=error_description(failure))
+            else:
+                phase["status"] = "passed" if code == 0 else "failed"
+            if receipt_errors:
+                phase["receiptErrors"] = [error_description(error) for error in receipt_errors]
+                if interruption is None:
+                    code = 1
+                    phase.update(status="failed", error=error_description(receipt_errors[0]))
+            if cleanup_error is not None:
+                phase.update(status="cleanup-failed", cleanupError=error_description(cleanup_error))
+                if interruption is None:
+                    code = 1
+            phase.update(exitCode=code, elapsedSeconds=time.monotonic() - start)
+            return interruption
+
+        def save_phase():
+            try:
+                self.save()
+            except (RunInterrupted, KeyboardInterrupt) as error:
+                pending_signals.append(error.signum if isinstance(error, RunInterrupted) else signal.SIGINT)
+            except Exception as error:
+                receipt_errors.append(error)
+
         try:
+            # Collect throughout ownership of the child, including receipt writes.
+            # A second signal cannot jump over cleanup or handler installation.
             for sig in (signal.SIGINT, signal.SIGTERM):
                 handlers[sig] = signal.signal(sig, collect)
-            self.save()
-            print(f"Starting {label}", flush=True)
             try:
+                self.save()
+                print(f"Starting {label}", flush=True)
                 with (self.output / phase["log"]).open("w") as log, (self.output / phase["stderrLog"]).open("w") as diagnostics:
                     child = subprocess.Popen(args, stdout=log, stderr=diagnostics, start_new_session=True)
                     phase["processGroupID"] = child.pid
@@ -384,65 +422,51 @@ class Runner:
             finally:
                 if child is not None:
                     try:
-                        # Also verify descendants after a normal leader exit.
-                        # The non-reaping waiter leaves the anchor available.
                         cleanup_child(child)
                     except BaseException as error:
                         cleanup_error = error
-            def settle():
-                nonlocal code
-                interruption = (RunInterrupted(pending_signals[0]) if pending_signals else
-                    failure if isinstance(failure, RunInterrupted) else
-                    RunInterrupted(signal.SIGINT) if isinstance(failure, KeyboardInterrupt) else None)
-                if interruption is not None:
-                    code = 128 + interruption.signum
-                    phase.update(status="interrupted", error=error_description(interruption))
-                    if child is None and failure is not None:
-                        phase["launchError"] = str(failure) or error_description(failure)
-                elif isinstance(failure, subprocess.TimeoutExpired):
-                    code = 124
-                    phase.update(status="timeout", error=error_description(failure))
-                elif failure is not None:
-                    phase.update(status="launch-failed" if child is None else "failed", error=error_description(failure))
-                else:
-                    phase["status"] = "passed" if code == 0 else "failed"
-                if cleanup_error is not None:
-                    phase.update(status="cleanup-failed", cleanupError=error_description(cleanup_error))
-                    if interruption is None:
-                        code = 1
-                phase.update(exitCode=code, elapsedSeconds=time.monotonic() - start)
-                return interruption
-            interruption = settle()
-            self.save()
+            settle()
+            save_phase()
         finally:
-            # Finish restoring every handler even if an original handler raises
-            # during restoration. The child has already been retired above.
-            restoration_error = None
+            # Restore every handler even when one restoration fails. The child
+            # has already retired; collected signals are adjudicated afterward.
             mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
             try:
                 for sig, handler in handlers.items():
                     try:
                         signal.signal(sig, handler)
                     except BaseException as error:
-                        restoration_error = error
+                        if failure is None:
+                            failure = error
             finally:
                 signal.pthread_sigmask(signal.SIG_SETMASK, mask)
-            if restoration_error is not None:
-                failure = restoration_error
-        # Nothing can append to our list after restoration. Re-adjudicate once:
-        # a signal during the first save or a failed launch must not disappear.
+        settle()
+        save_phase()
         interruption = settle()
-        self.save()
+        if receipt_errors:
+            print("Could not persist command receipt: " + "; ".join(map(error_description, receipt_errors)), file=sys.stderr)
         print(f"Finished {label}: {phase['status']} ({phase['elapsedSeconds']:.1f}s)", flush=True)
         if interruption is not None:
             if cleanup_error is not None:
                 interruption.cleanup_error = error_description(cleanup_error)
-            raise interruption from failure
+            raise interruption from (receipt_errors[0] if receipt_errors else failure)
         if cleanup_error is not None:
             raise CleanupFailed(error_description(cleanup_error)) from failure
+        if receipt_errors:
+            raise receipt_errors[0] from failure
         if failure is not None and not isinstance(failure, subprocess.TimeoutExpired):
             raise failure
         return code
+
+
+class UnsupportedInterpreter(ValueError):
+    pass
+
+
+def require_supported_python() -> None:
+    if sys.platform == "darwin" and (sys.version_info < (3, 13) or
+            not all(hasattr(os, name) for name in ("waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT", "CLD_EXITED"))):
+        raise UnsupportedInterpreter("UI verification requires Python 3.13 or later on macOS with os.waitid support; invoke this script with python3.13 or a newer interpreter")
 
 
 def require_local_execution(environment: dict[str, str]) -> None:
@@ -563,6 +587,7 @@ def main() -> int:
     exit_code = 1
     try:
         handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGINT, signal.SIGTERM)}
+        require_supported_python()
         os.chdir(repo)
         selection = (repo / args.selection).resolve()
         selection.relative_to(repo)
@@ -630,6 +655,10 @@ def main() -> int:
     except (RunInterrupted, KeyboardInterrupt) as error:
         runner.receipt.update(status="interrupted", error=error_description(error))
         exit_code = 128 + error.signum if isinstance(error, RunInterrupted) else 130
+    except UnsupportedInterpreter as error:
+        runner.receipt.update(status="failed", error=error_description(error))
+        print(str(error), file=sys.stderr)
+        exit_code = 2
     except Exception as error:
         runner.receipt.update(status="failed", error=error_description(error))
         print(error_description(error), file=sys.stderr)

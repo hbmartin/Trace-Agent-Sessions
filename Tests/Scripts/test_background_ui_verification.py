@@ -21,6 +21,117 @@ spec.loader.exec_module(module)
 
 
 class BackgroundUIVerificationTests(unittest.TestCase):
+    descendant_fixture_program = """import os,sys,time
+from pathlib import Path
+ready,release=Path(sys.argv[1]),Path(sys.argv[2])
+if os.fork()==0:
+ pending=ready.with_suffix('.tmp');pending.write_text('ready');pending.replace(ready)
+ deadline=time.monotonic()+float(sys.argv[3])
+ while not release.exists() and time.monotonic()<deadline:time.sleep(.005)
+else:
+ deadline=time.monotonic()+3
+ while not ready.exists() and time.monotonic()<deadline:time.sleep(.005)
+ os._exit(0 if ready.exists() else 2)
+"""
+
+    def test_unsupported_mac_python_records_failure_before_any_launch(self):
+        for version in [(3, 9), (3, 12)]:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / 'attempt'
+                with patch.object(module.sys, 'platform', 'darwin'), patch.object(module.sys, 'version_info', version), \
+                     patch.object(module.sys, 'argv', ['runner', '--selection', 'Tests/Verification/ui-smoke.json', '--output', str(output)]), \
+                     patch.dict(os.environ, {'CI': 'false', 'GITHUB_ACTIONS': 'false'}), \
+                     patch.object(module.subprocess, 'Popen') as launch, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual(module.main(), 2)
+                launch.assert_not_called()
+                self.assertIn('Python 3.13', stderr.getvalue())
+                receipt = json.loads((output / 'verification.json').read_text())
+                self.assertEqual(receipt['status'], 'failed')
+                self.assertEqual(receipt['phases'], [])
+                self.assertIn('python3.13', receipt['error'])
+
+    def test_supported_python_requires_non_reaping_wait_capability(self):
+        with patch.object(module.sys, 'platform', 'darwin'), patch.object(module.sys, 'version_info', (3, 13)):
+            module.require_supported_python()
+            actual = hasattr
+            with patch('builtins.hasattr', side_effect=lambda obj, name: False if obj is module.os and name == 'waitid' else actual(obj, name)):
+                with self.assertRaisesRegex(module.UnsupportedInterpreter, 'os.waitid'):
+                    module.require_supported_python()
+
+    def test_receipt_write_failure_cannot_mask_pending_interruption(self):
+        from unittest.mock import Mock
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            for failed_save in (1, 2, 3):
+                with self.subTest(signal=sig, failed_save=failed_save), tempfile.TemporaryDirectory() as temp:
+                    runner = module.Runner(Path(temp) / 'attempt', {})
+                    original = runner.save
+                    calls = 0
+                    def save():
+                        nonlocal calls
+                        calls += 1
+                        # A signal collected before restoration must survive
+                        # even if the final (post-restoration) write also fails.
+                        if calls == (2 if failed_save == 3 else failed_save):
+                            signal.getsignal(sig)(sig, None)
+                        if calls == failed_save:
+                            raise PermissionError('receipt replacement denied')
+                        original()
+                    previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+                    child = Mock(pid=123, returncode=0)
+                    with patch.object(runner, 'save', side_effect=save), patch.object(module.subprocess, 'Popen', return_value=child) as launch, \
+                         patch.object(module, 'wait_owned_child', return_value=0), patch.object(module, 'cleanup_child') as cleanup, \
+                         contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(module.RunInterrupted) as caught:
+                            runner.command('fixture', ['fixture'], 1)
+                    self.assertEqual(caught.exception.signum, sig)
+                    self.assertIsInstance(caught.exception.__cause__, PermissionError)
+                    self.assertEqual(launch.call_count, 0 if failed_save == 1 else 1)
+                    self.assertEqual(cleanup.call_count, launch.call_count)
+                    phase = runner.receipt['phases'][0]
+                    self.assertEqual(phase['status'], 'interrupted')
+                    self.assertEqual(phase['exitCode'], 128 + sig)
+                    self.assertTrue(all(signal.getsignal(s) == handler for s, handler in previous.items()))
+                    if failed_save < 3:
+                        self.assertEqual(json.loads((runner.output / 'verification.json').read_text())['phases'][0]['status'], 'interrupted')
+
+    def test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            runner = module.Runner(Path(temp) / 'attempt', {})
+            original = runner.save
+            calls = 0
+            def save():
+                nonlocal calls
+                calls += 1
+                if calls == 1: return original()
+                if calls == 2: signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                raise OSError('persistent receipt failure')
+            with patch.object(runner, 'save', side_effect=save), patch.object(module.subprocess, 'Popen', return_value=Mock(pid=123)), \
+                 patch.object(module, 'wait_owned_child', return_value=0), patch.object(module, 'cleanup_child'), \
+                 contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(module.RunInterrupted) as caught: runner.command('fixture', ['fixture'], 1)
+            self.assertEqual(caught.exception.signum, signal.SIGTERM)
+            self.assertEqual(calls, 3, 'Persistence failure must not create an unbounded save loop')
+            self.assertIn('persistent receipt failure', stderr.getvalue())
+            self.assertEqual(runner.receipt['phases'][0]['exitCode'], 143)
+
+    def test_receipt_write_failure_without_signal_remains_visible(self):
+        from unittest.mock import Mock
+        for failed_save in (1, 2, 3):
+            with self.subTest(failed_save=failed_save), tempfile.TemporaryDirectory() as temp:
+                runner = module.Runner(Path(temp) / 'attempt', {})
+                original = runner.save
+                calls = 0
+                def save():
+                    nonlocal calls
+                    calls += 1
+                    if calls == failed_save: raise OSError('receipt write failure')
+                    original()
+                with patch.object(runner, 'save', side_effect=save), patch.object(module.subprocess, 'Popen', return_value=Mock(pid=123)), \
+                     patch.object(module, 'wait_owned_child', return_value=0), patch.object(module, 'cleanup_child'), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaisesRegex(OSError, 'receipt write failure'): runner.command('fixture', ['fixture'], 1)
+                self.assertIn(runner.receipt['phases'][0]['status'], ('failed', 'launch-failed'))
+
     def test_signal_during_launch_failure_save_is_not_lost(self):
         with tempfile.TemporaryDirectory() as temp:
             runner=module.Runner(Path(temp)/'attempt',{})
@@ -94,25 +205,44 @@ class BackgroundUIVerificationTests(unittest.TestCase):
     def test_normal_command_retires_descendants_before_reaping_leader(self):
         with tempfile.TemporaryDirectory() as temp:
             ready,release=Path(temp)/'ready',Path(temp)/'release'
-            program="""import os,sys,time
-from pathlib import Path
-ready,release=Path(sys.argv[1]),Path(sys.argv[2])
-if os.fork()==0:
- pending=ready.with_suffix('.tmp');pending.write_text('ready');pending.replace(ready)
- while not release.exists():time.sleep(.005)
-else:
- deadline=time.monotonic()+3
- while not ready.exists() and time.monotonic()<deadline:time.sleep(.005)
- os._exit(0 if ready.exists() else 2)
-"""
+            program = self.descendant_fixture_program
             runner=module.Runner(Path(temp)/'attempt',{})
             try:
-                self.assertEqual(runner.command('normal',[sys.executable,'-c',program,str(ready),str(release)],5),0)
+                self.assertEqual(runner.command('normal',[sys.executable,'-c',program,str(ready),str(release),'30'],5),0)
                 phase=runner.receipt['phases'][0]
                 self.assertEqual(phase['status'],'passed')
                 self.assertFalse(any(not member['state'].startswith('Z') for member in module.process_group_members(phase['processGroupID'])))
             finally:
                 release.touch()
+
+
+    def test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ready, release = Path(temp) / 'ready', Path(temp) / 'release'
+            runner = module.Runner(Path(temp) / 'attempt', {})
+            children = []
+            popen = subprocess.Popen
+            def launch(*args, **kwargs):
+                child = popen(*args, **kwargs)
+                children.append(child)
+                return child
+            try:
+                with patch.object(module.subprocess, 'Popen', side_effect=launch), \
+                     patch.object(module, 'cleanup_child', side_effect=module.CleanupFailed('injected cleanup failure')):
+                    with self.assertRaises(module.CleanupFailed):
+                        runner.command('fixture', [sys.executable, '-c', self.descendant_fixture_program,
+                            str(ready), str(release), '.2'], 5)
+                child = children[0]
+                deadline = time.monotonic() + 5
+                while any(not member['state'].startswith('Z') for member in module.process_group_members(child.pid)):
+                    self.assertLess(time.monotonic(), deadline, 'Fixture must exit without seeing a release marker')
+                    time.sleep(.01)
+                child.wait(timeout=2)
+                self.assertFalse(release.exists())
+            finally:
+                for child in children:
+                    module.cleanup_child(child)
+
 
 
     def products(self, derived):

@@ -146,7 +146,34 @@ struct ReconciliationLivePaths {
 }
 
 public actor IndexCoordinator {
-    private var discoveredLinkPaths: [String: [String: String]] = [:]
+    private struct DiscoveredLinks {
+        let context: SourceRootPathContext
+        var targets: [String: String] = [:]
+        var ancestorScopes: Set<RootRelativeScope> = []
+
+        init(_ targets: [String: String], root: SourceRoot, context: SourceRootPathContext) {
+            self.context = context
+            merge(targets, root: root)
+        }
+        mutating func merge(_ incoming: [String: String], root: SourceRoot) {
+            for (location, target) in incoming {
+                let isNew = targets.updateValue(target, forKey: location) == nil
+                guard isNew, let scope = root.lexicalDiscoveryScope(location, in: context) else { continue }
+                for count in 0...scope.relativeScope.components.count {
+                    ancestorScopes.insert(.init(components: Array(scope.relativeScope.components.prefix(count)),
+                        caseSensitive: context.scanPath.isCaseSensitive))
+                }
+            }
+        }
+    }
+    private var discoveredLinks: [String: DiscoveredLinks] = [:]
+
+    private func linkMembership(for root: SourceRoot, in context: SourceRootPathContext) -> DiscoveredLinks {
+        if let current = discoveredLinks[root.id], current.context == context { return current }
+        let refreshed = DiscoveredLinks(discoveredLinks[root.id]?.targets ?? [:], root: root, context: context)
+        discoveredLinks[root.id] = refreshed
+        return refreshed
+    }
     private struct SourceFileKey: Hashable {
         let agent: AgentKind
         let comparisonPath: String
@@ -723,8 +750,12 @@ public actor IndexCoordinator {
                     }
                 }
                 if scopes.contains(where: { $0.relativeScope.isRoot }), result.failures.isEmpty {
-                    discoveredLinkPaths[root.id] = links
-                } else { discoveredLinkPaths[root.id, default: [:]].merge(links) { _, new in new } }
+                    discoveredLinks[root.id] = .init(links, root: root, context: mappingContext)
+                } else {
+                    var membership = linkMembership(for: root, in: mappingContext)
+                    membership.merge(links, root: root)
+                    discoveredLinks[root.id] = membership
+                }
                 let scannedScopes = Set(scopes.map(\.relativeScope))
                 discoveryAttempts.append(.init(
                     source: source, root: root, mappingContext: mappingContext,
@@ -791,9 +822,10 @@ public actor IndexCoordinator {
                         for root in source.roots {
                             try Task.checkCancellation()
                             guard let context = mappingContexts[root.id] else { continue }
+                            let membership = linkMembership(for: root, in: context)
                             let scopes = Self.minimalRootScopes(
                                 discoveryPaths.compactMap {
-                                    root.lexicalDiscoveryScope($0, in: context).map { discoveredLinkPaths[root.id]?[$0.scanPath.path] != nil } == true
+                                    root.lexicalDiscoveryScope($0, in: context).map { membership.ancestorScopes.contains($0.relativeScope) } == true
                                         ? root.rootScope(in: context)
                                         : root.reconciliationScope(forRawPath: $0, in: context)
                                 }
@@ -1132,17 +1164,18 @@ public actor IndexCoordinator {
                     if !absentOptionalRoots.contains(root.id) {
                         for failure in attempt.failures {
                             facts[failure.relativeScope] = .init(order: 0, covered: false)
-                            let oldTargets = (discoveredLinkPaths[root.id] ?? [:]).filter { location, _ in
+                            let oldTargets = (discoveredLinks[root.id]?.targets ?? [:]).filter { location, _ in
                                 root.lexicalDiscoveryScope(location, in: context).map { failure.relativeScope.contains($0.relativeScope) } == true
                             }.values
                             for target in oldTargets {
                                 facts[root.navigationScope(forStoredPath: target, in: context)] = .init(order: 0, covered: false)
                             }
-                            // On a fresh installation there may be no old link
-                            // map. Withhold external absence, while explicit
-                            // successful file observations below can qualify it.
-                            if oldTargets.isEmpty,
-                               (try? FileManager.default.attributesOfItem(atPath: failure.failure.path)[.type]) as? FileAttributeType == .typeSymbolicLink {
+                            // A failed directory or unknown location may hide
+                            // links absent from this installation's membership map.
+                            // Proven regular-file failures stay file-local. Explicit
+                            // successful external observations below still qualify.
+                            let failedType = (try? FileManager.default.attributesOfItem(atPath: failure.failure.path)[.type]) as? FileAttributeType
+                            if failedType != .typeRegular {
                                 facts[.init(components: ["\0external"], caseSensitive: true)] = .init(order: 0, covered: false)
                             }
                         }
