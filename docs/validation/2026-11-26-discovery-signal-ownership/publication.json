@@ -1,0 +1,17 @@
+{
+  "request": "open ready PR",
+  "recordedAtUTC": "2026-11-26T17:57:38.581876+00:00",
+  "decision": "Publish a ready, unmerged follow-up now with the incomplete targeted-measurement gate explicit.",
+  "performanceAcceptanceWaivedOrPassed": false,
+  "targetedMeasurementsExecuted": false,
+  "acceptedPerformanceSamples": 0,
+  "local10PercentPerformanceAcceptanceClaim": false,
+  "priorVerificationSnapshotCommit": "7ae6067",
+  "runtimeAndHarnessChangesSinceFrozenCandidate": false,
+  "remainingGate": "Approved paired targeted measurements were prepared and smoke-tested but not run before publication.",
+  "otherOmissions": [
+    "UI tests",
+    "complete native suites",
+    "three full Release comparison pairs"
+  ]
+}

@@ -1,0 +1,278 @@
+{
+  "base": "753b578a2eb6aa4ef9aafdb95c9c6d6dd1125dc4",
+  "baseline": "a8732af55a5595974d20260cc81d854eb3c50895",
+  "frozenCandidate": "a511d9d6a5d0abac89b611ecb799779fce52c894",
+  "status": "publication-requested-with-targeted-measurements-incomplete",
+  "native": {
+    "passed": 759,
+    "failed": 0,
+    "skipped": 0,
+    "coreCounts": "affected-core-direct-6-counts.json",
+    "appCounts": "affected-app-direct-3-counts.json",
+    "directXCTest": true
+  },
+  "releaseBehavior": {
+    "passed": 10,
+    "failed": 0,
+    "skipped": 0,
+    "counts": "release-core-focus-v2-counts.json"
+  },
+  "scripts": {
+    "passed": 149,
+    "failed": 0,
+    "attempt": "affected-scripts-2.json"
+  },
+  "ownershipRaces": {
+    "repetitions": 5,
+    "nativeExecutions": 30,
+    "scriptExecutions": 40,
+    "selectors": "race-selectors.json",
+    "nativeAttempts": [
+      "ownership-core-final-1.json",
+      "ownership-core-final-2.json",
+      "ownership-core-final-3.json",
+      "ownership-core-final-4.json",
+      "ownership-core-final-5.json"
+    ],
+    "scriptAttempts": [
+      "ownership-scripts-1.json",
+      "ownership-scripts-2.json",
+      "ownership-scripts-3.json",
+      "ownership-scripts-4.json",
+      "ownership-scripts-5.json"
+    ]
+  },
+  "checks": {
+    "canonical-failure-debug-build": {
+      "command": [
+        "xcodebuild",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Debug",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryDebug",
+        "build-for-testing"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:33:48.323583+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 51.7970484578982
+    },
+    "final-core-debug-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-target",
+        "TraceCoreTests",
+        "-configuration",
+        "Debug",
+        "-sdk",
+        "macosx",
+        "-arch",
+        "arm64",
+        "-jobs",
+        "2",
+        "SYMROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products",
+        "OBJROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Intermediates.noindex",
+        "-clonedSourcePackagesDirPath",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/SourcePackages"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:39:55.287460+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 51.2312055840157
+    },
+    "final-release-app-build": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "Trace",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryRelease",
+        "ENABLE_TESTABILITY=NO"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:42:30.814671+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 115.69623004179448
+    },
+    "release-core-target-v2": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-target",
+        "TraceCoreTests",
+        "-configuration",
+        "Release",
+        "-sdk",
+        "macosx",
+        "-arch",
+        "arm64",
+        "-jobs",
+        "2",
+        "ENABLE_TESTABILITY=YES",
+        "SYMROOT=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products",
+        "OBJROOT=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Intermediates",
+        "-clonedSourcePackagesDirPath",
+        "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/SourcePackages"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:39:51.705231+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 35.733728957828134
+    },
+    "external-client": {
+      "command": [
+        "xcodebuild",
+        "build",
+        "-project",
+        "Trace.xcodeproj",
+        "-scheme",
+        "TraceExternalClientFixture",
+        "-configuration",
+        "Release",
+        "-destination",
+        "platform=macOS,arch=arm64",
+        "-derivedDataPath",
+        "build/AdapterDiscoveryExternal"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:33:47.164869+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 102.54672108311206
+    },
+    "project-drift-v2": {
+      "command": [
+        "bash",
+        "Scripts/check-project-drift.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:41:41.142534+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.34414891665801406
+    },
+    "signing-settings": {
+      "command": [
+        "bash",
+        "Scripts/check-signing-settings.sh"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:44:26.550984+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 6.122466667089611
+    },
+    "verify-built-signatures": {
+      "command": [
+        "python3",
+        "-c",
+        "import subprocess; [subprocess.run(['codesign','--verify','--deep','--strict',p],check=True) for p in ['build/AdapterDiscoveryDebug/Build/Products/Debug/Trace.app','build/AdapterDiscoveryRelease/Build/Products/Release/Trace.app']]; print('Debug and Release built signatures verified')"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:51:22.281408+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.1323318751528859
+    },
+    "final-network-surface": {
+      "command": [
+        "bash",
+        "Scripts/check-network-surface.sh",
+        "build/AdapterDiscoveryRelease/Build/Products/Release/Trace.app"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:44:32.713631+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.10013670939952135
+    },
+    "pinned-whitespace": {
+      "command": [
+        "git",
+        "diff",
+        "753b578a2eb6aa4ef9aafdb95c9c6d6dd1125dc4...HEAD",
+        "--check"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:44:32.850444+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 0.05145820789039135
+    },
+    "verify-source-hashes": {
+      "command": [
+        "python3",
+        "/private/tmp/discovery-verify-source-map.py"
+      ],
+      "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+      "startedAt": "2026-11-26T17:55:11.236511+00:00",
+      "status": "passed",
+      "acceptedPerformanceMeasurement": false,
+      "exitCode": 0,
+      "wallSeconds": 3.796811082866043
+    }
+  },
+  "vendorSnapshotPreserved": true,
+  "targetedMeasurements": {
+    "required": true,
+    "status": "not-run-before-requested-publication",
+    "acceptedSamples": 0,
+    "warmups": 0,
+    "correctnessSmokesAreMeasurements": false,
+    "waiver": null
+  },
+  "optimizedPreparation": {
+    "baseline": "baseline-export-v3.json",
+    "candidate": "candidate-export-v2.json",
+    "inputEquivalence": "input-equivalence.json",
+    "allSharedClientsCompiled": true,
+    "invalidCountRejections": 24,
+    "smallCorrectnessRuns": 22
+  },
+  "omissions": {
+    "UI": "omitted by the selected plan",
+    "completeNativeSuites": "omitted by the selected plan",
+    "threeFullReleaseComparisonPairs": "omitted by the selected plan"
+  },
+  "local10PercentPerformanceAcceptanceClaim": false,
+  "rawArtifacts": "raw-artifacts.json",
+  "coordination": {
+    "receiptLocalPath": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/native-exclusive-lease.json",
+    "coreAndRaceExecution": "All passed while lease was held",
+    "receiptOverallStatus": "failed because the extra Release launcher failed before execution; direct Release retry passes",
+    "releaseRetry": "release-core-focus-v2.json"
+  },
+  "publicationDecision": "publication.json"
+}

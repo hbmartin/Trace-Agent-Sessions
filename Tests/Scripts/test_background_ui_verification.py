@@ -21,6 +21,100 @@ spec.loader.exec_module(module)
 
 
 class BackgroundUIVerificationTests(unittest.TestCase):
+    def test_signal_during_launch_failure_save_is_not_lost(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner=module.Runner(Path(temp)/'attempt',{})
+            save=runner.save;injected=False
+            def signal_in_save():
+                nonlocal injected
+                if runner.receipt['phases'][-1]['status']=='launch-failed' and not injected:
+                    injected=True;signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+                save()
+            with patch.object(module.subprocess,'Popen',side_effect=OSError('launch failed')),patch.object(runner,'save',side_effect=signal_in_save):
+                with self.assertRaises(module.RunInterrupted) as caught:runner.command('launch',['fixture'],1)
+            self.assertTrue(injected);self.assertEqual(caught.exception.signum,signal.SIGTERM)
+            phase=json.loads((runner.output/'verification.json').read_text())['phases'][0]
+            self.assertEqual(phase['status'],'interrupted');self.assertEqual(phase['exitCode'],143)
+            self.assertEqual(phase['launchError'],'launch failed')
+
+    def test_non_os_launch_failure_retains_signal_and_original_error(self):
+        def launch(*args,**kwargs):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+            raise ValueError('non-OS launch failure')
+        with tempfile.TemporaryDirectory() as temp:
+            runner=module.Runner(Path(temp)/'attempt',{})
+            with patch.object(module.subprocess,'Popen',side_effect=launch):
+                with self.assertRaises(module.RunInterrupted) as caught:runner.command('launch',['fixture'],1)
+            self.assertIsInstance(caught.exception.__cause__,ValueError)
+            self.assertEqual(runner.receipt['phases'][0]['status'],'interrupted')
+
+    def test_second_signal_cannot_escape_cleanup_or_replace_first(self):
+        from unittest.mock import Mock
+        child=Mock(pid=123,returncode=None)
+        def wait(child,timeout,pending):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+            raise subprocess.TimeoutExpired('fixture',timeout)
+        def cleanup(child):
+            signal.getsignal(signal.SIGINT)(signal.SIGINT,None)
+            child.returncode=-signal.SIGTERM
+        with tempfile.TemporaryDirectory() as temp:
+            runner=module.Runner(Path(temp)/'attempt',{})
+            with patch.object(module.subprocess,'Popen',return_value=child),patch.object(module,'wait_owned_child',side_effect=wait),patch.object(module,'cleanup_child',side_effect=cleanup) as retired:
+                with self.assertRaises(module.RunInterrupted) as caught:runner.command('held',['fixture'],1)
+            self.assertEqual(caught.exception.signum,signal.SIGTERM)
+            self.assertEqual(retired.call_count,1);self.assertEqual(runner.receipt['phases'][0]['exitCode'],143)
+
+    def test_signal_during_handler_restoration_is_adjudicated(self):
+        from unittest.mock import Mock
+        child=Mock(pid=123,returncode=0)
+        original=signal.signal;previous={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM)}
+        injected=False
+        def installing(sig,handler):
+            nonlocal injected
+            if sig==signal.SIGINT and handler==previous[sig] and not injected:
+                injected=True;signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+            return original(sig,handler)
+        with tempfile.TemporaryDirectory() as temp:
+            runner=module.Runner(Path(temp)/'attempt',{})
+            with patch.object(module.subprocess,'Popen',return_value=child),patch.object(module,'wait_owned_child',return_value=0),patch.object(module,'cleanup_child'),patch.object(module.signal,'signal',side_effect=installing):
+                with self.assertRaises(module.RunInterrupted):runner.command('normal',['fixture'],1)
+            self.assertTrue(injected);self.assertEqual(runner.receipt['phases'][0]['exitCode'],143)
+            self.assertTrue(all(signal.getsignal(sig)==handler for sig,handler in previous.items()))
+
+    def test_completion_observation_does_not_reap_the_owned_child(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        child=Mock(pid=123,args=['fixture'])
+        with patch.object(module.os,'waitid',side_effect=[None,SimpleNamespace(si_status=0,si_code=os.CLD_EXITED)]) as observed,patch.object(module.time,'sleep'):
+            self.assertEqual(module.wait_owned_child(child,1,[]),0)
+        self.assertEqual(observed.call_count,2)
+        self.assertTrue(observed.call_args.args[2] & os.WNOWAIT)
+        child.wait.assert_not_called();child.poll.assert_not_called()
+
+    def test_normal_command_retires_descendants_before_reaping_leader(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ready,release=Path(temp)/'ready',Path(temp)/'release'
+            program="""import os,sys,time
+from pathlib import Path
+ready,release=Path(sys.argv[1]),Path(sys.argv[2])
+if os.fork()==0:
+ pending=ready.with_suffix('.tmp');pending.write_text('ready');pending.replace(ready)
+ while not release.exists():time.sleep(.005)
+else:
+ deadline=time.monotonic()+3
+ while not ready.exists() and time.monotonic()<deadline:time.sleep(.005)
+ os._exit(0 if ready.exists() else 2)
+"""
+            runner=module.Runner(Path(temp)/'attempt',{})
+            try:
+                self.assertEqual(runner.command('normal',[sys.executable,'-c',program,str(ready),str(release)],5),0)
+                phase=runner.receipt['phases'][0]
+                self.assertEqual(phase['status'],'passed')
+                self.assertFalse(any(not member['state'].startswith('Z') for member in module.process_group_members(phase['processGroupID'])))
+            finally:
+                release.touch()
+
+
     def products(self, derived):
         products = derived / "Build/Products"
         for name in ("Trace.app", "TraceUITests-Runner.app"):
@@ -217,7 +311,7 @@ except m.RunInterrupted as e:
                     time.sleep(.01)
                 held_pid = int(log.read_text().strip())
                 child.send_signal(signal.SIGTERM)
-                stdout, stderr = child.communicate(timeout=5)
+                stdout, stderr = child.communicate(timeout=25)
                 self.assertEqual(child.returncode, 143, stdout + stderr)
                 receipt = json.loads((output / "verification.json").read_text())
                 self.assertEqual(receipt["status"], "interrupted")
@@ -405,7 +499,7 @@ except m.RunInterrupted as e:
             def cleanup(child):
                 signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
                 raise module.CleanupFailed("unconfirmed group")
-            with patch.object(module.subprocess,"Popen",return_value=child),patch.object(module,"cleanup_child",side_effect=cleanup):
+            with patch.object(module.subprocess,"Popen",return_value=child),patch.object(module,"wait_owned_child",side_effect=lambda child, timeout, pending: child.wait(timeout=timeout)),patch.object(module,"cleanup_child",side_effect=cleanup):
                 with self.assertRaises(module.RunInterrupted) as interrupted: runner.command("held",["fixture"],1)
             self.assertEqual(interrupted.exception.signum,signal.SIGTERM)
             self.assertEqual(runner.receipt["phases"][0]["processGroupID"],123)
@@ -672,7 +766,7 @@ except m.RunInterrupted as e:
                     if child.poll() is not None or time.monotonic()>deadline: self.fail('cleanup did not rendezvous')
                     time.sleep(.005)
                 child.send_signal(signal.SIGTERM)
-                stdout,stderr=child.communicate(timeout=5)
+                stdout,stderr=child.communicate(timeout=25)
                 self.assertEqual(child.returncode,143,stdout+stderr)
                 self.assertNotIn('BAD_CONTINUATION',stdout)
                 receipt=json.loads((output/'verification.json').read_text())

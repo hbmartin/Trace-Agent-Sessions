@@ -158,6 +158,58 @@ private struct ReconciliationScopeMatcher: Sendable {
     }
 }
 
+// A slot is owned by exactly one GRDB connection. Both setting the matcher and
+// invoking its SQL function occur synchronously on that connection's queue.
+// Neither the function nor the weak lookup table retains the database/actor.
+private final class ReconciliationMatcherSlot: @unchecked Sendable {
+    var matcher: ReconciliationScopeMatcher?
+}
+private final class ReconciliationFunctions: Sendable {
+    private final class WeakSlot: @unchecked Sendable {
+        weak var value: ReconciliationMatcherSlot?
+        init(_ value: ReconciliationMatcherSlot) { self.value = value }
+    }
+    private let slots = OSAllocatedUnfairLock(initialState: [ObjectIdentifier: WeakSlot]())
+    #if DEBUG
+    let predicates = OSAllocatedUnfairLock(initialState: 0)
+    #endif
+    #if DEBUG || TRACE_CHECKPOINT_BENCHMARK
+    let registrations = OSAllocatedUnfairLock(initialState: 0)
+    #endif
+    func install(in db: Database) {
+        let slot = ReconciliationMatcherSlot()
+        let identity = ObjectIdentifier(db)
+        slots.withLock { values in
+            values = values.filter { $0.value.value != nil }
+            values[identity] = WeakSlot(slot)
+        }
+        #if DEBUG || TRACE_CHECKPOINT_BENCHMARK
+        registrations.withLock { $0 += 1 }
+        #endif
+        // The query-local context changes between executions: do not declare
+        // this context-dependent function pure or permit constant folding.
+        db.add(function: DatabaseFunction("trace_reconciliation_matches", argumentCount: 1, pure: false) { [slot, self] values in
+            guard let matcher = slot.matcher, let path = String.fromDatabaseValue(values[0]) else {
+                throw SessionSourceError.malformedRecord("reconciliation matcher context unavailable")
+            }
+            #if DEBUG
+            predicates.withLock { $0 += 1 }
+            #endif
+            return matcher.contains(path)
+        })
+    }
+    func withMatcher<T>(_ matcher: ReconciliationScopeMatcher, in db: Database, _ body: () throws -> T) throws -> T {
+        let identity = ObjectIdentifier(db)
+        guard let slot = slots.withLock({ $0[identity]?.value }) else {
+            throw SessionSourceError.malformedRecord("reconciliation connection unavailable")
+        }
+        let previous = slot.matcher
+        slot.matcher = matcher
+        defer { slot.matcher = previous }
+        return try body()
+    }
+}
+
 public actor IndexDatabase {
     private struct SourcePathKey: Hashable, Sendable { let agent: String; let rootID: Int64 }
     private struct SourcePathCacheContext: Equatable, Sendable {
@@ -171,6 +223,7 @@ public actor IndexDatabase {
     // Counts, not path copies: retained state is bounded by configured roots.
     private var nonASCIIPathCounts: [SourcePathKey: Int] = [:]
     private var sourcePathCacheContext: SourcePathCacheContext?
+    private nonisolated let reconciliationFunctions: ReconciliationFunctions
 
     private nonisolated static func sourcePathMembership(id: Int64, in db: Database) throws -> SourcePathMembership? {
         guard let row = try Row.fetchOne(db, sql: "SELECT agent, root_id, path FROM source_file WHERE id=?", arguments: [id]) else { return nil }
@@ -258,6 +311,8 @@ public actor IndexDatabase {
         )
         var configuration = configuration
         configuration.busyMode = .timeout(5)
+        let functions = ReconciliationFunctions()
+        reconciliationFunctions = functions
         let supportedAgents = AgentKind.allCases.map {
             "SELECT '\($0.rawValue.replacingOccurrences(of: "'", with: "''"))' AS agent"
         }.joined(separator: " UNION ALL ")
@@ -268,6 +323,7 @@ public actor IndexDatabase {
             try db.execute(sql: "PRAGMA temp_store = MEMORY")
             try db.execute(sql: "PRAGMA mmap_size = 268435456")
             try db.execute(sql: "CREATE TEMP VIEW supported_agent(agent) AS \(supportedAgents)")
+            functions.install(in: db)
 
         }
         pool = try DatabasePool(path: url.path, configuration: configuration)
@@ -1799,6 +1855,7 @@ public actor IndexDatabase {
         let scopes = capturedScopes.map { Array(Set($0)).sorted { $0.path < $1.path } }
         let matcher = scopes.map(ReconciliationScopeMatcher.init)
         let onlyASCII = scopes?.allSatisfy { $0.isCaseSensitive && $0.path.utf8.allSatisfy { $0 < 128 } } == true
+        let functions = reconciliationFunctions
         let readRows: @Sendable (Database, Bool) throws -> [IndexedSourcePath] = { db, skipFallback in
             var rows: [Row] = [], seen: Set<Int64> = []
             let base = "SELECT id, root_id, path FROM source_file WHERE agent=? AND root_id=?"
@@ -1822,20 +1879,13 @@ public actor IndexDatabase {
                     #if DEBUG
                     self.reconciliationFallbacks.withLock { $0 += 1 }
                     #endif
-                    let function = DatabaseFunction("trace_reconciliation_matches", argumentCount: 1, pure: true) { values in
-                        guard let path = String.fromDatabaseValue(values[0]) else { return false }
-                        #if DEBUG
-                        self.reconciliationPredicates.withLock { $0 += 1 }
-                        #endif
-                        return matcher.contains(path)
-                    }
-                    db.add(function: function)
-                    defer { db.remove(function: function) }
-                    if onlyASCII {
-                        try collect(" AND path GLOB ? AND trace_reconciliation_matches(path)",
-                            [agent.rawValue, rootID, "*[^\u{1}-\u{7f}]*"])
-                    } else {
-                        try collect(" AND trace_reconciliation_matches(path)", [agent.rawValue, rootID])
+                    try functions.withMatcher(matcher, in: db) {
+                        if onlyASCII {
+                            try collect(" AND path GLOB ? AND trace_reconciliation_matches(path)",
+                                [agent.rawValue, rootID, "*[^\u{1}-\u{7f}]*"])
+                        } else {
+                            try collect(" AND trace_reconciliation_matches(path)", [agent.rawValue, rootID])
+                        }
                     }
                 }
             } else {
@@ -1889,6 +1939,31 @@ public actor IndexDatabase {
     }
 
     #if DEBUG
+    nonisolated func withReconciliationMatcherForTesting(path: String, _ body: @Sendable (Database) throws -> Bool) throws -> Bool {
+        let functions = reconciliationFunctions
+        let scope = TraceFileIO.CanonicalPath(path: path, comparisonKey: path, isCaseSensitive: true)
+        return try pool.read { db in try functions.withMatcher(.init([scope]), in: db) { try body(db) } }
+    }
+    func reconciliationFunctionReuseForTesting() throws -> (before: Int, after: Int, restored: Bool, reprepares: Int) {
+        let functions = reconciliationFunctions
+        return try pool.read { db in
+            let statement = try db.cachedStatement(sql: "SELECT 42")
+            _ = try Int.fetchOne(statement)
+            let before = functions.registrations.withLock { $0 }
+            for name in ["/first", "/second"] {
+                let scope = TraceFileIO.CanonicalPath(path: name, comparisonKey: name, isCaseSensitive: true)
+                try functions.withMatcher(.init([scope]), in: db) {
+                    guard try Bool.fetchOne(db, sql: "SELECT trace_reconciliation_matches(?)", arguments: [name]) == true else { throw CancellationError() }
+                }
+            }
+            do { try functions.withMatcher(.init([]), in: db) { throw CancellationError() } } catch { }
+            let restored: Bool
+            do { _ = try Bool.fetchOne(db, sql: "SELECT trace_reconciliation_matches('/first')"); restored = false } catch { restored = true }
+            _ = try Int.fetchOne(statement)
+            return (before, functions.registrations.withLock { $0 }, restored,
+                Int(sqlite3_stmt_status(statement.sqliteStatement, SQLITE_STMTSTATUS_REPREPARE, 0)))
+        }
+    }
     private var reconciliationSnapshotHookForTesting: (@Sendable () -> Void)?
     func setReconciliationSnapshotHookForTesting(_ hook: (@Sendable () -> Void)?) { reconciliationSnapshotHookForTesting = hook }
     var reconciliationCachedRootsForTesting: Int { nonASCIIPathCounts.count }
@@ -1900,9 +1975,8 @@ public actor IndexDatabase {
     nonisolated var reconciliationClassificationsForTesting: Int { reconciliationClassifications.withLock { $0 } }
     nonisolated var reconciliationFallbacksForTesting: Int { reconciliationFallbacks.withLock { $0 } }
     private nonisolated let reconciliationRows = OSAllocatedUnfairLock(initialState: 0)
-    private nonisolated let reconciliationPredicates = OSAllocatedUnfairLock(initialState: 0)
     nonisolated var reconciliationRowsForTesting: Int { reconciliationRows.withLock { $0 } }
-    nonisolated var reconciliationPredicatesForTesting: Int { reconciliationPredicates.withLock { $0 } }
+    nonisolated var reconciliationPredicatesForTesting: Int { reconciliationFunctions.predicates.withLock { $0 } }
     #endif
 
     private var rollupFailures: Set<IndexFailureDiagnostic> = []

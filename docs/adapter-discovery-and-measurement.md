@@ -17,10 +17,13 @@ policy; an explicitly configured hidden/package root remains eligible.
 ## Reproducing the optimized reconciliation harness
 
 The decoded-row counter is measurement instrumentation, not a normal TraceCore API.
-Apply the committed preparer to an isolated source export for **both** revisions:
+Apply the same committed preparer to isolated exports using their explicit layouts:
 
 ```sh
-python3 Scripts/prepare-reconciliation-benchmark.py --source-root /absolute/export --layout count-cache
+# Pinned #107 baseline:
+python3 Scripts/prepare-reconciliation-benchmark.py --source-root /absolute/baseline --layout count-cache
+# This follow-up candidate:
+python3 Scripts/prepare-reconciliation-benchmark.py --source-root /absolute/export --layout connection-matcher
 xcodebuild build -project /absolute/export/Trace.xcodeproj -scheme Trace \
   -configuration Release -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath /absolute/products \
@@ -57,8 +60,8 @@ Prepared UI provenance now uses format 2 with product-relative manifest names an
 streaming hashes. An old receipt must be prepared again; reuse never rebuilds it.
 The existing complete Debug inventory and before/after-case checks remain in place.
 
-Use `--layout pr106` for the pinned #106 export and `--layout count-cache` for
-the follow-up; missing or incompatible layouts fail before writing. Both layouts
+Historical #106 exports use `--layout pr106`; #107 uses `--layout count-cache`;
+this follow-up uses `--layout connection-matcher`. missing or incompatible layouts fail before writing. Both layouts
 use the same metric definitions. `query-sensitive-ascii` and
 `query-sensitive-mixed` separate the first cold query from 100 warm queries.
 Actual captured filesystem policies and forced SQL policies are reported
@@ -72,3 +75,18 @@ Other-writer commits invalidate qualification, and reset/root retirement removes
 entries. Unicode-bearing roots retain fallback matching; this does not make
 normalization-sensitive filesystems equivalent to APFS. No filesystem policy or
 normalization semantics change is implied by the optimization.
+
+External transcript links retain lexical discovery membership separately from their
+canonical ingestion identity. A proven link returned by whole-root discovery is
+indexed even when its target is outside the root. Narrow link-topology changes
+reconcile the owning root when old target membership cannot be proved locally;
+no additional watcher is installed for an external directory. File-local identity
+failures cannot grant successful root coverage or suppress unrelated cleanup.
+
+The reconciliation matcher function is registered once per connection. Its
+context is installed/restored synchronously on the GRDB connection queue and is
+not declared pure. Repeated preparation preserves `sourceSHA256` for the original
+uninstrumented source; `inputSHA256` identifies the actual bytes supplied to that
+invocation. Changed outputs are atomically replaced. Reservation benchmark metric
+version 2 accumulates admissions before retirement; version 1 measurements must
+not be compared without rerunning synchronized harnesses.

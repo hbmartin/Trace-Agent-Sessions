@@ -1,0 +1,550 @@
+{
+  "rawRoot": "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup",
+  "attempts": {
+    "affected-app-direct-2.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 298.9587912079878
+    },
+    "affected-app-direct-3.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 142.07256079139188
+    },
+    "affected-core-direct-2.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 119.54690974997357
+    },
+    "affected-core-direct-3.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 127.70997083280236
+    },
+    "affected-core-direct-4.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 119.06776933418587
+    },
+    "affected-core-direct-5.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 115.86134608276188
+    },
+    "affected-core-direct-6.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 71.54649079218507
+    },
+    "affected-core-direct.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 684.0866993749514
+    },
+    "affected-scripts-2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 156.82626916700974
+    },
+    "canonical-and-link-focus.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.5877974168397486
+    },
+    "canonical-failure-debug-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 51.7970484578982
+    },
+    "checkpoint-test-diagnostic.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 4.215674457605928
+    },
+    "compile-baseline-discovery-membership.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.1356515418738127
+    },
+    "compile-baseline-incremental-reconciliation.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 8.223269541747868
+    },
+    "compile-baseline-reconciliation-contention.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.5727792498655617
+    },
+    "compile-candidate-discovery-membership-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 1.5639915000647306
+    },
+    "compile-candidate-discovery-membership.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 1.4443031251430511
+    },
+    "compile-candidate-incremental-reconciliation-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.5690426672808826
+    },
+    "compile-candidate-incremental-reconciliation.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.180908457841724
+    },
+    "compile-candidate-reconciliation-contention-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 1.8698341250419617
+    },
+    "compile-candidate-reconciliation-contention.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 1.6955908332020044
+    },
+    "core-test-build-6.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 93.58829183410853
+    },
+    "debug-build-1.json": {
+      "status": "failed",
+      "exitCode": 65,
+      "wallSeconds": 278.5140038751997
+    },
+    "debug-build-10.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 9.707753958180547
+    },
+    "debug-build-2.json": {
+      "status": "failed",
+      "exitCode": 65,
+      "wallSeconds": 192.24488654220477
+    },
+    "debug-build-3.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 534.2020987081341
+    },
+    "debug-build-4.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 121.48301554238424
+    },
+    "debug-build-5.json": {
+      "status": "failed",
+      "exitCode": -9,
+      "wallSeconds": 900.3312882501632,
+      "error": "TimeoutExpired(['xcodebuild', 'build-for-testing', '-project', 'Trace.xcodeproj', '-scheme', 'Trace', '-configuration', 'Debug', '-destination', 'platform=macOS,arch=arm64', '-derivedDataPath', 'build/AdapterDiscoveryDebug'], 900.0)"
+    },
+    "debug-build-7.json": {
+      "status": "failed",
+      "exitCode": 65,
+      "wallSeconds": 56.64003662485629
+    },
+    "debug-build-8.json": {
+      "status": "failed",
+      "exitCode": 65,
+      "wallSeconds": 11.780693124979734
+    },
+    "debug-build-9.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 42.87510549975559
+    },
+    "descriptor-signal-regression-2.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 22.310788750182837
+    },
+    "descriptor-signal-regression-3.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 7.887663249857724
+    },
+    "descriptor-signal-regression.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 4.080569291021675
+    },
+    "deterministic-script-tests-2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.5896302917972207
+    },
+    "deterministic-script-tests.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 1.5508172078989446
+    },
+    "diagnostic-core-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 64.37618700042367
+    },
+    "direct-app-focus-1.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.8658077917061746
+    },
+    "direct-core-focus-1.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 6.114975417032838
+    },
+    "direct-core-focus-2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.5665035001002252
+    },
+    "direct-core-focus-3.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 1.2304389169439673
+    },
+    "direct-core-focus-4.json": {
+      "status": "failed",
+      "exitCode": -9,
+      "wallSeconds": 180.01236279169098,
+      "error": "TimeoutExpired(['env', 'DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks', 'xcrun', 'xctest', '-XCTest', 'TraceCoreTests.IndexingRegressionTests/testDanglingExternalLinkRetainsRowsAndWithholdsAbsenceUntilRecovery,TraceCoreTests.IndexingRegressionTests/testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry,TraceCoreTests.IndexingRegressionTests/testNestedMissingDefaultRootDoesNotBorrowAvailabilityFailure,TraceCoreTests.IndexingRegressionTests/testPreviouslyScannedNestedRootFailureIsCountedOnlyOnce,TraceCoreTests.IndexingRegressionTests/testExternalTranscriptLinkSurvivesRefreshRetargetAndDeletion,TraceCoreTests.IndexingRegressionTests/testExternalLinkFailureWithholdsCoverageAndRecoveryPaysFullScan,TraceCoreTests.IndexingRegressionTests/testIncompatibleIdentityFailureIsFileScopedAndSiblingsStayCovered,TraceCoreTests.IndexingRegressionTests/testUnprovenExternalDiscoveryCannotAuthorizeWholeRootDeletion,TraceCoreTests.IndexingRegressionTests/testExternalDirectoryLinkCannotPretendToBeTranscriptCoverage,TraceCoreTests.IndexingRegressionTests/testDiscoveryScopeLookupPreservesPrefixCaseAndBoundaryRules,TraceCoreTests.IndexingRegressionTests/testConcurrentReconciliationReadersKeepConnectionLocalMatchers,TraceCoreTests.IndexingRegressionTests/testReconciliationFunctionContextRestoresWithoutStatementInvalidation', '/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest'], 180.0)"
+    },
+    "direct-core-focus-5.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.553420875221491
+    },
+    "discovery-core-focus-1.json": {
+      "status": "failed",
+      "exitCode": -9,
+      "wallSeconds": 300.86673825001344,
+      "error": "TimeoutExpired(['xcodebuild', '-project', 'Trace.xcodeproj', '-scheme', 'Trace', '-configuration', 'Debug', '-destination', 'platform=macOS,arch=arm64', '-derivedDataPath', 'build/AdapterDiscoveryDebug', 'test-without-building', '-resultBundlePath', '/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/discovery-core-focus-1.xcresult', '-only-testing:TraceCoreTests/IndexingRegressionTests/testNestedMissingDefaultRootDoesNotBorrowAvailabilityFailure', '-only-testing:TraceCoreTests/IndexingRegressionTests/testExternalTranscriptLinkSurvivesRefreshRetargetAndDeletion', '-only-testing:TraceCoreTests/IndexingRegressionTests/testExternalLinkFailureWithholdsCoverageAndRecoveryPaysFullScan', '-only-testing:TraceCoreTests/IndexingRegressionTests/testIncompatibleIdentityFailureIsFileScopedAndSiblingsStayCovered', '-only-testing:TraceCoreTests/IndexingRegressionTests/testUnprovenExternalDiscoveryCannotAuthorizeWholeRootDeletion', '-only-testing:TraceCoreTests/IndexingRegressionTests/testDiscoveryScopeLookupPreservesPrefixCaseAndBoundaryRules', '-only-testing:TraceCoreTests/IndexingRegressionTests/testReconciliationFunctionContextRestoresWithoutStatementInvalidation', '-only-testing:TraceCoreTests/IndexingRegressionTests/testOverlappingConfiguredRootDiscoverySharesReadFailures', '-only-testing:TraceCoreTests/IndexingRegressionTests/testLegacyDirectoryAdapterPreservesFileRefreshAndDeletion', '-only-testing:TraceCoreTests/IndexingRegressionTests/testDiscoveryCanonicalAliasBindsRootAndIncompatibleRootRemainsUncovered'], 300.0)"
+    },
+    "external-client.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 102.54672108311206
+    },
+    "final-core-debug-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 51.2312055840157
+    },
+    "final-debug-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 66.76882979180664
+    },
+    "final-network-surface.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.10013670939952135
+    },
+    "final-preparation-tests.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.605530250351876
+    },
+    "final-release-app-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 115.69623004179448
+    },
+    "focused-script-tests-1.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 89.07080808375031
+    },
+    "isolated-checkpoint-restart.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.0675993748009205
+    },
+    "optimized-baseline-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 102.08899141708389
+    },
+    "optimized-candidate-build-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 57.6453249999322
+    },
+    "optimized-candidate-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 106.85035841586068
+    },
+    "ownership-core-1.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.3983103330247104
+    },
+    "ownership-core-2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.41342454217374325
+    },
+    "ownership-core-3.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.4192154579795897
+    },
+    "ownership-core-4.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.4549983749166131
+    },
+    "ownership-core-5.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.5103965839371085
+    },
+    "ownership-core-final-1.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.3179678339511156
+    },
+    "ownership-core-final-2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.33080570911988616
+    },
+    "ownership-core-final-3.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.30116591695696115
+    },
+    "ownership-core-final-4.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.3014081669971347
+    },
+    "ownership-core-final-5.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.3011044580489397
+    },
+    "ownership-scripts-1.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 10.904127500019968
+    },
+    "ownership-scripts-2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 10.860271874815226
+    },
+    "ownership-scripts-3.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 10.913523207884282
+    },
+    "ownership-scripts-4.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 10.937290959060192
+    },
+    "ownership-scripts-5.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 10.991106833796948
+    },
+    "pinned-whitespace.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.05145820789039135
+    },
+    "preparation-tests-2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.7060397090390325
+    },
+    "prepare-baseline-export-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.843179499730468
+    },
+    "prepare-baseline-export.json": {
+      "status": "failed",
+      "exitCode": -9,
+      "wallSeconds": 240.38561341632158,
+      "error": "TimeoutExpired(['python3', '/private/tmp/discovery-prepare-baseline.py'], 240.0)"
+    },
+    "project-drift-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.34414891665801406
+    },
+    "project-drift.json": {
+      "status": "failed",
+      "exitCode": 1,
+      "wallSeconds": 0.23794699972495437
+    },
+    "release-app-build.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 150.9719346249476
+    },
+    "release-core-focus-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.7762653748504817
+    },
+    "release-core-focus.json": {
+      "status": "failed",
+      "exitCode": 83,
+      "wallSeconds": 0.07168379100039601
+    },
+    "release-core-target-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 35.733728957828134
+    },
+    "release-core-target.json": {
+      "status": "failed",
+      "exitCode": 65,
+      "wallSeconds": 132.51781187485904
+    },
+    "signing-settings.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 6.122466667089611
+    },
+    "smoke-baseline-discovery-membership.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.302437833044678
+    },
+    "smoke-baseline-incremental-reconciliation.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 3.0245932918041945
+    },
+    "smoke-baseline-query-insensitive.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.1584876673296094
+    },
+    "smoke-baseline-query-sensitive-ascii.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.104810416698456
+    },
+    "smoke-baseline-query-sensitive-mixed.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.142953041009605
+    },
+    "smoke-baseline-query-unicode.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.1571323750540614
+    },
+    "smoke-baseline-reconciliation-contention.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.2311717090196908
+    },
+    "smoke-baseline-unicode.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.4431121670641005
+    },
+    "smoke-candidate-discovery-membership-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.089224500115961
+    },
+    "smoke-candidate-discovery-membership.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.1369639160111547
+    },
+    "smoke-candidate-incremental-reconciliation-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.5007730000652373
+    },
+    "smoke-candidate-incremental-reconciliation.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.5564460423775017
+    },
+    "smoke-candidate-query-insensitive.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.178023540880531
+    },
+    "smoke-candidate-query-sensitive-ascii.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.107774083968252
+    },
+    "smoke-candidate-query-sensitive-mixed.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.1860869168303907
+    },
+    "smoke-candidate-query-unicode.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.158647167030722
+    },
+    "smoke-candidate-reconciliation-contention-v2.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.1340884170494974
+    },
+    "smoke-candidate-reconciliation-contention.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.112064457964152
+    },
+    "smoke-candidate-unicode.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 2.4209301248192787
+    },
+    "smoke-cleanup-baseline-early-exit.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.20100841717794538
+    },
+    "smoke-cleanup-baseline-live.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.1935100839473307
+    },
+    "smoke-cleanup-baseline-zombie.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.17410750035196543
+    },
+    "smoke-cleanup-candidate-early-exit.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.20432404102757573
+    },
+    "smoke-cleanup-candidate-live.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.1889782501384616
+    },
+    "smoke-cleanup-candidate-zombie.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.17390841711312532
+    },
+    "verify-built-signatures.json": {
+      "status": "passed",
+      "exitCode": 0,
+      "wallSeconds": 0.1323318751528859
+    }
+  },
+  "note": "Failed and superseded attempts remain local. Passing final selections do not erase earlier failures. No native timing failure is classified as unrelated without matching baseline evidence."
+}

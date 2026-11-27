@@ -37,6 +37,34 @@ public enum TraceFileIO {
         }
     }
 
+    /// Observed leaf identity with only its parent resolved. This is distinct
+    /// from the canonical target and cannot be used as an ingestion identity.
+    public struct FileLocation: Sendable {
+        private let path: String
+        fileprivate init(path: String) { self.path = path }
+        public func isWithin(_ root: CanonicalPath) -> Bool {
+            let key = comparisonKey(path, caseSensitive: root.isCaseSensitive)
+            let prefix = root.comparisonKey == "/" ? "/" : root.comparisonKey + "/"
+            return key == root.comparisonKey || key.hasPrefix(prefix)
+        }
+        public func matchesCanonicalPath(_ target: CanonicalPath) -> Bool {
+            comparisonKey(path, caseSensitive: target.isCaseSensitive) == target.comparisonKey
+        }
+    }
+
+    /// Batch-local parent resolution, performed on the preparation executor.
+    public struct FileLocationResolver: Sendable {
+        private var parents: [String: CanonicalPath] = [:]
+        public init() {}
+        public mutating func location(_ rawPath: String) -> FileLocation {
+            let url = URL(fileURLWithPath: rawPath).standardizedFileURL
+            let parent = url.deletingLastPathComponent().path
+            let canonical = parents[parent] ?? canonicalPath(parent)
+            parents[parent] = canonical
+            return .init(path: URL(fileURLWithPath: canonical.path).appendingPathComponent(url.lastPathComponent).path)
+        }
+    }
+
     public static func canonicalPath(_ rawPath: String) -> CanonicalPath {
         let standardized = URL(fileURLWithPath: rawPath).standardizedFileURL
         var ancestor = standardized

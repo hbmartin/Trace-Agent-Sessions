@@ -1,0 +1,21 @@
+{
+  "repetitions": 5,
+  "core": [
+    "testConcurrentReconciliationReadersKeepConnectionLocalMatchers",
+    "testReconciliationFunctionContextRestoresWithoutStatementInvalidation",
+    "testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry",
+    "testExternalTranscriptLinkSurvivesRefreshRetargetAndDeletion",
+    "testPathCacheRollbackAndCommittedCheckpointFailure",
+    "testAcceptingAliasesShareFailureAndRecovery"
+  ],
+  "scripts": [
+    "test_background_ui_verification.BackgroundUIVerificationTests.test_signal_during_launch_failure_save_is_not_lost",
+    "test_background_ui_verification.BackgroundUIVerificationTests.test_non_os_launch_failure_retains_signal_and_original_error",
+    "test_background_ui_verification.BackgroundUIVerificationTests.test_second_signal_cannot_escape_cleanup_or_replace_first",
+    "test_background_ui_verification.BackgroundUIVerificationTests.test_signal_during_handler_restoration_is_adjudicated",
+    "test_background_ui_verification.BackgroundUIVerificationTests.test_completion_observation_does_not_reap_the_owned_child",
+    "test_background_ui_verification.BackgroundUIVerificationTests.test_normal_command_retires_descendants_before_reaping_leader",
+    "test_background_ui_verification.BackgroundUIVerificationTests.test_timeout_cleans_term_resistant_descendant_after_leader_exits",
+    "test_reconciliation_benchmark.ReconciliationInstrumentationTests.test_interruption_after_descriptor_release_does_not_double_close"
+  ]
+}

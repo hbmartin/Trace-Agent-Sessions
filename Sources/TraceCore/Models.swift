@@ -187,6 +187,14 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
         forRawPath rawPath: String, in context: SourceRootPathContext
     ) -> SourceRootScope? {
         if let scope = scope(forRawPath: rawPath, in: context) { return scope }
+        // A link inside the configured tree may resolve outside it. Its topology
+        // can replace a previously indexed target, so prove the affected root
+        // through discovery instead of pretending the external target is a subtree.
+        if lexicalDiscoveryScope(rawPath, in: context) != nil {
+            var directory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: rawPath, isDirectory: &directory), directory.boolValue { return nil }
+            return rootScope(in: context)
+        }
         let lexical = Self.lexicalComponents(rawPath)
         let compared = Self.comparisonComponents(
             lexical, caseSensitive: context.scanPath.isCaseSensitive
@@ -235,6 +243,35 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
         for component in relativeScope.components { mapped.appendPathComponent(component) }
         let canonical = TraceFileIO.canonicalPath(mapped.path)
         return scope(forScanPath: canonical, in: context) ?? rootScope(in: context)
+    }
+
+    // Lexical discovery membership is independent of a file symlink's target.
+    // This value is never persisted or used as the ingestion identity.
+    func lexicalDiscoveryScope(_ path: String, in context: SourceRootPathContext) -> SourceRootScope? {
+        let components = Self.lexicalComponents(path)
+        let compared = Self.comparisonComponents(components, caseSensitive: context.scanPath.isCaseSensitive)
+        let depth: Int
+        if Self.hasPrefix(compared, prefix: context.configuredComparisonComponents) { depth = context.configuredComparisonComponents.count }
+        else if Self.hasPrefix(compared, prefix: context.scanComparisonComponents) { depth = context.scanComponents.count }
+        else {
+            let cached = Self.lexicalComponents(cachedScanURL.path)
+            guard Self.hasPrefix(compared, prefix: Self.comparisonComponents(cached, caseSensitive: context.scanPath.isCaseSensitive)) else { return nil }
+            depth = cached.count
+        }
+        let suffix = Array(components.dropFirst(depth))
+        let path = suffix.reduce(URL(fileURLWithPath: context.scanPath.path)) { $0.appendingPathComponent($1) }.path
+        return .init(scanPath: .init(path: path,
+            comparisonKey: TraceFileIO.comparisonKey(path, caseSensitive: context.scanPath.isCaseSensitive),
+            isCaseSensitive: context.scanPath.isCaseSensitive),
+            relativeScope: .init(components: suffix, caseSensitive: context.scanPath.isCaseSensitive))
+    }
+
+    // Coverage has a private namespace for root-owned external file targets.
+    // NUL cannot occur in a filesystem component. Broad root facts still retire
+    // old target facts; no relocation dictionary or persistent schema is needed.
+    func navigationScope(forStoredPath path: String, in context: SourceRootPathContext) -> RootRelativeScope {
+        relativeScope(forStoredPath: path, in: context) ?? .init(
+            components: ["\0external"] + path.precomposedStringWithCanonicalMapping.split(separator: "/").map(String.init), caseSensitive: true)
     }
 
     /// Maps an indexed path back into this root without re-resolving symlinks.
@@ -446,17 +483,25 @@ public struct DiscoveredSourceFile: Hashable, Sendable {
     public let url: URL
     public let format: SourceFormat
     let canonicalPath: TraceFileIO.CanonicalPath
+    let discoveryPath: String
 
     public init(agent: AgentKind, root: URL, url: URL, format: SourceFormat) {
-        self.init(agent: agent, root: root, canonicalPath: TraceFileIO.canonicalPath(url.path), format: format)
+        self.init(agent: agent, root: root, canonicalPath: TraceFileIO.canonicalPath(url.path), format: format, discoveryPath: url.standardizedFileURL.path)
     }
 
-    init(agent: AgentKind, root: URL, canonicalPath: TraceFileIO.CanonicalPath, format: SourceFormat) {
+    init(agent: AgentKind, root: URL, canonicalPath: TraceFileIO.CanonicalPath, format: SourceFormat, discoveryPath: String? = nil) {
+        self.discoveryPath = discoveryPath ?? canonicalPath.path
         self.agent = agent
         self.root = root.standardized
         self.canonicalPath = canonicalPath
         self.url = URL(fileURLWithPath: canonicalPath.path)
         self.format = format
+    }
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.agent == rhs.agent && lhs.root == rhs.root && lhs.canonicalPath == rhs.canonicalPath && lhs.format == rhs.format
+    }
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(agent); hasher.combine(root); hasher.combine(canonicalPath); hasher.combine(format)
     }
 }
 
@@ -1035,13 +1080,13 @@ public struct IndexNavigationCoverage: Sendable {
         return index
     }
     public func covers(_ reference: SessionNavigationReference) -> Bool {
-        guard let region = regions[reference.agent + ":" + reference.root],
-              let relative = region.root.relativeScope(forStoredPath: reference.path, in: region.context) else { return false }
+        guard let region = regions[reference.agent + ":" + reference.root] else { return false }
+        let relative = region.root.navigationScope(forStoredPath: reference.path, in: region.context)
         return region.index.latest(Self.key(relative))?.covered == true
     }
     fileprivate func absoluteKey(_ reference: SessionNavigationReference) -> [UInt8]? {
-        guard let region = regions[reference.agent + ":" + reference.root],
-              let relative = region.root.relativeScope(forStoredPath: reference.path, in: region.context) else { return nil }
+        guard let region = regions[reference.agent + ":" + reference.root] else { return nil }
+        let relative = region.root.navigationScope(forStoredPath: reference.path, in: region.context)
         let base = region.context.scanPath.path
         let absolute = relative.isRoot ? base : (base == "/" ? "/" : base + "/") + relative.path
         return navigationAbsoluteKey(TraceFileIO.comparisonKey(absolute, caseSensitive: relative.isCaseSensitive))

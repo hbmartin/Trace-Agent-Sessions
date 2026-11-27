@@ -58,7 +58,15 @@ else:
 '''
             child = subprocess.Popen([sys.executable, '-c', code, str(ready), str(release), args.mode, str(shutdown_read)],
                 pass_fds=(shutdown_read,), start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            os.close(shutdown_read); shutdown_read = None
+            # Transfer ownership before release, with signals masked across both
+            # operations. A deferred signal cannot leave a closed fd recorded or
+            # interrupt after clearing ownership but before closing the fd.
+            mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+            try:
+                descriptor, shutdown_read = shutdown_read, None
+                os.close(descriptor)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
             result['processGroupID'] = child.pid
             deadline = time.monotonic()+5
             while not ready.exists() and time.monotonic()<deadline: time.sleep(.005)

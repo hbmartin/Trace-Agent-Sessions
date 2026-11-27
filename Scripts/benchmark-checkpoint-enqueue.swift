@@ -42,6 +42,7 @@ private struct FaultSource: SessionSource {
     let failing: OSAllocatedUnfairLock<Bool>
     var agent: AgentKind { base.agent }
     var roots: [SourceRoot] { base.roots }
+    var supportsFileScopedDiscovery: Bool { base.supportsFileScopedDiscovery }
     func discover() throws -> [DiscoveredSourceFile] { try base.discover() }
     func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] { try base.discover(scopedTo: paths) }
     func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult { try base.discoverResult(scopedTo: paths) }
