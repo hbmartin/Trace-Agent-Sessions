@@ -7,6 +7,143 @@ import XCTest
 @testable import TraceCore
 
 final class IndexingRegressionTests: XCTestCase {
+
+    func testLegacyDiscoveryKeepsHealthyFilesAndDefersUnavailableLinkReads() throws {
+        let parent = try directory()
+        for agent in AgentKind.allCases {
+            let root = parent.appendingPathComponent(agent.rawValue)
+            let files = agent == .gemini ? root.appendingPathComponent("chats") : root
+            try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+            let prefix = agent == .codex ? "rollout-" : agent == .gemini ? "session-" : ""
+            try line(1).data(using: .utf8)!.write(to: files.appendingPathComponent(prefix + "good.jsonl"))
+            let bad = files.appendingPathComponent(prefix + "bad.jsonl")
+            try FileManager.default.createSymbolicLink(at: bad, withDestinationURL: parent.appendingPathComponent("missing"))
+            let source: any SessionSource
+            switch agent {
+            case .claudeCode: source = ClaudeCodeSource(roots: [root])
+            case .codex: source = CodexSource(root: root)
+            case .gemini: source = GeminiSource(root: root)
+            }
+            XCTAssertEqual(try source.discover().count, 2, "Legacy enumeration defers a candidate's read failure")
+            XCTAssertEqual(try source.discover(scopedTo: [root.path]).count, 2)
+            let partial = try source.discoverResult(scopedTo: nil)
+            XCTAssertEqual(partial.files.count, 1); XCTAssertEqual(partial.failures.count, 1)
+            try FileManager.default.removeItem(at: bad)
+            try FileManager.default.createSymbolicLink(at: bad, withDestinationURL: root)
+            XCTAssertEqual(try source.discover().count, 2)
+            XCTAssertEqual(try source.discoverResult(scopedTo: nil).failures.count, 1)
+        }
+    }
+
+    func testIsolatedBrokenLinkDoesNotProtectAnUnrelatedRemovedExternalLink() async throws {
+        for legacy in [false, true] {
+            for fresh in [false, true] {
+                let parent = try directory(), root = parent.appendingPathComponent("root")
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                let removed = parent.appendingPathComponent("removed.jsonl"), unavailable = parent.appendingPathComponent("unavailable.jsonl")
+                try Data(line(1).utf8).write(to: removed); try Data(line(2).utf8).write(to: unavailable)
+                let removedLink = root.appendingPathComponent("removed.jsonl"), badLink = root.appendingPathComponent("bad.jsonl")
+                try FileManager.default.createSymbolicLink(at: removedLink, withDestinationURL: removed)
+                try FileManager.default.createSymbolicLink(at: badLink, withDestinationURL: unavailable)
+                let base = ClaudeCodeSource(roots: [root])
+                let source: any SessionSource = legacy ? WholeDiscoveryFallbackSource(base: base) : base
+                let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+                let initial = IndexCoordinator(database: database, sources: [source])
+                await initial.indexAll(scope: .proseOnly)
+                let before = try await database.sessions(); XCTAssertEqual(before.count, 2)
+                try FileManager.default.removeItem(at: removedLink); try FileManager.default.removeItem(at: unavailable)
+                let coordinator = fresh ? IndexCoordinator(database: database, sources: [source]) : initial
+                let terminal = await coordinator.indexAllResult(scope: .proseOnly)
+                let rows = try await database.sessions()
+                XCTAssertEqual(rows.map(\.sourcePath), [TraceFileIO.canonicalPath(unavailable.path).path])
+                let coverage = try XCTUnwrap(terminal.navigationCoverage)
+                func reference(_ url: URL) -> SessionNavigationReference {
+                    .init(agent: source.agent.rawValue, root: root.path, path: TraceFileIO.canonicalPath(url.path).path,
+                        externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+                }
+                XCTAssertTrue(coverage.covers(reference(removed)))
+                XCTAssertFalse(coverage.covers(reference(unavailable)))
+                XCTAssertEqual(terminal.failedFiles, 1)
+            }
+        }
+    }
+
+    func testDeletedInternalTargetSettlesDespiteRemainingBrokenAlias() async throws {
+        let parent = try directory(), root = parent.appendingPathComponent("root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let target = root.appendingPathComponent("real.jsonl"), alias = root.appendingPathComponent("alias.jsonl")
+        try Data(line(1).utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let source = ClaudeCodeSource(roots: [root]), database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path, path: TraceFileIO.canonicalPath(target.path).path,
+            externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+        try FileManager.default.removeItem(at: target)
+        let terminal = await coordinator.indexAllResult(scope: .proseOnly)
+        let rows = try await database.sessions()
+        XCTAssertTrue(rows.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(terminal.navigationCoverage).covers(reference))
+        XCTAssertEqual(terminal.failedFiles, 1)
+    }
+
+    func testReconciliationRejectsMismatchedRootAgentForEveryQueryPolicy() async throws {
+        let parent = try directory(), file = parent.appendingPathComponent("source.jsonl")
+        try Data(line(1).utf8).write(to: file)
+        let url = parent.appendingPathComponent("index.sqlite"), database = try IndexDatabase(url: url)
+        let source = ClaudeCodeSource(roots: [parent])
+        await IndexCoordinator(database: database, sources: [source]).indexAll(scope: .proseOnly)
+        let rootID = try await database.register(root: source.roots[0])
+        let raw = try DatabaseQueue(path: url.path)
+        try await raw.write { db in try db.execute(sql: "UPDATE source_file SET agent=?", arguments: [AgentKind.codex.rawValue]) }
+        for captured: [TraceFileIO.CanonicalPath]? in [nil,
+            [.init(path: file.path, comparisonKey: file.path, isCaseSensitive: true)],
+            [.init(path: file.path, comparisonKey: file.path.lowercased(), isCaseSensitive: false)],
+            [.init(path: parent.path + "/café", comparisonKey: parent.path + "/café", isCaseSensitive: true)]] {
+            let rows = try await database.paths(agent: .codex, rootID: rootID, capturedScopes: captured)
+            XCTAssertTrue(rows.isEmpty)
+        }
+    }
+
+    func testRetargetedFailedLinkCannotReuseCapturedFailureQualification() throws {
+        let parent = try directory(), root = parent.appendingPathComponent("root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let alias = root.appendingPathComponent("alias.jsonl"), old = parent.appendingPathComponent("missing.jsonl"), new = parent.appendingPathComponent("other-missing.jsonl")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: old)
+        let source = ClaudeCodeSource(roots: [root]), captured = try source.discoverResult(scopedTo: nil)
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: new)
+        let owner = source.roots[0], context = owner.mappingContext
+        let verified = verifiedDiscoveryResult(captured, agent: source.agent, root: owner,
+            capturedContext: context, currentContext: context, scopes: [owner.rootScope(in: context)])
+        XCTAssertEqual(verified.failures.count, 1)
+        XCTAssertEqual(verified.failures.first?.failure.evidence, .unknown)
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: alias)
+        XCTAssertNil(SourceRoot.discoveryLinkTarget(alias))
+        XCTAssertEqual(try source.discover().count, 1)
+        XCTAssertEqual(try source.discoverResult(scopedTo: nil).failures.count, 1)
+    }
+
+    func testDuplicateConfiguredRootsCannotTrapVerification() throws {
+        let parent = try directory(), root = SourceRoot(agent: .claudeCode, url: parent)
+        let other = SourceRoot(agent: .claudeCode, url: parent.appendingPathComponent("other"))
+        let context = root.mappingContext
+        let result = verifiedDiscoveryResult(.init(), agent: .claudeCode, root: root,
+            capturedContext: context, currentContext: context, configuredRoots: [root, other, other], scopes: [root.rootScope(in: context)])
+        XCTAssertTrue(result.files.isEmpty); XCTAssertTrue(result.failures.isEmpty)
+    }
+
+    func testLexicalDiscoveryMappingPreservesLiteralComponentsAndCapturedCase() throws {
+        let url = URL(fileURLWithPath: "/UPPER", isDirectory: true)
+        let root = SourceRoot(agent: .claudeCode, url: url, isDefault: false, frozenScanURL: url, frozenCaseSensitive: false)
+        let context = root.mappingContext
+        let mapped = try XCTUnwrap(root.lexicalDiscoveryScope("/upper/a %23/café/record.jsonl", in: context))
+        XCTAssertEqual(mapped.scanPath.path, "/UPPER/a %23/café/record.jsonl")
+        XCTAssertEqual(mapped.scanPath.comparisonKey, "/upper/a %23/café/record.jsonl")
+        XCTAssertNil(root.lexicalDiscoveryScope("/upper-sibling/a", in: context))
+    }
+
     func testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings() async throws {
         for rename in [false, true] {
             let parent = try directory(), root = parent.appendingPathComponent("root")

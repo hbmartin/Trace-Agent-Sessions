@@ -259,7 +259,8 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
             depth = cached.count
         }
         let suffix = Array(components.dropFirst(depth))
-        let path = suffix.reduce(URL(fileURLWithPath: context.scanPath.path)) { $0.appendingPathComponent($1) }.path
+        let base = context.scanPath.path == "/" ? "" : context.scanPath.path
+        let path = suffix.isEmpty ? context.scanPath.path : base + "/" + suffix.joined(separator: "/")
         return .init(scanPath: .init(path: path,
             comparisonKey: TraceFileIO.comparisonKey(path, caseSensitive: context.scanPath.isCaseSensitive),
             isCaseSensitive: context.scanPath.isCaseSensitive),
@@ -370,7 +371,14 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
         return kept
     }
 
-    private static func resolveScanURL(_ configuredURL: URL) -> (url: URL, encounteredSymlink: Bool) {
+    // Discovery needs a target even when its leaf is absent. A cycle or hop-limit
+    // outcome cannot qualify another target's absence.
+    static func discoveryLinkTarget(_ url: URL) -> TraceFileIO.CanonicalPath? {
+        let resolved = resolveScanURL(url)
+        return resolved.complete ? TraceFileIO.canonicalPath(resolved.url.path) : nil
+    }
+
+    private static func resolveScanURL(_ configuredURL: URL) -> (url: URL, encounteredSymlink: Bool, complete: Bool) {
         let manager = FileManager.default
         var pending = Array(configuredURL.standardized.pathComponents.dropFirst())
         var candidate = URL(fileURLWithPath: "/", isDirectory: true)
@@ -384,7 +392,7 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
                   let destination = try? manager.destinationOfSymbolicLink(atPath: candidate.path) {
                 let resolutionState = candidate.path + "\u{0}" + pending.joined(separator: "/")
                 guard visited.insert(resolutionState).inserted else {
-                    return (candidate.standardized, encounteredSymlink)
+                    return (candidate.standardized, encounteredSymlink, false)
                 }
                 // macOS exposes stable top-level aliases such as /var ->
                 // /private/var. They canonicalize path identity but do not make
@@ -397,8 +405,11 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
                 pending = Array(resolved.standardized.pathComponents.dropFirst()) + pending
                 candidate = URL(fileURLWithPath: "/", isDirectory: true)
             }
+            if hops == 32, (try? manager.destinationOfSymbolicLink(atPath: candidate.path)) != nil {
+                return (candidate.standardized, encounteredSymlink, false)
+            }
         }
-        return (candidate.standardized, encounteredSymlink)
+        return (candidate.standardized, encounteredSymlink, true)
     }
 }
 
@@ -484,6 +495,7 @@ public struct DiscoveredSourceFile: Hashable, Sendable {
     public let format: SourceFormat
     let canonicalPath: TraceFileIO.CanonicalPath
     let discoveryPath: String
+    var discoveryFailure: DiscoveryFailure? = nil
 
     public init(agent: AgentKind, root: URL, url: URL, format: SourceFormat) {
         self.init(agent: agent, root: root, canonicalPath: TraceFileIO.canonicalPath(url.path), format: format, discoveryPath: url.standardizedFileURL.path)

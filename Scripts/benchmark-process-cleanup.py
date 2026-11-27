@@ -61,8 +61,9 @@ else:
             # Transfer ownership before release, with signals masked across both
             # operations. A deferred signal cannot leave a closed fd recorded or
             # interrupt after clearing ownership but before closing the fd.
-            mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+            mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
             try:
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
                 descriptor, shutdown_read = shutdown_read, None
                 os.close(descriptor)
             finally:

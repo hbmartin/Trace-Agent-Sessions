@@ -12,6 +12,24 @@ import XCTest
 #if DEBUG
 @MainActor
 final class AppReviewFollowupTests: XCTestCase {
+    func testDeletedInternalTargetWithBrokenAliasSettlesSelectedReader() async throws {
+        let f = try await fixture(count: 1), target = f.root.appendingPathComponent("sessions.jsonl")
+        let alias = f.root.appendingPathComponent("alias.jsonl")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        await f.coordinator.indexAll(scope: .proseOnly)
+        await f.model.refreshSummariesForTesting()
+        let selected = try XCTUnwrap(f.model.sessions.first)
+        f.model.selectSession(selected.id)
+        try await wait { !f.model.messages.isEmpty }
+        try FileManager.default.removeItem(at: target)
+        let terminal = await f.coordinator.indexAllResult(scope: .proseOnly)
+        XCTAssertEqual(terminal.failedFiles, 1)
+        await f.model.receiveProgress(terminal)
+        try await wait { f.model.selectedSessionID == nil }
+        XCTAssertTrue(f.model.messages.isEmpty)
+        XCTAssertNil(f.model.settings.lastSessionID)
+    }
+
     func testTranscriptPreparationPreservesExternalFileLinkOwnerAndControls() async throws {
         let f = try await fixture(count: 1), outside = f.root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".jsonl")
         try Data("{}\n".utf8).write(to: outside)

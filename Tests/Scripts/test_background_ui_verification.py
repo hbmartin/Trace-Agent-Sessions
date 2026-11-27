@@ -21,6 +21,49 @@ spec.loader.exec_module(module)
 
 
 class BackgroundUIVerificationTests(unittest.TestCase):
+    def test_case_final_save_cannot_replace_interruption_or_cleanup_failure(self):
+        for failure in (module.RunInterrupted(signal.SIGTERM), KeyboardInterrupt(), module.CleanupFailed("unconfirmed group")):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as temp:
+                runner = module.Runner(Path(temp)/"attempt", {})
+                original = runner.save
+                def save():
+                    if runner.receipt["tests"] and runner.receipt["tests"][-1]["status"] != "running":
+                        raise PermissionError("persistent case receipt failure")
+                    original()
+                with patch.object(runner, "command", side_effect=failure) as command, patch.object(runner, "save", side_effect=save):
+                    with self.assertRaises(type(failure)) as caught:
+                        module.run_case(runner, [], "TraceUITests/example", 1, 360)
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(command.call_count, 1)
+                self.assertIn("persistent case receipt failure", runner.receipt["tests"][0]["receiptWriteError"])
+                self.assertEqual(runner.receipt["tests"][0]["status"], "cleanup-failed" if isinstance(failure,module.CleanupFailed) else "interrupted")
+
+    def test_case_final_save_retains_first_signal_but_does_not_swallow_new_signal(self):
+        for original_error in (module.RunInterrupted(signal.SIGTERM), module.CleanupFailed("unconfirmed group")):
+            with self.subTest(original=type(original_error).__name__),tempfile.TemporaryDirectory() as temp:
+                runner=module.Runner(Path(temp)/"attempt",{})
+                original_save=runner.save
+                def save():
+                    if runner.receipt["tests"] and runner.receipt["tests"][-1]["status"] != "running":
+                        raise module.RunInterrupted(signal.SIGINT)
+                    original_save()
+                with patch.object(runner,"command",side_effect=original_error),patch.object(runner,"save",side_effect=save):
+                    with self.assertRaises(module.RunInterrupted) as caught:
+                        module.run_case(runner,[],"TraceUITests/example",1,360)
+                self.assertEqual(caught.exception.signum,signal.SIGTERM if isinstance(original_error,module.RunInterrupted) else signal.SIGINT)
+
+    def test_case_final_save_failure_without_interruption_remains_visible(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = module.Runner(Path(temp)/"attempt", {})
+            original = runner.save
+            def save():
+                if runner.receipt["tests"] and runner.receipt["tests"][-1]["status"] == "failed":
+                    raise PermissionError("failed case receipt")
+                original()
+            with patch.object(runner,"command",return_value=1),patch.object(runner,"save",side_effect=save):
+                with self.assertRaisesRegex(PermissionError,"failed case receipt"):
+                    module.run_case(runner,[],"TraceUITests/example",1,360)
+
     descendant_fixture_program = """import os,sys,time
 from pathlib import Path
 ready,release=Path(sys.argv[1]),Path(sys.argv[2])

@@ -48,7 +48,7 @@ def probe(layout):
         private let context: SourceRootPathContext
         private let files: [DiscoveredSourceFile]
         private let scopes: [SourceRootScope]
-        public init(root url: URL, count: Int, scopeCount: Int, caseSensitive: Bool) {
+        public init(root url: URL, count: Int, scopeCount: Int, caseSensitive: Bool, depth: Int = 1) {
             root = SourceRoot(agent: .claudeCode, url: url)
             let actual = TraceFileIO.canonicalPath(url.path)
             actualCaseSensitive = actual.isCaseSensitive
@@ -56,7 +56,8 @@ def probe(layout):
                 comparisonKey: TraceFileIO.comparisonKey(actual.path, caseSensitive: caseSensitive),
                 isCaseSensitive: caseSensitive), configuredComponents: root.url.pathComponents)
             files = (0..<count).map { index in
-                let path = actual.path + "/p-" + String(index) + "/file.jsonl"
+                let middle = Array(repeating: "deep folder café %", count: max(0, depth - 1)).joined(separator: "/")
+                let path = actual.path + "/p-" + String(index) + "/" + (middle.isEmpty ? "" : middle + "/") + "file.jsonl"
                 return .init(agent: .claudeCode, root: url, canonicalPath: .init(path: path,
                     comparisonKey: TraceFileIO.comparisonKey(path, caseSensitive: actual.isCaseSensitive),
                     isCaseSensitive: actual.isCaseSensitive), format: .claudeJSONL)
@@ -67,6 +68,16 @@ def probe(layout):
                     comparisonKey: TraceFileIO.comparisonKey(path, caseSensitive: caseSensitive),
                     isCaseSensitive: caseSensitive), relativeScope: .init(components: [name], caseSensitive: caseSensitive))
             }
+        }
+        public var expectedLexicalBytes: Int { files.reduce(0) { $0 + $1.discoveryPath.utf8.count } }
+        public func lexical() -> (accepted: Int, bytes: Int) {
+            var accepted = 0, bytes = 0
+            for file in files {
+                if let scope = root.lexicalDiscoveryScope(file.discoveryPath, in: context) {
+                    accepted += 1; bytes += scope.scanPath.path.utf8.count
+                }
+            }
+            return (accepted, bytes)
         }
         public func run() -> (accepted: Int, failures: Int) {
             let result = verifiedDiscoveryResult(.init(files: files), agent: .claudeCode, root: root,

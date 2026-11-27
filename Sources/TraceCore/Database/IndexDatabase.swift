@@ -1857,6 +1857,7 @@ public actor IndexDatabase {
         let onlyASCII = scopes?.allSatisfy { $0.isCaseSensitive && $0.path.utf8.allSatisfy { $0 < 128 } } == true
         let functions = reconciliationFunctions
         let readRows: @Sendable (Database, Bool) throws -> [IndexedSourcePath] = { db, skipFallback in
+            guard try Int64.fetchOne(db, sql: "SELECT id FROM source_root WHERE id=? AND agent=?", arguments: [rootID, agent.rawValue]) != nil else { return [] }
             var rows: [Row] = [], seen: Set<Int64> = []
             let base = "SELECT id, root_id, path FROM source_file WHERE agent=? AND root_id=?"
             func collect(_ suffix: String, _ arguments: StatementArguments) throws {

@@ -61,8 +61,11 @@ streaming hashes. An old receipt must be prepared again; reuse never rebuilds it
 The existing complete Debug inventory and before/after-case checks remain in place.
 
 Historical #106 exports use `--layout pr106`; #107 uses `--layout count-cache`;
-this follow-up uses `--layout connection-matcher`. missing or incompatible layouts fail before writing. Both layouts
-use the same metric definitions. `query-sensitive-ascii` and
+this follow-up uses `--layout connection-matcher`. Missing or incompatible layouts
+fail before writing. All three layouts count materialized rows and fallback queries
+consistently. `functionRegistrations` counts actual per-connection registrations only
+in `connection-matcher`; older layouts substitute the number of fallback queries.
+Do not compare those registration values as equivalent metrics. `query-sensitive-ascii` and
 `query-sensitive-mixed` separate the first cold query from 100 warm queries.
 Actual captured filesystem policies and forced SQL policies are reported
 separately; forced queries do not establish physical mixed-volume coverage.
@@ -110,3 +113,21 @@ Directory events containing a known external link reconcile its owning root.
 Unobserved links behind failed directories cannot establish absence; successful
 observations still qualify their own external targets. The protocol's default
 scoped discovery retains lexical link membership for identity verification.
+
+Legacy array discovery retains recognized file-link candidates and defers their
+individual read failures. Result-based discovery returns healthy candidates plus
+file-local failures. Directory-enumeration failures retain their existing error
+semantics. Qualified failed-link targets are captured and revalidated; unknown
+subtree failures still withhold external absence. Cleanup and navigation share
+that qualification, including internal deletion proved by a successful scan.
+
+Case-level receipt persistence preserves interruption and cleanup failure as the
+primary outcome. Secondary write errors remain diagnostic; an unwritable receipt
+cannot be guaranteed to exist. Cleanup-benchmark signal masking restores the
+previous mask even if interruption occurs while blocking signals.
+
+`benchmark-link-discovery.swift` uses the same exported instrumentation for both
+revisions. It separates captured scoped-discovery validation from lexical mapping,
+reports process CPU and execution-thread CPU distinctly, and releases captured
+inputs before the retained-footprint sample. These targeted comparisons do not
+constitute the three-pair local performance acceptance.

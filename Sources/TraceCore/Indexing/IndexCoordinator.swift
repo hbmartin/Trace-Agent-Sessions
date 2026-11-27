@@ -186,6 +186,34 @@ public actor IndexCoordinator {
         let scannedScopes: Set<RootRelativeScope>
         let capturedScopes: [TraceFileIO.CanonicalPath]
         let failures: [NormalizedDiscoveryFailure]
+        let uncoveredScopes: Set<RootRelativeScope>
+    }
+
+    // Deletion and navigation use the same captured discovery qualification.
+    private static func uncoveredDiscoveryScopes(
+        _ failures: [NormalizedDiscoveryFailure], root: SourceRoot,
+        context: SourceRootPathContext, scanned: Set<RootRelativeScope>, links: [String: String]
+    ) -> Set<RootRelativeScope> {
+        var uncovered = Set(failures.map(\.relativeScope))
+        for failure in failures {
+            switch failure.failure.evidence {
+            case let .fileLink(target?, missing):
+                let internalScope = root.relativeScope(forStoredPath: target.path, in: context)
+                let provesInternalDeletion = missing && internalScope.map { path in scanned.contains { $0.contains(path) } } == true
+                if !provesInternalDeletion { uncovered.insert(root.navigationScope(forStoredPath: target.path, in: context)) }
+            case .fileLink(nil, _), .unknown:
+                for (location, target) in links {
+                    if root.lexicalDiscoveryScope(location, in: context).map({ failure.relativeScope.contains($0.relativeScope) }) == true {
+                        uncovered.insert(root.navigationScope(forStoredPath: target, in: context))
+                    }
+                }
+                let type = (try? FileManager.default.attributesOfItem(atPath: failure.failure.path)[.type]) as? FileAttributeType
+                if type != .typeRegular {
+                    uncovered.insert(.init(components: ["\0external"], caseSensitive: true))
+                }
+            }
+        }
+        return uncovered
     }
 
     private let database: IndexDatabase
@@ -749,18 +777,29 @@ public actor IndexCoordinator {
                         links[lexical.scanPath.path] = file.canonicalPath.path
                     }
                 }
-                if scopes.contains(where: { $0.relativeScope.isRoot }), result.failures.isEmpty {
-                    discoveredLinks[root.id] = .init(links, root: root, context: mappingContext)
-                } else {
-                    var membership = linkMembership(for: root, in: mappingContext)
-                    membership.merge(links, root: root)
-                    discoveredLinks[root.id] = membership
-                }
+                let prior = linkMembership(for: root, in: mappingContext)
                 let scannedScopes = Set(scopes.map(\.relativeScope))
+                let uncovered = Self.uncoveredDiscoveryScopes(result.failures, root: root,
+                    context: mappingContext, scanned: scannedScopes, links: prior.targets)
+                // A failed leaf remains known, but successful enumeration can
+                // retire unrelated vanished aliases even when another leaf failed.
+                for failure in result.failures {
+                    if case let .fileLink(target?, _) = failure.failure.evidence,
+                       let lexical = root.lexicalDiscoveryScope(failure.failure.path, in: mappingContext) {
+                        links[lexical.scanPath.path] = target.path
+                    }
+                }
+                var retained = prior.targets.filter { location, _ in
+                    guard let lexical = root.lexicalDiscoveryScope(location, in: mappingContext) else { return false }
+                    return !scannedScopes.contains(where: { $0.contains(lexical.relativeScope) })
+                        || result.failures.contains(where: { $0.relativeScope.contains(lexical.relativeScope) })
+                }
+                retained.merge(links, uniquingKeysWith: { _, new in new })
+                discoveredLinks[root.id] = .init(retained, root: root, context: mappingContext)
                 discoveryAttempts.append(.init(
                     source: source, root: root, mappingContext: mappingContext,
                     scannedScopes: scannedScopes, capturedScopes: scopes.map(\.scanPath),
-                    failures: result.failures
+                    failures: result.failures, uncoveredScopes: uncovered
                 ))
             }
 
@@ -782,7 +821,9 @@ public actor IndexCoordinator {
                     source: source, root: root, mappingContext: mappingContext,
                     scannedScopes: Set(scopes.map(\.relativeScope)),
                     capturedScopes: scopes.map(\.scanPath),
-                    failures: deduplicatedNormalizedDiscoveryFailures(failures)
+                    failures: deduplicatedNormalizedDiscoveryFailures(failures),
+                    uncoveredScopes: Self.uncoveredDiscoveryScopes(failures, root: root, context: mappingContext,
+                        scanned: Set(scopes.map(\.relativeScope)), links: linkMembership(for: root, in: mappingContext).targets)
                 ))
             }
 
@@ -1072,7 +1113,7 @@ public actor IndexCoordinator {
                     ReconciliationLivePaths(files.map(\.canonicalPath))
                 }
                 for (rootID, attempt) in attemptsByRootID.sorted(by: { $0.key < $1.key }) {
-                    let failedScopes = attempt.failures.map(\.relativeScope)
+                    let failedScopes = attempt.uncoveredScopes
                     let coversWholeRoot = attempt.scannedScopes.contains(where: \.isRoot)
                     if failedScopes.contains(where: \.isRoot) { continue }
                     let context = attempt.mappingContext
@@ -1084,9 +1125,8 @@ public actor IndexCoordinator {
                         if !coversWholeRoot {
                             guard let relative, attempt.scannedScopes.contains(where: { $0.contains(relative) }) else { continue }
                         }
-                        if !failedScopes.isEmpty {
-                            guard let relative, !failedScopes.contains(where: { $0.contains(relative) }) else { continue }
-                        }
+                        let navigationScope = attempt.root.navigationScope(forStoredPath: stored.path, in: context)
+                        if failedScopes.contains(where: { $0.contains(navigationScope) }) { continue }
                         try await database.deleteSource(id: stored.id)
                         await mutations.markChanged()
                     }
@@ -1162,23 +1202,7 @@ public actor IndexCoordinator {
                 for attempt in discoveryAttempts where attempt.root.id == root.id {
                     for scope in attempt.scannedScopes { facts[scope] = .init(order: 0, covered: true) }
                     if !absentOptionalRoots.contains(root.id) {
-                        for failure in attempt.failures {
-                            facts[failure.relativeScope] = .init(order: 0, covered: false)
-                            let oldTargets = (discoveredLinks[root.id]?.targets ?? [:]).filter { location, _ in
-                                root.lexicalDiscoveryScope(location, in: context).map { failure.relativeScope.contains($0.relativeScope) } == true
-                            }.values
-                            for target in oldTargets {
-                                facts[root.navigationScope(forStoredPath: target, in: context)] = .init(order: 0, covered: false)
-                            }
-                            // A failed directory or unknown location may hide
-                            // links absent from this installation's membership map.
-                            // Proven regular-file failures stay file-local. Explicit
-                            // successful external observations below still qualify.
-                            let failedType = (try? FileManager.default.attributesOfItem(atPath: failure.failure.path)[.type]) as? FileAttributeType
-                            if failedType != .typeRegular {
-                                facts[.init(components: ["\0external"], caseSensitive: true)] = .init(order: 0, covered: false)
-                            }
-                        }
+                        for scope in attempt.uncoveredScopes { facts[scope] = .init(order: 0, covered: false) }
                     }
                 }
                 // Routing selects one reader; every accepting root shares its outcome.
