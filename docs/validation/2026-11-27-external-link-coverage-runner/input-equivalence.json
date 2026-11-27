@@ -1,0 +1,11 @@
+{
+  "candidate": "fe3427e19fbcdf117de74d1d9e82dc5a88bb7219",
+  "nativeAppPathsUnchangedFromBase": true,
+  "acceptedRuntimeSourceMapVerified": true,
+  "historicalValidationUnchanged": true,
+  "scriptRunCandidate": "14367d9a5e69c1aca6970c5a3ba377c8c98c2209",
+  "changedAfterScriptRun": [
+    "Tests/TraceCoreTests/IndexingRegressionTests.swift"
+  ],
+  "scriptAndProductionInputsUnchanged": true
+}

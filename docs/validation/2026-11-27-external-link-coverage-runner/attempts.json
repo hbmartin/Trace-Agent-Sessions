@@ -1,0 +1,1021 @@
+[
+  {
+    "label": "scripts-first",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "Tests/Scripts"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:33:58.573683+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "error": "TimeoutExpired(['python3', '-m', 'unittest', 'discover', '-s', 'Tests/Scripts'], 240.0)",
+    "exitCode": -9,
+    "wallSeconds": 240.0491431253031
+  },
+  {
+    "label": "core-debug-build-first",
+    "command": [
+      "xcodebuild",
+      "build",
+      "-project",
+      "Trace.xcodeproj",
+      "-target",
+      "TraceCoreTests",
+      "-configuration",
+      "Debug",
+      "-sdk",
+      "macosx",
+      "-arch",
+      "arm64",
+      "-jobs",
+      "2",
+      "SYMROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products",
+      "OBJROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Intermediates.noindex",
+      "-clonedSourcePackagesDirPath",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/SourcePackages"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:34:14.619537+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 158.69340258371085
+  },
+  {
+    "label": "scripts-focused-v2",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_receipt_write_failure_cannot_mask_pending_interruption",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_receipt_write_failure_without_signal_remains_visible",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_unsupported_mac_python_records_failure_before_any_launch",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_supported_python_requires_non_reaping_wait_capability",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:36:27.120311+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 1.2233262080699205
+  },
+  {
+    "label": "core-focused-first",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification",
+      "build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:37:22.898437+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.5717519172467291
+  },
+  {
+    "label": "debug-app-tests-build",
+    "command": [
+      "xcodebuild",
+      "build-for-testing",
+      "-project",
+      "Trace.xcodeproj",
+      "-scheme",
+      "Trace",
+      "-configuration",
+      "Debug",
+      "-destination",
+      "platform=macOS,arch=arm64",
+      "-derivedDataPath",
+      "build/AdapterDiscoveryDebug",
+      "-jobs",
+      "2",
+      "-only-testing:TraceCoreTests",
+      "-only-testing:TraceAppTests"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:38:12.902236+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 459.2842840417288
+  },
+  {
+    "label": "scripts-final",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "Tests/Scripts",
+      "-v"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:38:57.038921+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 437.34358179103583
+  },
+  {
+    "label": "interpreter-cli-matrix",
+    "command": [
+      "python3",
+      "-c",
+      "import json,pathlib,subprocess,tempfile; r=pathlib.Path(\"/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates\"); a=[]\nfor interpreter in [\"/usr/bin/python3\",\"/opt/homebrew/bin/python3.12\"]:\n with tempfile.TemporaryDirectory() as t:\n  out=pathlib.Path(t)/\"attempt\"; p=subprocess.run([interpreter,str(r/\"Scripts/run-selected-ui-verification.py\"),\"--selection\",\"Tests/Verification/ui-smoke.json\",\"--output\",str(out)],capture_output=True,text=True,timeout=15); receipt=json.loads((out/\"verification.json\").read_text()); assert p.returncode==2 and receipt[\"status\"]==\"failed\" and receipt[\"phases\"]==[]; a.append({\"interpreter\":interpreter,\"exitCode\":p.returncode,\"stderr\":p.stderr.strip(),\"receipt\":receipt})\nprint(json.dumps(a,indent=2))"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:40:18.657579+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.5103122089058161
+  },
+  {
+    "label": "runner-final-group",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification",
+      "-v"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:41:06.378296+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 36.88448687503114
+  },
+  {
+    "label": "network-surface",
+    "command": [
+      "Scripts/check-network-surface.sh"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:45:09.531738+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.28720458317548037
+  },
+  {
+    "label": "pinned-whitespace",
+    "command": [
+      "git",
+      "diff",
+      "89d4e6a741fe797f86950c87ed2eb87df1148941...14367d9a5e69c1aca6970c5a3ba377c8c98c2209",
+      "--check"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:45:09.971980+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.15228366712108254
+  },
+  {
+    "label": "runner-python313",
+    "command": [
+      "/opt/homebrew/bin/python3.13",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification",
+      "-v"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:45:32.796748+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 37.646867625415325
+  },
+  {
+    "label": "core-debug-build-final",
+    "command": [
+      "xcodebuild",
+      "build",
+      "-project",
+      "Trace.xcodeproj",
+      "-target",
+      "TraceCoreTests",
+      "-configuration",
+      "Debug",
+      "-sdk",
+      "macosx",
+      "-arch",
+      "arm64",
+      "-jobs",
+      "2",
+      "SYMROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products",
+      "OBJROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Intermediates.noindex",
+      "-clonedSourcePackagesDirPath",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/SourcePackages"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:45:53.434836+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 369.0081871668808
+  },
+  {
+    "label": "ownership-scripts-1",
+    "command": [
+      "/opt/homebrew/bin/python3.13",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_receipt_write_failure_cannot_mask_pending_interruption",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_pending_first_signal_wins_when_original_handler_interrupts_unmask",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_second_signal_cannot_escape_cleanup_or_replace_first",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_signal_during_handler_restoration_is_adjudicated",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_normal_command_retires_descendants_before_reaping_leader",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_non_os_launch_failure_retains_signal_and_original_error"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:46:10.904306+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 1.970537332817912
+  },
+  {
+    "label": "ownership-scripts-2",
+    "command": [
+      "/opt/homebrew/bin/python3.13",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_receipt_write_failure_cannot_mask_pending_interruption",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_pending_first_signal_wins_when_original_handler_interrupts_unmask",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_second_signal_cannot_escape_cleanup_or_replace_first",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_signal_during_handler_restoration_is_adjudicated",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_normal_command_retires_descendants_before_reaping_leader",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_non_os_launch_failure_retains_signal_and_original_error"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:46:12.983841+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 1.9144605416804552
+  },
+  {
+    "label": "ownership-scripts-3",
+    "command": [
+      "/opt/homebrew/bin/python3.13",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_receipt_write_failure_cannot_mask_pending_interruption",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_pending_first_signal_wins_when_original_handler_interrupts_unmask",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_second_signal_cannot_escape_cleanup_or_replace_first",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_signal_during_handler_restoration_is_adjudicated",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_normal_command_retires_descendants_before_reaping_leader",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_non_os_launch_failure_retains_signal_and_original_error"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:46:15.165707+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 1.7034551668912172
+  },
+  {
+    "label": "ownership-scripts-4",
+    "command": [
+      "/opt/homebrew/bin/python3.13",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_receipt_write_failure_cannot_mask_pending_interruption",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_pending_first_signal_wins_when_original_handler_interrupts_unmask",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_second_signal_cannot_escape_cleanup_or_replace_first",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_signal_during_handler_restoration_is_adjudicated",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_normal_command_retires_descendants_before_reaping_leader",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_non_os_launch_failure_retains_signal_and_original_error"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:46:17.118045+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 1.5824335841462016
+  },
+  {
+    "label": "ownership-scripts-5",
+    "command": [
+      "/opt/homebrew/bin/python3.13",
+      "-m",
+      "unittest",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_receipt_write_failure_cannot_mask_pending_interruption",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_pending_first_signal_wins_when_original_handler_interrupts_unmask",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_second_signal_cannot_escape_cleanup_or_replace_first",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_signal_during_handler_restoration_is_adjudicated",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_normal_command_retires_descendants_before_reaping_leader",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_descendant_fixture_exits_when_cleanup_fails_and_release_is_missed",
+      "Tests.Scripts.test_background_ui_verification.BackgroundUIVerificationTests.test_non_os_launch_failure_retains_signal_and_original_error"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:46:18.783066+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 1.8549600830301642
+  },
+  {
+    "label": "scripts-frozen",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "Tests/Scripts",
+      "-v"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:46:42.763351+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 459.30239295912907
+  },
+  {
+    "label": "affected-core-final",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests,TraceCoreTests.FSEventsWatcherTests,TraceCoreTests.SidecarDependencyTests,TraceCoreTests.TranscriptViewportPolicyTests",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T16:52:02.549904+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "error": "TimeoutExpired(['env', 'DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks', '/Applications/Xcode.app/Contents/Developer/usr/bin/xctest', '-XCTest', 'TraceCoreTests.IndexingRegressionTests,TraceCoreTests.FSEventsWatcherTests,TraceCoreTests.SidecarDependencyTests,TraceCoreTests.TranscriptViewportPolicyTests', '/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest'], 600.0)",
+    "exitCode": -9,
+    "wallSeconds": 600.0588053748943
+  },
+  {
+    "label": "isolated-core-stall-check",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider,TraceCoreTests.IndexingRegressionTests/testCancellationCommitsCheckpointAndResumesWithoutDuplicates,TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+      "build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:01:29.803555+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "error": "TimeoutExpired(['env', 'DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks', '/Applications/Xcode.app/Contents/Developer/usr/bin/xctest', '-XCTest', 'TraceCoreTests.IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider,TraceCoreTests.IndexingRegressionTests/testCancellationCommitsCheckpointAndResumesWithoutDuplicates,TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity', 'build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest'], 60.0)",
+    "exitCode": -9,
+    "wallSeconds": 60.08382700011134
+  },
+  {
+    "label": "isolated-owned-tmpdir",
+    "command": [
+      "env",
+      "TMPDIR=/private/tmp/TraceExternalLinkNative-pcve1xd4/",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider,TraceCoreTests.IndexingRegressionTests/testCancellationCommitsCheckpointAndResumesWithoutDuplicates,TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:03:18.842563+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "error": "TimeoutExpired(['env', 'TMPDIR=/private/tmp/TraceExternalLinkNative-pcve1xd4/', 'DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks', '/Applications/Xcode.app/Contents/Developer/usr/bin/xctest', '-XCTest', 'TraceCoreTests.IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider,TraceCoreTests.IndexingRegressionTests/testCancellationCommitsCheckpointAndResumesWithoutDuplicates,TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity', '/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest'], 90.0)",
+    "exitCode": -9,
+    "wallSeconds": 90.0528185418807
+  },
+  {
+    "label": "baseline-existing-controls",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity,TraceCoreTests.IndexingRegressionTests/testCancellationCommitsCheckpointAndResumesWithoutDuplicates,TraceCoreTests.IndexingRegressionTests/testSharedPhysicalFileKeepsIndependentAgentOwnership",
+      "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:06:53.029851+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "error": "TimeoutExpired(['env', 'DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/PackageFrameworks', '/Applications/Xcode.app/Contents/Developer/usr/bin/xctest', '-XCTest', 'TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity,TraceCoreTests.IndexingRegressionTests/testCancellationCommitsCheckpointAndResumesWithoutDuplicates,TraceCoreTests.IndexingRegressionTests/testSharedPhysicalFileKeepsIndependentAgentOwnership', '/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest'], 75.0)",
+    "exitCode": -9,
+    "wallSeconds": 75.08620691671968
+  },
+  {
+    "label": "core-fixture-build",
+    "command": [
+      "xcodebuild",
+      "build",
+      "-project",
+      "Trace.xcodeproj",
+      "-target",
+      "TraceCoreTests",
+      "-configuration",
+      "Debug",
+      "-sdk",
+      "macosx",
+      "-arch",
+      "arm64",
+      "-jobs",
+      "2",
+      "SYMROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products",
+      "OBJROOT=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Intermediates.noindex",
+      "-clonedSourcePackagesDirPath",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/SourcePackages"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:07:03.571059+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 84.46271912520751
+  },
+  {
+    "label": "fixture-owned-core-controls",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testScheduledCoveragePaysDefinitivelyUnclaimedProvider,TraceCoreTests.IndexingRegressionTests/testCancellationCommitsCheckpointAndResumesWithoutDuplicates,TraceCoreTests.IndexingRegressionTests/testSharedPhysicalFileKeepsIndependentAgentOwnership,TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion",
+      "build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:09:21.880463+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 5.46403329167515
+  },
+  {
+    "label": "fsevents-path-probe",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/private/tmp/external-link-fsevent-probe"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:09:36.934765+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 13.650635750032961
+  },
+  {
+    "label": "affected-core-owned",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests,TraceCoreTests.FSEventsWatcherTests,TraceCoreTests.SidecarDependencyTests,TraceCoreTests.TranscriptViewportPolicyTests",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:12:04.343828+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 1,
+    "wallSeconds": 174.23838949995115
+  },
+  {
+    "label": "baseline-watcher-sidecar",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.FSEventsWatcherTests,TraceCoreTests.SidecarDependencyTests",
+      "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:16:04.353417+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 1,
+    "wallSeconds": 66.67674970906228
+  },
+  {
+    "label": "affected-app-final",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceAppTests.AppReviewFollowupTests",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceAppTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:17:39.201264+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "error": "TimeoutExpired(['env', 'DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks', '/Applications/Xcode.app/Contents/Developer/usr/bin/xctest', '-XCTest', 'TraceAppTests.AppReviewFollowupTests', '/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceAppTests.xctest'], 600.0)",
+    "exitCode": -9,
+    "wallSeconds": 600.0602344996296
+  },
+  {
+    "label": "baseline-live-empty-1",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+      "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:18:41.229345+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 7.859432999975979
+  },
+  {
+    "label": "baseline-live-empty-2",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+      "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:18:49.209063+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 1.0953181250952184
+  },
+  {
+    "label": "baseline-live-empty-3",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+      "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:18:50.389276+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 6.346173541154712
+  },
+  {
+    "label": "baseline-live-empty-4",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+      "/Volumes/Pro2T/TraceValidation/discovery-signal-ownership-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:18:56.815798+00:00",
+    "status": "failed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 1,
+    "wallSeconds": 6.657990667037666
+  },
+  {
+    "label": "ownership-core-1",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion,TraceCoreTests.IndexingRegressionTests/testConcurrentReconciliationReadersKeepConnectionLocalMatchers,TraceCoreTests.IndexingRegressionTests/testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry,TraceCoreTests.IndexingRegressionTests/testPathCacheRollbackAndCommittedCheckpointFailure",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:27:39.595302+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 19.316723958123475
+  },
+  {
+    "label": "ownership-core-2",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion,TraceCoreTests.IndexingRegressionTests/testConcurrentReconciliationReadersKeepConnectionLocalMatchers,TraceCoreTests.IndexingRegressionTests/testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry,TraceCoreTests.IndexingRegressionTests/testPathCacheRollbackAndCommittedCheckpointFailure",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:28:00.026599+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 28.734620708040893
+  },
+  {
+    "label": "ownership-core-3",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion,TraceCoreTests.IndexingRegressionTests/testConcurrentReconciliationReadersKeepConnectionLocalMatchers,TraceCoreTests.IndexingRegressionTests/testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry,TraceCoreTests.IndexingRegressionTests/testPathCacheRollbackAndCommittedCheckpointFailure",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:28:28.894012+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 3.20004737470299
+  },
+  {
+    "label": "ownership-core-4",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion,TraceCoreTests.IndexingRegressionTests/testConcurrentReconciliationReadersKeepConnectionLocalMatchers,TraceCoreTests.IndexingRegressionTests/testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry,TraceCoreTests.IndexingRegressionTests/testPathCacheRollbackAndCommittedCheckpointFailure",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:28:32.286881+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 3.806308582890779
+  },
+  {
+    "label": "ownership-core-5",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion,TraceCoreTests.IndexingRegressionTests/testConcurrentReconciliationReadersKeepConnectionLocalMatchers,TraceCoreTests.IndexingRegressionTests/testExternalReadFailureFencesRootCheckpointUntilOrdinaryRetry,TraceCoreTests.IndexingRegressionTests/testPathCacheRollbackAndCommittedCheckpointFailure",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:28:36.445466+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 4.942892499733716
+  },
+  {
+    "label": "release-core-build",
+    "command": [
+      "xcodebuild",
+      "build",
+      "-project",
+      "Trace.xcodeproj",
+      "-target",
+      "TraceCoreTests",
+      "-configuration",
+      "Release",
+      "-sdk",
+      "macosx",
+      "-arch",
+      "arm64",
+      "-jobs",
+      "2",
+      "ENABLE_TESTABILITY=YES",
+      "SYMROOT=/Volumes/Pro2T/TraceValidation/external-link-coverage-runner-followup/release-core-target/Build/Products",
+      "OBJROOT=/Volumes/Pro2T/TraceValidation/external-link-coverage-runner-followup/release-core-target/Build/Intermediates",
+      "-clonedSourcePackagesDirPath",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/SourcePackages"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:28:41.594849+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 299.5152907911688
+  },
+  {
+    "label": "affected-app-focused",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceAppTests.AppReviewFollowupTests/testTranscriptPreparationPreservesExternalFileLinkOwnerAndControls,TraceAppTests.AppReviewFollowupTests/testLiveMetadataIngressEnrollsConfiguredSourceBeforeFallbackPreparation,TraceAppTests.AppReviewFollowupTests/testMetadataOutsideTranscriptRootsDoesNotAccumulateNavigationWork,TraceAppTests.AppReviewFollowupTests/testCancelledTerminalDeliveryBeforeAdmissionDoesNotPublishOrRead,TraceAppTests.AppReviewFollowupTests/testLatestBookmarkAnchorOrExplicitClearWinsOverResetCapture,TraceAppTests.AppReviewFollowupTests/testSafetyResetWithoutFileEventsSettlesMissingTargetAndRemapsBookmark",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceAppTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:28:42.188098+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 31.889136041980237
+  },
+  {
+    "label": "release-core-focused",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceValidation/external-link-coverage-runner-followup/release-core-target/Build/Products/Release:/Volumes/Pro2T/TraceValidation/external-link-coverage-runner-followup/release-core-target/Build/Products/Release/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.IndexingRegressionTests/testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification,TraceCoreTests.IndexingRegressionTests/testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies,TraceCoreTests.IndexingRegressionTests/testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification,TraceCoreTests.IndexingRegressionTests/testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion,TraceCoreTests.IndexingRegressionTests/testExternalTranscriptLinkSurvivesRefreshRetargetAndDeletion",
+      "/Volumes/Pro2T/TraceValidation/external-link-coverage-runner-followup/release-core-target/Build/Products/Release/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:33:41.168540+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.6230907500721514
+  },
+  {
+    "label": "release-app-build",
+    "command": [
+      "xcodebuild",
+      "build",
+      "-project",
+      "Trace.xcodeproj",
+      "-scheme",
+      "Trace",
+      "-configuration",
+      "Release",
+      "-destination",
+      "platform=macOS,arch=arm64",
+      "-derivedDataPath",
+      "build/AdapterDiscoveryRelease",
+      "-jobs",
+      "2",
+      "ENABLE_TESTABILITY=NO"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:33:42.806888+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 205.99800008302554
+  },
+  {
+    "label": "pinned-whitespace-final",
+    "command": [
+      "git",
+      "diff",
+      "89d4e6a741fe797f86950c87ed2eb87df1148941...fe3427e19fbcdf117de74d1d9e82dc5a88bb7219",
+      "--check"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:35:33.876716+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.1385081666521728
+  },
+  {
+    "label": "external-client-build",
+    "command": [
+      "xcodebuild",
+      "build",
+      "-project",
+      "Trace.xcodeproj",
+      "-scheme",
+      "TraceExternalClientFixture",
+      "-configuration",
+      "Release",
+      "-destination",
+      "platform=macOS,arch=arm64",
+      "-derivedDataPath",
+      "build/AdapterDiscoveryExternal",
+      "-jobs",
+      "2"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:37:08.978794+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 278.34597237501293
+  },
+  {
+    "label": "toolchain-xcode",
+    "command": [
+      "xcodebuild",
+      "-version"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:37:13.692016+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.2667080000974238
+  },
+  {
+    "label": "toolchain-swift",
+    "command": [
+      "xcrun",
+      "swift",
+      "--version"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:37:14.014749+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.28031954215839505
+  },
+  {
+    "label": "host-version",
+    "command": [
+      "sw_vers"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:37:14.361754+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.028649291954934597
+  },
+  {
+    "label": "project-drift",
+    "command": [
+      "Scripts/check-project-drift.sh"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:41:47.419286+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.6752217076718807
+  },
+  {
+    "label": "signing-settings",
+    "command": [
+      "Scripts/check-signing-settings.sh"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:41:48.149330+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 33.031373667065054
+  },
+  {
+    "label": "debug-signature",
+    "command": [
+      "codesign",
+      "--verify",
+      "--deep",
+      "--strict",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/Trace.app"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:42:21.262571+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.09147608280181885
+  },
+  {
+    "label": "debug-network",
+    "command": [
+      "Scripts/check-network-surface.sh",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/Trace.app"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:42:21.444151+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.11986733274534345
+  },
+  {
+    "label": "release-signature",
+    "command": [
+      "codesign",
+      "--verify",
+      "--deep",
+      "--strict",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryRelease/Build/Products/Release/Trace.app"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:42:21.633014+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.1044893329963088
+  },
+  {
+    "label": "release-network",
+    "command": [
+      "Scripts/check-network-surface.sh",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryRelease/Build/Products/Release/Trace.app"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:42:21.797760+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.21235341718420386
+  },
+  {
+    "label": "debug-app-frozen-build",
+    "command": [
+      "xcodebuild",
+      "build",
+      "-project",
+      "Trace.xcodeproj",
+      "-scheme",
+      "Trace",
+      "-configuration",
+      "Debug",
+      "-destination",
+      "platform=macOS,arch=arm64",
+      "-derivedDataPath",
+      "build/AdapterDiscoveryDebug",
+      "-jobs",
+      "2"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:42:22.417916+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 221.09267545770854
+  },
+  {
+    "label": "source-metadata-safety",
+    "command": [
+      "env",
+      "DYLD_FRAMEWORK_PATH=/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug:/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/PackageFrameworks",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/xctest",
+      "-XCTest",
+      "TraceCoreTests.SessionFileSafetyTests,TraceCoreTests.SessionMetadataTests",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/TraceCoreTests.xctest"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:46:03.633954+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 14.402142999693751
+  },
+  {
+    "label": "debug-frozen-signature",
+    "command": [
+      "codesign",
+      "--verify",
+      "--deep",
+      "--strict",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/Trace.app"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:46:18.308766+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.1569023341871798
+  },
+  {
+    "label": "debug-frozen-network",
+    "command": [
+      "Scripts/check-network-surface.sh",
+      "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates/build/AdapterDiscoveryDebug/Build/Products/Debug/Trace.app"
+    ],
+    "cwd": "/Volumes/Pro2T/TraceWorktrees/rebuild-live-updates",
+    "startedAt": "2026-11-27T17:46:18.542914+00:00",
+    "status": "passed",
+    "acceptedPerformanceMeasurement": false,
+    "exitCode": 0,
+    "wallSeconds": 0.22797024995088577
+  }
+]

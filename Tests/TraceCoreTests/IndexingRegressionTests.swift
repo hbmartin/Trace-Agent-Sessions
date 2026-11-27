@@ -7,6 +7,141 @@ import XCTest
 @testable import TraceCore
 
 final class IndexingRegressionTests: XCTestCase {
+    func testAncestorDirectoryEventsRetireExternalLinkRowsWithoutAffectingSiblings() async throws {
+        for rename in [false, true] {
+            let parent = try directory(), root = parent.appendingPathComponent("root")
+            let sub = root.appendingPathComponent("sub"), sibling = root.appendingPathComponent("sub-other")
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+            let target = parent.appendingPathComponent("target.jsonl"), other = parent.appendingPathComponent("other.jsonl")
+            try Data(line(1).utf8).write(to: target); try Data(line(2).utf8).write(to: other)
+            try FileManager.default.createSymbolicLink(at: sub.appendingPathComponent("link.jsonl"), withDestinationURL: target)
+            try FileManager.default.createSymbolicLink(at: sibling.appendingPathComponent("link.jsonl"), withDestinationURL: other)
+            let source = ClaudeCodeSource(roots: [root]), database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+            let coordinator = IndexCoordinator(database: database, sources: [source])
+            await coordinator.indexAll(scope: .proseOnly)
+            let initial = try await database.sessions()
+            XCTAssertEqual(initial.count, 2)
+            if rename { try FileManager.default.moveItem(at: sub, to: parent.appendingPathComponent("moved")) }
+            else { try FileManager.default.removeItem(at: sub) }
+            let result = await coordinator.reconcile(paths: [sub.path], scope: .proseOnly, activity: .eventStreamRecovery)
+            XCTAssertEqual(result.phase, .complete)
+            let remaining = try await database.sessions()
+            XCTAssertEqual(remaining.map(\.sourcePath), [TraceFileIO.canonicalPath(other.path).path])
+            XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+            // The successful root discovery also retires the removed ancestry.
+            let repeated = await coordinator.reconcile(paths: [sub.path], scope: .proseOnly, activity: .eventStreamRecovery)
+            let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path,
+                path: TraceFileIO.canonicalPath(other.path).path, externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+            XCTAssertFalse(try XCTUnwrap(repeated.navigationCoverage).covers(reference), "A stale ancestor must not keep broadening later requests")
+        }
+    }
+
+    func testDefaultScopedDiscoveryPreservesLexicalExternalLinkUntilVerification() async throws {
+        let parent = try directory(), rootURL = parent.appendingPathComponent("root"), alias = parent.appendingPathComponent("alias")
+        let sub = rootURL.appendingPathComponent("sub"), sibling = rootURL.appendingPathComponent("sibling")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: rootURL)
+        let target = parent.appendingPathComponent("outside.jsonl"), other = parent.appendingPathComponent("other.jsonl")
+        try Data(line(1).utf8).write(to: target); try Data(line(2).utf8).write(to: other)
+        try FileManager.default.createSymbolicLink(at: sub.appendingPathComponent("link.jsonl"), withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(at: sibling.appendingPathComponent("link.jsonl"), withDestinationURL: other)
+        let source = WholeDiscoveryFallbackSource(base: .init(roots: [alias]))
+        XCTAssertFalse(source.supportsFileScopedDiscovery)
+        XCTAssertEqual(try source.discover().count, 2)
+        let raw = try source.discoverResult(scopedTo: [alias.appendingPathComponent("sub").path])
+        XCTAssertEqual(raw.files.map(\.url.path), [TraceFileIO.canonicalPath(target.path).path])
+        let root = source.roots[0], context = root.mappingContext
+        let verified = verifiedDiscoveryResult(raw, agent: source.agent, root: root, capturedContext: context,
+            currentContext: context, scopes: [try XCTUnwrap(root.lexicalDiscoveryScope(sub.path, in: context))])
+        XCTAssertEqual(verified.files.count, 1); XCTAssertTrue(verified.failures.isEmpty)
+        let database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let initial = try await database.sessions()
+        XCTAssertEqual(initial.count, 2, "The public compatibility default must reach verification during a full scan")
+        let refreshed = await coordinator.indexAllResult(scope: .proseOnly)
+        let after = try await database.sessions()
+        XCTAssertEqual(Set(after.map(\.id)), Set(initial.map(\.id)))
+        XCTAssertEqual(refreshed.failedFiles, 0)
+    }
+
+    func testUnknownFailedSubtreeWithholdsExternalAbsenceButObservedSiblingQualifies() async throws {
+        let parent = try directory(), root = parent.appendingPathComponent("root"), sub = root.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let target = parent.appendingPathComponent("outside.jsonl"), other = parent.appendingPathComponent("other.jsonl")
+        try Data(line(1).utf8).write(to: target); try Data(line(2).utf8).write(to: other)
+        try FileManager.default.createSymbolicLink(at: sub.appendingPathComponent("link.jsonl"), withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("other.jsonl"), withDestinationURL: other)
+        let source = ClaudeCodeSource(roots: [root]), database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let initial = IndexCoordinator(database: database, sources: [source])
+        await initial.indexAll(scope: .proseOnly)
+        let reference: (URL) -> SessionNavigationReference = { path in
+            .init(agent: source.agent.rawValue, root: root.path, path: TraceFileIO.canonicalPath(path.path).path,
+                externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+        }
+        for missing in [false, true] {
+            if missing { try FileManager.default.removeItem(at: sub) }
+            // Fresh installations cannot rely on an in-memory link map.
+            let failed = IndexCoordinator(database: database, sources: [SubtreeDiscoveryFailureSource(base: source, failurePath: sub)])
+            let result = await failed.indexAllResult(scope: .proseOnly)
+            let coverage = try XCTUnwrap(result.navigationCoverage)
+            XCTAssertEqual(result.failedFiles, 1)
+            XCTAssertFalse(coverage.covers(reference(target)))
+            XCTAssertTrue(coverage.covers(reference(other)), "An actual successful file observation overrides only its own external failure")
+            let sessions = try await database.sessions()
+            XCTAssertEqual(sessions.count, 2)
+        }
+        let recovered = await initial.indexAllResult(scope: .proseOnly)
+        XCTAssertTrue(try XCTUnwrap(recovered.navigationCoverage).covers(reference(target)), "Authoritative discovery can now settle the removed link")
+        let sessions = try await database.sessions()
+        XCTAssertEqual(sessions.map(\.sourcePath), [TraceFileIO.canonicalPath(other.path).path])
+    }
+
+    func testDefaultScopedDiscoveryCannotTurnUnprovenMembershipIntoDeletion() async throws {
+        let parent = try directory(), root = parent.appendingPathComponent("root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let existing = root.appendingPathComponent("existing.jsonl"), unproven = parent.appendingPathComponent("outside.jsonl")
+        try Data(line(1).utf8).write(to: existing); try Data(line(2).utf8).write(to: unproven)
+        let base = ClaudeCodeSource(roots: [root]), database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        await IndexCoordinator(database: database, sources: [base]).indexAll(scope: .proseOnly)
+        let source = WholeDiscoveryFallbackSource(base: base, replacement: [.init(agent: .claudeCode, root: root, url: unproven, format: .claudeJSONL)])
+        XCTAssertEqual(try source.discover(scopedTo: [root.path]).count, 1, "Identity validation must see the adapter's claim")
+        let result = await IndexCoordinator(database: database, sources: [source]).indexAllResult(scope: .proseOnly)
+        XCTAssertEqual(result.failedFiles, 1)
+        let retained = try await database.sessions()
+        XCTAssertEqual(retained.map(\.sourcePath), [TraceFileIO.canonicalPath(existing.path).path])
+    }
+
+    func testExternalReferenceUsesNormalizedRootAndSensitiveTargetQualification() throws {
+        let url = URL(fileURLWithPath: "/UPPER-ROOT")
+        let root = SourceRoot(agent: .claudeCode, url: url, isDefault: false, frozenScanURL: url, frozenCaseSensitive: false)
+        let context = root.mappingContext, generation = IndexContentGeneration(value: "family:content")
+        let upper = SessionNavigationReference(agent: root.agent.rawValue, root: root.url.path, path: "/outside/A.jsonl",
+            externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+        let lower = SessionNavigationReference(agent: root.agent.rawValue, root: root.url.path, path: "/outside/a.jsonl",
+            externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+        let broad = root.rootScope(in: context).relativeScope
+        func coverage(_ failed: Bool) -> IndexNavigationCoverage {
+            .init(contentGeneration: generation, scope: .proseOnly, regions: [.init(root: root, context: context,
+                facts: [broad: .init(order: 0, covered: true), root.navigationScope(forStoredPath: upper.path, in: context): .init(order: 0, covered: !failed)])])
+        }
+        let ledger = IndexNavigationWorkLedger(), work = ledger.reserve(canonicalPaths: [], canonicalReconciliationPaths: [context.scanPath])
+        let accepted = coverage(false)
+        XCTAssertFalse(ledger.permitsAbsence(upper, coverage: accepted), "An unpaid insensitive root also fences its external references")
+        let failed = coverage(true), execution = IndexNavigationWork.begin(work)
+        IndexNavigationWork.observe(failed, executions: execution); IndexNavigationWork.finish(execution)
+        XCTAssertFalse(ledger.permitsAbsence(upper, coverage: failed))
+        XCTAssertTrue(ledger.permitsAbsence(lower, coverage: failed), "External target suffixes must not inherit root case folding")
+        let recovery = IndexNavigationWork.begin(work)
+        IndexNavigationWork.observe(accepted, executions: recovery); IndexNavigationWork.finish(recovery)
+        XCTAssertTrue(ledger.permitsAbsence(upper, coverage: accepted))
+        #if DEBUG
+        XCTAssertEqual(ledger.countsForTesting["pendingReceipts"], 0)
+        #endif
+    }
+
     func testDanglingExternalLinkRetainsRowsAndWithholdsAbsenceUntilRecovery() async throws {
         let parent = try directory(), root = parent.appendingPathComponent("root")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -3818,9 +3953,12 @@ final class IndexingRegressionTests: XCTestCase {
     #endif
 
     private func directory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRegression-\(UUID())")
+        // Codex metadata lives beside its sessions root. Own that parent too,
+        // rather than discovering metadata in the shared system temp directory.
+        let namespace = FileManager.default.temporaryDirectory.appendingPathComponent("TraceRegressionNamespace-\(UUID())")
+        let url = namespace.appendingPathComponent("TraceRegression-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: namespace) }
         return url
     }
 
@@ -8629,6 +8767,57 @@ private struct DirectoryOnlyDiscoverySource: SessionSource {
     func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] {
         let directories = paths.filter { (try? FileManager.default.attributesOfItem(atPath: $0)[.type] as? FileAttributeType) == .typeDirectory }
         return directories.isEmpty ? [] : try discover()
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
+        try base.hydrate(fileURL: fileURL, format: format, locator: locator)
+    }
+}
+
+// Deliberately exercise the public default scoped-discovery implementation.
+private struct WholeDiscoveryFallbackSource: SessionSource {
+    let base: ClaudeCodeSource
+    var replacement: [DiscoveredSourceFile]? = nil
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    func discover() throws -> [DiscoveredSourceFile] {
+        if let replacement { return replacement }
+        return try base.discover()
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialSessionID: String?) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialSessionID: initialSessionID)
+    }
+    func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?, initialContext: SourceReadContext) -> AsyncThrowingStream<ParsedRecord, Error> {
+        base.records(in: file, from: offset, through: boundary, initialContext: initialContext)
+    }
+    func hydrate(fileURL: URL, format: SourceFormat, locator: RecordLocator) throws -> HydratedMessage {
+        try base.hydrate(fileURL: fileURL, format: format, locator: locator)
+    }
+}
+
+private struct SubtreeDiscoveryFailureSource: SessionSource {
+    let base: ClaudeCodeSource
+    let failurePath: URL
+    var agent: AgentKind { base.agent }
+    var roots: [SourceRoot] { base.roots }
+    var supportsFileScopedDiscovery: Bool { base.supportsFileScopedDiscovery }
+    func discover() throws -> [DiscoveredSourceFile] { try discoverResult(scopedTo: nil).files }
+    func discoverResult(scopedTo paths: Set<String>?) throws -> DiscoveryResult {
+        let result = try base.discoverResult(scopedTo: paths)
+        return .init(files: result.files.filter {
+            $0.discoveryPath != failurePath.path && !$0.discoveryPath.hasPrefix(failurePath.path + "/")
+        }, failures: result.failures + [.init(agent: agent, root: roots[0].url, path: failurePath.path, message: "Injected unreadable subtree")])
     }
     func records(in file: DiscoveredSourceFile, from offset: Int64, through boundary: Int64?) -> AsyncThrowingStream<ParsedRecord, Error> {
         base.records(in: file, from: offset, through: boundary)

@@ -1087,9 +1087,7 @@ public struct IndexNavigationCoverage: Sendable {
     fileprivate func absoluteKey(_ reference: SessionNavigationReference) -> [UInt8]? {
         guard let region = regions[reference.agent + ":" + reference.root] else { return nil }
         let relative = region.root.navigationScope(forStoredPath: reference.path, in: region.context)
-        let base = region.context.scanPath.path
-        let absolute = relative.isRoot ? base : (base == "/" ? "/" : base + "/") + relative.path
-        return navigationAbsoluteKey(TraceFileIO.comparisonKey(absolute, caseSensitive: relative.isCaseSensitive))
+        return Self.absoluteKey(Self.key(relative), in: region.context)
     }
     public func merging(_ newer: Self) -> Self {
         guard contentGeneration == newer.contentGeneration, scope == newer.scope else { return newer }
@@ -1122,8 +1120,12 @@ public struct IndexNavigationCoverage: Sendable {
     // Source identity precedes the canonical path. Providers and configured
     // aliases may scan the same directory without sharing observation authority.
     private static func sourcePrefix(_ id: String) -> [UInt8] { [0] + Array(id.utf8) + [0] }
+    private static func absoluteKey(_ relative: [UInt8], in context: SourceRootPathContext) -> [UInt8] {
+        // The root and a root-owned external target can have different policies.
+        navigationAbsoluteKey(context.scanPath.comparisonKey) + relative
+    }
     fileprivate var sourceRoots: [String: [UInt8]] {
-        regions.mapValues { navigationAbsoluteKey($0.context.scanPath.comparisonKey) }
+        regions.mapValues { Self.absoluteKey([], in: $0.context) }
     }
     fileprivate func qualifiedKey(_ reference: SessionNavigationReference) -> [UInt8]? {
         absoluteKey(reference).map { Self.sourcePrefix(reference.agent + ":" + reference.root) + $0 }
@@ -1141,7 +1143,7 @@ public struct IndexNavigationCoverage: Sendable {
     fileprivate func observationIndex(admission: UInt64, execution: UInt64) -> NavigationScopeIndex {
         var result = NavigationScopeIndex()
         for (id, region) in delta {
-            let base = Self.sourcePrefix(id) + navigationAbsoluteKey(region.context.scanPath.comparisonKey)
+            let base = Self.sourcePrefix(id) + Self.absoluteKey([], in: region.context)
             region.index.visit { key, fact in
                 result = result.setting(base + key, .init(rank: .init(admission: admission, execution: execution), covered: fact.covered))
             }

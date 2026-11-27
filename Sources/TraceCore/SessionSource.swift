@@ -85,9 +85,10 @@ struct VerifiedDiscoveryResult: Sendable {
 // membership checks independent of the number of requested scopes.
 struct DiscoveryScopeMatcher {
     private let sensitive: Set<String>, insensitive: Set<String>
-    init(_ scopes: [SourceRootScope]) {
-        sensitive = Set(scopes.filter { $0.scanPath.isCaseSensitive }.map { $0.scanPath.path.precomposedStringWithCanonicalMapping })
-        insensitive = Set(scopes.filter { !$0.scanPath.isCaseSensitive }.map { $0.scanPath.comparisonKey.precomposedStringWithCanonicalMapping })
+    init(_ scopes: [SourceRootScope]) { self.init(scopes.map(\.scanPath)) }
+    init(_ paths: [TraceFileIO.CanonicalPath]) {
+        sensitive = Set(paths.filter(\.isCaseSensitive).map { $0.path.precomposedStringWithCanonicalMapping })
+        insensitive = Set(paths.filter { !$0.isCaseSensitive }.map { $0.comparisonKey.precomposedStringWithCanonicalMapping })
     }
     private func contains(_ path: String, keys: Set<String>) -> Bool {
         var key = path
@@ -295,9 +296,25 @@ public extension SessionSource {
 
     func discover(scopedTo paths: Set<String>) throws -> [DiscoveredSourceFile] {
         guard !paths.isEmpty else { return [] }
-        let scopes = paths.map(TraceFileIO.canonicalPath)
+        let matcher = DiscoveryScopeMatcher(paths.map(TraceFileIO.canonicalPath))
+        let contexts = roots.map { ($0, $0.mappingContext) }
+        var rootIdentities: [String: TraceFileIO.CanonicalPath] = [:]
         return try discover().filter { file in
-            scopes.contains { $0.contains(file.canonicalPath) }
+            if matcher.contains(file.canonicalPath) { return true }
+            // Preserve lexical membership until verification proves identity and
+            // target type. Resolving the leaf here would discard external links.
+            return contexts.contains { root, context in
+                if root.lexicalDiscoveryScope(file.discoveryPath, in: context)
+                    .map({ matcher.contains($0.scanPath) }) == true { return true }
+                // A whole-root result claiming this root must reach verification
+                // even when its membership is unproven. Silently dropping it
+                // would turn identity failure into authoritative empty discovery.
+                guard matcher.contains(context.scanPath) else { return false }
+                if file.root.path == root.url.path { return true }
+                let identity = rootIdentities[file.root.path] ?? TraceFileIO.canonicalPath(file.root.path)
+                rootIdentities[file.root.path] = identity
+                return identity == context.scanPath
+            }
         }
     }
 

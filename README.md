@@ -208,6 +208,10 @@ xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 ```
 
+The local selected-UI runner requires Python 3.13 or later on macOS; invoke it
+with `python3.13` or a newer interpreter. See
+[runner compatibility and interruption handling](docs/adapter-discovery-and-measurement.md#local-ui-runner-interpreter-and-interruptions).
+
 UI tests automatically isolate their database, sources, preferences, and
 diagnostics. Set `TRACE_TEST_DIRECTORY` to use a fixed test directory whose
 `Sources` folder contains `Claude`, `Codex`, and `Gemini` roots. The test-only
