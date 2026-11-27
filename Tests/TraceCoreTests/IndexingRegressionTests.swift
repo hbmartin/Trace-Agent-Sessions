@@ -105,6 +105,34 @@ final class IndexingRegressionTests: XCTestCase {
         }
     }
 
+    func testUnreadableIntermediateLinkCannotAuthorizeExternalAbsence() async throws {
+        let parent = try directory(), root = parent.appendingPathComponent("root"), protected = parent.appendingPathComponent("protected")
+        for folder in [root, protected] { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        let target = parent.appendingPathComponent("real.jsonl"), intermediate = protected.appendingPathComponent("through.jsonl"), alias = root.appendingPathComponent("alias.jsonl")
+        try Data(line(1).utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: intermediate, withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: intermediate)
+        let source = ClaudeCodeSource(roots: [root]), database = try IndexDatabase(url: parent.appendingPathComponent("index.sqlite"))
+        let coordinator = IndexCoordinator(database: database, sources: [source])
+        await coordinator.indexAll(scope: .proseOnly)
+        let before = try await database.sessions(); XCTAssertEqual(before.count, 1)
+        let reference = SessionNavigationReference(agent: source.agent.rawValue, root: root.path, path: TraceFileIO.canonicalPath(target.path).path,
+            externalSessionID: "session", anchorSourceKey: nil, anchorExternalID: nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: protected.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: protected.path) }
+        XCTAssertNil(SourceRoot.discoveryLinkTarget(alias))
+        XCTAssertNil(SourceRoot.discoveryLinkTarget(root.appendingPathComponent("not-a-link.jsonl")))
+        let terminal = await coordinator.indexAllResult(scope: .proseOnly)
+        let retained = try await database.sessions()
+        XCTAssertEqual(retained.map(\.id), before.map(\.id))
+        XCTAssertFalse(try XCTUnwrap(terminal.navigationCoverage).covers(reference))
+        XCTAssertEqual(terminal.failedFiles, 1)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: protected.path)
+        let recovered = await coordinator.indexAllResult(scope: .proseOnly)
+        XCTAssertEqual(recovered.failedFiles, 0)
+        XCTAssertTrue(try XCTUnwrap(recovered.navigationCoverage).covers(reference))
+    }
+
     func testRetargetedFailedLinkCannotReuseCapturedFailureQualification() throws {
         let parent = try directory(), root = parent.appendingPathComponent("root")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

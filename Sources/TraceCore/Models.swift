@@ -374,8 +374,22 @@ public struct SourceRoot: Codable, Hashable, Sendable, Identifiable {
     // Discovery needs a target even when its leaf is absent. A cycle or hop-limit
     // outcome cannot qualify another target's absence.
     static func discoveryLinkTarget(_ url: URL) -> TraceFileIO.CanonicalPath? {
-        let resolved = resolveScanURL(url)
-        return resolved.complete ? TraceFileIO.canonicalPath(resolved.url.path) : nil
+        let manager = FileManager.default
+        guard let destination = try? manager.destinationOfSymbolicLink(atPath: url.path) else { return nil }
+        let start = destination.hasPrefix("/") ? URL(fileURLWithPath: destination, isDirectory: false)
+            : url.deletingLastPathComponent().appendingPathComponent(destination, isDirectory: false)
+        let resolved = resolveScanURL(start)
+        guard resolved.complete else { return nil }
+        let target = TraceFileIO.canonicalPath(resolved.url.path)
+        do {
+            if try manager.attributesOfItem(atPath: target.path)[.type] as? FileAttributeType == .typeSymbolicLink { return nil }
+        } catch {
+            let error = error as NSError
+            let missing = (error.domain == NSCocoaErrorDomain && error.code == CocoaError.Code.fileReadNoSuchFile.rawValue)
+                || (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
+            guard missing else { return nil }
+        }
+        return target
     }
 
     private static func resolveScanURL(_ configuredURL: URL) -> (url: URL, encounteredSymlink: Bool, complete: Bool) {

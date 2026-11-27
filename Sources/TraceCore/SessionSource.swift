@@ -457,13 +457,17 @@ public extension SessionSource {
 
             func appendFile(_ url: URL, format: SourceFormat) {
                 if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
-                    let target = SourceRoot.discoveryLinkTarget(url)
-                    var type: FileAttributeType?, missing = false
-                    if let target {
-                        do { type = try itemTypeIfPresent(for: URL(fileURLWithPath: target.path, isDirectory: false)); missing = type == nil }
-                        catch { /* Retain uncertainty; a read failure is not deletion. */ }
-                    }
-                    guard type == .typeRegular else {
+                    // Healthy links retain the existing Foundation fast path.
+                    // Only unavailable leaves need bounded target qualification.
+                    let resolved = url.resolvingSymlinksInPath()
+                    let type = (try? manager.attributesOfItem(atPath: resolved.path)[.type]) as? FileAttributeType
+                    if type != .typeRegular {
+                        let target = SourceRoot.discoveryLinkTarget(url)
+                        var missing = false
+                        if let target {
+                            do { missing = try itemTypeIfPresent(for: URL(fileURLWithPath: target.path, isDirectory: false)) == nil }
+                            catch { /* A previously qualified identity stays unpaid. */ }
+                        }
                         let scope = root.lexicalDiscoveryScope(url.path, in: context) ?? rootScope
                         var failure = DiscoveryFailure(agent: agent, root: root.url, path: url.path,
                             message: "The source link target is not currently available", requestedScope: scope)
