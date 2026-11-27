@@ -94,6 +94,29 @@ else:
                     if failed_save < 3:
                         self.assertEqual(json.loads((runner.output / 'verification.json').read_text())['phases'][0]['status'], 'interrupted')
 
+    def test_pending_first_signal_wins_when_original_handler_interrupts_unmask(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            runner = module.Runner(Path(temp) / 'attempt', {})
+            mask = signal.pthread_sigmask
+            def unmask(how, signals):
+                result = mask(how, signals)
+                if how == signal.SIG_SETMASK:
+                    raise module.RunInterrupted(signal.SIGINT)
+                return result
+            def wait(child, timeout, pending):
+                pending.append(signal.SIGTERM)
+                return 0
+            previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+            with patch.object(module.subprocess, 'Popen', return_value=Mock(pid=123)), \
+                 patch.object(module, 'wait_owned_child', side_effect=wait), patch.object(module, 'cleanup_child'), \
+                 patch.object(module.signal, 'pthread_sigmask', side_effect=unmask):
+                with self.assertRaises(module.RunInterrupted) as caught:
+                    runner.command('fixture', ['fixture'], 1)
+            self.assertEqual(caught.exception.signum, signal.SIGTERM)
+            self.assertEqual(runner.receipt['phases'][0]['exitCode'], 143)
+            self.assertTrue(all(signal.getsignal(sig) == handler for sig, handler in previous.items()))
+
     def test_persistently_unwritable_receipt_preserves_signal_and_io_diagnostic(self):
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as temp:

@@ -435,11 +435,16 @@ class Runner:
                 for sig, handler in handlers.items():
                     try:
                         signal.signal(sig, handler)
+                    except (RunInterrupted, KeyboardInterrupt) as error:
+                        pending_signals.append(error.signum if isinstance(error, RunInterrupted) else signal.SIGINT)
                     except BaseException as error:
                         if failure is None:
                             failure = error
             finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+                except (RunInterrupted, KeyboardInterrupt) as error:
+                    pending_signals.append(error.signum if isinstance(error, RunInterrupted) else signal.SIGINT)
         settle()
         save_phase()
         interruption = settle()
