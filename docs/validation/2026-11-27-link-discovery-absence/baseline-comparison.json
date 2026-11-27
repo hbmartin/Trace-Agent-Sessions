@@ -1,0 +1,109 @@
+{
+  "baseline": "f91336d2aa3f68b851fdd461e8823a50e962a710",
+  "candidate": "0d5b819011b2b4173b08c82a62690616d4194bcc",
+  "configuration": "Debug for both",
+  "candidateFailed": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked",
+    "TraceCoreTests.FSEventsWatcherTests/testStopDrainsInFlightCallbacksBeforeRelease",
+    "TraceCoreTests.SidecarDependencyTests/testHomeDeletionRecreationAndPopulatedLinkReopenMonitors",
+    "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+    "TraceCoreTests.SidecarDependencyTests/testLiveWalCreationAndLaterWritesAreDelivered",
+    "TraceCoreTests.SidecarDependencyTests/testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation",
+    "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+    "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+  ],
+  "baselineFailed": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked",
+    "TraceCoreTests.FSEventsWatcherTests/testStopDrainsInFlightCallbacksBeforeRelease",
+    "TraceCoreTests.SidecarDependencyTests/testHomeDeletionRecreationAndPopulatedLinkReopenMonitors",
+    "TraceCoreTests.SidecarDependencyTests/testLiveWalCreationAndLaterWritesAreDelivered",
+    "TraceCoreTests.SidecarDependencyTests/testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+  ],
+  "matched": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked",
+    "TraceCoreTests.FSEventsWatcherTests/testStopDrainsInFlightCallbacksBeforeRelease",
+    "TraceCoreTests.SidecarDependencyTests/testHomeDeletionRecreationAndPopulatedLinkReopenMonitors",
+    "TraceCoreTests.SidecarDependencyTests/testLiveWalCreationAndLaterWritesAreDelivered",
+    "TraceCoreTests.SidecarDependencyTests/testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation"
+  ],
+  "unmatched": [
+    "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+    "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+    "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+  ],
+  "firstCandidateFailed": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked",
+    "TraceCoreTests.FSEventsWatcherTests/testStopDrainsInFlightCallbacksBeforeRelease",
+    "TraceCoreTests.SidecarDependencyTests/testFifoSidecarsDoNotBlockActivationOrMetadataReads",
+    "TraceCoreTests.SidecarDependencyTests/testHomeDeletionRecreationAndPopulatedLinkReopenMonitors",
+    "TraceCoreTests.SidecarDependencyTests/testLiveWalCreationAndLaterWritesAreDelivered",
+    "TraceCoreTests.SidecarDependencyTests/testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation",
+    "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+    "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+  ],
+  "qualification": "Baseline uses synchronized measurement helpers with TRACE_CHECKPOINT_BENCHMARK disabled; no timing sample accepted from this test comparison. Three predetermined additional runs retain both passing and failed attempts; no failure-rate or root-cause claim.",
+  "boundedAdditionalRuns": [
+    {
+      "label": "baseline-unmatched-repeat-1",
+      "selection": [
+        "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+        "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ],
+      "failed": [
+        "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ]
+    },
+    {
+      "label": "baseline-unmatched-repeat-2",
+      "selection": [
+        "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+        "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ],
+      "failed": [
+        "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ]
+    },
+    {
+      "label": "baseline-unmatched-repeat-3",
+      "selection": [
+        "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+        "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ],
+      "failed": [
+        "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+      ]
+    }
+  ],
+  "matchedAcrossRuns": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked",
+    "TraceCoreTests.FSEventsWatcherTests/testStopDrainsInFlightCallbacksBeforeRelease",
+    "TraceCoreTests.SidecarDependencyTests/testHomeDeletionRecreationAndPopulatedLinkReopenMonitors",
+    "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored",
+    "TraceCoreTests.SidecarDependencyTests/testLiveWalCreationAndLaterWritesAreDelivered",
+    "TraceCoreTests.SidecarDependencyTests/testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation",
+    "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement",
+    "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation"
+  ],
+  "stillUnmatched": [],
+  "finalFailed": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+  ],
+  "finalWatcherFixturePolicy": "Watcher/sidecar fixtures unchanged on system temporary volume; Core/App indexing fixture helpers use explicit external APFS root",
+  "finalMatched": [
+    "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+    "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+  ],
+  "finalUnmatched": []
+}

@@ -1,0 +1,252 @@
+{
+  "candidate": "0d5b819011b2b4173b08c82a62690616d4194bcc",
+  "base": "47bfd93c21e29896fd77517a5aa6ad79067a2c37",
+  "followUpTo": 109,
+  "native": {
+    "indexing": {
+      "executed": 283,
+      "skipped": 1,
+      "assertionFailures": 0,
+      "failedCases": []
+    },
+    "metadata": {
+      "executed": 67,
+      "skipped": 0,
+      "assertionFailures": 0,
+      "failedCases": []
+    },
+    "watcher-sidecar": {
+      "executed": 40,
+      "skipped": 0,
+      "assertionFailures": 3,
+      "failedCases": [
+        "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity",
+        "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked"
+      ]
+    },
+    "app": {
+      "executed": 7,
+      "skipped": 0,
+      "assertionFailures": 0,
+      "failedCases": []
+    },
+    "release-behavior": {
+      "executed": 8,
+      "skipped": 0,
+      "assertionFailures": 0,
+      "failedCases": []
+    }
+  },
+  "scriptCases": 160,
+  "coreOwnershipExecutions": 45,
+  "scriptOwnershipExecutions": 40,
+  "repetitions": 5,
+  "privateVarSupplement": {
+    "executed": 1,
+    "skipped": 0,
+    "assertionFailures": 0,
+    "failedCases": []
+  },
+  "sourceHashCount": 140,
+  "requiredChecks": [
+    "recovered-core-build",
+    "recovered-app-test-build",
+    "recovered-release-core-build",
+    "recovered-debug-app-build",
+    "recovered-release-app-build-retry-1",
+    "recovered-external-client-build",
+    "recovered-indexing",
+    "recovered-metadata",
+    "recovered-app",
+    "recovered-release-behavior",
+    "recovered-project-drift",
+    "recovered-signing-settings",
+    "recovered-network-source",
+    "recovered-pinned-whitespace",
+    "recovered-debug-signature",
+    "recovered-release-signature",
+    "recovered-debug-network",
+    "recovered-release-network",
+    "recovered-ownership-core-1",
+    "recovered-ownership-core-2",
+    "recovered-ownership-core-3",
+    "recovered-ownership-core-4",
+    "recovered-ownership-core-5",
+    "recovered-scripts",
+    "recovered-ownership-scripts-1",
+    "recovered-ownership-scripts-2",
+    "recovered-ownership-scripts-3",
+    "recovered-ownership-scripts-4",
+    "recovered-ownership-scripts-5",
+    "recovered-private-var-supplement"
+  ],
+  "fixtureRoot": "/Volumes/Pro2T/TraceValidation/link-discovery-absence-followup/temporary",
+  "fixturePermissionCheck": {
+    "permissionDenied": true
+  },
+  "ui": "omitted by user selection",
+  "completeNativeSuites": "omitted",
+  "fullReleaseComparisonPairs": "omitted",
+  "local10PercentAcceptanceClaim": false,
+  "targetedMeasurements": "unrun; published at user request before the remaining measurement gate",
+  "measurementOmission": null,
+  "publicationDirection": {
+    "recordedAt": "2026-11-27T21:24:26.137373+00:00",
+    "userInstruction": "open ready PR",
+    "context": "Requested after the assistant disclosed that required paired measurements remain pending and no PR was open.",
+    "action": "Publish ready PR now with unrun measurements explicitly disclosed.",
+    "measurementsExecuted": false,
+    "desktopIdleConfirmed": false,
+    "performanceAcceptanceClaim": false,
+    "qualification": "Publication direction is not a measurement result or desktop-idle confirmation."
+  },
+  "baselineAssertionComparison": {
+    "qualification": "Matching assertion sites and messages establishes reproduction only, not root cause or failure rate. All attempts remain preserved.",
+    "labels": {
+      "recovered-watcher-sidecar": {
+        "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity": [
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 311,
+            "message": "XCTAssertTrue failed - received paths: []"
+          }
+        ],
+        "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked": [
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 258,
+            "message": "XCTAssertTrue failed"
+          },
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 269,
+            "message": "XCTAssertTrue failed"
+          }
+        ]
+      },
+      "baseline-failed-case-comparison": {
+        "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity": [
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 311,
+            "message": "XCTAssertTrue failed - received paths: []"
+          }
+        ],
+        "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked": [
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 258,
+            "message": "XCTAssertTrue failed"
+          },
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 269,
+            "message": "XCTAssertTrue failed"
+          }
+        ],
+        "TraceCoreTests.FSEventsWatcherTests/testStopDrainsInFlightCallbacksBeforeRelease": [
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 212,
+            "message": "XCTAssertEqual failed: (\"timedOut\") is not equal to (\"success\")"
+          },
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 219,
+            "message": "XCTAssertEqual failed: (\"success\") is not equal to (\"timedOut\")"
+          },
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 221,
+            "message": "XCTAssertEqual failed: (\"timedOut\") is not equal to (\"success\")"
+          },
+          {
+            "file": "FSEventsWatcherTests.swift",
+            "line": 222,
+            "message": "XCTAssertTrue failed - replacement must receive the in-flight batch"
+          }
+        ],
+        "TraceCoreTests.SidecarDependencyTests/testHomeDeletionRecreationAndPopulatedLinkReopenMonitors": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 938,
+            "message": "XCTAssertTrue failed - the recreated namespace must monitor subsequent target writes; streams=[\"/var/folders/zk/m1t80b0n64z5sphqvc6kkmzc0000gn/T/TraceDependencies-80C6E379-5535-4E80-8EF7-74A741F91DD8/target\"]"
+          }
+        ],
+        "TraceCoreTests.SidecarDependencyTests/testLiveWalCreationAndLaterWritesAreDelivered": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 645,
+            "message": "XCTAssertTrue failed - a later write must create a new batch"
+          }
+        ],
+        "TraceCoreTests.SidecarDependencyTests/testRefreshObservesDirectoryCreatedBetweenSnapshotAndActivation": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 791,
+            "message": "XCTAssertTrue failed - a later write must reach the configured sidecar without another parent event"
+          }
+        ]
+      },
+      "baseline-unmatched-repeat-1": {
+        "TraceCoreTests.SidecarDependencyTests/testLiveEmptyHomeLinkAndMissingAncestorsBecomeMonitored": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 816,
+            "message": "XCTAssertTrue failed"
+          }
+        ],
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 750,
+            "message": "XCTAssertTrue failed"
+          }
+        ]
+      },
+      "baseline-unmatched-repeat-2": {
+        "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 906,
+            "message": "XCTAssertTrue failed"
+          }
+        ],
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 750,
+            "message": "XCTAssertTrue failed"
+          }
+        ]
+      },
+      "baseline-unmatched-repeat-3": {
+        "TraceCoreTests.SidecarDependencyTests/testRelevantChangesSurviveWatcherReplacement": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 906,
+            "message": "XCTAssertTrue failed"
+          }
+        ],
+        "TraceCoreTests.SidecarDependencyTests/testStartupRebuildsStaleSnapshotAndRechecksAfterActivation": [
+          {
+            "file": "SidecarDependencyTests.swift",
+            "line": 750,
+            "message": "XCTAssertTrue failed"
+          }
+        ]
+      }
+    },
+    "candidateAssertionsMatchBaseline": {
+      "TraceCoreTests.FSEventsWatcherTests/testAppendIsReportedAtFileGranularity": true,
+      "TraceCoreTests.FSEventsWatcherTests/testMainActorStopReturnsWhileFilesystemCallbackIsBlocked": true
+    }
+  },
+  "vendorPreservation": {
+    "checkedInputs": 3015,
+    "changed": [],
+    "headUnchanged": true,
+    "statusUnchanged": true
+  },
+  "rawPayloadsLocalOnly": true
+}
